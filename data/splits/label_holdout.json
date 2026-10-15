@@ -1,0 +1,73 @@
+{
+  "labels": [
+    "Freedom of religion and belief",
+    "Gender-based violence",
+    "General",
+    "Freedom of association and peaceful assembly",
+    "Asylum-seekers - refugees",
+    "ESC rights - general",
+    "Other",
+    "Special procedures"
+  ],
+  "details": [
+    {
+      "label": "Freedom of religion and belief",
+      "index": 19,
+      "total_examples": 80,
+      "train_records_removed": 56,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "Gender-based violence",
+      "index": 21,
+      "total_examples": 78,
+      "train_records_removed": 54,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "General",
+      "index": 22,
+      "total_examples": 77,
+      "train_records_removed": 54,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "Freedom of association and peaceful assembly",
+      "index": 16,
+      "total_examples": 76,
+      "train_records_removed": 48,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "Asylum-seekers - refugees",
+      "index": 1,
+      "total_examples": 73,
+      "train_records_removed": 50,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "ESC rights - general",
+      "index": 10,
+      "total_examples": 73,
+      "train_records_removed": 50,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "Other",
+      "index": 39,
+      "total_examples": 73,
+      "train_records_removed": 50,
+      "collateral_labels_removed_from_train": []
+    },
+    {
+      "label": "Special procedures",
+      "index": 57,
+      "total_examples": 72,
+      "train_records_removed": 50,
+      "collateral_labels_removed_from_train": []
+    }
+  ],
+  "run_id": "base",
+  "source": "data/raw/upr.jsonl",
+  "source_sha256": "93ba79cc0104c4cb1529864a4053e1c18497050ab135ec7ddb2d067649e9e50f"
+}

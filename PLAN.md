@@ -65,11 +65,11 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 **Exit:** `pytest` passes and the CLI works (`uv run cluster-rag --help`, equivalently `python -m cluster_rag.cli --help`).
 
 ### Phase 1: Data exploration and splits
-- [ ] Loader with validation (pydantic `Record` model) that reports and drops malformed rows.
-- [ ] Stats: number of records, number of unique labels, labels per record, label frequency distribution (head / torso / tail buckets), label co-occurrence, languages, text lengths.
-- [ ] Prefix analysis: most common leading 1-3 words ("Continue to", "Ensure that", ...).
-- [ ] Multi-label **iterative stratified** split into train / val / test (e.g. `iterative-stratification` or `scikit-multilearn`). Fix and save the split ids.
-- [ ] Create a "label-holdout" split: some labels removed entirely from train, to test zero-shot and new-label discovery.
+- [x] Loader with validation (pydantic `Record` model) that reports and drops malformed rows. *(built in Phase 0, exercised on the full dataset in Phase 1: 3000 valid, 0 dropped)*
+- [x] Stats: number of records, number of unique labels, labels per record, label frequency distribution (head / torso / tail buckets), label co-occurrence, languages, text lengths. *(run `base` -> `results/base/stats.json`)*
+- [x] Prefix analysis: most common leading 1-3 words ("Continue to", "Ensure that", ...).
+- [x] Multi-label **iterative stratified** split into train / val / test (e.g. `iterative-stratification` or `scikit-multilearn`). Fix and save the split ids.
+- [x] Create a "label-holdout" split: some labels removed entirely from train, to test zero-shot and new-label discovery.
 
 **Deliverables:** `notebooks/01_eda.ipynb` or a script report, plus `data/splits/*.json`.
 **Exit:** The splits are reproducible and the label statistics are written to `docs/experiments.md`.
@@ -166,10 +166,10 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 | Data leakage | Strict split discipline (see AGENTS.md) |
 
 ## 7. Open questions
-- Is the full label taxonomy available with descriptions and hierarchy?
-- How many languages are there, and what is the volume per language?
+- Is the full label taxonomy available with descriptions and hierarchy? *(Phase 1 finding: no catalog file exists; the 68 labels are known from annotations only — zero-shot label names/descriptions remain a controlled experiment)*
+- How many languages are there, and what is the volume per language? *(Phase 1 finding: one language, `en`, 3000 records total — multilingual models are unnecessary for now)*
 - Latency budget per suggestion (decides whether an LLM rerank is feasible)?
-- Expected data size (decides between numpy, FAISS and hnswlib)?
+- Expected data size (decides between numpy, FAISS and hnswlib)? *(Phase 1 finding: 3000 records / 68 labels — plain numpy indexes are sufficient; revisit if more data arrives)*
 
 ## 8. Milestones
 1. **M1:** Phases 0-3, the evaluation harness with baselines.

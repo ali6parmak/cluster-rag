@@ -64,3 +64,18 @@ def test_load_config_rejects_non_mapping(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="YAML mapping"):
         load_config(config_file)
+
+
+def test_load_config_stats_section(tmp_path) -> None:
+    """The stats section validates, overrides the schema defaults and rejects typos."""
+    config_file = tmp_path / "cfg.yaml"
+    config_file.write_text(CONFIG_YAML + "\nstats:\n  frequency_head_min: 77\n", encoding="utf-8")
+
+    config = load_config(config_file)
+    assert config.stats.frequency_head_min == 77
+    assert config.stats.frequency_torso_min == 40  # untouched default
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(CONFIG_YAML + "\nstats:\n  frequency_head_minm: 77\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(bad)

@@ -13,3 +13,29 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 def sample_jsonl() -> Path:
     """Path to the tiny fixture dataset (~20 rows, see AGENTS.md testing rules)."""
     return FIXTURE_DIR / "sample.jsonl"
+
+
+@pytest.fixture()
+def write_config(tmp_path: Path):
+    """Factory fixture: write a minimal YAML config pointing at a dataset.
+
+    The config uses absolute paths under ``tmp_path`` so tests never touch the
+    real ``data/`` or ``results/`` directories. Pass ``extra`` to append
+    additional YAML sections.
+    """
+
+    def _write_config(data_raw: Path, run_id: str | None = "cli-test", extra: str = "") -> Path:
+        config_file = tmp_path / "cfg.yaml"
+        run_id_line = f"run_id: {run_id}\n" if run_id else ""
+        config_file.write_text(
+            run_id_line + "paths:\n"
+            f"  data_raw: {data_raw.as_posix()}\n"
+            f"  data_processed: {(tmp_path / 'processed').as_posix()}\n"
+            f"  data_splits: {(tmp_path / 'splits').as_posix()}\n"
+            f"  cache: {(tmp_path / 'cache').as_posix()}\n"
+            f"  results: {(tmp_path / 'results').as_posix()}\n" + extra,
+            encoding="utf-8",
+        )
+        return config_file
+
+    return _write_config

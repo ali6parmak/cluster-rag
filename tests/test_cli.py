@@ -2,26 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 
 import pytest
 
 from cluster_rag.cli import main
-
-
-def _write_config(tmp_path: Path, data_raw: Path) -> Path:
-    """Point a minimal config at a dataset path (absolute, as written in the YAML)."""
-    config_file = tmp_path / "cli.yaml"
-    config_file.write_text(
-        "paths:\n"
-        f"  data_raw: {data_raw.as_posix()}\n"
-        "  data_processed: processed\n"
-        "  data_splits: splits\n"
-        "  cache: cache\n"
-        "  results: results\n",
-        encoding="utf-8",
-    )
-    return config_file
 
 
 def test_help_exits_zero() -> None:
@@ -31,14 +16,35 @@ def test_help_exits_zero() -> None:
     assert exc.value.code == 0
 
 
-def test_stats_command_on_fixture(sample_jsonl, tmp_path, capsys) -> None:
-    """`stats` runs end-to-end on the fixture dataset and prints a summary."""
-    config_file = _write_config(tmp_path, sample_jsonl)
+def test_stats_command_on_fixture(sample_jsonl, write_config, tmp_path, capsys) -> None:
+    """`stats` runs end-to-end on the fixture and writes the run artifacts."""
+    config_file = write_config(sample_jsonl)
     assert main(["stats", "--config", str(config_file)]) == 0
     out = capsys.readouterr().out
     assert "Records: 20 valid, 0 malformed line(s) dropped" in out
     assert "Unique labels" in out
+    assert "Frequency buckets" in out
     assert "Children" in out  # a frequent fixture label appears in the top list
+
+    results_dir = tmp_path / "results" / "cli-test"
+    stats_path = results_dir / "stats.json"
+    assert (results_dir / "config.yaml").is_file()
+    payload = json.loads(stats_path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == "cli-test"
+    assert payload["source"].endswith("sample.jsonl")
+    assert payload["n_valid_records"] == 20
+    assert payload["n_malformed_lines"] == 0
+    assert payload["dataset_stats"]["overview"]["n_records"] == 20
+
+
+def test_stats_command_requires_run_id(sample_jsonl, write_config, caplog) -> None:
+    """Without run_id the command refuses to run: artifacts need a folder name."""
+    import logging
+
+    config_file = write_config(sample_jsonl, run_id=None)
+    with caplog.at_level(logging.ERROR):
+        assert main(["stats", "--config", str(config_file)]) == 1
+    assert any("run_id" in record.message for record in caplog.records)
 
 
 def test_stats_command_missing_config_returns_error() -> None:

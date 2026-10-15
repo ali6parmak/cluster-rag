@@ -15,3 +15,22 @@ paths:
   label_catalog: null             # optional labels.jsonl with name/description/parent
   cache: cache                    # embedding cache (gitignored)
   results: results                # run artifacts (gitignored)
+
+stats:
+  # Label frequency buckets: head >= head_min, torso >= torso_min, tail below.
+  # Defaults chosen for this dataset (68 labels): head 16, torso 34, tail 18.
+  frequency_head_min: 100
+  frequency_torso_min: 40
+  prefix_max_words: 3
+  prefix_lowercase: true
+  top_n_labels: 15
+  top_n_pairs: 10
+  top_n_prefixes: 10
+
+splits:
+  ratios: [0.7, 0.15, 0.15]  # train / val / test, multi-label iterative stratification
+  coverage_min_total: 3      # labels rarer than this are not force-corrected between splits
+  label_holdout:
+    n_labels: 8              # labels removed entirely from train (zero-shot discovery test)
+    min_examples: 30         # eligibility: total examples within [min_examples, max_examples]
+    max_examples: 80
