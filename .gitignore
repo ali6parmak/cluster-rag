@@ -218,3 +218,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- cluster-rag project ---
+
+# Datasets are not committed; only the fixed split id lists under
+# data/splits/ are (see AGENTS.md repository layout).
+data/*
+!data/splits/
+
+# Embedding cache
+cache/
+
+# Run artifacts (one folder per run_id); summary files under
+# results/summaries/ may be committed.
+results/*
+!results/summaries/
+
+# Model weights and local model stores
+models/
+*.safetensors
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.ckpt

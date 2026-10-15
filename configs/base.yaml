@@ -1,0 +1,17 @@
+# Base configuration for cluster-rag.
+#
+# All values live here, never in the code (AGENTS.md coding conventions).
+# Paths are resolved relative to the current working directory:
+# run the CLI from the repository root.
+# Experiment-specific overrides go in configs/experiments/*.yaml.
+
+run_id: base      # results are written to results/<run_id>/ from Phase 3 on
+seed: 42          # fix all random seeds (numpy/random/torch/UMAP) for reproducibility
+
+paths:
+  data_raw: data/raw/upr.jsonl    # original JSONL dataset, read-only
+  data_processed: data/processed
+  data_splits: data/splits        # fixed split id lists (committed, they are small)
+  label_catalog: null             # optional labels.jsonl with name/description/parent
+  cache: cache                    # embedding cache (gitignored)
+  results: results                # run artifacts (gitignored)

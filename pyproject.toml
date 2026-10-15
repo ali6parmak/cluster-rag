@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cluster-rag"
+version = "0.1.0"
+description = "Retrieval-augmented multi-label topic classification with clustering and active feedback."
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scikit-learn>=1.4",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    # httpx is the HTTP backend for the Ollama embedder (Phase 2).
+    "httpx>=0.27",
+    "sentence-transformers>=3.0",
+    # Multi-label iterative stratification for the Phase 1 splits.
+    "iterative-stratification>=0.0.7",
+]
+
+# Keep this in sync with [dependency-groups] below (uv installs the dev group
+# automatically; pip installs it via `pip install -e ".[dev]"`).
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.scripts]
+cluster-rag = "cluster_rag.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cluster_rag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not integration' --strict-markers"
+markers = [
+    "integration: requires network access or model downloads (skipped by default)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
