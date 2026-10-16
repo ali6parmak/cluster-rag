@@ -27,6 +27,7 @@ class PathsConfig(BaseModel):
     cache: Path
     results: Path
     label_catalog: Path | None = None
+    data_external: Path | None = None  # auxiliary pairwise dataset (PLAN.md section 2)
 
 
 class StatsConfig(BaseModel):

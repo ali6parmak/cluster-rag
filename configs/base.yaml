@@ -13,6 +13,7 @@ paths:
   data_processed: data/processed
   data_splits: data/splits        # fixed split id lists (committed, they are small)
   label_catalog: null             # optional labels.jsonl with name/description/parent
+  data_external: data/external/omct_pairs.json  # auxiliary pairwise dataset (PLAN.md section 2)
   cache: cache                    # embedding cache (gitignored)
   results: results                # run artifacts (gitignored)
 

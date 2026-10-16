@@ -23,6 +23,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   └── experiments/*.yaml
     ├── data/                    # gitignored
     │   ├── raw/                 # original JSONL (read-only)
+    │   ├── external/            # auxiliary datasets from collaborators (see PLAN §2)
     │   ├── processed/
     │   └── splits/              # fixed split id lists (commit these, they are small)
     ├── cache/                   # gitignored: embedding cache
@@ -87,6 +88,7 @@ Check the prefixes against the model card before running experiments.
 - The label-holdout split must exclude the held-out labels everywhere in train artifacts, including label prototypes built from examples (zero-shot name/description embeddings are allowed).
 - The feedback simulator may reveal gold labels only for items the active learner selected, one at a time, and must log every revealed item.
 - Always report per frequency bucket (head / torso / tail / unseen) as well as overall numbers.
+- Auxiliary pairwise data in `data/external/` (e.g. OMCT GTI paragraph-question pairs) is for model selection, threshold calibration and optional reranker/fine-tune training only. It never enters UPR train artifacts and is never reported as a UPR metric; its runs use an `aux-` run_id prefix in the log.
 
 ## Running things (target CLI)
 

@@ -26,6 +26,7 @@ from cluster_rag import __version__
 from cluster_rag.config import AppConfig, load_config
 from cluster_rag.data import SPLIT_NAMES, LoadReport, build_splits, load_jsonl
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
+from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to the YAML config file, e.g. configs/base.yaml.",
+    )
+    stats.add_argument(
+        "--pairs",
+        action="store_true",
+        help="Summarize the auxiliary pairwise dataset (PLAN section 2), not the UPR dataset.",
     )
 
     split = subparsers.add_parser(
@@ -151,8 +157,10 @@ def _print_stats(report: LoadReport, dataset_stats: dict[str, Any]) -> None:
         )
 
 
-def _cmd_stats(config: AppConfig) -> int:
+def _cmd_stats(config: AppConfig, pairs: bool = False) -> int:
     """Run the stats command: compute, print and persist the dataset report."""
+    if pairs:
+        return _cmd_stats_pairs(config)
     run_id = _require_run_id(config)
     report = load_jsonl(config.paths.data_raw)
     stats_config = config.stats
@@ -183,6 +191,72 @@ def _cmd_stats(config: AppConfig) -> int:
     )
     _print_stats(report, dataset_stats)
     print(f"Report written to {results_dir / 'stats.json'}")
+    return 0
+
+
+def _print_stats_pairs(
+    report: PairLoadReport, pair_stats: dict[str, Any], results_dir: Path
+) -> None:
+    """Print a human-readable summary of the pairwise dataset to stdout."""
+    print(f"Pairwise dataset: {report.path}")
+    print(
+        f"Pairs: {pair_stats['n_pairs']} valid, {report.n_invalid} malformed entry/entries skipped"
+    )
+    positive = pair_stats["label_counts"]["1"]
+    negative = pair_stats["label_counts"]["0"]
+    share = pair_stats["positive_share"]
+    print(f"Labels: {positive} positive / {negative} negative ({share:.1%} positive)")
+    print(
+        f"Distinct questions: {pair_stats['n_distinct_question_numbers']} numbers, "
+        f"{pair_stats['n_distinct_question_texts']} texts"
+    )
+    print(f"Documents ({pair_stats['n_documents']}): {pair_stats['document_counts']}")
+    print(f"Positive pairs by document: {pair_stats['positive_by_document']}")
+    print(f"Duplicate pair ids: {pair_stats['n_duplicate_pair_ids']}")
+    para = pair_stats["paragraph_text_chars"]
+    quest = pair_stats["question_text_chars"]
+    mean_para = para["mean"]
+    mean_quest = quest["mean"]
+    print(f"Paragraph length (chars): mean {mean_para:.1f} (min {para['min']}, max {para['max']})")
+    print(
+        f"Question length (chars): mean {mean_quest:.1f} (min {quest['min']}, max {quest['max']})"
+    )
+    print(f"Top-level metadata: {report.metadata}")
+    if report.errors:
+        first = list(report.errors.items())[:5]
+        logger.warning(
+            "Dropped %d malformed pair(s); first reasons: %s%s",
+            report.n_invalid,
+            first,
+            " ..." if report.n_invalid > len(first) else "",
+        )
+
+
+def _cmd_stats_pairs(config: AppConfig) -> int:
+    """Run `stats --pairs`: summarize the auxiliary pairwise dataset (aux-prefixed run)."""
+    run_id = _require_run_id(config)
+    if config.paths.data_external is None:
+        raise ValueError("paths.data_external must be set in the config to summarize pairs")
+    report = load_pairs(config.paths.data_external)
+    pair_stats = summarize_pairs(report.records)
+    aux_run_id = f"aux-{run_id}"
+    payload = {
+        "run_id": aux_run_id,
+        "source": str(config.paths.data_external),
+        "source_sha256": file_sha256(config.paths.data_external),
+        "n_valid_pairs": report.n_valid,
+        "n_malformed_pairs": report.n_invalid,
+        "malformed_pairs": [[index, reason] for index, reason in report.errors.items()],
+        "dataset_metadata": report.metadata,
+        "pair_stats": pair_stats,
+    }
+    results_dir = config.paths.results / aux_run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    (results_dir / "pairs_stats.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    _print_stats_pairs(report, pair_stats, results_dir)
     return 0
 
 
@@ -274,7 +348,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         if args.command == "stats":
-            return _cmd_stats(config)
+            return _cmd_stats(config, pairs=args.pairs)
         if args.command == "split":
             return _cmd_split(config, force=args.force)
     except FileNotFoundError as exc:

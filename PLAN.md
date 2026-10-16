@@ -28,13 +28,26 @@ Assumptions to verify in Phase 1:
 
 Optional extra resource: a label catalog file (`labels.jsonl`) with `name`, an optional `description`, and an optional `parent`. Even labels with zero examples can be retrieved through it.
 
+### Auxiliary pairwise relevance data (Phase 1.5)
+
+`data/external/omct_pairs.json` (`omct_gti_paragraph_question_golden_pairs`, provided by the collaborator): human-labeled paragraph ↔ GTI question pairs, each judged "same topic?" (label 0/1).
+
+- Shape: `{"pairs": [{"pair_id", "source_csv", "document", "paragraph_number", "paragraph_text", "question_number", "question_text", "label", "label_origin"}], "n_pairs", "n_positive", "n_negative", "name", "description", "question_text_sources", ...}`.
+- Quick inspection (Phase 1.5 stats run will formalize): 1520 pairs, 524 positive / 996 negative, 294 distinct question numbers (~280 distinct texts) across 3 documents, 0 missing question texts, 0 duplicate ids. Paragraphs are long (mean ~890 chars; UPR texts mean ~151).
+- Role, strictly auxiliary:
+  1. embedding-model selection probe (similarity AUC + question retrieval, Phase 2),
+  2. threshold-calibration evidence (what similarity scores "same topic" actually look like, Phase 4),
+  3. training pairs for the optional cross-encoder reranker (Phase 6) and/or embedder fine-tuning (Phase 9),
+  4. an independent text ↔ description retrieval benchmark (Phase 3).
+- Guardrails: never merged into UPR train artifacts, never reported as a UPR metric; auxiliary runs are prefixed `aux-` in the log; domain differs (AI/OMCT reporting vs UPR recommendations) so results are always a separate line.
+
 ## 3. Target architecture
 
     Text -> Preprocess -> Embed -> [Cluster routing: top-n clusters]
          -> Retrieve: (a) top-k similar labeled examples (Example Index)
                       (b) top-m candidate labels       (Label Index)
          -> Score fusion (kNN votes + prototype sim + zero-shot sim - negative memory)
-         -> [Optional rerank: cross-encoder or LLM with retrieved few-shot examples]
+         -> [Optional rerank: cross-encoder (LLM variant skipped by decision)]
          -> Suggestions (labels + scores + evidence)
          -> User feedback -> Feedback Store -> online index/prototype updates
                                             -> periodic fine-tuning
@@ -47,7 +60,7 @@ Core components:
 | Label Index | One vector per label: a blend of name/description embedding and the mean of its examples (prototype). |
 | Cluster tree | Hierarchical clusters over examples and/or labels, used for routing and discovery. |
 | Scorer | Fuses signals into per-label scores and applies thresholds. |
-| Reranker (optional) | Cross-encoder or a local LLM via Ollama that picks final labels from a shortlist. |
+| Reranker (optional) | Cross-encoder over (text, label description) pairs; LLM variant skipped by decision. |
 | Feedback Store | SQLite log of feedback events. It is the source of truth for online updates. |
 | Active learner | Picks items for human review. |
 | Evaluation harness | Offline metrics plus a simulated-user feedback loop. |
@@ -74,6 +87,14 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 **Deliverables:** `notebooks/01_eda.ipynb` or a script report, plus `data/splits/*.json`.
 **Exit:** The splits are reproducible and the label statistics are written to `docs/experiments.md`.
 
+### Phase 1.5: Auxiliary pairwise data integration
+- [x] Loader: `PairRecord` pydantic model with strict validation (drop-and-report malformed entries, same pattern as `Record`) reading `data/external/omct_pairs.json`, driven by a `paths.data_external` config entry. *(module `src/cluster_rag/pairs.py`)*
+- [x] Pairwise stats (CLI, e.g. `uv run cluster-rag stats --pairs`): n pairs, positive/negative balance, distinct questions, documents, duplicate ids, text lengths; written to `results/<run_id>/` and summarized in `docs/experiments.md`. *(run `aux-base` → `results/aux-base/pairs_stats.json`)*
+- [ ] Decide and implement: `data/external/` committed to the repo or gitignored? (open question in section 7; currently gitignored by the `data/*` rule until the collaborator answers)
+
+**Deliverables:** loader + stats report for the pairwise dataset.
+**Exit:** the pairs load and are summarized; nothing else depends on them yet.
+
 ### Phase 2: Embedding layer
 - [ ] `Embedder` protocol: `encode(texts, kind: "query"|"document"|"label") -> np.ndarray` (L2-normalized float32).
 - [ ] `HFEmbedder` (sentence-transformers) and `OllamaEmbedder` (HTTP `POST /api/embed`, batched).
@@ -81,6 +102,7 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - [ ] Disk cache keyed by `(model_id, prefix, preprocessing_version, sha1(text))`.
 - [ ] Preprocessing variants: `raw`, `strip_leading_phrase` (remove formulaic openers), `lowercase`.
 - [ ] Candidate models to compare (pick 3-5): `intfloat/multilingual-e5-base|large`, `BAAI/bge-m3`, `sentence-transformers/all-MiniLM-L6-v2` (fast baseline), Ollama `embeddinggemma`, `mxbai-embed-large`, `bge-m3`, `snowflake-arctic-embed`.
+- [ ] Auxiliary probe on the pairwise dataset: per candidate embedder, cosine-similarity AUC separating label 1 vs 0, and R@1 / R@10 question retrieval. Independent evidence for model choice, next to the UPR metrics.
 
 **Exit:** The full dataset embeds with at least 2 backends and cache hits skip re-encoding.
 
@@ -88,6 +110,7 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - [ ] Metrics: P@k, R@k (k = 1, 3, 5, 10), nDCG@k, micro-F1, macro-F1, sample-F1, label coverage. Report each per frequency bucket (head / torso / tail / unseen).
 - [ ] **Shortlist recall@m** (m = 20, 50, 100): is the gold label anywhere in the retrieved candidates? This is the ceiling for any reranker.
 - [ ] Trivial baselines: most-frequent labels and random.
+- [ ] Pairwise-retrieval metrics (pure functions in `eval/metrics.py`): per paragraph, rank the distinct questions by embedding similarity and report recall@k against the manual labels; exercised by the Phase 2/3 auxiliary probe.
 - [ ] Results written as JSON to `results/<run_id>/metrics.json` together with the resolved config, plus a one-line summary appended to `docs/experiments.md`.
 
 **Exit:** One command evaluates any predictor on val or test.
@@ -113,8 +136,8 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 **Exit:** A documented decision on whether routing is worth it at the current data size, plus a cluster report artifact.
 
 ### Phase 6: Reranking (optional, after Phase 4 is solid)
-- [ ] Cross-encoder reranker on (text, label name/description) pairs. Zero-shot first, then fine-tuned with training pairs.
-- [ ] LLM reranker via Ollama (e.g. a 7-14B instruct model) with the prompt = text + shortlist (labels + descriptions) + top retrieved examples as few-shot. It must return **strict JSON** (`{"labels": [...], "confidence": {...}}`), checked against the schema, with retry on parse failure.
+- [ ] Cross-encoder reranker on (text, label name/description) pairs. Zero-shot first, then fine-tuned on the auxiliary pairwise data (Phase 1.5) plus hard negatives from rejected suggestions.
+- ~~LLM reranker via Ollama~~ **Skipped by decision (2026-10): no LLMs in the pipeline.**
 - [ ] Compare against fusion alone: quality gain vs latency and cost.
 
 **Exit:** The reranker is enabled only if it improves val F1 / P@k by a meaningful margin.
@@ -125,7 +148,7 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
   - accept/add: the item goes into the Example Index with its confirmed labels.
   - reject: the (text embedding, label) pair goes into the **negative memory**, and similar future texts get a penalty for that label.
   - Rocchio update of label prototypes (`a*proto + b*mean(accepted) - c*mean(rejected)`, then renormalize).
-  - Corrected items become few-shot candidates for the LLM reranker.
+  - Corrected items become few-shot candidates for the optional reranker (LLM variant skipped by decision).
 - [ ] Every update can be replayed from the event log (rebuild the indexes from scratch at any time).
 - [ ] **Simulated user** for evaluation: an oracle that answers with the gold labels, optionally with configurable noise.
 - [ ] Learning curve: metric vs number of feedback events, with and without each update rule.
@@ -140,7 +163,8 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 **Exit:** At least one strategy beats random on the learning curve.
 
 ### Phase 9: Embedding / model fine-tuning
-- [ ] Build training data from the labels plus accumulated feedback: (text, positive label/text, hard negative). Hard negatives come from rejected suggestions and confusable labels.
+- [ ] Build training data from the labels plus accumulated feedback: (text, positive label/text, hard negative). Hard negatives come from rejected suggestions and confusable labels. The auxiliary pairwise pairs (Phase 1.5) join as (paragraph, question) positive/negative examples.
+- [ ] Leakage rule: fine-tune inputs may include the auxiliary pairwise data and UPR train only — never UPR val/test.
 - [ ] Options: SetFit, sentence-transformers `MultipleNegativesRankingLoss`, or a bi-encoder over (text, label description) pairs.
 - [ ] Retrain on a schedule (e.g. every N feedback events), re-embed, and compare with the previous model version.
 
@@ -152,6 +176,7 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 
 ## 5. Experiment tracking
 - Every run gets a `run_id`, a frozen config and metrics in `results/`, plus one line in `docs/experiments.md`.
+- Auxiliary-dataset runs get an `aux-` run_id prefix and clearly-marked rows in the experiment log (never mixed with UPR rows).
 - Fix all random seeds. Record model ids and versions (HF revision or Ollama model digest).
 - Optional: MLflow or a simple CSV leaderboard.
 
@@ -168,11 +193,14 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 ## 7. Open questions
 - Is the full label taxonomy available with descriptions and hierarchy? *(Phase 1 finding: no catalog file exists; the 68 labels are known from annotations only — zero-shot label names/descriptions remain a controlled experiment)*
 - How many languages are there, and what is the volume per language? *(Phase 1 finding: one language, `en`, 3000 records total — multilingual models are unnecessary for now)*
-- Latency budget per suggestion (decides whether an LLM rerank is feasible)?
+- Latency budget per suggestion? *(was an input to feasibility of the LLM reranker, which is skipped by decision — only matters again if that decision is revisited; cross-encoder latency still TBD in Phase 6)*
 - Expected data size (decides between numpy, FAISS and hnswlib)? *(Phase 1 finding: 3000 records / 68 labels — plain numpy indexes are sufficient; revisit if more data arrives)*
+- Auxiliary pairwise data: commit `data/external/omct_pairs.json` to the repo or keep it external? (ownership/licensing with the collaborator; gitignored until answered)
+- Auxiliary pairwise data: is the "Answer choices" text inside `question_text` signal or noise for embeddings? (test both in the Phase 2 probe)
+- Auxiliary pairwise data: annotation provenance — single annotator or merged/verified several times? (affects how much we trust it for threshold calibration)
 
 ## 8. Milestones
-1. **M1:** Phases 0-3, the evaluation harness with baselines.
+1. **M1:** Phases 0-3, the evaluation harness with baselines. (Phase 1.5 auxiliary data + probe included)
 2. **M2:** Phase 4, a strong retrieval baseline.
 3. **M3:** Phases 5-6, the clustering report and reranker decision.
 4. **M4:** Phases 7-8, feedback + active learning shown working in simulation.
