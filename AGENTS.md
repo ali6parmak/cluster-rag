@@ -77,6 +77,7 @@ Check the prefixes against the model card before running experiments.
 - Type hints everywhere, and docstrings on public functions. Run `ruff check` and `ruff format` before finishing.
 - Embeddings are `np.float32`, shape `(n, d)`, L2-normalized. Assert this at index boundaries.
 - Pure functions for scoring and metrics, with no hidden global state. Components take a config object.
+- Dependency direction: `cli.py` orchestrates, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
 - No hard-coded paths, thresholds or model names in the logic. Put them in `configs/`.
 - Pass explicit seeds (`numpy`, `random`, `torch`, UMAP `random_state`).
 - Logging uses the `logging` module, not `print`, in library code.
