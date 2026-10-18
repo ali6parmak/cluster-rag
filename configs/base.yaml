@@ -35,3 +35,53 @@ splits:
     n_labels: 8              # labels removed entirely from train (zero-shot discovery test)
     min_examples: 30         # eligibility: total examples within [min_examples, max_examples]
     max_examples: 80
+
+# Phase 2 sections. `embed` (backend/model/prefixes) is defined per experiment in
+# configs/experiments/*.yaml -- model ids and prefixes must never be hard-coded
+# in code (AGENTS.md). Schema defaults (see src/cluster_rag/config.py):
+#   embed:     {backend, model_id, prefixes: {query, document, label},
+#               dimension, batch_size: 64, device, revision, trust_remote_code,
+#               host, timeout: 120}          # hf-specific: device/revision/trust_remote_code;
+#                                            # ollama-specific: host/timeout/dimension
+#   preprocess: {variant: raw, strip_openers: [...]}  # variants: raw | lowercase |
+#                                            # strip_leading_formulaic; openers below
+#   cache:     {enabled: true}               # disk cache at paths.cache
+#   probe:     {question_transforms: [keep, strip_block],
+#               question_block_markers: ["Answer choices:", "Notes:"],
+#               recall_ks: [1, 10]}          # used by the `probe-aux` command
+#
+# strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
+# start with "continue"); longest opener wins, so multi-word forms are listed
+# before their shorter prefixes.
+preprocess:
+  variant: raw
+  strip_openers:
+    - continue to
+    - continue its efforts to
+    - continue its efforts
+    - continue its
+    - continue efforts to
+    - continue efforts
+    - continue
+    - ensure that the
+    - ensure that
+    - ensure the
+    - ensure
+    - take all necessary measures to
+    - take all necessary measures
+    - take measures to
+    - take measures
+    - take steps to
+    - take steps
+    - take
+    - strengthen
+    - adopt
+    - consider
+    - ratify
+    - establish
+    - implement
+    - further
+    - increase
+    - review
+    - develop
+    - intensify

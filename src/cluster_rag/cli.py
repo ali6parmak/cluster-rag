@@ -5,9 +5,12 @@ Invocation (target CLI in AGENTS.md):
     uv run cluster-rag stats    --config configs/base.yaml
     python -m cluster_rag.cli stats    --config configs/base.yaml   # equivalent
 
-Run from the repository root so relative paths in the config resolve. Commands
-write their artifacts to ``results/<run_id>/`` (frozen resolved config plus a
-JSON report), so ``run_id`` must be set in the config for any command.
+Commands: stats (--pairs for the auxiliary pairwise data), split, embed
+(Phase 2: dataset embedding through the disk cache), probe-aux (Phase 2: the
+auxiliary pairwise embedding probe). Run from the repository root so relative
+paths in the config resolve. Commands write their artifacts to
+``results/<run_id>/`` (frozen resolved config plus a JSON report), so
+``run_id`` must be set in the config for any command.
 """
 
 from __future__ import annotations
@@ -16,17 +19,23 @@ import argparse
 import json
 import logging
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
 from cluster_rag import __version__
+from cluster_rag.aux_probe import ProbeCacheOptions, run_probe
 from cluster_rag.config import AppConfig, load_config
 from cluster_rag.data import SPLIT_NAMES, LoadReport, build_splits, load_jsonl
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
+from cluster_rag.embed import KINDS, build_embedder
+from cluster_rag.embed.cache import CachedEmbedder
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
+from cluster_rag.preprocess import build_preprocess_spec
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +85,51 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Overwrite already existing split id files in data_splits.",
+    )
+
+    embed = subparsers.add_parser(
+        "embed",
+        help="Embed texts with the configured backend, cached on disk (Phase 2).",
+        description=(
+            "Load the dataset, apply the configured preprocessing variant and "
+            "embed every text with the configured backend (hf / ollama), through "
+            "the disk cache keyed by (model_id, prefix, preprocessing_version, "
+            "sha1(text)). Writes results/<run_id>/embeddings.npz plus meta.json."
+        ),
+    )
+    embed.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config file with an embed: section, "
+        "e.g. configs/experiments/embed_e5_base_v2.yaml.",
+    )
+    embed.add_argument(
+        "--kinds",
+        type=str,
+        default="document",
+        help="Comma-separated encode kinds to embed for (default: document). "
+        "One matrix per kind is written; the cache separates them by prefix.",
+    )
+
+    probe_aux = subparsers.add_parser(
+        "probe-aux",
+        help="Auxiliary pairwise-data probe: AUC + question retrieval per embedder (Phase 2).",
+        description=(
+            "Embed paragraphs and GTI questions from the auxiliary pairwise dataset "
+            "with the configured backend and compute cosine-similarity AUC (judged "
+            "0 vs 1) plus hit@k/recall@k question retrieval in two scopes (all "
+            "questions / same document), for each configured question transform "
+            "('keep' vs 'strip_block'), with truncation diagnostics against the "
+            "model context. Auxiliary evidence only: results are written to "
+            "results/aux-<run_id>/ and prefixed aux- in the experiment log."
+        ),
+    )
+    probe_aux.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with embed: and paths.data_external set.",
     )
     return parser
 
@@ -260,6 +314,196 @@ def _cmd_stats_pairs(config: AppConfig) -> int:
     return 0
 
 
+def _parse_kinds(raw: str) -> list[str]:
+    """Parse and validate the --kinds flag ("document" or "document,query")."""
+    kinds = [part.strip() for part in raw.split(",") if part.strip()]
+    if not kinds:
+        raise ValueError("--kinds must name at least one encode kind")
+    for kind in kinds:
+        if kind not in KINDS:
+            raise ValueError(f"Unknown encode kind {kind!r}; expected one of {KINDS}")
+    return kinds
+
+
+def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
+    """Run the embed command: preprocess, embed through the disk cache, persist.
+
+    Writes ``results/<run_id>/embeddings.npz`` (one ``vectors_<kind>`` matrix
+    plus ``ids``) and ``meta.json`` (model/digest/revision, prefixes,
+    preprocessing diagnostics, cache hit/miss statistics, timings). A rerun
+    with the same config must report ``cache_hits == n_records``.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    if config.embed is None:
+        raise ValueError(
+            "the embed: section (backend, model_id, prefixes) is required for the `embed` command"
+        )
+    report = load_jsonl(config.paths.data_raw)
+    if report.errors:
+        logger.warning("%d malformed line(s) dropped before embedding", report.n_invalid)
+    ids = [record.id for record in report.records]
+    raw_texts = [record.text for record in report.records]
+
+    spec = build_preprocess_spec(config.preprocess)
+    processed = spec.apply(raw_texts)
+    preprocess_meta = spec.describe(raw_texts)
+
+    embedder = build_embedder(config.embed)
+    info = embedder.info
+    if config.cache.enabled:
+        embedder = CachedEmbedder(embedder, config.paths.cache, preprocessing_version=spec.version)
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+
+    arrays: dict[str, Any] = {"ids": np.asarray(ids)}
+    kind_stats: dict[str, dict[str, Any]] = {}
+
+    def _cache_counters() -> tuple[int, int, int]:
+        return (
+            getattr(embedder, "cache_hits", 0),
+            getattr(embedder, "cache_misses", 0),
+            getattr(embedder, "n_stored", 0),
+        )
+
+    for kind in kinds:
+        started_kind = time.perf_counter()
+        before = _cache_counters()
+        vectors = embedder.encode(processed, kind)
+        after = _cache_counters()
+        kind_stats[kind] = {
+            "n_vectors": int(vectors.shape[0]),
+            "dimension": int(vectors.shape[1]),
+            "l2_rows": float(np.linalg.norm(vectors, axis=1).mean()) if len(vectors) else 1.0,
+            "cache_hits": after[0] - before[0],
+            "cache_misses": after[1] - before[1],
+            "n_stored": after[2] - before[2],
+            "seconds": round(time.perf_counter() - started_kind, 3),
+        }
+        arrays[f"vectors_{kind}"] = vectors
+    np.savez_compressed(results_dir / "embeddings.npz", **arrays)
+
+    totals = _cache_counters()
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "command": "embed",
+        "kinds": list(kinds),
+        "n_records": len(ids),
+        "n_malformed_lines": report.n_invalid,
+        "source_sha256": file_sha256(config.paths.data_raw),
+        "embedder": {
+            "backend": info.backend,
+            "model_id": info.model_id,
+            "dimension": info.dimension,
+            "revision_or_digest": info.revision_or_digest,
+            "context_tokens": info.context_tokens,
+            "prefixes": dict(info.prefixes),
+            "extra": info.extra,
+        },
+        "cache": {
+            "enabled": config.cache.enabled,
+            "path": str(config.paths.cache) if config.cache.enabled else None,
+            "cache_hits": totals[0],
+            "cache_misses": totals[1],
+            "n_stored": totals[2],
+        },
+        "preprocess": preprocess_meta,
+        "kind_stats": kind_stats,
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    (results_dir / "meta.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(f"Embedded {len(ids)} record(s) with {info.backend}:{info.model_id} -> {results_dir}")
+    print(
+        f"  kinds: {list(kinds)}, dimension: {info.dimension}, "
+        f"preprocess: {spec.variant} ({preprocess_meta['n_changed']} text(s) changed)"
+    )
+    print(
+        f"  cache: {totals[0]} hit(s), {totals[1]} miss(es), {totals[2]} stored, "
+        f"{payload['total_seconds']}s total"
+    )
+    return 0
+
+
+def _cmd_probe_aux(config: AppConfig) -> int:
+    """Run probe-aux: the Phase 2 auxiliary evidence run (results/aux-<run_id>/)."""
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    if config.embed is None:
+        raise ValueError(
+            "the embed: section (backend, model_id, prefixes) is required for probe-aux"
+        )
+    if config.paths.data_external is None:
+        raise ValueError("paths.data_external must be set in the config to run the aux probe")
+
+    pair_report = load_pairs(config.paths.data_external)
+    spec = build_preprocess_spec(config.preprocess)
+    embedder = build_embedder(config.embed)
+
+    probe_report = run_probe(
+        pair_report.records,
+        embedder,
+        preprocess_spec=spec,
+        probe_config=config.probe,
+        cache=ProbeCacheOptions(root=str(config.paths.cache)) if config.cache.enabled else None,
+    )
+    embedder_info = embedder.info
+    aux_run_id = f"aux-{run_id}"
+
+    payload = {
+        "run_id": aux_run_id,
+        "command": "probe-aux",
+        "source": str(config.paths.data_external),
+        "source_sha256": file_sha256(config.paths.data_external),
+        "n_valid_pairs": pair_report.n_valid,
+        "n_malformed_pairs": pair_report.n_invalid,
+        "embedder": probe_report["embedder"],
+        "cache": (
+            {"enabled": True, "path": str(config.paths.cache), **(probe_report["cache"] or {})}
+            if config.cache.enabled
+            else {"enabled": False}
+        ),
+        "preprocess": {
+            "variant": spec.variant,
+            "version": spec.version,
+            "openers": list(spec.openers),
+        },
+        "probe": probe_report,
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    results_dir = config.paths.results / aux_run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    (results_dir / "probe_report.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(f"Auxiliary probe: {aux_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
+    print(
+        f"  corpus: {pair_report.n_valid} judged pairs "
+        f"({payload['probe']['corpus']['n_positive_pairs']} positive), "
+        f"{payload['probe']['corpus']['n_distinct_paragraph_texts']} distinct paragraphs, "
+        f"{payload['probe']['corpus']['n_distinct_question_texts']} distinct questions"
+    )
+    for variant in payload["probe"]["variants"]:
+        same_doc_hit1 = variant["retrieval"]["same_document"]["hit@1"]
+        trunc_share = variant["truncation"].get("share_paragraphs_over_context")
+        trunc_text = "n/a" if trunc_share is None else f"{trunc_share:.1%}"
+        print(
+            f"  [{variant['transform']:>11s}] pair-AUC {variant['pair_auc']:.4f}; "
+            f"hit@1 {variant['retrieval']['all']['hit@1']:.3f} (all) / "
+            f"{same_doc_hit1:.3f} (same-doc); hit@10 "
+            f"{variant['retrieval']['same_document']['hit@10']:.3f} (same-doc); "
+            f"paragraphs over context: {trunc_text}"
+        )
+    print(f"Report written to {results_dir / 'probe_report.json'}")
+    return 0
+
+
 def _write_split_files(
     report: dict[str, Any], splits_dir: Path, run_id: str, source_path: Path
 ) -> None:
@@ -351,6 +595,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_stats(config, pairs=args.pairs)
         if args.command == "split":
             return _cmd_split(config, force=args.force)
+        if args.command == "embed":
+            return _cmd_embed(config, kinds=_parse_kinds(args.kinds))
+        if args.command == "probe-aux":
+            return _cmd_probe_aux(config)
     except FileNotFoundError as exc:
         logger.error("File not found: %s", exc.filename or exc)
         return 1

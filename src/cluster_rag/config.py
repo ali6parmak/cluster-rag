@@ -11,9 +11,46 @@ working directory. Run the CLI from the repository root, as in AGENTS.md.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Default formulaic openers for the ``strip_leading_formulaic`` preprocessing
+# variant (Phase 2). Derived from the Phase 1 prefix analysis (results/base/
+# stats.json): "continue" opens 17.8% of UPR texts, the top-8 verbs ~49%.
+# Longest match wins at encode time; override per experiment in YAML.
+DEFAULT_STRIP_OPENERS: tuple[str, ...] = (
+    "continue to",
+    "continue its efforts to",
+    "continue its efforts",
+    "continue its",
+    "continue efforts to",
+    "continue efforts",
+    "continue",
+    "ensure that the",
+    "ensure that",
+    "ensure the",
+    "ensure",
+    "take all necessary measures to",
+    "take all necessary measures",
+    "take measures to",
+    "take measures",
+    "take steps to",
+    "take steps",
+    "take",
+    "strengthen",
+    "adopt",
+    "consider",
+    "ratify",
+    "establish",
+    "implement",
+    "further",
+    "increase",
+    "review",
+    "develop",
+    "intensify",
+)
 
 
 class PathsConfig(BaseModel):
@@ -76,31 +113,154 @@ class SplitsConfig(BaseModel):
         return value
 
 
-class AppConfig(BaseModel):
-    """Root configuration validated from a YAML file.
+class PrefixesConfig(BaseModel):
+    """Per-kind embedding prefixes applied before the model sees the text.
 
-    Unknown keys are rejected (``extra="forbid"``) so typos in a config file
-    fail immediately instead of silently changing behavior.
+    Keys are the encode kinds ("query" = the text being classified, "document" =
+    indexed examples, "label" = label names/descriptions). Values are prepended
+    verbatim, or used as templates when they contain ``{content}`` (e.g. the
+    documented EmbeddingGemma prompts). Empty string = no prefix. The right
+    values per model live in configs/ (AGENTS.md: never hard-coded in logic);
+    check them against the model card before running (e.g. e5 "query: " /
+    "passage: ", nomic "classification:" / "search_document:").
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    query: str = ""
+    document: str = ""
+    label: str = ""
+
+
+class EmbedderConfig(BaseModel):
+    """Which embedding backend and model to use, and how to call it.
+
+    ``host``/``timeout`` only apply to the Ollama backend; ``device``/
+    ``revision``/``trust_remote_code`` only to the HF backend. Irrelevant keys
+    are ignored with the backend that does not use them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    backend: str  # "hf" (sentence-transformers) or "ollama" (/api/embed)
+    model_id: str = Field(min_length=1)
+    dimension: int | None = Field(default=None, ge=1)  # Ollama fallback if /api/show hides the size
+    prefixes: PrefixesConfig = Field(default_factory=PrefixesConfig)
+    batch_size: int = Field(default=64, ge=1)
+    device: str | None = None  # HF only: null = let sentence-transformers pick (cuda if present)
+    revision: str | None = None  # HF only: pin the model revision (AGENTS.md)
+    trust_remote_code: bool = False  # HF only
+    host: str = "http://localhost:11434"  # Ollama only; env OLLAMA_HOST overrides an unset value
+    timeout: float = Field(default=120.0, gt=0)  # Ollama HTTP timeout in seconds
+
+
+class CacheConfig(BaseModel):
+    """Disk cache for embeddings (key includes model, prefix, preprocessing)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+
+
+class PreprocessConfig(BaseModel):
+    """Preprocessing applied to texts before embedding (Phase 2).
+
+    Variants: ``raw`` (identity), ``lowercase``, ``strip_leading_formulaic``
+    (remove formulaic openers like "Continue to" from UPR recommendations —
+    17.8% start with "continue"; see PLAN.md section 6). The opener list is
+    config, never code; changing it changes the preprocessing version and thus
+    the cache key, so stale embeddings cannot leak through.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    variant: str = "raw"  # raw | lowercase | strip_leading_formulaic
+    strip_openers: tuple[str, ...] = DEFAULT_STRIP_OPENERS
+
+
+class ProbeConfig(BaseModel):
+    """Parameters of the Phase 2 auxiliary probe on the pairwise dataset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question_transforms: tuple[str, ...] = ("keep", "strip_block")
+    question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
+    recall_ks: tuple[int, ...] = (1, 10)
+
+
+class AppConfig(BaseModel):
+    """Root configuration validated from a YAML file.
+
+    Unknown keys are rejected (``extra="forbid"``) so typos in a config file
+    fail immediately instead of silently changing behavior. ``extends`` names
+    a parent YAML (path relative to this file) merged underneath this one:
+    child values win in a recursive dict merge, so experiment configs only
+    override what they change.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    extends: str | None = None
     run_id: str | None = None
     seed: int = 42
     paths: PathsConfig
     stats: StatsConfig = Field(default_factory=StatsConfig)
     splits: SplitsConfig = Field(default_factory=SplitsConfig)
+    embed: EmbedderConfig | None = None
+    preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
+    cache: CacheConfig = Field(default_factory=CacheConfig)
+    probe: ProbeConfig = Field(default_factory=ProbeConfig)
+
+
+def _parse_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Read a YAML file and require a mapping at the top level."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config file {path} must contain a YAML mapping at the top level.")
+    return raw
+
+
+def _merge_configs(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge the child experiment over its parent config."""
+    merged: dict[str, Any] = dict(parent)
+    for key, value in child.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_configs(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_raw_chain(path: Path, *, _depth: int = 0) -> dict[str, Any]:
+    """Read a config and merge its ``extends`` parent chain underneath it.
+
+    Each file may extend one parent (path relative to the file, or absolute);
+    children override parents in a recursive dict merge. The ``extends`` key
+    itself is removed from the merged payload.
+    """
+    if _depth > 8:
+        raise ValueError(f"config extends chain is too deep at {path} (possible cycle)")
+    raw = _parse_yaml_mapping(path)
+    extends = raw.pop("extends", None)
+    if extends is not None:
+        if not isinstance(extends, str) or not extends.strip():
+            raise ValueError(f"extends must be a path string in {path}")
+        parent_path = Path(extends)
+        if not parent_path.is_absolute():
+            parent_path = path.parent / parent_path
+        raw = _merge_configs(_load_raw_chain(parent_path, _depth=_depth + 1), raw)
+    return raw
 
 
 def load_config(path: str | Path) -> AppConfig:
     """Load and validate a YAML config file into an :class:`AppConfig`.
 
+    An ``extends: <parent.yaml>`` key merges the parent chain underneath this
+    config before validation (see :func:`_load_raw_chain`).
+
     Raises:
-        FileNotFoundError: If the config file does not exist.
-        ValueError: If the file is not valid YAML or does not match the schema.
+        FileNotFoundError: If the config file (or a parent) does not exist.
+        ValueError: If a file is not valid YAML or does not match the schema
+            (pydantic ``ValidationError`` is a ``ValueError`` subclass).
     """
-    config_path = Path(path)
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"Config file {config_path} must contain a YAML mapping at the top level.")
-    return AppConfig.model_validate(raw)
+    return AppConfig.model_validate(_load_raw_chain(Path(path)))

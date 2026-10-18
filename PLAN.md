@@ -33,7 +33,7 @@ Optional extra resource: a label catalog file (`labels.jsonl`) with `name`, an o
 `data/external/omct_pairs.json` (`omct_gti_paragraph_question_golden_pairs`, provided by the collaborator): human-labeled paragraph ↔ GTI question pairs, each judged "same topic?" (label 0/1).
 
 - Shape: `{"pairs": [{"pair_id", "source_csv", "document", "paragraph_number", "paragraph_text", "question_number", "question_text", "label", "label_origin"}], "n_pairs", "n_positive", "n_negative", "name", "description", "question_text_sources", ...}`.
-- Quick inspection (Phase 1.5 stats run will formalize): 1520 pairs, 524 positive / 996 negative, 294 distinct question numbers (~280 distinct texts) across 3 documents, 0 missing question texts, 0 duplicate ids. Paragraphs are long (mean ~890 chars; UPR texts mean ~151).
+- Quick inspection (Phase 1.5 stats run will formalize): 1520 pairs, 524 positive / 996 negative, 294 distinct question numbers/texts across 3 documents, 0 missing question texts, 0 duplicate ids. Paragraphs are long (mean ~890 chars; UPR texts mean ~151).
 - Role, strictly auxiliary:
   1. embedding-model selection probe (similarity AUC + question retrieval, Phase 2),
   2. threshold-calibration evidence (what similarity scores "same topic" actually look like, Phase 4),
@@ -90,21 +90,21 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 ### Phase 1.5: Auxiliary pairwise data integration
 - [x] Loader: `PairRecord` pydantic model with strict validation (drop-and-report malformed entries, same pattern as `Record`) reading `data/external/omct_pairs.json`, driven by a `paths.data_external` config entry. *(module `src/cluster_rag/pairs.py`)*
 - [x] Pairwise stats (CLI, e.g. `uv run cluster-rag stats --pairs`): n pairs, positive/negative balance, distinct questions, documents, duplicate ids, text lengths; written to `results/<run_id>/` and summarized in `docs/experiments.md`. *(run `aux-base` → `results/aux-base/pairs_stats.json`)*
-- [ ] Decide and implement: `data/external/` committed to the repo or gitignored? (open question in section 7; currently gitignored by the `data/*` rule until the collaborator answers)
+- [x] Decide and implement: `data/external/` committed to the repo or gitignored? *(decided 2026-10-16: keep it gitignored/external, see section 7; only the Phase 1.5 stats run and its sha256 provenance reference it)*
 
 **Deliverables:** loader + stats report for the pairwise dataset.
 **Exit:** the pairs load and are summarized; nothing else depends on them yet.
 
 ### Phase 2: Embedding layer
-- [ ] `Embedder` protocol: `encode(texts, kind: "query"|"document"|"label") -> np.ndarray` (L2-normalized float32).
-- [ ] `HFEmbedder` (sentence-transformers) and `OllamaEmbedder` (HTTP `POST /api/embed`, batched).
-- [ ] Model-specific prefix handling (e.g. e5 `query:`/`passage:`, nomic `classification:`/`clustering:`, instruction-style prompts for bge/gte/qwen-embedding). Keep the prefixes in config, never hard-coded in the logic.
-- [ ] Disk cache keyed by `(model_id, prefix, preprocessing_version, sha1(text))`.
-- [ ] Preprocessing variants: `raw`, `strip_leading_phrase` (remove formulaic openers), `lowercase`.
-- [ ] Candidate models to compare (pick 3-5): `intfloat/multilingual-e5-base|large`, `BAAI/bge-m3`, `sentence-transformers/all-MiniLM-L6-v2` (fast baseline), Ollama `embeddinggemma`, `mxbai-embed-large`, `bge-m3`, `snowflake-arctic-embed`.
-- [ ] Auxiliary probe on the pairwise dataset: per candidate embedder, cosine-similarity AUC separating label 1 vs 0, and R@1 / R@10 question retrieval. Independent evidence for model choice, next to the UPR metrics.
+- [x] `Embedder` protocol: `encode(texts, kind: "query"|"document"|"label") -> np.ndarray` (L2-normalized float32). *(module `src/cluster_rag/embed/base.py`; contract enforced by `ensure_embedding_contract` at every backend + cache boundary; prefix templates with `{content}` supported for prompt-wrapping models)*
+- [x] `HFEmbedder` (sentence-transformers) and `OllamaEmbedder` (HTTP `POST /api/embed`, batched). *(`embed/hf.py` records the pinned/loaded revision, `embed/ollama.py` records the digest(es)+context from `/api/tags`+`/api/show`; connection errors say "is `ollama serve` running?", unknown model says `ollama pull <model>`. Full-dataset runs: `results/embed-e5-base-v2/` 3000 texts 4.9s GPU, rerun 3000 cache hits / 0 encoded; `results/embed-arctic2/` 3000 via /api/embed 16.3s. Integration tests marked and run locally.)*
+- [x] Model-specific prefix handling (e.g. e5 `query:`/`passage:`, nomic `classification:`/`clustering:`, instruction-style prompts for bge/gte/qwen-embedding). Keep the prefixes in config, never hard-coded in the logic. *(all prefixes/templates live in `configs/experiments/*.yaml`; verified against model cards: e5, arctic-embed v2 (`query: ` queries only), embeddinggemma (`task: search result | query: {content}` / `title: none | text: {content}`), mxbai (`Represent this sentence for searching relevant passages: ` query-side); a HF integration test asserts dropping the e5 prefix changes vectors)*
+- [x] Disk cache keyed by `(model_id, prefix, preprocessing_version, sha1(text))`. *(module `src/cluster_rag/embed/cache.py`, `CachedEmbedder` decorator over any `Embedder`; one atomic `.npy` per vector under `cache/v1/<model>/<prep-version>/<prefix>/`; hits make zero model calls — proven by unit test and checked end-to-end by the `embed` command metadata)*
+- [x] Preprocessing variants: `raw`, `strip_leading_formulaic` (remove formulaic openers; implemented under exactly this name), `lowercase`. *(module `src/cluster_rag/preprocess.py`; opener list is config (`preprocess.strip_openers`) and hashed into the preprocessing version that forms the cache key — on the real UPR texts the default list modifies 57.97% of records, mean 10.7 chars)*
+- [x] Candidate models to compare (pick 3-5): `intfloat/multilingual-e5-base|large`, `BAAI/bge-m3`, `sentence-transformers/all-MiniLM-L6-v2` (fast baseline), Ollama `embeddinggemma`, `mxbai-embed-large`, `bge-m3`, `snowflake-arctic-embed`. *(implemented as 6, one over budget, all already local on disk — zero downloads — because PLAN's list predates the environment check: all-MiniLM-L6-v2 and intfloat/e5-base-v2 (en-only data → e5-base-v2 preferred over the multilingual variant; e5-large deferred until Phase 9 justifies the cost), BAAI/bge-m3 via HF, snowflake-arctic-embed2 / embeddinggemma / mxbai-embed-large via Ollama; configs in `configs/experiments/probe_*.yaml`, revisions/digests recorded per run)*
+- [x] Auxiliary probe on the pairwise dataset: per candidate embedder, cosine-similarity AUC separating label 1 vs 0, and R@1 / R@10 question retrieval. Independent evidence for model choice, next to the UPR metrics. *(CLI `probe-aux` → `results/aux-probe-<model>/probe_report.json`; per run both question transforms (keep vs strip_block) and truncation diagnostics vs the model context; metrics are pure functions in `eval/metrics.py` (hand-tested); findings in docs/experiments.md: strip_block wins on AUC 6/6; truncation negligible; modest absolute AUCs 0.42-0.58 used as relative evidence; top all-scope AUC e5-base-v2 0.579, best same-doc hit@10 arctic2 0.813-0.826)*
 
-**Exit:** The full dataset embeds with at least 2 backends and cache hits skip re-encoding.
+**Exit:** The full dataset embeds with at least 2 backends and cache hits skip re-encoding. *(met 2026-10-16: `results/embed-e5-base-v2/` (HF, GPU) and `results/embed-arctic2/` (Ollama /api/embed); both 3000 texts, rerun of the e5 job = 3000 cache hits / 0 encoded; cache-key test proves hits make zero model calls.)*
 
 ### Phase 3: Evaluation harness (build before modeling)
 - [ ] Metrics: P@k, R@k (k = 1, 3, 5, 10), nDCG@k, micro-F1, macro-F1, sample-F1, label coverage. Report each per frequency bucket (head / torso / tail / unseen).
@@ -195,8 +195,8 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - How many languages are there, and what is the volume per language? *(Phase 1 finding: one language, `en`, 3000 records total — multilingual models are unnecessary for now)*
 - Latency budget per suggestion? *(was an input to feasibility of the LLM reranker, which is skipped by decision — only matters again if that decision is revisited; cross-encoder latency still TBD in Phase 6)*
 - Expected data size (decides between numpy, FAISS and hnswlib)? *(Phase 1 finding: 3000 records / 68 labels — plain numpy indexes are sufficient; revisit if more data arrives)*
-- Auxiliary pairwise data: commit `data/external/omct_pairs.json` to the repo or keep it external? (ownership/licensing with the collaborator; gitignored until answered)
-- Auxiliary pairwise data: is the "Answer choices" text inside `question_text` signal or noise for embeddings? (test both in the Phase 2 probe)
+- Auxiliary pairwise data: commit `data/external/omct_pairs.json` to the repo or keep it external? *(decided 2026-10-16: keep it gitignored/external — collaborator-owned file; the sha256 recorded in the `aux-` runs is its provenance)*
+- Auxiliary pairwise data: is the "Answer choices" text inside `question_text` signal or noise for embeddings? *(answered by the Phase 2 probe, 2026-10-16: mostly noise — `strip_block` raises pair-AUC for all 6 embedders (e5 +0.087, mxbai +0.068, MiniLM +0.034, bge-m3 +0.019, arctic2 +0.017, embeddinggemma +0.013) and same-doc hit@1 for 4/6; occasional hit@10 losses (arctic2, embeddinggemma) mean the block sometimes carries signal too. Default question-side transform for aux runs: `strip_block`.)*
 - Auxiliary pairwise data: annotation provenance — single annotator or merged/verified several times? (affects how much we trust it for threshold calibration)
 
 ## 8. Milestones

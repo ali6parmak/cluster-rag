@@ -1,0 +1,22 @@
+# Phase 2 aux probe: the fast baseline, sentence-transformers/all-MiniLM-L6-v2.
+# Model card: no prefixes/tasks prompts; a 256-token model -> truncation-prone
+# on the ~890-char auxiliary paragraphs, which is exactly one thing to measure.
+extends: ../base.yaml
+
+run_id: probe-minilm
+
+embed:
+  backend: hf
+  model_id: sentence-transformers/all-MiniLM-L6-v2
+  revision: c9745ed1d9f207416be6d2e6f8de32d1f16199bf
+  batch_size: 64
+  device: null
+  prefixes:
+    query: ""
+    document: ""
+    label: ""
+
+probe:
+  question_transforms: [keep, strip_block]
+  question_block_markers: ["Answer choices:", "Notes:"]
+  recall_ks: [1, 10]

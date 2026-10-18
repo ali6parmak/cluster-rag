@@ -1,0 +1,21 @@
+# Phase 2 aux probe: Ollama mxbai-embed-large (334M, 512 ctx, 1024d).
+# Ollama model card: the query/passage prompt
+# "Represent this sentence for searching relevant passages: " goes on the query
+# side (asymmetric model); documents stay unprefixed. 512-token context truncates.
+extends: ../base.yaml
+
+run_id: probe-mxbai
+
+embed:
+  backend: ollama
+  model_id: mxbai-embed-large:latest
+  batch_size: 64
+  prefixes:
+    query: "Represent this sentence for searching relevant passages: "
+    document: ""
+    label: ""
+
+probe:
+  question_transforms: [keep, strip_block]
+  question_block_markers: ["Answer choices:", "Notes:"]
+  recall_ks: [1, 10]

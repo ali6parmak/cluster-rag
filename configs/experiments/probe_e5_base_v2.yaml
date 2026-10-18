@@ -1,0 +1,22 @@
+# Phase 2 aux probe: intfloat/e5-base-v2 (sentence-transformers).
+# Model card: "query: " on the query side, "passage: " on the indexed side.
+# Paragraphs = indexed (document kind), questions = queries. 512-token context.
+extends: ../base.yaml
+
+run_id: probe-e5-base-v2
+
+embed:
+  backend: hf
+  model_id: intfloat/e5-base-v2
+  revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd
+  batch_size: 64
+  device: null
+  prefixes:
+    query: "query: "
+    document: "passage: "
+    label: "query: "
+
+probe:
+  question_transforms: [keep, strip_block]
+  question_block_markers: ["Answer choices:", "Notes:"]
+  recall_ks: [1, 10]

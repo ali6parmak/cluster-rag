@@ -1,0 +1,22 @@
+# Phase 2 aux probe: BAAI/bge-m3 (sentence-transformers), the long-context HF
+# candidate: 8192-token context via XLM-R -> nothing in this dataset truncates.
+# BGE-M3 works without instruction prefixes (dense/CLS in its ST config).
+extends: ../base.yaml
+
+run_id: probe-bge-m3
+
+embed:
+  backend: hf
+  model_id: BAAI/bge-m3
+  revision: 9a0624b896d81da7492a910ffa53731274b6cf3d
+  batch_size: 32
+  device: null
+  prefixes:
+    query: ""
+    document: ""
+    label: ""
+
+probe:
+  question_transforms: [keep, strip_block]
+  question_block_markers: ["Answer choices:", "Notes:"]
+  recall_ks: [1, 10]

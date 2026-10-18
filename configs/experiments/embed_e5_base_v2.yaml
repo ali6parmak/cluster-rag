@@ -1,0 +1,22 @@
+# Phase 2: full-dataset embedding with intfloat/e5-base-v2 (sentence-transformers).
+#
+# Model card prefixes (AGENTS.md): "query: " for texts being classified, "passage: "
+# for indexed documents. Labels are retrievable candidates, treated as the query
+# side here (Phase 4 may ablate "passage: " for labels).
+extends: ../base.yaml
+
+run_id: embed-e5-base-v2
+
+embed:
+  backend: hf
+  model_id: intfloat/e5-base-v2
+  revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd  # pin the cache snapshot
+  batch_size: 128
+  device: null  # null = sentence-transformers picks (cuda when present)
+  prefixes:
+    query: "query: "
+    document: "passage: "
+    label: "query: "
+
+preprocess:
+  variant: raw

@@ -1,0 +1,55 @@
+{
+  "phase": 2,
+  "generated": "2026-10-16",
+  "provenance": {
+    "source": "data/external/omct_pairs.json",
+    "source_sha256": "70a42ba2a42434f0...",
+    "note": "auxiliary only: never merged into UPR artifacts, never reported as a UPR metric (PLAN.md section 2)"
+  },
+  "corpus": {
+    "n_pairs": 1520,
+    "n_positive": 524,
+    "n_negative": 996,
+    "n_distinct_paragraph_texts": 225,
+    "n_distinct_question_texts": 294,
+    "n_documents": 3
+  },
+  "embed_runs": [
+    {
+      "run_id": "embed-e5-base-v2",
+      "backend": "hf",
+      "model_id": "intfloat/e5-base-v2",
+      "revision": "f52bf8ec8c7124536f0efb74aca902b2995e5bcd",
+      "dimension": 768,
+      "context_tokens": 512,
+      "prefixes": {"query": "query: ", "document": "passage: ", "label": "query: "},
+      "first_pass_seconds": 4.937,
+      "rerun_seconds": 3.453,
+      "rerun_cache_hits_of_3000": 3000
+    },
+    {
+      "run_id": "embed-arctic2",
+      "backend": "ollama",
+      "model_id": "snowflake-arctic-embed2:latest",
+      "digest": "30685f516da4acfcce0b8afee7444afc9b60bc9628f269add5f7730c5e4be3b0",
+      "dimension": 1024,
+      "context_tokens": 8192,
+      "prefixes": {"query": "query: ", "document": "", "label": "query: "},
+      "first_pass_seconds": 16.271
+    }
+  ],
+  "aux_probe": [
+    {"run_id": "aux-probe-minilm", "backend": "hf", "model": "sentence-transformers/all-MiniLM-L6-v2", "revision": "c9745ed1d9f207416be6d2e6f8de32d1f16199bf", "dim": 384, "ctx": 256,   "auc_keep": 0.4190, "auc_strip": 0.4526, "same_doc_hit1_keep": 0.355, "same_doc_hit1_strip": 0.381, "same_doc_hit10_keep": 0.723, "same_doc_hit10_strip": 0.748, "all_hit1_best": 0.342, "paragraphs_over_context": 4,  "n_paragraphs": 225, "token_source": "tokenizer-exact"},
+    {"run_id": "aux-probe-e5-base-v2", "backend": "hf", "model": "intfloat/e5-base-v2", "revision": "f52bf8ec8c7124536f0efb74aca902b2995e5bcd", "dim": 768, "ctx": 512,   "auc_keep": 0.4921, "auc_strip": 0.5793, "same_doc_hit1_keep": 0.271, "same_doc_hit1_strip": 0.374, "same_doc_hit10_keep": 0.723, "same_doc_hit10_strip": 0.774, "all_hit1_best": 0.316, "paragraphs_over_context": 0, "n_paragraphs": 225, "token_source": "tokenizer-exact"},
+    {"run_id": "aux-probe-bge-m3", "backend": "hf", "model": "BAAI/bge-m3", "revision": "9a0624b896d81da7492a910ffa53731274b6cf3d", "dim": 1024, "ctx": 8192, "auc_keep": 0.4501, "auc_strip": 0.4687, "same_doc_hit1_keep": 0.284, "same_doc_hit1_strip": 0.361, "same_doc_hit10_keep": 0.690, "same_doc_hit10_strip": 0.748, "all_hit1_best": 0.323, "paragraphs_over_context": 0, "n_paragraphs": 225, "token_source": "tokenizer-exact"},
+    {"run_id": "aux-probe-arctic2", "backend": "ollama", "model": "snowflake-arctic-embed2:latest", "digest": "30685f516da4acfc...", "dim": 1024, "ctx": 8192, "auc_keep": 0.4512, "auc_strip": 0.4680, "same_doc_hit1_keep": 0.355, "same_doc_hit1_strip": 0.355, "same_doc_hit10_keep": 0.826, "same_doc_hit10_strip": 0.813, "all_hit1_best": 0.316, "paragraphs_over_context": 0, "n_paragraphs": 225, "token_source": "chars-over-4-estimate"},
+    {"run_id": "aux-probe-embeddinggemma", "backend": "ollama", "model": "embeddinggemma:latest", "digest": "3a2d262bdb75dd10...", "dim": 768, "ctx": 2048, "auc_keep": 0.5238, "auc_strip": 0.5371, "same_doc_hit1_keep": 0.400, "same_doc_hit1_strip": 0.458, "same_doc_hit10_keep": 0.826, "same_doc_hit10_strip": 0.794, "all_hit1_best": 0.413, "paragraphs_over_context": 0, "n_paragraphs": 225, "token_source": "chars-over-4-estimate", "note": "ollama build is QAT Q4_0"},
+    {"run_id": "aux-probe-mxbai", "backend": "ollama", "model": "mxbai-embed-large:latest", "digest": "468836162de7f81e...", "dim": 1024, "ctx": 512, "auc_keep": 0.4871, "auc_strip": 0.5552, "same_doc_hit1_keep": 0.426, "same_doc_hit1_strip": 0.413, "same_doc_hit10_keep": 0.781, "same_doc_hit10_strip": 0.768, "all_hit1_best": 0.381, "paragraphs_over_context": 1, "n_paragraphs": 225, "token_source": "chars-over-4-estimate"}
+  ],
+  "conclusions": [
+    "strip_block (drop 'Question:' label + 'Answer choices:'/Notes: blocks) raises pair-AUC for 6/6 embedders (max +0.087 e5-base-v2) -> adopted as the default question-side transform for aux data",
+    "truncation not a blocker at current sizes: max paragraph ~478-564 tokens; only MiniLM (256 ctx) truncates 1.8% of paragraphs, mxbai (512) 0.4%; those rows still hit top-10 in same-doc ranking",
+    "absolute AUCs modest (0.42-0.58): bi-encoder paragraph<->question discrimination is hard here (same-document negatives are topically adjacent); treat as relative model evidence",
+    "leadership varies by metric: e5-base-v2 best AUC (0.579 strip), mxbai second (0.555); arctic2/embeddinggemma best same-doc hit@10 (0.826/0.794-0.813); no single dominant model - UPR harness (Phase 3/4) is the next filter"
+  ]
+}

@@ -37,3 +37,38 @@ digest in the notes.
 - **Documents (3):** UN-style "Concluding observations ... Colombia" 845 pairs (211 positive, 25%), "Human rights in Colombia Amnesty International" 99 pairs (79 positive, 80%), "Observaciones preliminares colombia 2024" 576 pairs (234 positive, 41%) — per-document class balance differs strongly
 - **Paragraph length:** mean 889.8 chars (min 32, max 2255) — much longer than UPR texts; embedding truncation must be checked in Phase 2
 - **Zero duplicate ids; zero missing question texts**; labels are human-reviewed (metadata: positives from merged Questions column, negatives reviewer-confirmed non-links)
+
+## Phase 2: embedding layer (backends, cache, preprocessing)
+
+### Full-dataset embed runs (Phase 2 exit criterion: ≥ 2 backends, cache hits skip re-encoding)
+
+- **Run:** `embed-e5-base-v2` (2026-10-16, `results/embed-e5-base-v2/`, config `configs/experiments/embed_e5_base_v2.yaml`) — **HF backend**, `intfloat/e5-base-v2`, revision `f52bf8ec8c7124536f0efb74aca902b2995e5bcd`, dim 768, max_seq_length 512, device cuda:0, prefixes query=`query: ` / document=`passage: ` / label=`query: `. First pass: 3000 texts encoded in **4.94 s** (3000 misses/stored); **rerun: 3000 cache hits, 0 encoded, 3.45 s** (meta.json in the results folder is the rerun = the cache-hit proof artifact). Output: `embeddings.npz` (ids + `vectors_document`).
+- **Run:** `embed-arctic2` (2026-10-16, `results/embed-arctic2/`, config `configs/experiments/embed_arctic2.yaml`) — **Ollama backend**, `snowflake-arctic-embed2:latest` (digest `30685f516da4...`), dim 1024, ctx 8192, prefix query=`query: ` / document="". 3000 texts via batched `POST /api/embed` in **16.27 s**; **rerun: 3000 cache hits, 0 encoded, 0.43 s** (meta.json shows the hit stats). The arctic-embed-v2 model card instructs query-prefix only; verified before the run.
+- Cache layout: `cache/v1/<model_id>/<preprocessing_version>/<prefix>/<sha1(text)>.npy` (URL-quoted components), one atomic `.npy` per vector; cache-hit correctness proven by unit test (hits make zero model calls) and end-to-end above.
+
+### Preprocessing variants
+- `raw`, `lowercase`, `strip_leading_formulaic` implemented (`src/cluster_rag/preprocess.py`); openers config-driven and hashed into the preprocessing version (cache honesty). On the real UPR texts the default opener list (top-8 lead verbs + connector forms from the Phase 1 prefix analysis) **modifies 58.0% of records** (1739/3000, mean 10.7 chars), including all 535 "continue..." texts (17.8%). The effect on UPR quality itself is measured in Phase 4 ablations (embedding × preprocessing).
+
+### Auxiliary probe (Phase 2, last checkbox): 6 candidate embedders × question transform
+
+Scope: `data/external/omct_pairs.json` only (auxiliary, never a UPR metric). Corpus: 1520 judged pairs (524 positive / 996 negative), 225 distinct paragraphs (deduplicated by text), 294 distinct questions. Two question transforms compared per model: `keep` (raw question incl. "Question:/Answer choices:"/Notes: furniture) vs `strip_block` (drop it). Question = query side, paragraph = document side (models with asymmetric instructions prefixed accordingly, per model cards). Token counts: exact (HF tokenizer) or chars/4 estimate (Ollama, documented per report).
+
+| run_id (aux-prefix) | model (backend) | dim | ctx | keep→strip pair-AUC | keep→strip hit@1 same-doc | keep→strip hit@10 same-doc | recall@10 best | paragraphs over ctx |
+|---|---|---|---|---|---|---|---|---|
+| `aux-probe-minilm` | all-MiniLM-L6-v2 (hf) | 384 | 256 | 0.4190 → 0.4526 | 0.355 → 0.381 | 0.723 → 0.748 | 0.508–0.529 | **4/225 (1.8%)** |
+| `aux-probe-e5-base-v2` | intfloat/e5-base-v2 (hf) | 768 | 512 | 0.4921 → **0.5793** | 0.271 → 0.374 | 0.723 → 0.774 | 0.485–0.540 | 0 |
+| `aux-probe-bge-m3` | BAAI/bge-m3 (hf) | 1024 | 8192 | 0.4501 → 0.4687 | 0.284 → 0.361 | 0.690 → 0.748 | 0.465–0.476 | 0 |
+| `aux-probe-arctic2` | snowflake-arctic-embed2 (ollama) | 1024 | 8192 | 0.4512 → 0.4680 | 0.355 → 0.355 | **0.826** → 0.813 | 0.570–0.593 | 0 |
+| `aux-probe-embeddinggemma` | embeddinggemma:latest (ollama, Q4_0 QAT) | 768 | 2048 | 0.5238 → 0.5371 | 0.400 → **0.458** | 0.826 → 0.794 | 0.582–0.650 | 0 |
+| `aux-probe-mxbai` | mxbai-embed-large:latest (ollama) | 1024 | 512 | 0.4871 → 0.5552 | 0.426 → 0.413 | 0.781 → 0.768 | 0.558–0.582 | **1/225 (0.4%)** |
+
+Digests/revisions recorded in each `results/aux-probe-*/probe_report.json` (ollama digests `30685f...` arctic2, `3a2d26...` gemma, `468836...` mxbai; HF revisions pinned in the configs).
+
+**Findings:**
+1. **Question furniture is mostly noise → `strip_block` adopted as the default for question-side text** (PLAN §7 open question answered): pair-AUC improves for **6/6** embedders (+0.013 … +0.087; strongest e5 +0.087, mxbai +0.068), same-doc hit@1 for 4/6 (embeddinggemma +0.058, e5 +0.103); a few same-doc hit@10 drop (arctic2 −0.013, embeddinggemma −0.032) so the block occasionally carries topical signal (answer-choice words), but the AUC direction is consistent everywhere.
+2. **Truncation is not a blocker at current sizes**: max paragraph ≈ 564 est. tokens (chars/4) / 478 exact (bge-m3 tokenizer) — only MiniLM (256 ctx) truncates 1.8% of paragraphs and mxbai (512) 0.4%; even those over-context rows returned their gold question in the top-10 (n=4: hit@10 1.000; n=1: hit@10 1.000). Long-context models show 0% truncation.
+3. **Absolute AUCs are modest (0.42–0.58)**: bi-encoder paragraph↔question discrimination on this corpus is hard (negatives are heavily same-document, topically adjacent); treat the numbers as *relative model evidence*, not absolute retrieval quality. Under `strip_block`: e5-base-v2 (0.579) and mxbai (0.555) lead on AUC; arctic2/embeddinggemma lead same-document hit@10 (0.81/0.79).
+4. **Candidate pool (6, all already local — zero downloads; PLAN said "pick 3-5")**: MiniLM (fast baseline), e5-base-v2 (prefix asymmetry), bge-m3 (long-context HF), arctic2 / embeddinggemma / mxbai (Ollama). No single model dominates every column; the UPR `evaluate` harness (Phase 3/4) is the next filter. embeddinggemma is strong at hit@1 (best 0.458 same-doc) despite Q4 quantization.
+5. 225 distinct paragraphs: paragraph texts repeat across documents/paragraph numbers, so dedup-by-text matters before embedding (the cache does it content-addressed anyway); question furniture removal leaves 294 distinct questions with 0 collisions on this data.
+
+**Next:** Phase 3 evaluation harness (metrics incl. the pairwise-retrieval functions above, shortlist recall, trivial baselines) before any Phase 4 modeling. Commit-able summary artifact (gitignored runs stay out of the repo): `results/summaries/phase2_aux_probe.json`.

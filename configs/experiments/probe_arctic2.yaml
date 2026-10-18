@@ -1,0 +1,19 @@
+# Phase 2 aux probe: Ollama snowflake-arctic-embed2 (v2.0, 566M, 8192 ctx).
+# Model card: queries take the "query: " prefix; documents none (CLS token).
+extends: ../base.yaml
+
+run_id: probe-arctic2
+
+embed:
+  backend: ollama
+  model_id: snowflake-arctic-embed2:latest
+  batch_size: 64
+  prefixes:
+    query: "query: "
+    document: ""
+    label: "query: "
+
+probe:
+  question_transforms: [keep, strip_block]
+  question_block_markers: ["Answer choices:", "Notes:"]
+  recall_ks: [1, 10]
