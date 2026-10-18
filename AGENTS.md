@@ -11,6 +11,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
 3. **Explain before large changes.** For new dependencies, schema changes, or refactors touching more than 3 modules, describe the plan and wait for approval.
 4. **Never claim results you did not measure.** Every metric you report must come from a run in `results/` and appear in `docs/experiments.md`.
 5. **If something is ambiguous, ask.** Do not guess label semantics, data formats or thresholds. Add open questions to `PLAN.md` section 7.
+6. **Explain plainly and state the scope.** When discussing concepts, results or reviews: one concept per paragraph, short sentences, define jargon on first use, and pair formal definitions with a small concrete example. Always say which dataset a claim or metric applies to — the UPR train/val/test data or the auxiliary OMCT pairwise data (`aux-` runs) — and which split where relevant. Never leave the dataset implicit for the reader to guess.
 
 ## Repository layout (target)
 
@@ -108,6 +109,7 @@ Each command writes to `results/<run_id>/`: `config.yaml` (resolved), `metrics.j
 - Unit tests for metrics (hand-computed small cases), fusion and thresholds, Rocchio updates, the feedback store, and cache keys.
 - Use a tiny fixture dataset (`tests/fixtures/sample.jsonl`, about 20 rows) and a **fake embedder** (deterministic hash-based vectors) so tests need neither network access nor model downloads.
 - Ollama/HF integration tests are marked `@pytest.mark.integration` and skipped by default.
+- Integration tests skip by default; run them explicitly with `uv run pytest -o adopts= -m integration -q`.
 
 ## Experiment log format (`docs/experiments.md`)
 Append one row per run:
