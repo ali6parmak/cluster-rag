@@ -30,12 +30,19 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── cache/                   # gitignored: embedding cache
     ├── results/                 # gitignored except summaries: one folder per run_id
     ├── docs/
-    │   └── experiments.md       # append-only experiment log
+    │   ├── experiments.md       # append-only experiment log
+    │   └── experiments_table.md # comparison tables, auto-appended by CLI commands
     ├── notebooks/               # exploration only, no logic that others import
+    ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
     ├── src/cluster_rag/
     │   ├── config.py
     │   ├── data.py              # Record model, loading, validation, splits
     │   ├── preprocess.py
+    │   ├── pairs.py             # auxiliary PairRecord model + loader/validation
+    │   ├── dataset_stats.py     # UPR dataset statistics (pure functions)
+    │   ├── aux_probe.py         # auxiliary probe driver (numpy + eval metrics only)
+    │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
+    │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── embed/
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend
@@ -75,7 +82,7 @@ Many embedding models expect task prefixes, and a wrong prefix silently hurts qu
 Check the prefixes against the model card before running experiments.
 
 ## Coding conventions
-- Type hints everywhere, and docstrings on public functions. Run `ruff check` and `ruff format` before finishing.
+- Type hints everywhere, and docstrings on public functions. Run `ruff check` and `ruff format` over `src`, `tests` *and* `experiments/` before finishing (sweep files live outside src).
 - Embeddings are `np.float32`, shape `(n, d)`, L2-normalized. Assert this at index boundaries.
 - Pure functions for scoring and metrics, with no hidden global state. Components take a config object.
 - Dependency direction: `cli.py` orchestrates, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
@@ -96,7 +103,9 @@ Check the prefixes against the model card before running experiments.
 
     uv run cluster-rag stats      --config configs/base.yaml
     uv run cluster-rag split      --config configs/base.yaml
-    uv run cluster-rag embed      --config configs/experiments/e5_base.yaml
+    uv run cluster-rag embed      --config configs/experiments/embed_e5_base_v2.yaml
+    uv run cluster-rag probe-aux  --config configs/experiments/probe_e5_base_v2.yaml
+    uv run cluster-rag sweep      --file experiments/aux_probe_sweep.py
     uv run cluster-rag evaluate   --config configs/experiments/knn_proto.yaml --split val
     uv run cluster-rag clusters   --config configs/experiments/hdbscan.yaml
     uv run cluster-rag simulate   --config configs/experiments/feedback_sim.yaml

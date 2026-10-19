@@ -33,7 +33,7 @@ Optional extra resource: a label catalog file (`labels.jsonl`) with `name`, an o
 `data/external/omct_pairs.json` (`omct_gti_paragraph_question_golden_pairs`, provided by the collaborator): human-labeled paragraph ↔ GTI question pairs, each judged "same topic?" (label 0/1).
 
 - Shape: `{"pairs": [{"pair_id", "source_csv", "document", "paragraph_number", "paragraph_text", "question_number", "question_text", "label", "label_origin"}], "n_pairs", "n_positive", "n_negative", "name", "description", "question_text_sources", ...}`.
-- Quick inspection (Phase 1.5 stats run will formalize): 1520 pairs, 524 positive / 996 negative, 294 distinct question numbers/texts across 3 documents, 0 missing question texts, 0 duplicate ids. Paragraphs are long (mean ~890 chars; UPR texts mean ~151).
+- Formalized by the Phase 1.5 stats run (`aux-base`): 1520 pairs, 524 positive / 996 negative, 294 distinct question numbers/texts across 3 documents, 0 missing question texts, 0 duplicate ids. Paragraphs are long (mean ~890 chars; UPR texts mean ~151). Text repeats across documents (verified Phase 2.5): **0/225** paragraph texts, **186/294** question texts.
 - Role, strictly auxiliary:
   1. embedding-model selection probe (similarity AUC + question retrieval, Phase 2),
   2. threshold-calibration evidence (what similarity scores "same topic" actually look like, Phase 4),
@@ -111,7 +111,7 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - [x] Question transform default: `strip_block` becomes the probe's default; `keep` only as an explicit comparison. *(schema default `probe.question_transforms: [strip_block]` + config-time validator for unknown transforms; the 6 `probe_*.yaml` configs rely on the default; `keep` returns by listing `[strip_block, keep]` — covered by tests incl. the CLI end-to-end in comparison mode. Phase 2 keep-vs-strip evidence stays in the original `aux-probe-*` artifacts and the log)*
 - [x] Probe breakdown per (document, source_csv): n pairs, positives, pair-AUC, same-doc hit@1 / hit@10 reusing the pure metrics with group row masks; counts shown next to every number. *(module `aux_probe.group_breakdown`, wired into `run_probe` per transform variant; `subset_pair_metrics` gained the candidate-column restriction used by the same-doc scope; single-class groups report `pair_auc: null` + note; counts and n_rows_with_gold in the report and the CLI printout — one document has only 99 pairs)*
 - [x] Comparison table `docs/experiments_table.md`: human-readable markdown tables, one per (phase, command), auto-appended by the CLI commands; delete `results/summaries/phase2_aux_probe.json` once the tables carry its content. *(`embed`/`probe-aux` (and therefore the sweep) append rows upserted by run key — run_id (+ transform/document per row kind); path is config `paths.experiment_table` (unset → skip); module `src/cluster_rag/experiment_table.py`; three Phase 2 tables: embed, probe-aux, probe-aux groups. The summary-JSON delete happens with the Phase 2.5 runs)*
-- [x] Experiment sweep as Python: typed `SweepCell`s (label, command, config overrides) built with plain loops; `define_sweep(cells, base=...)` resolves every cell over the base config into a validated `AppConfig`; a new `cluster-rag sweep --file ...` command executes the resolved cells through the existing command functions; one run folder per cell with the frozen resolved config, exactly as single runs. *(`src/cluster_rag/sweep.py` — validation of command/label/uniqueness/forbidden `run_id`/`extends` overrides; `experiments/aux_probe_sweep.py` holds the 6-model probe grid (`labels probe2-*` → `results/aux-probe2-*`); first failing cell aborts; table rows come from the commands, sweep code only produces configs)*
+- [x] Experiment sweep as Python: typed `SweepCell`s (label, command, config overrides) built with plain loops; `define_sweep(cells, base=...)` resolves every cell over the base config into a validated `AppConfig`; a new `cluster-rag sweep --file ...` command executes the resolved cells through the existing command functions; one run folder per cell with the frozen resolved config, exactly as single runs. *(`src/cluster_rag/sweep.py` — validation of command/label/uniqueness/forbidden `run_id`/`extends` overrides; `experiments/aux_probe_sweep.py` holds the 6-model probe grid (`labels probe2-*` → `results/aux-probe2-*`); first failing cell aborts; table rows come from the commands, sweep code only produces configs; the sweep resolves over `configs/base.yaml` only — `configs/experiments/probe_*.yaml` are not sweep inputs)*
 - [x] Log correction (Phase 2 finding 5): paragraph texts do **not** repeat across documents — 0/225 in more than one document (they repeat only within documents, against different questions); 186/294 question texts are judged in >1 document (handled by one column per text + per-document doc sets + per-paragraph golds; the all-scope never counts them wrong). *(verified on the data; `summarize_pairs` now carries both counts, recorded in the `aux-base` stats rerun and the Phase 2.5 log section)*
 
 **Exit:** Phase 2 artifacts regenerate under the final layout/configs with identical strip-block numbers; the sweep infrastructure exists for Phase 3+ grids. *(met 2026-10-19: cache rebuilt under the slug layout — warm passes 3000 hits / 0 encoded per model; six `aux-probe2-*` sweep runs reproduce the Phase 2 strip_block numbers digit-for-digit; tables in `docs/experiments_table.md`)*
@@ -120,19 +120,19 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - [ ] Metrics: P@k, R@k (k = 1, 3, 5, 10), nDCG@k, micro-F1, macro-F1, sample-F1, label coverage. Report each per frequency bucket (head / torso / tail / unseen).
 - [ ] **Shortlist recall@m** (m = 20, 50, 100): is the gold label anywhere in the retrieved candidates? This is the ceiling for any reranker.
 - [ ] Trivial baselines: most-frequent labels and random.
-- [ ] Pairwise-retrieval metrics (pure functions in `eval/metrics.py`): per paragraph, rank the distinct questions by embedding similarity and report recall@k against the manual labels; exercised by the Phase 2/3 auxiliary probe.
-- [ ] Results written as JSON to `results/<run_id>/metrics.json` together with the resolved config, plus a one-line summary appended to `docs/experiments.md`.
+- [x] Pairwise-retrieval metrics (pure functions in `eval/metrics.py`): per paragraph, rank the distinct questions by embedding similarity and report recall@k against the manual labels; exercised by the Phase 2/3 auxiliary probe. *(built in Phase 2 as the probe's dependency — `roc_auc`, `pairwise_retrieval_metrics`, `subset_pair_metrics` (incl. per-row candidate columns), all hand-tested; the Phase 2.5 group breakdown adds group row masks)*
+- [ ] Results written as JSON to `results/<run_id>/metrics.json` together with the resolved config; plus a table row appended to `docs/experiments_table.md` (auto) and a narrative row in `docs/experiments.md`.
 
 **Exit:** One command evaluates any predictor on val or test.
 
 ### Phase 4: Retrieval baselines (no clustering yet)
-- [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature).
+- [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute)*
 - [ ] **Label prototypes:** mean of the example embeddings per label.
 - [ ] **Zero-shot label embeddings:** embed label names and descriptions, optionally with templates such as "This recommendation is about {label}."
 - [ ] **Fusion:** `score = a*knn + b*proto + c*zeroshot`. Tune the weights on val.
-- [ ] **Thresholding:** global, per-label (calibrated on val) and top-k with a minimum score. Compare them.
+- [ ] **Thresholding:** global, per-label (calibrated on val) and top-k with a minimum score. Compare them. *(calibration evidence, strictly aux-annotated: OMCT pair score distributions, including goldless paragraphs' top similarities — the "should answer nothing" rows; val decides any operating point)*
 - [ ] Optional lexical signal: BM25 over texts and label names, for hybrid retrieval.
-- [ ] Ablations: embedding model x preprocessing x k x fusion weights.
+- [ ] Ablations: embedding model x preprocessing x k x fusion weights. *(staged: Phase 3 val evidence narrows the model pool first; grids run as sweep files)*
 
 **Exit:** The best config is chosen on val, with test results reported once. Expect kNN + prototype fusion to clearly beat the trivial baselines.
 
@@ -185,10 +185,12 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - [ ] Minimal Streamlit or Gradio UI: show a text, the suggested labels with evidence (nearest examples), and accept/reject/add buttons.
 
 ## 5. Experiment tracking
-- Every run gets a `run_id`, a frozen config and metrics in `results/`, plus one line in `docs/experiments.md`.
+- Every run gets a `run_id`, a frozen config and metrics in `results/`, plus a narrative row/section in `docs/experiments.md` (append-only).
+- Comparison tables: `docs/experiments_table.md` — one markdown table per (phase, command), auto-appended by the CLI commands and upserted by run key (the latest run per key wins). The human-readable leaderboard.
+- Grids: sweep files under `experiments/` define grids as typed `SweepCell`s resolved over `configs/base.yaml` (`define_sweep`); `cluster-rag sweep --file <file>.py` executes the cells through the existing command functions (one run folder per cell with the frozen config), so sweep code only produces configs.
 - Auxiliary-dataset runs get an `aux-` run_id prefix and clearly-marked rows in the experiment log (never mixed with UPR rows).
-- Fix all random seeds. Record model ids and versions (HF revision or Ollama model digest).
-- Optional: MLflow or a simple CSV leaderboard.
+- Fix all random seeds. Record model ids and versions — HF models pinned by revision in the config (the backend also records the loaded snapshot), Ollama by digest.
+- MLflow not planned for now: the comparison tables fulfill the leaderboard role (revisit only if run volume demands it).
 
 ## 6. Risks and mitigations
 | Risk | Mitigation |
@@ -208,9 +210,10 @@ Each phase lists **tasks**, **deliverables** and **exit criteria**. Do them in o
 - Auxiliary pairwise data: commit `data/external/omct_pairs.json` to the repo or keep it external? *(decided 2026-10-16: keep it gitignored/external — collaborator-owned file; the sha256 recorded in the `aux-` runs is its provenance)*
 - Auxiliary pairwise data: is the "Answer choices" text inside `question_text` signal or noise for embeddings? *(answered by the Phase 2 probe, 2026-10-16: mostly noise — `strip_block` raises pair-AUC for all 6 embedders (e5 +0.087, mxbai +0.068, MiniLM +0.034, bge-m3 +0.019, arctic2 +0.017, embeddinggemma +0.013) and same-doc hit@1 for 4/6; occasional hit@10 losses (arctic2, embeddinggemma) mean the block sometimes carries signal too. Default question-side transform for aux runs: `strip_block`.)*
 - Auxiliary pairwise data: annotation provenance — single annotator or merged/verified several times? (affects how much we trust it for threshold calibration)
+- Embedding-model pool: stay with the recorded 6 candidates, or widen — more models already in the local HF/Ollama caches (e.g. all-mpnet-base-v2, nomic-embed-text-v1.5) and/or other models worth testing — before Phase 4 grids are locked? *(a sweep-file extension is a few lines and minutes to run; decide with Phase 3 val evidence in hand)*
 
 ## 8. Milestones
-1. **M1:** Phases 0-3, the evaluation harness with baselines. (Phase 1.5 auxiliary data + probe included)
+1. **M1:** Phases 0-3, the evaluation harness with baselines. (Phase 1.5 auxiliary data + probe included, and the Phase 2.5 review touch-ups.)
 2. **M2:** Phase 4, a strong retrieval baseline.
 3. **M3:** Phases 5-6, the clustering report and reranker decision.
 4. **M4:** Phases 7-8, feedback + active learning shown working in simulation.
