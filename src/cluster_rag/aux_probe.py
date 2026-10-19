@@ -14,11 +14,13 @@ per candidate embedder and question-text transform:
   whose token count exceeds the budget and those rows' retrieval metrics vs
   the unaffected rest.
 
-Two question transforms are compared (question furniture as signal or noise,
-PLAN.md section 7 open question): ``keep`` (text as-is) and ``strip_block``
-(drop the "Question: " label and the trailing "Answer choices:"/"Notes:"
-blocks). Paragraphs are preprocessed with the config variant (default raw);
-both question variants are scored against the same paragraph vectors.
+Two question transforms exist (question furniture as signal or noise,
+PLAN.md section 7 answer): ``strip_block`` (drop the "Question: " label and
+the trailing "Answer choices:"/"Notes:" blocks) is the default, and ``keep``
+(text as-is) remains available for an explicit side-by-side comparison by
+listing both in ``probe.question_transforms``. Paragraphs are preprocessed
+with the config variant (default raw); transforms are scored against the same
+paragraph vectors.
 
 The embedding backend is injected (protocol port) so tests run a deterministic
 fake; the metrics are pure functions from :mod:`cluster_rag.eval.metrics`.
@@ -213,6 +215,76 @@ def same_document_columns(corpus: ProbeCorpus) -> list[list[int]]:
     return scopes
 
 
+def group_breakdown(
+    records: Sequence[PairRecord],
+    corpus: ProbeCorpus,
+    similarities: np.ndarray,
+    gold: Sequence[set[int]],
+    *,
+    same_doc_columns: Sequence[Sequence[int]],
+    ks: Sequence[int],
+) -> dict[str, Any]:
+    """Per (document, source_csv) judged-pair breakdown with counts beside numbers.
+
+    The overall probe numbers can hide document-level effects: per-document
+    class balance differs strongly (e.g. 80% positive in one column-source
+    document vs 25% in another) and the smallest document carries only ~99 of
+    the 1520 pairs. For each group this reports the pair counts, the pair-AUC
+    restricted to the group's judged pairs, and the same-document retrieval
+    metrics restricted to the group's paragraph rows — reusing the pure
+    metrics (:func:`roc_auc`, :func:`subset_pair_metrics`) with group masks.
+    A group without both classes reports ``pair_auc: null`` with a note
+    instead of inventing a number.
+    """
+    pair_indices_by_group: dict[tuple[str, str], list[int]] = {}
+    for pair_index, record in enumerate(records):
+        key = (record.document, record.source_csv)
+        pair_indices_by_group.setdefault(key, []).append(pair_index)
+
+    groups: list[dict[str, Any]] = []
+    for (document, source_csv), pair_indices in pair_indices_by_group.items():
+        pair_rows = np.asarray(corpus.rows[pair_indices], dtype=np.int64)
+        labels = [int(corpus.labels[pair_index]) for pair_index in pair_indices]
+        scores = similarities[pair_rows, np.asarray(corpus.columns)[pair_indices]].tolist()
+        try:
+            pair_auc: float | None = roc_auc(labels, scores)
+            pair_auc_note = None
+        except ValueError as exc:
+            pair_auc, pair_auc_note = None, str(exc)
+
+        row_mask = np.zeros(len(corpus.paragraphs), dtype=bool)
+        row_mask[sorted({int(row) for row in pair_rows})] = True
+        metrics = subset_pair_metrics(
+            similarities,
+            gold,
+            ks,
+            row_mask,
+            bucket=f"document={document!r} source_csv={source_csv!r}",
+            candidate_columns=same_doc_columns,
+        )
+        groups.append(
+            {
+                "document": document,
+                "source_csv": source_csv,
+                "n_pairs": len(pair_indices),
+                "n_positive": sum(label == 1 for label in labels),
+                "n_negative": sum(label == 0 for label in labels),
+                "pair_auc": pair_auc,
+                "pair_auc_note": pair_auc_note,
+                "n_rows": int(metrics["n_rows"]),
+                "n_rows_with_gold": int(metrics["n_rows_with_gold"]),
+                "same_document": metrics if metrics["n_rows_with_gold"] else None,
+            }
+        )
+
+    return {
+        "n_groups": len(groups),
+        "n_pairs": sum(group["n_pairs"] for group in groups),
+        "n_positive": sum(group["n_positive"] for group in groups),
+        "groups": groups,
+    }
+
+
 def paragraph_token_counts(embedder: Embedder, texts: Sequence[str]) -> tuple[str, np.ndarray]:
     """Token count per text; exact via an HF tokenizer, else a chars/4 estimate.
 
@@ -369,12 +441,21 @@ def run_probe(
         pair_auc = roc_auc(corpus.labels.tolist(), pair_scores.tolist())
 
         gold = gold_by_paragraph(corpus)
+        same_doc_columns = same_document_columns(corpus)
         retrieval = {
             "all": pairwise_retrieval_metrics(similarities, gold, ks),
             "same_document": pairwise_retrieval_metrics(
-                similarities, gold, ks, candidate_columns=same_document_columns(corpus)
+                similarities, gold, ks, candidate_columns=same_doc_columns
             ),
         }
+        breakdown = group_breakdown(
+            records,
+            corpus,
+            similarities,
+            gold,
+            same_doc_columns=same_doc_columns,
+            ks=ks,
+        )
         token_source, tokens = paragraph_token_counts(embedder, corpus.paragraphs)
         truncation = truncation_report(
             similarities, gold, tokens, embedder.info.context_tokens, token_source, ks
@@ -393,6 +474,7 @@ def run_probe(
                 "question_chars_mean_after": float(np.mean(corpus.question_chars_after)),
                 "pair_auc": pair_auc,
                 "retrieval": retrieval,
+                "group_breakdown": breakdown,
                 "truncation": truncation,
                 "seconds": round(time.perf_counter() - started, 3),
             }

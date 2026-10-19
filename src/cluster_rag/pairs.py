@@ -138,8 +138,12 @@ def summarize_pairs(records: Sequence[PairRecord]) -> dict[str, Any]:
     label_counts: Counter[int] = Counter(record.label for record in records)
     document_counts: Counter[str] = Counter(record.document for record in records)
     source_counts: Counter[str] = Counter(record.source_csv for record in records)
+    paragraph_documents: dict[str, set[str]] = {}
+    question_documents: dict[str, set[str]] = {}
     positive_in_document: dict[str, int] = {}
     for record in records:
+        paragraph_documents.setdefault(record.paragraph_text, set()).add(record.document)
+        question_documents.setdefault(record.question_text, set()).add(record.document)
         if record.label == 1:
             positive_in_document[record.document] = positive_in_document.get(record.document, 0) + 1
     paragraph_lengths = [len(record.paragraph_text) for record in records]
@@ -153,6 +157,12 @@ def summarize_pairs(records: Sequence[PairRecord]) -> dict[str, Any]:
         "positive_share": label_counts.get(1, 0) / n if n else 0.0,
         "n_distinct_question_numbers": len({record.question_number for record in records}),
         "n_distinct_question_texts": len({record.question_text for record in records}),
+        "n_paragraph_texts_in_multiple_documents": sum(
+            1 for docs in paragraph_documents.values() if len(docs) > 1
+        ),
+        "n_question_texts_in_multiple_documents": sum(
+            1 for docs in question_documents.values() if len(docs) > 1
+        ),
         "n_documents": len(document_counts),
         "document_counts": dict(sorted(document_counts.items())),
         "positive_by_document": {

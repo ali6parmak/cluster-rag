@@ -105,3 +105,36 @@ def test_subset_pair_metrics_respects_mask() -> None:
 
     under = subset_pair_metrics(sims, gold, [1], [False, False, True], bucket="within")
     assert under["hit@1"] == 0.0 and under["n_rows_with_gold"] == 1
+
+
+def test_subset_pair_metrics_restricted_candidates() -> None:
+    """candidate_columns reranks the subset rows within their given columns only."""
+    sims = np.array([[0.9, 0.8, 0.7], [0.2, 0.5, 1.0]])
+    gold = [{0}, {2}]
+    columns = [[1, 2], [0, 1]]  # each row loses its top-ranked column
+
+    full = subset_pair_metrics(sims, gold, [1], [True, True], bucket="b")
+    assert full["hit@1"] == 1.0  # both rows rank their gold first (all columns)
+    restricted = subset_pair_metrics(
+        sims, gold, [1], [True, True], bucket="b", candidate_columns=columns
+    )
+    assert restricted["hit@1"] == 0.0  # golds fall outside each row's candidates
+    only_row0 = subset_pair_metrics(
+        sims, gold, [1], [True, False], bucket="b", candidate_columns=columns
+    )
+    assert only_row0["n_rows"] == 1 and only_row0["hit@1"] == 0.0
+    only_row1 = subset_pair_metrics(
+        sims, gold, [1], [False, True], bucket="b", candidate_columns=columns
+    )
+    assert only_row1["n_rows"] == 1 and only_row1["hit@1"] == 0.0
+
+
+def test_pairwise_retrieval_metrics_empty_candidates_rank_nothing() -> None:
+    """An empty candidate list ranks nothing; only None means 'all columns'."""
+    sims = np.array([[0.9, 0.8, 0.7]])
+    assert pairwise_retrieval_metrics(sims, [{0}], ks=[1])["hit@1"] == 1.0
+    assert (
+        pairwise_retrieval_metrics(sims, [{0}], ks=[1], candidate_columns=[[1, 2, 0]])["hit@1"]
+        == 1.0
+    )
+    assert pairwise_retrieval_metrics(sims, [{0}], ks=[1], candidate_columns=[[]])["hit@1"] == 0.0

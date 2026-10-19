@@ -7,10 +7,14 @@ Invocation (target CLI in AGENTS.md):
 
 Commands: stats (--pairs for the auxiliary pairwise data), split, embed
 (Phase 2: dataset embedding through the disk cache), probe-aux (Phase 2: the
-auxiliary pairwise embedding probe). Run from the repository root so relative
+auxiliary pairwise embedding probe), sweep (Phase 2.5: run a Python sweep
+file's resolved cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
-``run_id`` must be set in the config for any command.
+``run_id`` must be set in the config for any command. When
+``paths.experiment_table`` is set, ``embed`` and ``probe-aux`` also append one
+row per run (per transform for probe-aux) to the comparison tables in
+``docs/experiments_table.md``, upserted by run key (Phase 2.5).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import logging
 import sys
 import time
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +39,18 @@ from cluster_rag.data import SPLIT_NAMES, LoadReport, build_splits, load_jsonl
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
+from cluster_rag.experiment_table import (
+    EMBED_COLUMNS,
+    EMBED_HEADING,
+    EMBED_KEY_COLUMNS,
+    PROBE_AUX_COLUMNS,
+    PROBE_AUX_GROUPS_COLUMNS,
+    PROBE_AUX_GROUPS_HEADING,
+    PROBE_AUX_GROUPS_KEY_COLUMNS,
+    PROBE_AUX_HEADING,
+    PROBE_AUX_KEY_COLUMNS,
+    append_table_rows,
+)
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.preprocess import build_preprocess_spec
 
@@ -119,10 +136,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "Embed paragraphs and GTI questions from the auxiliary pairwise dataset "
             "with the configured backend and compute cosine-similarity AUC (judged "
             "0 vs 1) plus hit@k/recall@k question retrieval in two scopes (all "
-            "questions / same document), for each configured question transform "
-            "('keep' vs 'strip_block'), with truncation diagnostics against the "
-            "model context. Auxiliary evidence only: results are written to "
-            "results/aux-<run_id>/ and prefixed aux- in the experiment log."
+            "questions / same document), under the configured question transforms "
+            "(default 'strip_block'; add 'keep' for an explicit comparison), with "
+            "truncation diagnostics against the model context. Auxiliary evidence "
+            "only: results are written to results/aux-<run_id>/ and prefixed aux- "
+            "in the experiment log."
         ),
     )
     probe_aux.add_argument(
@@ -130,6 +148,25 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to the YAML config with embed: and paths.data_external set.",
+    )
+
+    sweep = subparsers.add_parser(
+        "sweep",
+        help="Run a Python sweep file: each resolved cell executes as its own run (Phase 2.5).",
+        description=(
+            "Load a sweep file (a Python module exposing SWEEP: list[SweepRun], built "
+            "with define_sweep) and execute its cells in order through the existing "
+            "command functions (embed / probe-aux): one run folder per cell with the "
+            "frozen resolved config, exactly as single runs. Embed cells run with "
+            "the default kinds ('document'). The sweep file only produces configs; "
+            "the first failing cell aborts the sweep with its exit code."
+        ),
+    )
+    sweep.add_argument(
+        "--file",
+        type=Path,
+        required=True,
+        help="Path to the sweep file, e.g. experiments/aux_probe_sweep.py.",
     )
     return parser
 
@@ -142,6 +179,13 @@ def _require_run_id(config: AppConfig) -> str:
             "and the experiment log references the same run_id."
         )
     return config.run_id
+
+
+def _fmt(value: float | None, decimals: int) -> str | None:
+    """Fixed-precision rendering for table cells (None passes through)."""
+    if value is None:
+        return None
+    return f"{value:.{decimals}f}"
 
 
 def _write_resolved_config(results_dir: Path, config: AppConfig) -> None:
@@ -417,6 +461,31 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
+    if config.paths.experiment_table is not None:
+        append_table_rows(
+            config.paths.experiment_table,
+            heading=EMBED_HEADING,
+            columns=EMBED_COLUMNS,
+            key_columns=EMBED_KEY_COLUMNS,
+            rows=[
+                {
+                    "run_id": run_id,
+                    "date": date.today().isoformat(),
+                    "backend": info.backend,
+                    "model": info.model_id,
+                    "model_version": (info.revision_or_digest or "")[:12],
+                    "dim": info.dimension,
+                    "ctx": info.context_tokens,
+                    "kinds": ",".join(kinds),
+                    "preprocess": spec.variant,
+                    "n_texts": len(ids),
+                    "seconds": payload["total_seconds"],
+                    "cache_hits": totals[0],
+                    "cache_misses": totals[1],
+                }
+            ],
+        )
+
     print(f"Embedded {len(ids)} record(s) with {info.backend}:{info.model_id} -> {results_dir}")
     print(
         f"  kinds: {list(kinds)}, dimension: {info.dimension}, "
@@ -482,6 +551,67 @@ def _cmd_probe_aux(config: AppConfig) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
+    if config.paths.experiment_table is not None:
+        variant_rows: list[dict[str, Any]] = []
+        group_rows: list[dict[str, Any]] = []
+        for variant in payload["probe"]["variants"]:
+            same_doc = variant["retrieval"]["same_document"]
+            share_over = variant["truncation"].get("share_paragraphs_over_context")
+            variant_rows.append(
+                {
+                    "run_id": aux_run_id,
+                    "date": date.today().isoformat(),
+                    "backend": embedder_info.backend,
+                    "model": embedder_info.model_id,
+                    "model_version": (embedder_info.revision_or_digest or "")[:12],
+                    "dim": embedder_info.dimension,
+                    "ctx": embedder_info.context_tokens,
+                    "transform": variant["transform"],
+                    "pair_auc": _fmt(variant["pair_auc"], 4),
+                    "same-doc hit@1": _fmt(same_doc.get("hit@1"), 3),
+                    "same-doc hit@10": _fmt(same_doc.get("hit@10"), 3),
+                    "same-doc recall@10": _fmt(same_doc.get("recall@10"), 3),
+                    "paras>ctx": None if share_over is None else f"{share_over:.1%}",
+                    "n_paras": variant["retrieval"]["all"]["n_rows"],
+                    "n_pairs(pos)": (
+                        f"{payload['probe']['corpus']['n_pairs']}"
+                        f" ({payload['probe']['corpus']['n_positive_pairs']})"
+                    ),
+                    "seconds": variant["seconds"],
+                }
+            )
+            for group in variant["group_breakdown"]["groups"]:
+                scope = group["same_document"]
+                group_rows.append(
+                    {
+                        "run_id": aux_run_id,
+                        "transform": variant["transform"],
+                        "document": group["document"],
+                        "source_csv": group["source_csv"],
+                        "n_pairs": group["n_pairs"],
+                        "pos": group["n_positive"],
+                        "neg": group["n_negative"],
+                        "pair_auc": _fmt(group["pair_auc"], 4),
+                        "same-doc hit@1": None if scope is None else _fmt(scope.get("hit@1"), 3),
+                        "same-doc hit@10": None if scope is None else _fmt(scope.get("hit@10"), 3),
+                        "n_rows_with_gold": group["n_rows_with_gold"],
+                    }
+                )
+        append_table_rows(
+            config.paths.experiment_table,
+            heading=PROBE_AUX_HEADING,
+            columns=PROBE_AUX_COLUMNS,
+            key_columns=PROBE_AUX_KEY_COLUMNS,
+            rows=variant_rows,
+        )
+        append_table_rows(
+            config.paths.experiment_table,
+            heading=PROBE_AUX_GROUPS_HEADING,
+            columns=PROBE_AUX_GROUPS_COLUMNS,
+            key_columns=PROBE_AUX_GROUPS_KEY_COLUMNS,
+            rows=group_rows,
+        )
+
     print(f"Auxiliary probe: {aux_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
     print(
         f"  corpus: {pair_report.n_valid} judged pairs "
@@ -500,6 +630,22 @@ def _cmd_probe_aux(config: AppConfig) -> int:
             f"{variant['retrieval']['same_document']['hit@10']:.3f} (same-doc); "
             f"paragraphs over context: {trunc_text}"
         )
+        for group in variant["group_breakdown"]["groups"]:
+            auc_text = "n/a" if group["pair_auc"] is None else f"{group['pair_auc']:.4f}"
+            if group["same_document"] is None:
+                same_doc_text = "no gold rows"
+            else:
+                scope = group["same_document"]
+                same_doc_text = (
+                    f"hit@1 {scope['hit@1']:.3f} / hit@10 {scope['hit@10']:.3f} "
+                    f"over {group['n_rows_with_gold']} gold row(s)"
+                )
+            print(
+                f"      {group['document']} (csv {group['source_csv']}): "
+                f"pairs {group['n_pairs']} ({group['n_positive']} pos, "
+                f"{group['n_negative']} neg), rows {group['n_rows']} | "
+                f"pair-AUC {auc_text} | same-doc {same_doc_text}"
+            )
     print(f"Report written to {results_dir / 'probe_report.json'}")
     return 0
 
@@ -585,11 +731,78 @@ def _cmd_split(config: AppConfig, force: bool) -> int:
     return 0
 
 
+def _load_sweep_runs(path: Path) -> list[Any]:
+    """Import a sweep file and return its resolved SWEEP list (validated).
+
+    The file is a Python module executed once at load; its ``SWEEP`` must be a
+    non-empty list of :class:`~cluster_rag.sweep.SweepRun` — i.e. the product
+    of ``define_sweep(cells, base=...)``.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("cluster_rag_sweep_file", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"cannot load sweep file {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 -- any import error aborts with its cause
+        raise ValueError(f"loading sweep file {path} failed: {exc}") from exc
+    sweep = getattr(module, "SWEEP", None)
+    if not isinstance(sweep, list) or not sweep:
+        raise ValueError(
+            f"sweep file {path} must expose a non-empty SWEEP list (define_sweep(cells, base=...))"
+        )
+    from cluster_rag.sweep import SweepRun
+
+    if not all(isinstance(run, SweepRun) for run in sweep):
+        raise ValueError(
+            f"sweep file {path}: SWEEP must contain SweepRun entries "
+            "(from define_sweep), got "
+            f"{[type(entry).__name__ for entry in sweep[:3]]}"
+        )
+    return sweep
+
+
+def _cmd_sweep(path: Path) -> int:
+    """Run the sweep command: execute each resolved cell as its own single run."""
+    from cluster_rag.sweep import SweepRun
+
+    runs = _load_sweep_runs(path)
+    assert all(isinstance(run, SweepRun) for run in runs)  # typing only; _load_sweep_runs checks
+    total = len(runs)
+    started = time.perf_counter()
+    print(f"Sweep {path}: {total} cell(s)")
+    for index, run in enumerate(runs, start=1):
+        print(f"  [{index}/{total}] {run.command} label={run.label} (run_id={run.config.run_id})")
+        started_cell = time.perf_counter()
+        if run.command == "embed":
+            code = _cmd_embed(run.config, kinds=("document",))
+        else:  # probe-aux, the only other allowed command (SweepCell validator)
+            code = _cmd_probe_aux(run.config)
+        if code != 0:
+            logger.error(
+                "Sweep cell %d/%d (%s, label=%s) exited with code %d — aborting the sweep",
+                index,
+                total,
+                run.command,
+                run.label,
+                code,
+            )
+            return code
+        print(f"  [{index}/{total}] done in {time.perf_counter() - started_cell:.1f}s")
+    print(f"Sweep finished: {total} run(s), {time.perf_counter() - started:.1f}s total")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI. Returns a process exit code."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _build_parser().parse_args(argv)
     try:
+        if args.command == "sweep":  # sweeps resolve their configs themselves
+            return _cmd_sweep(args.file)
         config = load_config(args.config)
         if args.command == "stats":
             return _cmd_stats(config, pairs=args.pairs)
@@ -599,6 +812,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_embed(config, kinds=_parse_kinds(args.kinds))
         if args.command == "probe-aux":
             return _cmd_probe_aux(config)
+        if args.command == "sweep":
+            return _cmd_sweep(args.file)
     except FileNotFoundError as exc:
         logger.error("File not found: %s", exc.filename or exc)
         return 1

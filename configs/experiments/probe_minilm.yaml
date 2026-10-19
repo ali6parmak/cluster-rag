@@ -17,6 +17,8 @@ embed:
     label: ""
 
 probe:
-  question_transforms: [keep, strip_block]
+  # strip_block is the default question transform (Phase 2.5); the Phase 2
+  # keep-vs-strip comparison is recorded in docs/experiments.md. Use
+  # question_transforms: [strip_block, keep] for an explicit re-comparison.
   question_block_markers: ["Answer choices:", "Notes:"]
   recall_ks: [1, 10]

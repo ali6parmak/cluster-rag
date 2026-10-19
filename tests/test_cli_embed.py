@@ -118,6 +118,39 @@ def test_embed_command_cache_disabled(sample_jsonl, write_config, monkeypatch, t
     assert created[0].call_count == 1  # encoded exactly once (single kind)
 
 
+def test_embed_appends_experiment_table_row(
+    sample_jsonl, write_config, monkeypatch, tmp_path
+) -> None:
+    """paths.experiment_table: one row per run, upserted by run_id (Phase 2.5)."""
+
+    def factory(config):
+        return FakeEmbedder(
+            model_id="fake-embedder", dimension=6, prefixes={"document": "passage: "}
+        )
+
+    monkeypatch.setattr(cli, "build_embedder", factory)
+    table = tmp_path / "experiments_table.md"
+    config_file = write_config(
+        sample_jsonl,
+        run_id="embed-table",
+        experiment_table=table,
+        extra=EMBED_CONFIG_EXTRA + "preprocess:\n  variant: raw\n",
+    )
+    assert main(["embed", "--config", str(config_file)]) == 0
+    text = table.read_text("utf-8")
+    assert "## Phase 2 — embed" in text
+    data_rows = [line for line in text.splitlines() if line.startswith("| embed-table")]
+    assert len(data_rows) == 1 and "| 20 |" in data_rows[0]
+
+    assert main(["embed", "--config", str(config_file)]) == 0  # warm rerun
+    text = table.read_text("utf-8")
+    data_rows = [line for line in text.splitlines() if line.startswith("| embed-table")]
+    assert len(data_rows) == 1  # replaced, not duplicated
+    # the row now reports the cache-hit rerun counters
+    cells = [cell.strip() for cell in data_rows[0].strip("|").split("|")]
+    assert cells[-2:] == ["20", "0"]  # cache_hits / cache_misses
+
+
 def test_embed_command_requires_embed_section(sample_jsonl, write_config, caplog) -> None:
     """Without an embed: section the command fails with a clear message."""
     config_file = write_config(sample_jsonl, run_id="no-embed")

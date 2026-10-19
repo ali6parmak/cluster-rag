@@ -35,16 +35,21 @@ def write_config(tmp_path: Path):
         run_id: str | None = "cli-test",
         extra: str = "",
         data_external: Path | None = None,
+        experiment_table: Path | None = None,
     ) -> Path:
         config_file = tmp_path / "cfg.yaml"
         run_id_line = f"run_id: {run_id}\n" if run_id else ""
         external_line = f"  data_external: {data_external.as_posix()}\n" if data_external else ""
+        table_line = (
+            f"  experiment_table: {experiment_table.as_posix()}\n" if experiment_table else ""
+        )
         config_file.write_text(
             run_id_line + "paths:\n"
             f"  data_raw: {data_raw.as_posix()}\n"
             f"  data_processed: {(tmp_path / 'processed').as_posix()}\n"
             f"  data_splits: {(tmp_path / 'splits').as_posix()}\n"
             + external_line
+            + table_line
             + f"  cache: {(tmp_path / 'cache').as_posix()}\n"
             f"  results: {(tmp_path / 'results').as_posix()}\n" + extra,
             encoding="utf-8",

@@ -7,6 +7,7 @@ ZERO calls into the wrapped embedder.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -24,8 +25,23 @@ def wrapped(tmp_path: Path):
     return inner, tmp_path / "cache", cache
 
 
+def _model_dir(model_id: str) -> str:
+    """Mirror the cache layout rule: sha8(model_id) + readable slug."""
+    digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+    return f"{digest}-{_expected_slug(model_id)}"
+
+
+_ALLOWED_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
+
+def _expected_slug(value: str) -> str:
+    """Readable slug: keep [A-Za-z0-9._-], everything else becomes "_"."""
+    slug = "".join(char if char in _ALLOWED_CHARS else "_" for char in value)
+    return slug or "-"
+
+
 def test_cache_key_path_layout(tmp_path: Path) -> None:
-    """The key is (model, prefix, preprocessing, sha1) as path components; slugs are safe."""
+    """The key is (model, prefix, preprocessing, sha1) as path components; slugs are readable."""
     path = cache_key_path(
         tmp_path,
         model_id="intfloat/e5-base-v2",
@@ -33,14 +49,19 @@ def test_cache_key_path_layout(tmp_path: Path) -> None:
         preprocessing_version="raw-v1",
         text="continue to act",
     )
-    text_sha1 = __import__("hashlib").sha1(b"continue to act").hexdigest()
+    text_sha1 = hashlib.sha1(b"continue to act").hexdigest()
     assert path.relative_to(tmp_path).parts == (
         "v1",
-        "intfloat%2Fe5-base-v2",
+        _model_dir("intfloat/e5-base-v2"),
         "raw-v1",
-        "query%3A%20",
+        "query__",  # ":" and " " become "_"
         f"{text_sha1}.npy",
     )
+    # the model dir carries the sha1(model_id) uniqueness prefix
+    model_dir = path.relative_to(tmp_path).parts[1]
+    assert model_dir.startswith(hashlib.sha1(b"intfloat/e5-base-v2").hexdigest()[:8] + "-")
+    # the slug alphabet is exactly [A-Za-z0-9._-] (no unicode, no quoting)
+    assert not (set(model_dir) - _ALLOWED_CHARS)
     # every key component participates
     different = [
         cache_key_path(
@@ -78,6 +99,16 @@ def test_cache_key_path_layout(tmp_path: Path) -> None:
         tmp_path, model_id="m", prefix="", preprocessing_version="raw-v1", text="t"
     )
     assert noprefix.relative_to(tmp_path).parts[3] == "-"
+
+
+def test_model_dir_slugs_cannot_collapse(tmp_path: Path) -> None:
+    """Distinct model ids that slugify identically keep distinct directories."""
+    slash = cache_key_path(tmp_path, model_id="a/b", prefix="", preprocessing_version="v", text="t")
+    bare = cache_key_path(tmp_path, model_id="a_b", prefix="", preprocessing_version="v", text="t")
+    assert slash.parent.parent != bare.parent.parent
+    # identical ids keep directories identical (cache hits survive the prefix)
+    same = cache_key_path(tmp_path, model_id="a/b", prefix="", preprocessing_version="v", text="t")
+    assert slash.parent.parent == same.parent.parent
 
 
 def test_first_call_encodes_and_stores(wrapped) -> None:

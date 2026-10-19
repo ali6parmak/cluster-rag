@@ -69,6 +69,34 @@ Digests/revisions recorded in each `results/aux-probe-*/probe_report.json` (olla
 2. **Truncation is not a blocker at current sizes**: max paragraph ≈ 564 est. tokens (chars/4) / 478 exact (bge-m3 tokenizer) — only MiniLM (256 ctx) truncates 1.8% of paragraphs and mxbai (512) 0.4%; even those over-context rows returned their gold question in the top-10 (n=4: hit@10 1.000; n=1: hit@10 1.000). Long-context models show 0% truncation.
 3. **Absolute AUCs are modest (0.42–0.58)**: bi-encoder paragraph↔question discrimination on this corpus is hard (negatives are heavily same-document, topically adjacent); treat the numbers as *relative model evidence*, not absolute retrieval quality. Under `strip_block`: e5-base-v2 (0.579) and mxbai (0.555) lead on AUC; arctic2/embeddinggemma lead same-document hit@10 (0.81/0.79).
 4. **Candidate pool (6, all already local — zero downloads; PLAN said "pick 3-5")**: MiniLM (fast baseline), e5-base-v2 (prefix asymmetry), bge-m3 (long-context HF), arctic2 / embeddinggemma / mxbai (Ollama). No single model dominates every column; the UPR `evaluate` harness (Phase 3/4) is the next filter. embeddinggemma is strong at hit@1 (best 0.458 same-doc) despite Q4 quantization.
-5. 225 distinct paragraphs: paragraph texts repeat across documents/paragraph numbers, so dedup-by-text matters before embedding (the cache does it content-addressed anyway); question furniture removal leaves 294 distinct questions with 0 collisions on this data.
+5. 225 distinct paragraphs: dedup-by-text matters before embedding, but *within* documents only — paragraph texts do **not** repeat across documents (**0 of 225** appear in more than one document; verified on the data in the Phase 2.5 runs, counts recorded in the `aux-base` pairs_stats rerun). What repeats across documents are the questions: **186 of 294** distinct question texts are judged in more than one document — handled by one column per (transformed) text + per-document doc sets + per-paragraph golds, so the all-scope never counts them wrong. *(original wording "paragraph texts repeat across documents/paragraph numbers" was wrong; corrected 2026-10-19)*
 
-**Next:** Phase 3 evaluation harness (metrics incl. the pairwise-retrieval functions above, shortlist recall, trivial baselines) before any Phase 4 modeling. Commit-able summary artifact (gitignored runs stay out of the repo): `results/summaries/phase2_aux_probe.json`.
+**Next:** Phase 3 evaluation harness (metrics incl. the pairwise-retrieval functions above, shortlist recall, trivial baselines) before any Phase 4 modeling. *(the commit-able summary artifact originally planned here — `results/summaries/phase2_aux_probe.json` — was replaced in Phase 2.5 by the auto-appended comparison tables in `docs/experiments_table.md`)*
+
+## Phase 2.5: review touch-ups (runs under the final code)
+
+Datasets: `embed-*` rows embed the UPR full dataset (all 3000 records, no split); `aux-probe2-*`/`aux-base` rows are the auxiliary OMCT pairwise dataset (`aux-` prefix, never a UPR metric).
+
+### Cache rebuild under the readable slug layout (item 1)
+
+- Cache wiped and rebuilt: slugs are `[A-Za-z0-9._-]` with `_` for everything else, model dirs gain a short `sha1(model_id)` prefix (e.g. `BAAI/bge-m3` → `2022e1cf-BAAI_bge-m3`, `query: ` → `query__`); key semantics `(model_id, prefix, preprocessing_version, sha1(text))` unchanged, cache format stays `v1`.
+- **Run:** `embed-e5-base-v2`, `configs/experiments/embed_e5_base_v2.yaml` — UPR dataset, 3000 texts: cold pass 3000 encoded **7.50 s** (GPU); warm rerun **3000 cache hits, 0 encoded, 3.47 s** (meta.json = the warm pass; same run_id as Phase 2, first-pass numbers there are the 4.9 s HF pass of 2026-10-16).
+- **Run:** `embed-arctic2`, `configs/experiments/embed_arctic2.yaml` — Ollama `snowflake-arctic-embed2:latest` (digest `30685f516da4...`): cold 3000 via batched `POST /api/embed` **17.20 s**; warm **3000 hits, 0 encoded, 0.42 s**.
+- Both warm passes prove the slug rewrite end-to-end: same texts, same content keys, hits under the new layout make zero model calls.
+
+### Probe reruns: strip_block default + per-(document, source_csv) breakdown
+
+Sweep via `cluster-rag sweep --file experiments/aux_probe_sweep.py` (6 cells → `results/aux-probe2-<model>/`); corpus 1520 judged pairs (524 positive / 996 negative), 225 paragraph rows, 294 question columns, strip_block transform. **All six overall numbers reproduce the Phase 2 strip_block results digit-for-digit** — pair-AUC minilm 0.4526 / e5 0.5793 / bge-m3 0.4687 / arctic2 0.4680 / embeddinggemma 0.5371 / mxbai 0.5552, same-doc hit@1 0.381 / 0.374 / 0.361 / 0.355 / 0.458 / 0.413, same-doc hit@10 0.748 / 0.774 / 0.748 / 0.813 / 0.794 / 0.768 — so the rebuilt vectors are identical to the Phase 2 runs; the comparison tables live in `docs/experiments_table.md` (probe-aux + probe-aux groups, counts next to numbers).
+
+One per-group observation worth carrying forward (aux evidence, relative not absolute): the Amnesty source document (99 pairs, 79 positive = 80%) separates sharply for every model (AUC 0.52–0.76, same-doc hit@10 0.86–0.97), while the UN-style NU document (845 pairs, 211 positive = 25%) is where the "hard" same-document topically adjacent negatives live (AUC 0.42–0.48 for most models). This matches the Phase 2 decision: overall AUC is OMCT-pairs-only relative evidence, no gating at 0.5, model elimination happens on UPR val in Phase 3/4.
+
+### Docs correction (item 6, finding 5 above)
+
+Verified on `data/external/omct_pairs.json` and recorded in the `aux-base` rerun (`results/aux-base/pairs_stats.json`, field `n_paragraph_texts_in_multiple_documents` / `n_question_texts_in_multiple_documents`): **0 of 225** paragraph texts appear in more than one document (they repeat only within documents, against different questions); **186 of 294** question texts are judged in more than one document. `summarize_pairs` now carries both counts.
+
+### Housekeeping
+
+- Deleted `results/summaries/phase2_aux_probe.json` (its content moved to `docs/experiments_table.md` + this narrative; `docs/experiments.md` remains the append-only log).
+- New CLI surface for Phase 3+: `cluster-rag sweep --file <sweep.py>` (typed cells → frozen per-run configs; cells only produce configs).
+
+**Next:** Phase 3 evaluation harness, before any Phase 4 modeling.

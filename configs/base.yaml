@@ -16,6 +16,7 @@ paths:
   data_external: data/external/omct_pairs.json  # auxiliary pairwise dataset (PLAN.md section 2)
   cache: cache                    # embedding cache (gitignored)
   results: results                # run artifacts (gitignored)
+  experiment_table: docs/experiments_table.md  # markdown comparison tables, auto-appended (Phase 2.5)
 
 stats:
   # Label frequency buckets: head >= head_min, torso >= torso_min, tail below.
@@ -46,9 +47,9 @@ splits:
 #   preprocess: {variant: raw, strip_openers: [...]}  # variants: raw | lowercase |
 #                                            # strip_leading_formulaic; openers below
 #   cache:     {enabled: true}               # disk cache at paths.cache
-#   probe:     {question_transforms: [keep, strip_block],
+#   probe:     {question_transforms: [strip_block],     # default; add "keep" for an
 #               question_block_markers: ["Answer choices:", "Notes:"],
-#               recall_ks: [1, 10]}          # used by the `probe-aux` command
+#               recall_ks: [1, 10]}          # explicit comparison; used by `probe-aux`
 #
 # strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
 # start with "continue"); longest opener wins, so multi-word forms are listed

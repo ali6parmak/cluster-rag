@@ -91,6 +91,50 @@ def test_summarize_pairs(sample_pairs) -> None:
     assert stats["document_counts"] == {"Doc A": 2, "Doc B": 3, "Doc C": 1}
     assert stats["positive_by_document"]["Doc B"] == {"n": 3, "positive": 1}
     assert stats["n_duplicate_pair_ids"] == 0
+    # cross-document text repeats (Phase 2.5 log correction): the fixture itself
+    # has none (q10's shared number hides two different texts), so 0/0 here; the
+    # real dataset's 0 paragraphs / 186 questions show up in the aux-base stats run
+    assert stats["n_paragraph_texts_in_multiple_documents"] == 0
+    assert stats["n_question_texts_in_multiple_documents"] == 0
+
+
+def test_summarize_pairs_counts_cross_document_repeats(tmp_path) -> None:
+    """A question text judged in several documents is counted once, docs > 1."""
+    content = {
+        "pairs": [
+            {
+                "pair_id": "K-1",
+                "source_csv": "csvX",
+                "document": "Doc A",
+                "paragraph_number": "1",
+                "paragraph_text": "para one",
+                "question_number": 1,
+                "question_text": "shared question",
+                "label": 1,
+                "label_origin": "merged",
+            },
+            {
+                "pair_id": "K-2",
+                "source_csv": "csvY",
+                "document": "Doc B",
+                "paragraph_number": "1",
+                "paragraph_text": "para two",
+                "question_number": 1,
+                "question_text": "shared question",
+                "label": 0,
+                "label_origin": "reviewer",
+            },
+        ],
+        "n_pairs": 2,
+        "n_positive": 1,
+        "n_negative": 1,
+        "name": "cross-doc",
+    }
+    path = tmp_path / "cross.json"
+    path.write_text(json.dumps(content), encoding="utf-8")
+    stats = summarize_pairs(load_pairs(path).records)
+    assert stats["n_paragraph_texts_in_multiple_documents"] == 0  # paras repeat within docs only
+    assert stats["n_question_texts_in_multiple_documents"] == 1  # "shared question" in Both docs
 
 
 def test_stats_pairs_command_end_to_end(sample_pairs, write_config, tmp_path, capsys) -> None:

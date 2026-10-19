@@ -3,12 +3,15 @@
 Key, exactly as planned: ``(model_id, prefix, preprocessing_version,
 sha1(text))`` — implemented on disk as
 
-    <cache>/v1/<model_id>/<preprocessing_version>/<prefix>/<sha1(text)>.npy
+    <cache>/v1/<model-slug>/<preprocessing_version>/<prefix-slug>/<sha1(text)>.npy
 
-with URL-quoted path components (a missing value becomes "-" so the layout
-stays shallow). One file per vector: writes are atomic (tmp + rename), so a
-crashed run never corrupts an entry, and hits never reach the model at all
-(proven by tests). Only ``embed/`` touches the disk, per AGENTS.md.
+Path components are readable slugs: characters outside ``[A-Za-z0-9._-]``
+become ``_`` (an empty value collapses to "-"); the model directory carries a
+short ``sha1(model_id)`` prefix so ids that slugify identically stay distinct
+("BAAI/bge-m3" → ``<sha8>-BAAI_bge-m3``, "a/b" vs "a_b"). One file per vector:
+writes are atomic (tmp + rename), so a crashed run never corrupts an entry,
+and hits never reach the model at all (proven by tests). Only ``embed/``
+touches the disk, per AGENTS.md.
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ import os
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from urllib.parse import quote
 
 import numpy as np
 
@@ -36,10 +38,25 @@ logger = logging.getLogger(__name__)
 
 CACHE_FORMAT_VERSION = "v1"
 
+# Slug alphabet for path components: strictly ASCII so unicode is not leaked
+# in by isalnum(); everything else becomes "_".
+_SLUG_SAFE = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+
 
 def _slug(value: str) -> str:
-    """Filesystem-safe component; an empty value collapses to "-"."""
-    return quote(value, safe="") or "-"
+    """Readable path component (``[A-Za-z0-9._-]``); empty collapses to "-"."""
+    slug = "".join(char if char in _SLUG_SAFE else "_" for char in value)
+    return slug or "-"
+
+
+def _model_dir(model_id: str) -> str:
+    """Model cache directory: readable slug plus a uniqueness prefix.
+
+    The short ``sha1(model_id)`` prefix keeps distinct model ids apart when
+    their slugs would collide ("a/b" and "a_b" both slugify to "a_b").
+    """
+    digest = hashlib.sha1(model_id.encode("utf-8")).hexdigest()[:8]
+    return f"{digest}-{_slug(model_id)}"
 
 
 def cache_key_path(
@@ -57,7 +74,7 @@ def cache_key_path(
         Path(cache_root)
         .joinpath(
             cache_format_version,
-            _slug(model_id),
+            _model_dir(model_id),
             _slug(preprocessing_version),
             _slug(prefix),
             text_sha1,

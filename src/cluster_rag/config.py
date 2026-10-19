@@ -63,6 +63,9 @@ class PathsConfig(BaseModel):
     data_splits: Path
     cache: Path
     results: Path
+    # Markdown comparison tables, auto-appended by CLI commands (Phase 2.5);
+    # unset in throwaway configs -> the append is skipped.
+    experiment_table: Path | None = None
     label_catalog: Path | None = None
     data_external: Path | None = None  # auxiliary pairwise dataset (PLAN.md section 2)
 
@@ -179,13 +182,32 @@ class PreprocessConfig(BaseModel):
 
 
 class ProbeConfig(BaseModel):
-    """Parameters of the Phase 2 auxiliary probe on the pairwise dataset."""
+    """Parameters of the Phase 2 auxiliary probe on the pairwise dataset.
+
+    ``question_transforms``: the probe's default question-side transform is
+    ``strip_block`` (the "Question:"/"Answer choices:"/Notes:" furniture is
+    mostly noise — see PLAN.md section 7 and the Phase 2 findings); ``keep``
+    (raw question text) stays available for an explicit comparison by listing
+    both in one config, e.g. ``[strip_block, keep]``.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    question_transforms: tuple[str, ...] = ("keep", "strip_block")
+    question_transforms: tuple[str, ...] = ("strip_block",)
     question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
     recall_ks: tuple[int, ...] = (1, 10)
+
+    @field_validator("question_transforms")
+    @classmethod
+    def _transforms_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject unknown transforms at config time (fail before any run)."""
+        known = ("keep", "strip_block")
+        if not value:
+            raise ValueError("question_transforms must name at least one transform")
+        unknown = [transform for transform in value if transform not in known]
+        if unknown:
+            raise ValueError(f"Unknown question transform(s) {unknown}; expected values in {known}")
+        return value
 
 
 class AppConfig(BaseModel):
@@ -220,12 +242,12 @@ def _parse_yaml_mapping(path: Path) -> dict[str, Any]:
     return raw
 
 
-def _merge_configs(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge the child experiment over its parent config."""
+def merge_configs(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge the child experiment over its parent config (child wins)."""
     merged: dict[str, Any] = dict(parent)
     for key, value in child.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_configs(merged[key], value)
+            merged[key] = merge_configs(merged[key], value)
         else:
             merged[key] = value
     return merged
@@ -248,7 +270,7 @@ def _load_raw_chain(path: Path, *, _depth: int = 0) -> dict[str, Any]:
         parent_path = Path(extends)
         if not parent_path.is_absolute():
             parent_path = path.parent / parent_path
-        raw = _merge_configs(_load_raw_chain(parent_path, _depth=_depth + 1), raw)
+        raw = merge_configs(_load_raw_chain(parent_path, _depth=_depth + 1), raw)
     return raw
 
 

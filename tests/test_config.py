@@ -110,6 +110,26 @@ def test_load_config_embed_section(tmp_path) -> None:
         load_config_str(bad, tmp_path)
 
 
+def test_load_config_probe_transform_defaults_and_validation(tmp_path) -> None:
+    """strip_block is the default question transform; unknown ones fail at load time."""
+    config_file = tmp_path / "cfg.yaml"
+    config_file.write_text(CONFIG_YAML, encoding="utf-8")
+    config = load_config(config_file)
+    assert config.probe.question_transforms == ("strip_block",)
+
+    both = tmp_path / "both.yaml"
+    both.write_text(
+        CONFIG_YAML + "\nprobe:\n  question_transforms: [strip_block, keep]\n",
+        encoding="utf-8",
+    )
+    assert load_config(both).probe.question_transforms == ("strip_block", "keep")
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(CONFIG_YAML + "\nprobe:\n  question_transforms: [squeeze]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unknown question transform"):
+        load_config(bad)
+
+
 def test_load_config_extends_merges_parent(tmp_path) -> None:
     """extends merges a parent tree underneath; child wins in deep merge."""
     parent = tmp_path / "base.yaml"
