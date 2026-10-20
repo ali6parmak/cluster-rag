@@ -28,6 +28,8 @@ class MostFrequentPredictor:
     0 on the zero-shot discovery question by construction.
     """
 
+    REQUIRES_EMBEDDINGS: bool = False
+    REQUIRED_KINDS: tuple[str, ...] = ()
     ALLOWED_PARAMS: frozenset[str] = frozenset()
     NAME: str = "most_frequent"
 
@@ -47,8 +49,11 @@ class MostFrequentPredictor:
         )
         self._n_train = len(context.train_records)
 
-    def score(self, texts: Sequence[str]) -> np.ndarray:
-        """Tile the constant per-label score row: ``(n_texts, n_labels)``."""
+    def score(self, texts: Sequence[str], *, query_vectors: np.ndarray | None = None) -> np.ndarray:
+        """Tile the constant per-label score row: ``(n_texts, n_labels)``.
+
+        ``query_vectors`` is ignored: this predictor is embedding-free.
+        """
         return np.tile(self._scores, (len(texts), 1))
 
     def describe(self) -> dict[str, Any]:
@@ -68,6 +73,8 @@ class RandomPredictor:
     rank them alphabetically if one ever occurred.
     """
 
+    REQUIRES_EMBEDDINGS: bool = False
+    REQUIRED_KINDS: tuple[str, ...] = ()
     ALLOWED_PARAMS: frozenset[str] = frozenset()
     NAME: str = "random"
 
@@ -83,8 +90,11 @@ class RandomPredictor:
         self._rng = np.random.default_rng(seed)
         self._n_labels = len(context.labels)
 
-    def score(self, texts: Sequence[str]) -> np.ndarray:
-        """One uniform draw per (text, label) cell: ``(n_texts, n_labels)``."""
+    def score(self, texts: Sequence[str], *, query_vectors: np.ndarray | None = None) -> np.ndarray:
+        """One uniform draw per (text, label) cell: ``(n_texts, n_labels)``.
+
+        ``query_vectors`` is ignored: this predictor is embedding-free.
+        """
         return self._rng.uniform(size=(len(texts), self._n_labels))
 
     def describe(self) -> dict[str, Any]:

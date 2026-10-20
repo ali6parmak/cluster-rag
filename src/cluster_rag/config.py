@@ -13,6 +13,7 @@ working directory. Run the CLI from the repository root, as in AGENTS.md.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -210,8 +211,9 @@ class EvalPredictorConfig(BaseModel):
     """Which predictor the ``evaluate`` command runs (name + its parameters).
 
     The name resolves through the registry in
-    :mod:`cluster_rag.predictors` (``most_frequent`` / ``random`` in Phase 3);
-    ``params`` are validated by the predictor class itself.
+    :mod:`cluster_rag.predictors` (``most_frequent``/``random`` in Phase 3,
+    ``knn``/``prototype`` in Phase 4); ``params`` are validated by the
+    predictor class itself.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -272,6 +274,36 @@ class EvalMetricsConfig(BaseModel):
         return value
 
 
+EMBEDDING_RUN_ID_PREFIX = "upr-embed-"  # AGENTS.md run-id grammar for embed commands
+
+
+def validate_embedding_run_id(value: str) -> str:
+    """Validate a reference to a prior UPR embedding run (Phase 4 opening, item D).
+
+    ``eval.embedding_run_id`` names the ``upr-embed-*`` run whose
+    ``results/<run_id>/embeddings.npz`` the evaluate command consumes. The
+    ``upr-embed-`` prefix is enforced at config time: an ``omct-`` reference
+    would mix the auxiliary OMCT line into a UPR metric, and a non-embed run
+    id carries no vectors (the artifact loader gives the run's own message for
+    files that exist but are not embed artifacts). Validation here is purely
+    syntactic — existence is checked at run time.
+
+    Raises:
+        ValueError: If the value is not filesystem-safe or lacks the prefix.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise ValueError(
+            f"embedding_run_id must be filesystem-safe ([A-Za-z0-9._-]+), got {value!r}"
+        )
+    if not value.startswith(EMBEDDING_RUN_ID_PREFIX):
+        raise ValueError(
+            f"embedding_run_id {value!r} must name a UPR embedding run and start with "
+            f"{EMBEDDING_RUN_ID_PREFIX!r} (AGENTS.md run-id grammar; e.g. "
+            "'upr-embed-e5-base-v2') — an omct- or non-embed run cannot feed an eval"
+        )
+    return value
+
+
 class EvalConfig(BaseModel):
     """Phase 3 evaluation section: predictor, decision rule and metric grids.
 
@@ -279,6 +311,11 @@ class EvalConfig(BaseModel):
     for final reported numbers) — the CLI ``--split`` flag and sweep overrides
     win over this default. Only val/test are allowed: train is an index source,
     never an evaluation split, per the AGENTS.md leakage discipline.
+
+    ``embedding_run_id`` (Phase 4 opening, item D) is None for embedding-free
+    predictors and names a prior ``upr-embed-*`` run for embedding-dependent
+    ones: the evaluate command resolves, validates and id-aligns that run's
+    ``embeddings.npz`` and records its lineage in metrics.json.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -287,6 +324,7 @@ class EvalConfig(BaseModel):
     decision: EvalDecisionConfig = Field(default_factory=EvalDecisionConfig)
     metrics: EvalMetricsConfig = Field(default_factory=EvalMetricsConfig)
     split: str = "val"
+    embedding_run_id: str | None = None
 
     @field_validator("split")
     @classmethod
@@ -295,6 +333,12 @@ class EvalConfig(BaseModel):
         if value not in ("val", "test"):
             raise ValueError("eval.split must be 'val' or 'test' (the fixed evaluation splits)")
         return value
+
+    @field_validator("embedding_run_id")
+    @classmethod
+    def _embedding_run_id_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check of the embedding-run reference (fail at config time)."""
+        return None if value is None else validate_embedding_run_id(value)
 
 
 class ProbeConfig(BaseModel):

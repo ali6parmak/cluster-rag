@@ -50,6 +50,7 @@ from cluster_rag.data import (
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
+from cluster_rag.embed_artifact import EmbeddingArtifact, load_embedding_artifact
 from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
 from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
@@ -68,7 +69,7 @@ from cluster_rag.experiment_table import (
 )
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
-from cluster_rag.predictors import build_predictor
+from cluster_rag.predictors import build_predictor, predictor_embedding_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
 
@@ -174,14 +175,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     evaluate = subparsers.add_parser(
         "evaluate",
-        help="Evaluate any predictor on val or test (Phase 3 metrics; no embeddings needed).",
+        help="Evaluate any predictor on val or test (Phase 3 metrics).",
         description=(
             "Load the dataset and the fixed split ids (never re-split), build the "
-            "configured predictor (eval.predictor; trivial baselines now, retrieval "
-            "predictors in Phase 4) from train context only, score the eval split "
+            "configured predictor (eval.predictor: trivial baselines, Phase 4 "
+            "retrieval predictors) from train context only, score the eval split "
             "and report P@k / R@k / nDCG@k, micro/macro/sample-F1 at the configured "
             "decision rule, label coverage and shortlist recall@m — each per "
-            "frequency bucket (head/torso/tail/unseen) and overall. Writes "
+            "frequency bucket (head/torso/tail/unseen) and overall. Embedding-"
+            "dependent predictors consume eval.embedding_run_id (a prior "
+            "upr-embed-* run): its artifact is validated, id-aligned to the splits "
+            "and recorded in the metrics lineage. Writes "
             "results/<run_id>/metrics.json. Exit criterion: one command evaluates "
             "any predictor on val or test."
         ),
@@ -754,7 +758,11 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
 
     Loads the dataset and the fixed split ids (with a provenance sha check, never
     re-splitting), constructs the configured predictor from **train** context only,
-    scores the evaluation split and assembles the per-bucket report. Writes
+    scores the evaluation split and assembles the per-bucket report. Embedding-
+    dependent predictors (Phase 4) additionally consume
+    ``eval.embedding_run_id``: the artifact is loaded, hard-validated and
+    id-aligned (train document vectors only at construction; query vectors at
+    score time), and its lineage is recorded in the metrics. Writes
     ``results/<run_id>/{config.yaml, metrics.json}`` and the auto table row.
     """
     started = time.perf_counter()
@@ -788,6 +796,33 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     eval_records = select_records_by_ids(full_report.records, ids_by_split[split_name])
     train_records = select_records_by_ids(full_report.records, ids_by_split["train"])
 
+    # Phase 4 wiring (PLAN Phase 4 opening D): resolve the embedding-run
+    # reference against the declared needs of the predictor. The artifact holds
+    # the full dataset's vectors, but only the train rows reach the predictor's
+    # construction context and only the eval split's query rows reach score().
+    requires, required_kinds = predictor_embedding_requirements(eval_config.predictor.name)
+    artifact: EmbeddingArtifact | None = None
+    if eval_config.embedding_run_id and not requires:
+        logger.warning(
+            "eval.embedding_run_id %r is set but predictor %r does not use "
+            "embeddings; ignoring it (the run carries no embedding lineage).",
+            eval_config.embedding_run_id,
+            eval_config.predictor.name,
+        )
+    elif requires:
+        if not eval_config.embedding_run_id:
+            raise ValueError(
+                f"predictor {eval_config.predictor.name!r} requires embeddings; set "
+                "eval.embedding_run_id to a prior UPR embedding run_id "
+                "(e.g. 'upr-embed-e5-base-v2') — see PLAN.md Phase 4 opening D"
+            )
+        artifact = load_embedding_artifact(
+            config.paths.results,
+            eval_config.embedding_run_id,
+            required_kinds=required_kinds,
+            source_sha256=source_sha,
+        )
+
     labels = sorted({label for record in full_report.records for label in record.labels})
     dataset_counts: Counter[str] = Counter()
     for record in full_report.records:
@@ -802,14 +837,25 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         torso_min=config.stats.frequency_torso_min,
     )
 
+    train_vectors = (
+        artifact.select("document", ids_by_split["train"]) if artifact is not None else None
+    )
     predictor = build_predictor(
         eval_config.predictor.name,
         eval_config.predictor.params,
-        PredictorContext(labels=tuple(labels), train_records=tuple(train_records)),
+        PredictorContext(
+            labels=tuple(labels),
+            train_records=tuple(train_records),
+            train_document_vectors=train_vectors,
+        ),
         seed=config.seed,
     )
     texts = [record.text for record in eval_records]
-    scores = predictor.score(texts)
+    if artifact is not None:
+        query_vectors = artifact.select("query", ids_by_split[split_name])
+        scores = predictor.score(texts, query_vectors=query_vectors)
+    else:
+        scores = predictor.score(texts)
     expected_shape = (len(eval_records), len(labels))
     if scores.shape != expected_shape:
         raise ValueError(
@@ -852,6 +898,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         "n_labels": len(labels),
         "seed": config.seed,
         "predictor": predictor.describe(),
+        "embedding_run": artifact.lineage if artifact is not None else None,
         "decision": decision.model_dump(),
         "metrics_config": eval_config.metrics.model_dump(),
         "buckets": {
@@ -891,6 +938,11 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
                     "date": date.today().isoformat(),
                     "split": split_name,
                     "predictor": eval_config.predictor.name,
+                    "embedding": (
+                        eval_config.embedding_run_id.removeprefix("upr-embed-")
+                        if artifact is not None
+                        else None
+                    ),
                     "f1 decision": decision_cell,
                     "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
                     "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),

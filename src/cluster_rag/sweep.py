@@ -43,6 +43,7 @@ from cluster_rag.config import (
     ProbeConfig,
     load_config,
     merge_configs,
+    validate_embedding_run_id,
 )
 from cluster_rag.embed.base import KINDS
 
@@ -109,7 +110,10 @@ class EvalCell(_LabelledCell):
     ``decision`` (:class:`~cluster_rag.config.EvalDecisionConfig`) is the
     alternative for the other rules — exactly one of the two. ``metrics=None``
     keeps the schema default grids; ``split`` is restricted to the fixed
-    evaluation splits.
+    evaluation splits. ``embedding_run`` (Phase 4 opening D) names the prior
+    ``upr-embed-*`` run whose vectors embedding-dependent predictors consume
+    (knn, prototype, max-sim); embedding-free predictors ignore it (warn) and
+    such predictors without it fail with the wiring message.
     """
 
     predictor: str = Field(min_length=1)  # name from the predictors registry
@@ -118,6 +122,15 @@ class EvalCell(_LabelledCell):
     k: int | None = Field(default=None, ge=1)
     split: Literal["val", "test"] = "val"
     metrics: EvalMetricsConfig | None = None
+    embedding_run: str | None = None
+
+    @field_validator("embedding_run")
+    @classmethod
+    def _embedding_run_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        if value is None:
+            return None
+        return validate_embedding_run_id(value)
 
     @property
     def command(self) -> str:
@@ -147,6 +160,7 @@ class EvalCell(_LabelledCell):
                 "predictor": {"name": self.predictor, "params": self.params},
                 "decision": decision.model_dump(mode="python"),
                 "split": self.split,
+                "embedding_run_id": self.embedding_run,
             }
         }
         if self.metrics is not None:

@@ -185,9 +185,22 @@ def test_key_column_outside_columns_raises(tmp_path: Path) -> None:
 
 def test_column_groupings_match_the_phase35_contract() -> None:
     """Sanity: the regrouped evaluate table (f1 decision first, ranking second)."""
-    assert EVALUATE_COLUMNS[:4] == ("run_id", "date", "split", "predictor")
-    assert EVALUATE_COLUMNS[4:9] == ("f1 decision", "micro-F1", "macro-F1", "sample-F1", "coverage")
-    assert EVALUATE_COLUMNS[9:] == ("P@5", "R@10", "nDCG@5", "shortlist R@50", "n_texts", "seconds")
+    assert EVALUATE_COLUMNS[:5] == ("run_id", "date", "split", "predictor", "embedding")
+    assert EVALUATE_COLUMNS[5:10] == (
+        "f1 decision",
+        "micro-F1",
+        "macro-F1",
+        "sample-F1",
+        "coverage",
+    )
+    assert EVALUATE_COLUMNS[10:] == (
+        "P@5",
+        "R@10",
+        "nDCG@5",
+        "shortlist R@50",
+        "n_texts",
+        "seconds",
+    )
     assert EVALUATE_KEY_COLUMNS == ("run_id",)
     assert "cache_misses" in EMBED_COLUMNS
     assert "run_id" in PROBE_OMCT_COLUMNS and "pair_auc" in PROBE_OMCT_COLUMNS

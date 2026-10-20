@@ -85,12 +85,16 @@ EMBED_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
 # The evaluate table, regrouped (Phase 3.5): the f1 decision view first
 # (decision + its F1/coverage numbers), the ranking view (decision-rule
-# independent) second.
+# independent) second. "embedding" (Phase 4 opening D) is the detail of the
+# embedding run the predictor consumed (eval.embedding_run_id minus its
+# "upr-embed-" prefix); empty for embedding-free predictors — full lineage
+# (model, digest, prefixes) lives in the run's metrics.json.
 EVALUATE_COLUMNS: tuple[str, ...] = (
     "run_id",
     "date",
     "split",
     "predictor",
+    "embedding",
     "f1 decision",
     "micro-F1",
     "macro-F1",

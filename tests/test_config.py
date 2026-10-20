@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cluster_rag.config import load_config
+from cluster_rag.config import EvalConfig, load_config
 
 CONFIG_YAML = """
 paths:
@@ -275,3 +275,20 @@ def test_load_config_embed_kinds(tmp_path) -> None:
     empty.write_text(CONFIG_YAML + "\nembed_kinds: []\n", encoding="utf-8")
     with pytest.raises(ValueError, match="at least one encode kind"):
         load_config(empty)
+
+
+def test_eval_embedding_run_id_validation() -> None:
+    """eval.embedding_run_id: optional at load, but only upr-embed-* ids validate."""
+    filled = EvalConfig.model_validate(
+        {"predictor": {"name": "knn"}, "embedding_run_id": "upr-embed-e5-base-v2"}
+    )
+    assert filled.embedding_run_id == "upr-embed-e5-base-v2"
+    assert EvalConfig.model_validate({"predictor": {"name": "random"}}).embedding_run_id is None
+    # omct- ids would mix the auxiliary line into a UPR metric: rejected
+    with pytest.raises(ValueError, match="upr-embed-"):
+        EvalConfig.model_validate(
+            {"predictor": {"name": "knn"}, "embedding_run_id": "omct-probe2-x"}
+        )
+    # a path is not a run id (the loader resolves against paths.results itself)
+    with pytest.raises(ValueError, match="filesystem-safe"):
+        EvalConfig.model_validate({"predictor": {"name": "knn"}, "embedding_run_id": "results/x"})

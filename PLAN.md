@@ -194,9 +194,24 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 - [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN, prototype
   and per-label max-similarity evidence on UPR val across the pool BEFORE any
   fusion/preprocess weight grids ("embed all, ablate few" — no 14³ factorial).
-- [ ] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
+- [x] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
   explain and wait for the reviewer per AGENTS.md §3), then implement — how an
   `evaluate` config points at a prior `embed` run's artifact.
+  *(settled + done 2026-10-20: reviewer picked the run-level key among
+  {run-level key, predictor params-bag, raw path} — `EvalCell.embedding_run`
+  lands as `eval.embedding_run_id` (validated `upr-embed-` reference at config
+  time; existence checked at run time). Sub-decisions with the reviewer:
+  embedding-free predictors warn-and-ignore a set run id (never silently);
+  the UPR evaluate table gained an auto-appended `embedding` column (detail of
+  the run id; full lineage in metrics.json). `evaluate` resolves and
+  hard-validates `results/<run_id>/{embeddings.npz, meta.json}` (command=embed,
+  source-sha vs current data, required kinds, float32 unit-norm, id alignment);
+  only train document vectors reach the predictor's construction context, only
+  the eval split's query vectors reach score(). Lineage (model + digest +
+  prefixes + preprocess) recorded in the eval run's metrics.json
+  `embedding_run` block. Module `embed_artifact.py`; 39 new unit tests incl. a
+  fake-embedder CLI e2e; real-artifact smoke via a throwaway /tmp copy of
+  `upr-embed-e5-base-v2` (nothing in results/ or the log))*
 - [x] **E. Repo config cleanup (housekeeping).** The 9 authored experiment
   YAMLs in `configs/experiments/` are deleted: every experiment since Phase
   2.5 is defined in Python sweep files, nothing (code/tests/sweeps) reads the
@@ -209,8 +224,8 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
   sweeps; 191 unit + 12 integration tests green, ruff clean)*
 
 ### Phase 4: Retrieval baselines (no clustering yet)
-- [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute)*
-- [ ] **Label prototypes:** mean of the example embeddings per label.
+- [x] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute; done 2026-10-20: `predictors/knn.py` (port) over the pure core `retrieve/knn.py` — votes = Σ max(cos,0)^p over the top-k train examples, p configurable (softmax-with-temperature deliberately deferred until a grid needs it), ties → earlier train row, k clamped to n_train; consumes the Phase 4 wiring (train-only document vectors at construction); fake-embedder unit tests incl. hand-computed votes, tie and clipping cases; val evidence arrives with Phase 4 opening C)*
+- [x] **Label prototypes:** mean of the example embeddings per label. *(done 2026-10-20: `predictors/prototype.py` over `retrieve/prototypes.py` — renormalized per-label mean of train document vectors (float64 accumulation → float32 output); zero-example labels carry zero prototypes and score 0, matching the trivial baselines' unseen-label behavior; max-sim aggregation over the same matrix joins with the checkbox-C sweep)*
 - [ ] **Per-label max-similarity:** label score = max cosine between the text
   and any single train example of that label (over the same sentence matrix
   the prototype mean uses — complements the mean for tail labels with few

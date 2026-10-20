@@ -58,7 +58,7 @@ def test_random_predictor_is_seeded_and_reproducible() -> None:
 def test_build_predictor_unknown_name_lists_known() -> None:
     """An unknown registry name fails with the supported names in the message."""
     with pytest.raises(ValueError, match="most_frequent"):
-        build_predictor("knn", {}, _context(), seed=0)
+        build_predictor("no_such_predictor", {}, _context(), seed=0)
 
 
 def test_build_predictor_rejects_unsupported_params() -> None:

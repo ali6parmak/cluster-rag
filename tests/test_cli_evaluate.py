@@ -1,18 +1,25 @@
 """Tests for the `evaluate` CLI command (Phase 3), on the tiny fixture dataset.
 
 Covers: split -> evaluate end-to-end (artifacts, bucket sections, table row),
-seeded determinism on rerun, the --split flag, and the config-error contract.
-Baselines are pure, so no fake embedder or network is involved.
+seeded determinism on rerun, the --split flag, the config-error contract, and
+the Phase 4 embedding-run wiring (knn via a fabricated upr-embed-fix artifact,
+with a fake embedder, no network).
 """
 
 from __future__ import annotations
 
 import json
+import logging
+from pathlib import Path
 
+import numpy as np
 import pytest
 import yaml
 
 from cluster_rag.cli import main
+from cluster_rag.data import load_jsonl
+from cluster_rag.dataset_stats import file_sha256
+from fake_embedder import FakeEmbedder
 
 EVAL_CONFIG_EXTRA = """
 eval:
@@ -22,6 +29,59 @@ eval:
     rule: top_k
     k: 2
 """
+
+KNN_CONFIG_EXTRA = """
+eval:
+  predictor:
+    name: knn
+    params:
+      k: 2
+  embedding_run_id: upr-embed-fix
+  decision:
+    rule: top_k
+    k: 2
+"""
+
+
+def _write_embedding_run(results_root: Path, sample_jsonl: Path) -> None:
+    """Fabricate results/upr-embed-fix (npz + meta.json) for the fixture dataset.
+
+    Mirrors what the embed command writes — ids in dataset order, one
+    (n, d) float32 unit-norm matrix per kind, plus the lineage meta.
+    """
+    report = load_jsonl(sample_jsonl)
+    ids = [record.id for record in report.records]
+    texts = [record.text for record in report.records]
+    embedder = FakeEmbedder(dimension=8)
+    run_dir = results_root / "upr-embed-fix"
+    run_dir.mkdir(parents=True)
+    np.savez_compressed(
+        run_dir / "embeddings.npz",
+        ids=np.asarray(ids),
+        vectors_document=embedder.encode(texts, "document"),
+        vectors_query=embedder.encode(texts, "query"),
+    )
+    meta = {
+        "run_id": "upr-embed-fix",
+        "command": "embed",
+        "kinds": ["document", "query"],
+        "n_records": len(ids),
+        "source_sha256": file_sha256(sample_jsonl),
+        "embedder": {
+            "backend": "fake",
+            "model_id": "fake-embedder",
+            "dimension": 8,
+            "revision_or_digest": "fake-revision",
+            "context_tokens": None,
+            "prefixes": {"query": "", "document": "", "label": ""},
+            "extra": {},
+        },
+        "cache": {"enabled": False},
+        "preprocess": {"variant": "raw", "version": "raw-v1", "n_changed": 0},
+        "kind_stats": {},
+        "total_seconds": 0.1,
+    }
+    (run_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
 
 @pytest.fixture()
@@ -158,7 +218,7 @@ def test_evaluate_unknown_predictor_name_fails(evaluate_run) -> None:
     bad_extra = """
 eval:
   predictor:
-    name: knn
+    name: no_such_predictor
   decision:
     rule: top_k
     k: 2
@@ -167,3 +227,69 @@ eval:
     assert code == 1
     assert metrics is None
     assert not (results_dir / "metrics.json").exists()
+
+
+def test_evaluate_knn_consumes_the_embedding_run(evaluate_run, sample_jsonl, tmp_path) -> None:
+    """Phase 4 wiring: knn resolves, validates and aligns the upr-embed artifact."""
+    _write_embedding_run(tmp_path / "results", sample_jsonl)
+    code, metrics, _, results_dir = evaluate_run(run_id="upr-eval-knn-fix", extra=KNN_CONFIG_EXTRA)
+    assert code == 0
+    assert metrics["predictor"]["name"] == "knn" and metrics["predictor"]["k"] == 2
+    lineage = metrics["embedding_run"]
+    assert lineage is not None
+    assert lineage["run_id"] == "upr-embed-fix"
+    assert lineage["backend"] == "fake" and lineage["model_id"] == "fake-embedder"
+    assert lineage["revision_or_digest"] == "fake-revision" and lineage["dimension"] == 8
+    assert lineage["kinds"] == ["document", "query"]
+    frozen = yaml.safe_load((results_dir / "config.yaml").read_text("utf-8"))
+    assert frozen["eval"]["embedding_run_id"] == "upr-embed-fix"
+
+
+def test_evaluate_knn_without_embedding_run_id_fails(
+    evaluate_run, sample_jsonl, tmp_path, caplog
+) -> None:
+    """A kNN config with no eval.embedding_run_id fails with the wiring message."""
+    knn_only = KNN_CONFIG_EXTRA.replace("  embedding_run_id: upr-embed-fix\n", "")
+    with caplog.at_level(logging.ERROR):
+        code, metrics, _, results_dir = evaluate_run(run_id="upr-eval-knn-nowire", extra=knn_only)
+    assert code == 1 and metrics is None
+    assert not (results_dir / "metrics.json").exists()
+    assert any("requires embeddings" in record.message for record in caplog.records)
+
+
+def test_evaluate_knn_with_missing_artifact_fails(
+    evaluate_run, sample_jsonl, tmp_path, caplog
+) -> None:
+    """A dangling embedding_run_id fails naming the artifact and the fix."""
+    with caplog.at_level(logging.ERROR):
+        code, metrics, _, _ = evaluate_run(run_id="upr-eval-knn-missing", extra=KNN_CONFIG_EXTRA)
+    assert code == 1 and metrics is None
+    assert any("not found" in record.message for record in caplog.records)
+
+
+def test_evaluate_warns_and_ignores_embedding_run_for_free_predictors(
+    evaluate_run, sample_jsonl, tmp_path, caplog
+) -> None:
+    """most_frequent + embedding_run_id: run proceeds, warning logged, lineage None."""
+    _write_embedding_run(tmp_path / "results", sample_jsonl)
+    mf_extra = EVAL_CONFIG_EXTRA + "  embedding_run_id: upr-embed-fix\n"
+    with caplog.at_level(logging.WARNING):
+        code, metrics, _, _ = evaluate_run(run_id="upr-eval-mf-warn", extra=mf_extra)
+    assert code == 0
+    assert metrics["embedding_run"] is None  # no lineage: the artifact was never read
+    assert any(
+        "does not use" in record.message and "ignoring it" in record.message
+        for record in caplog.records
+    )
+
+
+def test_evaluate_table_row_carries_embedding_column(evaluate_run, sample_jsonl, tmp_path) -> None:
+    """The auto table shows the embedding run's detail next to the predictor."""
+    _write_embedding_run(tmp_path / "results", sample_jsonl)
+    table = tmp_path / "tables.md"
+    code, _, _, _ = evaluate_run(run_id="upr-eval-knn-table", extra=KNN_CONFIG_EXTRA, table=table)
+    assert code == 0
+    content = table.read_text("utf-8")
+    header = next(line for line in content.splitlines() if line.startswith("| run_id"))
+    assert header.index("predictor") < header.index("embedding") < header.index("f1 decision")
+    assert "| upr-eval-knn-table |" in content and "| fix |" in content

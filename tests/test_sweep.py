@@ -383,3 +383,38 @@ def test_sweep_command_rejects_bad_files(repo_root: Path, caplog) -> None:
     assert any("boom" in record.message for record in caplog.records)
 
     assert main(["sweep", "--file", str(repo_root / "missing.py")]) == 1
+
+
+def test_eval_cell_embedding_run_field() -> None:
+    """EvalCell.embedding_run validates and lands as eval.embedding_run_id."""
+    cell = EvalCell(
+        label="upr-eval-knn-x",
+        predictor="knn",
+        params={"k": 3},
+        k=2,
+        embedding_run="upr-embed-e5-base-v2",
+    )
+    assert cell.overrides["eval"]["embedding_run_id"] == "upr-embed-e5-base-v2"
+    default = EvalCell(label="upr-eval-x", predictor="random", k=2)
+    assert default.overrides["eval"]["embedding_run_id"] is None
+    # Only a UPR embed run may feed an eval: omct- or path-like values fail here.
+    with pytest.raises(ValueError, match="upr-embed-"):
+        EvalCell(label="upr-eval-x", predictor="knn", k=2, embedding_run="omct-probe2-x")
+    with pytest.raises(ValueError, match="filesystem-safe"):
+        EvalCell(label="upr-eval-x", predictor="knn", k=2, embedding_run="results/nope")
+
+
+def test_define_sweep_resolves_embedding_run(repo_root: Path) -> None:
+    """An EvalCell's embedding_run becomes the resolved config's eval key."""
+    cells = [
+        EvalCell(
+            label="upr-eval-knn-a",
+            predictor="knn",
+            params={"k": 3},
+            k=2,
+            embedding_run="upr-embed-jina-v5",
+        )
+    ]
+    runs = define_sweep(cells, dataset="upr", label="pool_sweep")
+    assert runs[0].config.eval.embedding_run_id == "upr-embed-jina-v5"
+    assert runs[0].config.eval.predictor.params == {"k": 3}
