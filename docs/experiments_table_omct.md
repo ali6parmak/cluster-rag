@@ -67,3 +67,29 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | omct-probe2-embeddinggemma2 | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.6987 | 0.429 | 0.857 | 35 |
 | omct-probe2-embeddinggemma2 | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.6294 | 0.405 | 0.770 | 74 |
 | omct-probe2-embeddinggemma2 | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.5585 | 0.283 | 0.652 | 46 |
+
+## OMCT — thresholds
+
+| run_id | date | backend | model | model_version | dim | ctx | transform | pair_auc | same-doc hit@1 | same-doc hit@10 | same-doc recall@10 | paras>ctx | n_paras | n_pairs(pos) | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-probe-thresholds-embeddinggemma | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | strip_block | 0.5371 | 0.458 | 0.794 | 0.582 | 0.0% | 225 | 1520 (524) | 0.041 |
+| omct-probe-thresholds-jina-v5 | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | strip_block | 0.5394 | 0.465 | 0.813 | 0.589 | 0.0% | 225 | 1520 (524) | 0.056 |
+| omct-probe-thresholds-voyage-4-nano | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | strip_block | 0.5004 | 0.355 | 0.716 | 0.474 | 0.0% | 225 | 1520 (524) | 0.058 |
+| omct-probe-thresholds-arctic2 | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | strip_block | 0.4680 | 0.355 | 0.813 | 0.570 | 0.0% | 225 | 1520 (524) | 0.039 |
+
+## OMCT — thresholds - groups
+
+| run_id | transform | document | source_csv | n_pairs | pos | neg | pair_auc | same-doc hit@1 | same-doc hit@10 | n_rows_with_gold |
+|---|---|---|---|---|---|---|---|---|---|---|
+| omct-probe-thresholds-embeddinggemma | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.7633 | 0.571 | 0.971 | 35 |
+| omct-probe-thresholds-embeddinggemma | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.6263 | 0.459 | 0.770 | 74 |
+| omct-probe-thresholds-embeddinggemma | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.5231 | 0.370 | 0.696 | 46 |
+| omct-probe-thresholds-jina-v5 | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.7146 | 0.486 | 0.914 | 35 |
+| omct-probe-thresholds-jina-v5 | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.6054 | 0.419 | 0.797 | 74 |
+| omct-probe-thresholds-jina-v5 | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.5467 | 0.522 | 0.761 | 46 |
+| omct-probe-thresholds-voyage-4-nano | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.6165 | 0.457 | 0.857 | 35 |
+| omct-probe-thresholds-voyage-4-nano | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.5573 | 0.338 | 0.716 | 74 |
+| omct-probe-thresholds-voyage-4-nano | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.5027 | 0.304 | 0.609 | 46 |
+| omct-probe-thresholds-arctic2 | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.6209 | 0.371 | 0.943 | 35 |
+| omct-probe-thresholds-arctic2 | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.5408 | 0.351 | 0.797 | 74 |
+| omct-probe-thresholds-arctic2 | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.4773 | 0.348 | 0.739 | 46 |

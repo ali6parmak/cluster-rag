@@ -351,3 +351,75 @@ def test_probe_omct_requires_embed_section(sample_pairs, write_config, caplog, m
     with caplog.at_level(logging.ERROR):
         assert main(["probe-omct", "--config", str(config_file)]) == 1
     assert any("embed: section" in record.message for record in caplog.records)
+
+
+def test_score_distributions_reported(strip_pairs_file) -> None:
+    """Every variant carries judged-label score distributions that reconcile."""
+    records = load_pairs(strip_pairs_file).records
+    embedder = FakeEmbedder(
+        model_id="fake-embedder", dimension=8, prefixes={"query": "q: ", "document": "d: "}
+    )
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    report = run_probe(records, embedder, preprocess_spec=spec, probe_config=_probe_config())
+    for variant in report["variants"]:
+        sd = variant["score_distributions"]
+        assert sd["judged_label1"]["n"] == 2
+        assert sd["judged_label0"]["n"] == 1
+        quantiles = sd["judged_label1"]["quantiles"]
+        assert [float(v) for v in quantiles.values()] == sorted(quantiles.values())
+        assert quantiles["0.25"] <= sd["judged_label1"]["mean"] <= quantiles["0.75"]
+        assert quantiles["0.01"] >= sd["judged_label1"]["min"]
+        assert quantiles["0.99"] <= sd["judged_label1"]["max"]
+        # both paragraphs in this fixture have a positive pair: no goldless rows
+        goldless = sd["goldless_paragraphs"]
+        assert goldless["n_paragraph_rows"] == 0
+        assert goldless["best_same_doc_similarity"]["n"] == 0
+
+
+def test_score_distributions_goldless_rows(strip_pairs_file, tmp_path) -> None:
+    """A paragraph judged only 'not same topic' is a goldless row; best sim by hand."""
+    # label X-1 flipped to 0: paragraph one (Doc A) then has only negative pairs
+    flipped = STRIP_PAIRS.replace(
+        '"label": 1, "label_origin": "merged"', '"label": 0, "label_origin": "merged"', 1
+    )
+    path = tmp_path / "goldless_pairs.json"
+    path.write_text(flipped, encoding="utf-8")
+    records = load_pairs(path).records
+    assert len(records) == 3
+
+    embedder = FakeEmbedder(
+        model_id="fake-embedder", dimension=8, prefixes={"query": "q: ", "document": "d: "}
+    )
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    report = run_probe(records, embedder, preprocess_spec=spec, probe_config=_probe_config())
+
+    # hand-computed expectation: paragraph one's same-document candidate is the
+    # single Doc-A question column (both its questions collide to one text)
+    corpus = build_probe_corpus(
+        records,
+        transform="strip_block",
+        markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+    )
+    gold = gold_by_paragraph(corpus)
+    assert gold[0] == set() and gold[1]  # paragraph one goldless, paragraph two not
+    paragraph_matrix = embedder.encode(corpus.paragraphs, "document")
+    question_matrix = embedder.encode(corpus.questions, "query")
+    sims = paragraph_matrix @ question_matrix.T
+    candidates = [
+        c
+        for c in range(len(corpus.questions))
+        if corpus.question_documents[c] & corpus.paragraph_documents[0]
+    ]
+    expected_best = float(sims[0, candidates].max())
+
+    sd = report["variants"][1]["score_distributions"]  # variants[0]=keep, [1]=strip_block
+    goldless = sd["goldless_paragraphs"]
+    assert goldless["n_paragraph_rows"] == 1
+    assert goldless["n_without_same_doc_candidates"] == 0
+    best = goldless["best_same_doc_similarity"]
+    assert best["n"] == 1
+    assert best["quantiles"]["0.5"] == pytest.approx(expected_best)
+    # a single goldless point: every quantile equals it
+    assert best["quantiles"]["0.25"] == best["quantiles"]["0.5"] == best["quantiles"]["0.75"]
+    assert sd["judged_label0"]["n"] == 2 and sd["judged_label1"]["n"] == 1

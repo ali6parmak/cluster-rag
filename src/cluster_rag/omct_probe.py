@@ -22,6 +22,11 @@ listing both in ``probe.question_transforms``. Paragraphs are preprocessed
 with the config variant (default raw); transforms are scored against the same
 paragraph vectors.
 
+Each variant also reports **score distributions** (Phase 4 thresholding
+evidence, strictly auxiliary): judged-pair cosines by label, and the best
+same-document-candidate similarity of paragraphs with only negative
+judgements ("should answer nothing" rows).
+
 The embedding backend is injected (protocol port) so tests run a deterministic
 fake; the metrics are pure functions from :mod:`cluster_rag.eval.metrics`.
 This module orchestrates backend + metrics for the CLI (like ``cli.py``) and
@@ -55,6 +60,78 @@ logger = logging.getLogger(__name__)
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0  # English-prose heuristic when no tokenizer exists
 TOKEN_SOURCE_TOKENIZER = "tokenizer-exact"  # HF embedders only
 TOKEN_SOURCE_ESTIMATE = f"chars-over-{CHARS_PER_TOKEN_ESTIMATE:g}-estimate"  # Ollama fallback
+
+PROBE_QUANTILES: tuple[float, ...] = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)
+
+
+def _quantile_dict(values: np.ndarray) -> dict[str, float]:
+    """Quantile snapshot with JSON-friendly string probability keys."""
+    return {f"{p:g}": float(np.quantile(values, p)) for p in PROBE_QUANTILES}
+
+
+def _distribution_block(values: np.ndarray, n_total: int) -> dict[str, Any]:
+    """Count + mean/min/max/quantiles for one judged-score group (may be empty)."""
+    block: dict[str, Any] = {"n": n_total}
+    if values.size:
+        block.update(
+            mean=float(np.mean(values)),
+            min=float(values.min()),
+            max=float(values.max()),
+            quantiles=_quantile_dict(values),
+        )
+    return block
+
+
+def score_distributions(
+    similarities: np.ndarray,
+    corpus: ProbeCorpus,
+    gold: Sequence[set[int]],
+) -> dict[str, Any]:
+    """Score-distribution evidence for threshold design (auxiliary line only).
+
+    Report what judged same-topic (label 1) vs not-same-topic (label 0) pair
+    cosines look like, plus — the "should answer nothing" rows of PLAN Phase
+    4 — the best similarity a paragraph reaches over its own same-document
+    candidate questions when *every* judged pair on it is label 0 (no gold).
+    Pure numpy; describes the OMCT data only and is never a UPR metric — UPR
+    operating points are calibrated on UPR val.
+    """
+    pair_scores = similarities[corpus.rows, corpus.columns]
+    positive = pair_scores[corpus.labels == 1]
+    negative = pair_scores[corpus.labels == 0]
+
+    goldless_rows = [row for row, columns in enumerate(gold) if not columns]
+    goldless_best: list[float] = []
+    without_candidates = 0
+    for row in goldless_rows:
+        candidates = [
+            column
+            for column in range(len(corpus.questions))
+            if corpus.question_documents[column] & corpus.paragraph_documents[row]
+        ]
+        if candidates:
+            goldless_best.append(float(similarities[row, candidates].max()))
+        else:
+            without_candidates += 1
+
+    return {
+        "note": (
+            "auxiliary threshold-calibration evidence (OMCT line, never a UPR "
+            "metric): judged pair cosine distributions by label, and the best "
+            "same-document-candidate similarity of paragraphs whose judged "
+            "pairs are all label 0 (the 'should answer nothing' rows); UPR "
+            "operating points are calibrated on UPR val"
+        ),
+        "judged_label1": _distribution_block(positive, int(positive.size)),
+        "judged_label0": _distribution_block(negative, int(negative.size)),
+        "goldless_paragraphs": {
+            "n_paragraph_rows": len(goldless_rows),
+            "n_without_same_doc_candidates": without_candidates,
+            "best_same_doc_similarity": _distribution_block(
+                np.asarray(goldless_best, dtype=np.float64), len(goldless_best)
+            ),
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -476,6 +553,7 @@ def run_probe(
                 "retrieval": retrieval,
                 "group_breakdown": breakdown,
                 "truncation": truncation,
+                "score_distributions": score_distributions(similarities, corpus, gold),
                 "seconds": round(time.perf_counter() - started, 3),
             }
         )
