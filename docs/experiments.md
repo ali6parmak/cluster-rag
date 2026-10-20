@@ -357,3 +357,73 @@ run) — 0 problems. Label-text variants: `name` (bare label) /
 (`experiments/fusion_c_sweep.py`: a=0.5, b=1, k∈{10,20}, c∈{0.1,0.25,0.5,1.0} ×
 the four semifinalists → 32 cells; the `upr-labelembed-*-about` artifacts are
 already built); then Phase 4 thresholding and the single final test run.
+
+## Phase 4: fusion c-grid — zero-shot term weight on UPR val (2026-10-20)
+
+UPR dataset scope: **val split only** (660 records, 68 labels), decision `top_k k=2`
+everywhere (comparability), artifact-side preprocessing `raw-v1`; CPU-only (32
+evaluate cells in 5.9s — every embedding/label artifact prebuilt, nothing
+re-encoded). 32 runs from `experiments/fusion_c_sweep.py`, section
+`## UPR — fusion_c` (table rows machine-appended). Verification: 32/32
+artifacts field-checked (predictor params a=0.5 b=1.0 c/k, decision, split
+scope, n_records, embedding lineage `upr-embed-<model>`, label lineage
+`upr-labelembed-<model>-about` = the 68-label `about`-template artifact with
+matching digests/dimension) + the 8 `c=0` comparators at a=0.5 re-read from the
+`fusion_weights` run folders — 0 problems.
+
+Mix pinned by the prior two log sections: `a=0.5` (best `a ≤ 0.5` per model,
+flat landscape), `b=1`, zero-shot template `about` (3/4 models + best mean).
+
+**micro-F1 by cell (UPR val, c=0 column = the a-grid's a0.5 twins):**
+
+| model | k | c=0 | c0.1 | c0.25 | c0.5 | c1 |
+|---|---|---|---|---|---|---|
+| embeddinggemma | 10 | 0.5464 | 0.5471 | **0.5479** | 0.5456 | **0.5479** |
+| embeddinggemma | 20 | 0.5403 | 0.5418 | 0.5410 | 0.5403 | 0.5433 |
+| jina-v5 | 10 | 0.5403 | 0.5410 | 0.5410 | **0.5426** | 0.5403 |
+| jina-v5 | 20 | 0.5403 | 0.5395 | 0.5403 | 0.5395 | 0.5418 |
+| voyage-4-nano | 10 | 0.5380 | 0.5372 | 0.5380 | **0.5395** | **0.5395** |
+| voyage-4-nano | 20 | 0.5372 | 0.5372 | 0.5388 | **0.5395** | 0.5388 |
+| arctic2 | 10 | 0.5410 | 0.5418 | **0.5426** | 0.5403 | 0.5395 |
+| arctic2 | 20 | 0.5334 | 0.5380 | 0.5380 | 0.5380 | 0.5372 |
+
+**Findings (UPR val):**
+1. **The zero-shot term helps, a little**: every model has a c>0 cell above
+   its c=0 twin. Per-model best cells (pool-cut rule: micro, tiebreak tail
+   macro): embeddinggemma k10 (c0.25/c1 exactly tied 0.547872 — c1 wins the
+   tail tiebreak 0.5181 vs 0.5117 and dominates macro 0.5006/0.4994 and
+   shortlist 0.7423/0.7337); jina-v5 k10 c0.5 0.5426 (+0.23 pp); voyage-4-nano
+   k20 c0.5 0.5395 (three-way micro tie {k10-c0.5, k10-c1, k20-c0.5}, tail
+   0.5614 breaks it); arctic2 k10 c0.25 0.5426 (+0.15 pp).
+2. **Near-tie honesty**: all per-model gains are +0.15 to +0.23 pp (single-cell
+   max +0.46 pp, arctic2 k20 c0.1) = ~1–6 gold cells of 1312 decisions — the
+   val landscape stays flat; weights should not be over-tuned.
+3. **New champion cell**: `upr-eval-fusionc-embeddinggemma-k10-c1` 0.5479
+   micro (macro 0.5006, tail macro 0.5181, shortlist R@50 0.7423) — +0.15 pp
+   over the a-grid champion (0.5464) and +0.91 pp over the pool-cut family
+   best (knn 0.5388).
+4. **The structural promise did NOT materialize**: inside fusion, unseen
+   coverage/micro stay **0.000 for every c ≤ 1** — with a·kNN vote sums
+   (up to ~k) plus b·proto cosines on seen labels, the c·zero-shot-only
+   unseen scores never reach the fused top-2 on val. The only route to
+   unseen labels remains the **standalone** zeroshot predictor (coverage
+   0.62–0.75, previous section); a fused c-term is a seen-label refinement
+   signal, full stop. (A min_score/`top_k_min_score` threshold rule could in
+   principle admit unseen labels under the thresholded decision — that is
+   thresholding's to test, not c's.)
+5. **Shortlist trade-off persists, slightly better at high c**: fused
+   shortlist R@50 0.7337–0.7423 (vs kNN's 0.89–0.96) — voyage-4-nano k10-c1
+   reaches 0.8193 but still under kNN; the Phase-6 reranker shortlist role
+   stays with kNN.
+
+**Final tuned weights (UPR val, top_k k=2, a=0.5 / b=1):** per model —
+embeddinggemma c=1 k10 (proposed Phase-4 config `upr-eval-fusionc-embeddinggemma-k10-c1`); jina-v5 c=0.5 k10; voyage-4-nano c=0.5 k20;
+arctic2 c=0.25 k10. Parsimony alternative for the champion: c=0.25
+(micro-tied, loses every tiebreak). The proposed test-run config: embeddinggemma,
+fusion(a=0.5, b=1.0, c=1.0), knn-neighborhood k=10, decision top_k k=2.
+
+**Next:** Phase 4 **Thresholding** (top_k vs score_threshold vs
+top_k_min_score, calibrated on val; OMCT pair score distributions as the
+auxiliary, separately-reported evidence), then the preprocess ablation on the
+semifinalists only, optional BM25 hybrid, then the single untouched-test run
+of the best config.

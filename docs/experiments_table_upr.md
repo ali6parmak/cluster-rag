@@ -225,3 +225,40 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-zeroshot-arctic2-about | 2026-10-20 | val | zeroshot | arctic2 | top_k k=2 | 0.4635 | 0.4741 | 0.4537 | 0.956 | 0.2473 | 0.6995 | 0.6015 | 0.8625 | 660 | 0.062 |
 | upr-labelembed-arctic2-topic | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | raw | 68 | 0.413 | 0 | 68 |
 | upr-eval-zeroshot-arctic2-topic | 2026-10-20 | val | zeroshot | arctic2 | top_k k=2 | 0.4567 | 0.4783 | 0.4477 | 0.941 | 0.2430 | 0.7051 | 0.5918 | 0.8777 | 660 | 0.061 |
+
+## UPR — fusion_c
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-fusionc-embeddinggemma-k10-c0.1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5471 | 0.4998 | 0.5267 | 0.868 | 0.2745 | 0.7073 | 0.6699 | 0.7337 | 660 | 0.131 |
+| upr-eval-fusionc-embeddinggemma-k10-c0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5479 | 0.4994 | 0.5272 | 0.868 | 0.2752 | 0.7105 | 0.6705 | 0.7337 | 660 | 0.138 |
+| upr-eval-fusionc-embeddinggemma-k10-c0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5456 | 0.4978 | 0.5245 | 0.868 | 0.2755 | 0.7115 | 0.6703 | 0.7337 | 660 | 0.157 |
+| upr-eval-fusionc-embeddinggemma-k10-c1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.132 |
+| upr-eval-fusionc-embeddinggemma-k20-c0.1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5418 | 0.4922 | 0.5213 | 0.853 | 0.2742 | 0.7057 | 0.6648 | 0.7337 | 660 | 0.132 |
+| upr-eval-fusionc-embeddinggemma-k20-c0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5410 | 0.4956 | 0.5209 | 0.853 | 0.2748 | 0.7067 | 0.6649 | 0.7337 | 660 | 0.134 |
+| upr-eval-fusionc-embeddinggemma-k20-c0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5403 | 0.4950 | 0.5203 | 0.853 | 0.2764 | 0.7077 | 0.6662 | 0.7337 | 660 | 0.133 |
+| upr-eval-fusionc-embeddinggemma-k20-c1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5433 | 0.4980 | 0.5231 | 0.853 | 0.2764 | 0.7086 | 0.6674 | 0.7423 | 660 | 0.136 |
+| upr-eval-fusionc-jina-v5-k10-c0.1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5410 | 0.4844 | 0.5213 | 0.868 | 0.2758 | 0.7083 | 0.6698 | 0.7337 | 660 | 0.186 |
+| upr-eval-fusionc-jina-v5-k10-c0.25 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5410 | 0.4854 | 0.5212 | 0.868 | 0.2758 | 0.7129 | 0.6699 | 0.7337 | 660 | 0.201 |
+| upr-eval-fusionc-jina-v5-k10-c0.5 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5426 | 0.4876 | 0.5223 | 0.868 | 0.2758 | 0.7150 | 0.6701 | 0.7337 | 660 | 0.197 |
+| upr-eval-fusionc-jina-v5-k10-c1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4856 | 0.5212 | 0.868 | 0.2773 | 0.7173 | 0.6714 | 0.7423 | 660 | 0.183 |
+| upr-eval-fusionc-jina-v5-k20-c0.1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5395 | 0.4811 | 0.5197 | 0.868 | 0.2764 | 0.7122 | 0.6672 | 0.7337 | 660 | 0.182 |
+| upr-eval-fusionc-jina-v5-k20-c0.25 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4812 | 0.5207 | 0.868 | 0.2773 | 0.7133 | 0.6691 | 0.7337 | 660 | 0.182 |
+| upr-eval-fusionc-jina-v5-k20-c0.5 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5395 | 0.4791 | 0.5204 | 0.868 | 0.2779 | 0.7136 | 0.6696 | 0.7337 | 660 | 0.185 |
+| upr-eval-fusionc-jina-v5-k20-c1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5418 | 0.4828 | 0.5228 | 0.868 | 0.2779 | 0.7141 | 0.6705 | 0.7423 | 660 | 0.188 |
+| upr-eval-fusionc-voyage-4-nano-k10-c0.1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5372 | 0.4836 | 0.5177 | 0.868 | 0.2721 | 0.7138 | 0.6640 | 0.7337 | 660 | 0.254 |
+| upr-eval-fusionc-voyage-4-nano-k10-c0.25 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4839 | 0.5182 | 0.868 | 0.2721 | 0.7134 | 0.6646 | 0.7337 | 660 | 0.245 |
+| upr-eval-fusionc-voyage-4-nano-k10-c0.5 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5395 | 0.4872 | 0.5197 | 0.868 | 0.2724 | 0.7141 | 0.6660 | 0.7428 | 660 | 0.268 |
+| upr-eval-fusionc-voyage-4-nano-k10-c1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5395 | 0.4926 | 0.5197 | 0.868 | 0.2748 | 0.7256 | 0.6699 | 0.8193 | 660 | 0.272 |
+| upr-eval-fusionc-voyage-4-nano-k20-c0.1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5372 | 0.4923 | 0.5175 | 0.868 | 0.2721 | 0.7116 | 0.6643 | 0.7337 | 660 | 0.247 |
+| upr-eval-fusionc-voyage-4-nano-k20-c0.25 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5388 | 0.4948 | 0.5193 | 0.868 | 0.2715 | 0.7115 | 0.6642 | 0.7337 | 660 | 0.251 |
+| upr-eval-fusionc-voyage-4-nano-k20-c0.5 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5395 | 0.4970 | 0.5202 | 0.868 | 0.2721 | 0.7130 | 0.6654 | 0.7428 | 660 | 0.248 |
+| upr-eval-fusionc-voyage-4-nano-k20-c1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5388 | 0.4979 | 0.5196 | 0.868 | 0.2745 | 0.7160 | 0.6680 | 0.8186 | 660 | 0.25 |
+| upr-eval-fusionc-arctic2-k10-c0.1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5418 | 0.4881 | 0.5216 | 0.868 | 0.2739 | 0.7117 | 0.6663 | 0.7337 | 660 | 0.154 |
+| upr-eval-fusionc-arctic2-k10-c0.25 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5426 | 0.4900 | 0.5223 | 0.868 | 0.2733 | 0.7109 | 0.6653 | 0.7337 | 660 | 0.147 |
+| upr-eval-fusionc-arctic2-k10-c0.5 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5403 | 0.4882 | 0.5205 | 0.868 | 0.2736 | 0.7119 | 0.6653 | 0.7337 | 660 | 0.174 |
+| upr-eval-fusionc-arctic2-k10-c1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5395 | 0.4878 | 0.5194 | 0.868 | 0.2745 | 0.7121 | 0.6663 | 0.7393 | 660 | 0.149 |
+| upr-eval-fusionc-arctic2-k20-c0.1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5380 | 0.4753 | 0.5177 | 0.868 | 0.2736 | 0.7120 | 0.6629 | 0.7337 | 660 | 0.151 |
+| upr-eval-fusionc-arctic2-k20-c0.25 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5380 | 0.4745 | 0.5177 | 0.868 | 0.2742 | 0.7125 | 0.6632 | 0.7337 | 660 | 0.151 |
+| upr-eval-fusionc-arctic2-k20-c0.5 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5380 | 0.4744 | 0.5177 | 0.868 | 0.2742 | 0.7125 | 0.6625 | 0.7337 | 660 | 0.146 |
+| upr-eval-fusionc-arctic2-k20-c1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5372 | 0.4745 | 0.5171 | 0.868 | 0.2745 | 0.7133 | 0.6631 | 0.7393 | 660 | 0.149 |
