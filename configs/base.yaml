@@ -52,7 +52,7 @@ splits:
 #   cache:     {enabled: true}               # disk cache at paths.cache
 #   probe:     {question_transforms: [strip_block],     # default; add "keep" for an
 #               question_block_markers: ["Answer choices:", "Notes:"],
-#               recall_ks: [1, 10]}          # explicit comparison; used by `probe-aux`
+#               recall_ks: [1, 10]}          # explicit comparison; used by `probe-omct`
 #
 # Phase 3 eval defaults (schema defaults, commented — the predictor name is
 # per-run by design; sweep cells set it). `evaluate` requires eval.predictor:

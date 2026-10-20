@@ -68,7 +68,7 @@ def pairwise_retrieval_metrics(
         gold: One set of gold column indices per row (may be empty).
         ks: k values for both metrics (clipped at the candidate count).
         candidate_columns: Optional per-row candidate column indices restricting
-            the ranking (the aux probe's "same document" scope); rows rank only
+            the ranking (the omct probe's "same document" scope); rows rank only
             within their candidate list. An empty per-row list ranks nothing.
             Defaults to every column.
 
@@ -116,7 +116,7 @@ def subset_pair_metrics(
 ) -> dict[str, float | int | str]:
     """:func:`pairwise_retrieval_metrics` restricted to rows where ``row_mask`` is true.
 
-    Used by the aux probe to compare metrics for row subsets: "paragraphs that
+    Used by the omct probe to compare metrics for row subsets: "paragraphs that
     exceed the model context (truncated by the server)" vs the rest, and (Phase
     2.5) per (document, source_csv) groups with their same-document candidates.
 

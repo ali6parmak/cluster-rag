@@ -60,10 +60,10 @@ def test_sweep_cell_validation() -> None:
         SweepCell(label="sub/dir", command="embed")
     with pytest.raises(ValueError, match="Extra inputs"):
         SweepCell(label="x", command="embed", run_id="y")  # type: ignore[call-arg]
-    assert COMMANDS == ("stats", "stats-pairs", "split", "embed", "evaluate", "probe-aux")
+    assert COMMANDS == ("stats", "stats-omct", "split", "embed", "evaluate", "probe-omct")
     assert DATASET_COMMANDS == {
         "upr": ("stats", "split", "embed", "evaluate"),
-        "omct": ("stats-pairs", "probe-aux"),
+        "omct": ("stats-omct", "probe-omct"),
     }
 
 
@@ -126,12 +126,12 @@ def test_define_sweep_rejects_unknown_dataset_and_command(repo_root: Path) -> No
     """dataset is closed over {upr, omct}; cells must run that dataset's commands."""
     with pytest.raises(ValueError, match="Unknown sweep dataset"):
         define_sweep(
-            [EvalCell(label="upr-eval-x", predictor="random", k=2)], dataset="aux", label="x"
+            [EvalCell(label="upr-eval-x", predictor="random", k=2)], dataset="unknown", label="x"
         )
     with pytest.raises(ValueError, match="not a 'omct' sweep command"):
         define_sweep([EvalCell(label="x", predictor="random", k=2)], dataset="omct", label="x")
     with pytest.raises(ValueError, match="not a 'upr' sweep command"):
-        define_sweep([SweepCell(label="upr-x", command="stats-pairs")], dataset="upr", label="x")
+        define_sweep([SweepCell(label="upr-x", command="stats-omct")], dataset="upr", label="x")
     with pytest.raises(ValueError, match="not a 'omct' sweep command"):
         define_sweep([SweepCell(label="x", command="split")], dataset="omct", label="x")
 
@@ -213,7 +213,7 @@ def test_define_sweep_validates_override_values(repo_root: Path) -> None:
     bad = [
         SweepCell(
             label="probe-y",
-            command="probe-aux",
+            command="probe-omct",
             overrides={"probe": {"question_transforms": ["wrong"]}},
         )
     ]
@@ -262,11 +262,11 @@ def test_sweep_command_executes_cells_in_order(repo_root: Path, monkeypatch, cap
 
 
 def test_sweep_command_runs_stats_by_command_name(repo_root: Path, monkeypatch) -> None:
-    """`stats` and `stats-pairs` cells dispatch to _cmd_stats with the pairs flag."""
+    """`stats` and `stats-omct` cells dispatch to _cmd_stats with the omct flag."""
     calls: list[tuple[str, str, str]] = []
 
-    def fake_stats(config, pairs=False):
-        calls.append(("stats", config.run_id, str(pairs)))
+    def fake_stats(config, omct=False):
+        calls.append(("stats", config.run_id, str(omct)))
         return 0
 
     monkeypatch.setattr(cli, "_cmd_stats", fake_stats)
@@ -277,7 +277,7 @@ def test_sweep_command_runs_stats_by_command_name(repo_root: Path, monkeypatch) 
         "SWEEP = (\n"
         "    define_sweep([SweepCell(label='upr-stats-base', command='stats')],\n"
         "                 dataset='upr', label='s')\n"
-        "    + define_sweep([SweepCell(label='stats-base', command='stats-pairs')],\n"
+        "    + define_sweep([SweepCell(label='stats-base', command='stats-omct')],\n"
         "                   dataset='omct', label='s')\n"
         ")\n",
         encoding="utf-8",

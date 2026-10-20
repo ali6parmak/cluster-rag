@@ -1,4 +1,4 @@
-# Phase 2 aux probe: Ollama snowflake-arctic-embed2 (v2.0, 566M, 8192 ctx).
+# Phase 2 omct probe: Ollama snowflake-arctic-embed2 (v2.0, 566M, 8192 ctx).
 # Model card: queries take the "query: " prefix; documents none (CLS token).
 extends: ../base.yaml
 

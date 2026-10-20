@@ -137,6 +137,12 @@ All decisions settled with the reviewer 2026-10-20 (do not re-litigate): sweeps 
 
 **Exit:** every experiment is defined in a Python sweep file; every comparison row lives in its dataset's file under its sweep's section; no artifact or doc row needs the old naming to be found. *(met 2026-10-20: `experiments/` holds 4 typed Python sweep files; tables are per-dataset, sections chosen by `table.sweep_label`; legacy ids survive only in old log rows + the migration mapping note)*
 
+### Phase 3.6: omct command naming (review follow-up)
+
+Follow-up to Phase 3.5, settled with the reviewer 2026-10-20: dataset-scoped commands carry the dataset name — no `aux`/`pairs` ambiguity in any command, flag or sweep name. The `<dataset>-<command>-<detail>[-<split>]` grammar and the `omct-` prefixing are unchanged.
+
+- [x] **Rename to `omct` + re-run + verify.** `probe-aux` → `probe-omct`; `stats --pairs` → `stats --omct` (sweep command `stats-pairs` → `stats-omct`); module `aux_probe.py` → `omct_probe.py` (+ `tests/test_aux_probe.py` → `test_omct_probe.py`, table constants `PROBE_OMCT_*`, "omct question transform" wordings in `preprocess.py`/`eval/metrics.py`/`embed/hf.py`); omct stats artifact `pairs_stats.json` → `stats.json` (uniform with the one-artifact-per-command convention). Deliberately kept: `pairs.py` / `PairRecord` / `load_pairs` / `summarize_pairs` and pair-count report fields — "pair" names the record type (paragraph↔question pair), not the dataset; `paths.data_external` unchanged; "auxiliary" survives only as the English adjective (the OMCT data *is* auxiliary — PLAN §2). Warm re-run of the two omct-run-producing sweeps (7 runs; frozen configs + payload `command` fields refreshed to `probe-omct`; run ids and table headings unchanged — labels own them), field-for-field diff vs the pre-3.6 artifacts (exempt: `run_id`, `*seconds*`, probe cache counters, the renamed `command` field), verification noted in `docs/experiments.md` (append-only).
+
 **Exit:** every experiment is defined in a Python sweep file; every comparison row lives in its dataset's file under its sweep's section; no artifact or doc row needs the old naming to be found.
 
 ### Phase 4: Retrieval baselines (no clustering yet)

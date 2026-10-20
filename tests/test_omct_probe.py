@@ -1,4 +1,4 @@
-"""Tests for the auxiliary probe (Phase 2): corpus build, run structure, CLI.
+"""Tests for the omct probe (Phase 2): corpus build, run structure, CLI.
 
 Uses the deterministic fake embedder and the sample_pairs fixture; no network,
 no model downloads. Numeric invariants only (fake vectors carry no semantics).
@@ -12,14 +12,14 @@ import logging
 import pytest
 
 from cluster_rag import cli
-from cluster_rag.aux_probe import (
+from cluster_rag.cli import main
+from cluster_rag.config import PreprocessConfig, ProbeConfig
+from cluster_rag.omct_probe import (
     build_probe_corpus,
     gold_by_paragraph,
     run_probe,
     same_document_columns,
 )
-from cluster_rag.cli import main
-from cluster_rag.config import PreprocessConfig, ProbeConfig
 from cluster_rag.pairs import load_pairs
 from cluster_rag.preprocess import build_preprocess_spec
 from fake_embedder import FakeEmbedder
@@ -236,7 +236,7 @@ preprocess:
 """
 
 
-def test_probe_aux_command_end_to_end(
+def test_probe_omct_command_end_to_end(
     sample_pairs, write_config, tmp_path, monkeypatch, capsys
 ) -> None:
     """CLI: builds the embedder, writes results/omct-<run_id>/ and a frozen config."""
@@ -252,9 +252,9 @@ def test_probe_aux_command_end_to_end(
     config_file = write_config(
         sample_pairs, run_id="probe-test", data_external=sample_pairs, extra=extra
     )
-    assert main(["probe-aux", "--config", str(config_file)]) == 0
+    assert main(["probe-omct", "--config", str(config_file)]) == 0
     out = capsys.readouterr().out
-    assert "Auxiliary probe: omct-probe-test" in out
+    assert "OMCT probe: omct-probe-test" in out
     assert "pair-AUC" in out
 
     results_dir = tmp_path / "results" / "omct-probe-test"
@@ -285,7 +285,7 @@ def test_probe_aux_command_end_to_end(
     assert b_srcb["pair_auc"] is None  # all-negative group: no AUC, note instead
 
 
-def test_probe_aux_appends_experiment_tables(
+def test_probe_omct_appends_experiment_tables(
     sample_pairs, write_config, tmp_path, monkeypatch
 ) -> None:
     """paths.experiment_table: variant rows + per-group rows (Phase 2.5)."""
@@ -302,10 +302,10 @@ def test_probe_aux_appends_experiment_tables(
         experiment_table_omct=table,
         extra=extra,
     )
-    assert main(["probe-aux", "--config", str(config_file)]) == 0
+    assert main(["probe-omct", "--config", str(config_file)]) == 0
     lines = table.read_text("utf-8").splitlines()
     # standalone run: the command names the section; groups get the suffix
-    assert "## OMCT — probe-aux" in lines and "## OMCT — probe-aux - groups" in lines
+    assert "## OMCT — probe-omct" in lines and "## OMCT — probe-omct - groups" in lines
     rows = [line for line in lines if line.startswith("| omct-probe-table")]
     assert len(rows) == 5  # one variant row + 4 group rows (the fixture's groups)
     variant_row = next(row for row in rows if "| 2026-" in row)
@@ -317,7 +317,7 @@ def test_probe_aux_appends_experiment_tables(
     assert sum(row.count("n/a") for row in group_rows) == 1 + 1 + 3
 
 
-def test_probe_aux_default_question_transform(
+def test_probe_omct_default_question_transform(
     sample_pairs, write_config, tmp_path, monkeypatch
 ) -> None:
     """Schema default: the probe runs strip_block only (keep needs an explicit config)."""
@@ -327,7 +327,7 @@ def test_probe_aux_default_question_transform(
     config_file = write_config(
         sample_pairs, run_id="probe-default", data_external=sample_pairs, extra=PROBE_CONFIG_EXTRA
     )
-    assert main(["probe-aux", "--config", str(config_file)]) == 0
+    assert main(["probe-omct", "--config", str(config_file)]) == 0
     payload = json.loads(
         (tmp_path / "results" / "omct-probe-default" / "probe_report.json").read_text("utf-8")
     )
@@ -338,16 +338,16 @@ def test_probe_aux_default_question_transform(
     assert breakdown["n_pairs"] == 6 and breakdown["n_positive"] == 3
 
 
-def test_probe_aux_requires_data_external(sample_pairs, write_config, caplog) -> None:
+def test_probe_omct_requires_data_external(sample_pairs, write_config, caplog) -> None:
     """Without paths.data_external the command fails with a clear message."""
     config_file = write_config(sample_pairs, run_id="probe-test", extra=PROBE_CONFIG_EXTRA)
     with caplog.at_level(logging.ERROR):
-        assert main(["probe-aux", "--config", str(config_file)]) == 1
+        assert main(["probe-omct", "--config", str(config_file)]) == 1
     assert any("data_external" in record.message for record in caplog.records)
 
 
-def test_probe_aux_requires_embed_section(sample_pairs, write_config, caplog, monkeypatch) -> None:
+def test_probe_omct_requires_embed_section(sample_pairs, write_config, caplog, monkeypatch) -> None:
     config_file = write_config(sample_pairs, run_id="probe-test", data_external=sample_pairs)
     with caplog.at_level(logging.ERROR):
-        assert main(["probe-aux", "--config", str(config_file)]) == 1
+        assert main(["probe-omct", "--config", str(config_file)]) == 1
     assert any("embed: section" in record.message for record in caplog.records)

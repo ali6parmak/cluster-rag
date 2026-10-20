@@ -1,4 +1,4 @@
-"""Auxiliary probe driver (Phase 2, PLAN.md last Phase 2 checkbox).
+"""OMCT probe driver (Phase 2, PLAN.md last Phase 2 checkbox).
 
 Evidence for embedding-model choice on the collaborator pairwise dataset
 (``data/external/omct_pairs.json``, strictly auxiliary per PLAN.md section 2;

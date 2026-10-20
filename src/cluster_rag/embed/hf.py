@@ -136,7 +136,7 @@ class HFEmbedder:
         """Exact subword token counts including special tokens (truncation diagnostics).
 
         Ollama has no client-side tokenizer, so only HF embedders can report
-        these exactly; the aux probe uses them to measure how many inputs
+        these exactly; the omct probe uses them to measure how many inputs
         exceed the model's ``max_seq_length`` and get truncated server-side.
         """
         encoded = self._model.tokenizer(list(texts))

@@ -3,7 +3,7 @@
 Pure text -> text functions, no model or I/O concerns: the cache keys on the
 preprocessing *version*, so every variant that can change text output carries
 a version string that changes with its parameters (the opener list of
-``strip_leading_formulaic`` is hashed into the version, and the aux question
+``strip_leading_formulaic`` is hashed into the version, and the omct question
 block markers likewise).
 
 Variants (``PreprocessConfig.variant``):
@@ -116,7 +116,7 @@ def _strip_leading_formulaic(text: str, openers: tuple[str, ...]) -> str:
 
 
 def strip_question_block(text: str, markers: Sequence[str] = ("Answer choices:", "Notes:")) -> str:
-    """Aux-only transform (PLAN.md section 7 open question): keep the question
+    """OMCT-only transform (PLAN.md section 7 open question): keep the question
     sentence, drop the "Question:" label and the trailing answer-choice/notes
     blocks so embeddings see the question content only.
 
@@ -133,7 +133,7 @@ def strip_question_block(text: str, markers: Sequence[str] = ("Answer choices:",
 
 
 def question_transform_version(transform: str, markers: Sequence[str]) -> str:
-    """Cache-facing version string of an aux question transform.
+    """Cache-facing version string of an omct question transform.
 
     Includes a content hash of the markers so a changed strip rule cannot
     silently reuse cached embeddings under the old rule.
@@ -150,7 +150,7 @@ def question_transform_version(transform: str, markers: Sequence[str]) -> str:
 def apply_question_transform(
     texts: Sequence[str], transform: str, markers: Sequence[str]
 ) -> list[str]:
-    """Apply an aux question transform to texts ('keep' = identity)."""
+    """Apply an omct question transform to texts ('keep' = identity)."""
     if transform == "keep":
         return list(texts)
     if transform == "strip_block":

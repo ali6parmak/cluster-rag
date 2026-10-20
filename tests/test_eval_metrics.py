@@ -81,7 +81,7 @@ def test_pairwise_retrieval_metrics_k_clipped() -> None:
 
 
 def test_pairwise_retrieval_metrics_candidate_columns_scope() -> None:
-    """A per-row candidate list restricts the ranking (aux probe same-doc scope)."""
+    """A per-row candidate list restricts the ranking (omct probe same-doc scope)."""
     sims = np.array([[0.2, 0.9, 0.8], [0.9, 0.5, 0.4]])
     gold = [{2}, {0}]
     # row 0 may only rank columns [0, 1] (its gold q2 is out of scope);

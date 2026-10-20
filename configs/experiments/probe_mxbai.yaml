@@ -1,4 +1,4 @@
-# Phase 2 aux probe: Ollama mxbai-embed-large (334M, 512 ctx, 1024d).
+# Phase 2 omct probe: Ollama mxbai-embed-large (334M, 512 ctx, 1024d).
 # Ollama model card: the query/passage prompt
 # "Represent this sentence for searching relevant passages: " goes on the query
 # side (asymmetric model); documents stay unprefixed. 512-token context truncates.

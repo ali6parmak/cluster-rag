@@ -1,4 +1,4 @@
-# Phase 2 aux probe: Ollama embeddinggemma (v1, 300M, 2048 ctx, 768d).
+# Phase 2 omct probe: Ollama embeddinggemma (v1, 300M, 2048 ctx, 768d).
 # Model card prompts are templates: query  "task: search result | query: {content}",
 # document "title: none | text: {content}". (Ollama's artifact is the QAT Q4_0
 # build -- recorded in the run digest; the quantization costs some quality.)

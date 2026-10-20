@@ -6,12 +6,12 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 
 | run_id | date | backend | model | model_version | dim | ctx | transform | pair_auc | same-doc hit@1 | same-doc hit@10 | same-doc recall@10 | paras>ctx | n_paras | n_pairs(pos) | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| omct-probe2-minilm | 2026-10-20 | hf | sentence-transformers/all-MiniLM-L6-v2 | c9745ed1d9f2 | 384 | 256 | strip_block | 0.4526 | 0.381 | 0.748 | 0.508 | 1.8% | 225 | 1520 (524) | 0.096 |
-| omct-probe2-e5-base-v2 | 2026-10-20 | hf | intfloat/e5-base-v2 | f52bf8ec8c71 | 768 | 512 | strip_block | 0.5793 | 0.374 | 0.774 | 0.540 | 0.0% | 225 | 1520 (524) | 0.075 |
-| omct-probe2-bge-m3 | 2026-10-20 | hf | BAAI/bge-m3 | 9a0624b896d8 | 1024 | 8192 | strip_block | 0.4687 | 0.361 | 0.748 | 0.476 | 0.0% | 225 | 1520 (524) | 0.075 |
-| omct-probe2-arctic2 | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | strip_block | 0.4680 | 0.355 | 0.813 | 0.570 | 0.0% | 225 | 1520 (524) | 0.067 |
-| omct-probe2-embeddinggemma | 2026-10-20 | ollama | embeddinggemma:latest | 3a2d262bdb75 | 768 | 2048 | strip_block | 0.5371 | 0.458 | 0.794 | 0.582 | 0.0% | 225 | 1520 (524) | 0.065 |
-| omct-probe2-mxbai | 2026-10-20 | ollama | mxbai-embed-large:latest | 468836162de7 | 1024 | 512 | strip_block | 0.5552 | 0.413 | 0.768 | 0.558 | 0.4% | 225 | 1520 (524) | 0.091 |
+| omct-probe2-minilm | 2026-10-20 | hf | sentence-transformers/all-MiniLM-L6-v2 | c9745ed1d9f2 | 384 | 256 | strip_block | 0.4526 | 0.381 | 0.748 | 0.508 | 1.8% | 225 | 1520 (524) | 0.068 |
+| omct-probe2-e5-base-v2 | 2026-10-20 | hf | intfloat/e5-base-v2 | f52bf8ec8c71 | 768 | 512 | strip_block | 0.5793 | 0.374 | 0.774 | 0.540 | 0.0% | 225 | 1520 (524) | 0.053 |
+| omct-probe2-bge-m3 | 2026-10-20 | hf | BAAI/bge-m3 | 9a0624b896d8 | 1024 | 8192 | strip_block | 0.4687 | 0.361 | 0.748 | 0.476 | 0.0% | 225 | 1520 (524) | 0.066 |
+| omct-probe2-arctic2 | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | strip_block | 0.4680 | 0.355 | 0.813 | 0.570 | 0.0% | 225 | 1520 (524) | 0.037 |
+| omct-probe2-embeddinggemma | 2026-10-20 | ollama | embeddinggemma:latest | 3a2d262bdb75 | 768 | 2048 | strip_block | 0.5371 | 0.458 | 0.794 | 0.582 | 0.0% | 225 | 1520 (524) | 0.047 |
+| omct-probe2-mxbai | 2026-10-20 | ollama | mxbai-embed-large:latest | 468836162de7 | 1024 | 512 | strip_block | 0.5552 | 0.413 | 0.768 | 0.558 | 0.4% | 225 | 1520 (524) | 0.045 |
 
 ## OMCT — probe2 - groups
 

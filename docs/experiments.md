@@ -152,3 +152,20 @@ Old → new mapping (old folders deleted after verification; the sweep file `exp
 The 6 legacy Phase 2 probe folders (`aux-probe-*`, the pre-2.5 originals whose numbers live in the Phase 2 section above) were deleted with the rest — their surviving numbers are in this log, their `probe2-*` successors are the ones that re-ran. The frozen `config.yaml` inside each new folder differs from the pre-3.5 one only in the expected places: the `run_id`, the renamed table path keys (`paths.experiment_table_upr`/`_omct` instead of `paths.experiment_table`), and the `table.sweep_label` key injected by `define_sweep`.
 
 **Legacy-id note:** log rows written before 2026-10-20 keep the ids they were written with (`base`, `embed-*`, `aux-*`, `ev-*`); never rewrite them. Use this mapping to move between the old names as they appear in old rows and the current `results/` folders. Phase 2.5's "Phase 2 — embed/probe-aux" and Phase 3's "Phase 3 — evaluate" headings from the retired single `docs/experiments_table.md` now live per dataset: embeds under `## UPR — migration` and the baselines under `## UPR — baselines` in `docs/experiments_table_upr.md`; the probe grid under `## OMCT — probe2` (+ `- groups`) in `docs/experiments_table_omct.md`.
+
+## Phase 3.6: omct command naming (2026-10-20, same-day follow-up to Phase 3.5)
+
+Reviewer decision: dataset-scoped commands carry the dataset name — `aux` and `pairs` must not name commands, flags or sweep commands. Renames (run-id grammar and prefixing unchanged):
+
+| before (Phase 3.5) | after (Phase 3.6) |
+|---|---|
+| CLI command `probe-aux` | **`probe-omct`** |
+| CLI flag `stats --pairs` | **`stats --omct`** |
+| sweep commands `stats-pairs` / `probe-aux` | **`stats-omct` / `probe-omct`** |
+| module `aux_probe.py`, test `test_aux_probe.py` | **`omct_probe.py`**, **`test_omct_probe.py`** (git renames) |
+| table constants `PROBE_AUX_*` | **`PROBE_OMCT_*`** |
+| omct stats artifact `pairs_stats.json` | **`stats.json`** (uniform one-artifact-per-command; `results/omct-stats-base/`) |
+
+Kept deliberately: `pairs.py`/`PairRecord`/`load_pairs`/`summarize_pairs` and pair-count fields in reports (`n_pairs` etc.) — "pair" names the record type (a paragraph↔question pair), not the dataset; `paths.data_external` unchanged; "auxiliary" survives only as the English adjective (the OMCT data *is* auxiliary per PLAN §2). "Omct question transform" wording applies to `preprocess.py`'s `keep`/`strip_block` helpers; transform names unchanged.
+
+Verification: the two omct sweeps re-ran warm (7 runs; frozen `config.yaml` + payload `command` fields refreshed to the new names; run ids `omct-probe2-*`/`omct-stats-base` and the `## OMCT — probe2` headings unchanged — labels own them) and every pre-3.6 artifact diffed **field-for-field: numbers unchanged, verified** (exempt: `run_id`, `*seconds*`, cache counters, the renamed payload `command` field). Historical log rows keep their old command names.

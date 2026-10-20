@@ -48,7 +48,7 @@ __all__ = [
 
 
 def build_embedder(config: EmbedderConfig) -> Embedder:
-    """Create the embedder named by the resolved config (cli/aux_probe entry point).
+    """Create the embedder named by the resolved config (cli/omct_probe entry point).
 
     The concrete imports are deferred into the branches: building one backend
     keeps the other backend's heavy dependencies (torch vs httpx) unloaded.

@@ -2,8 +2,8 @@
 ``docs/experiments_table_omct.md``.
 
 CLI commands append one row per run to their **dataset's** table file
-(``upr`` for stats/split/embed/evaluate, ``omct`` for probe-aux and
-``stats --pairs`` — derived from the command, never from the run name),
+(``upr`` for stats/split/embed/evaluate, ``omct`` for probe-omct and
+``stats --omct`` — derived from the command, never from the run name),
 under a section heading: ``## <UPR|OMCT> — <sweep-label>`` for runs coming
 from a sweep (the sweep label is injected into the run's config as
 ``table.sweep_label``; the probe's per-document breakdown appends
@@ -105,7 +105,7 @@ EVALUATE_COLUMNS: tuple[str, ...] = (
 )
 EVALUATE_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
-PROBE_AUX_COLUMNS: tuple[str, ...] = (
+PROBE_OMCT_COLUMNS: tuple[str, ...] = (
     "run_id",
     "date",
     "backend",
@@ -123,9 +123,9 @@ PROBE_AUX_COLUMNS: tuple[str, ...] = (
     "n_pairs(pos)",
     "seconds",
 )
-PROBE_AUX_KEY_COLUMNS: tuple[str, ...] = ("run_id", "transform")
+PROBE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "transform")
 
-PROBE_AUX_GROUPS_COLUMNS: tuple[str, ...] = (
+PROBE_OMCT_GROUPS_COLUMNS: tuple[str, ...] = (
     "run_id",
     "transform",
     "document",
@@ -138,7 +138,7 @@ PROBE_AUX_GROUPS_COLUMNS: tuple[str, ...] = (
     "same-doc hit@10",
     "n_rows_with_gold",
 )
-PROBE_AUX_GROUPS_KEY_COLUMNS: tuple[str, ...] = (
+PROBE_OMCT_GROUPS_KEY_COLUMNS: tuple[str, ...] = (
     "run_id",
     "transform",
     "document",

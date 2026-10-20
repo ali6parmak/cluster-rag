@@ -4,12 +4,12 @@ A sweep file under ``experiments/`` declares typed cells built with plain
 Python loops — :class:`EvalCell`, :class:`EmbedCell` and :class:`ProbeCell`
 (validated fields, no dict/YAML wiring), plus the generic
 :class:`SweepCell` (label + command + config overrides) for the commands
-without a dedicated cell (``stats``/``stats-pairs``/``split``).
+without a dedicated cell (``stats``/``stats-omct``/``split``).
 :func:`define_sweep` resolves every cell over ``configs/base.yaml`` into one
 validated :class:`~cluster_rag.config.AppConfig` per run. Sweeps only
 *produce* configs: the ``sweep`` CLI command executes the resolved cells
 through the existing command functions (``embed`` / ``evaluate`` /
-``probe-aux`` / ``stats`` / ``split``), so run folders, frozen configs, logs
+``probe-omct`` / ``stats`` / ``split``), so run folders, frozen configs, logs
 and experiment-table rows are exactly what single runs produce.
 
 A sweep is authored for exactly **one dataset** (:func:`define_sweep`'s
@@ -45,13 +45,13 @@ from cluster_rag.config import (
     merge_configs,
 )
 
-# ``stats-pairs`` is the sweep command for `stats --pairs` (separate name, so
+# ``stats-omct`` is the sweep command for `stats --omct` (separate name, so
 # the dataset decides nothing at execution time); ``stats`` is the plain UPR
 # dataset statistics run.
 UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "evaluate")
-OMCT_COMMANDS: tuple[str, ...] = ("stats-pairs", "probe-aux")
+OMCT_COMMANDS: tuple[str, ...] = ("stats-omct", "probe-omct")
 DATASET_COMMANDS: dict[str, tuple[str, ...]] = {"upr": UPR_COMMANDS, "omct": OMCT_COMMANDS}
-COMMANDS: tuple[str, ...] = ("stats", "stats-pairs", "split", "embed", "evaluate", "probe-aux")
+COMMANDS: tuple[str, ...] = ("stats", "stats-omct", "split", "embed", "evaluate", "probe-omct")
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
 # to the working directory the CLI is run from (the repository root).
@@ -83,8 +83,8 @@ class _LabelledCell(BaseModel):
 class SweepCell(_LabelledCell):
     """One generic sweep cell: a command plus the config overrides that define its run.
 
-    Used for commands without a dedicated typed cell (``stats``, ``stats-pairs``,
-    ``split``); ``evaluate`` / ``embed`` / ``probe-aux`` have :class:`EvalCell` /
+    Used for commands without a dedicated typed cell (``stats``, ``stats-omct``,
+    ``split``); ``evaluate`` / ``embed`` / ``probe-omct`` have :class:`EvalCell` /
     :class:`EmbedCell` / :class:`ProbeCell`. ``label`` becomes the cell's
     run_id (the omct- dataset commands add the ``omct-`` prefix themselves at
     run time), so labels should read like run ids.
@@ -179,7 +179,7 @@ class EmbedCell(_LabelledCell):
 
 
 class ProbeCell(_LabelledCell):
-    """One ``probe-aux`` cell: embedder + probe options on the pairwise dataset.
+    """One ``probe-omct`` cell: embedder + probe options on the pairwise dataset.
 
     ``probe=None`` keeps the schema defaults (``strip_block`` transforms; add
     an explicit :class:`~cluster_rag.config.ProbeConfig` for a ``keep``
@@ -193,7 +193,7 @@ class ProbeCell(_LabelledCell):
     @property
     def command(self) -> str:
         """The command this cell resolves to (constant for typed cells)."""
-        return "probe-aux"
+        return "probe-omct"
 
     @property
     def overrides(self) -> dict[str, Any]:
@@ -255,7 +255,7 @@ def define_sweep(
     override value, so an invalid cell fails here — before any run starts.
 
     Constraints: ``dataset`` selects the allowed commands (upr:
-    stats/split/embed/evaluate; omct: stats-pairs/probe-aux) and the cell-label
+    stats/split/embed/evaluate; omct: stats-omct/probe-omct) and the cell-label
     prefix rules (upr cells start with ``upr-``; omct cells are unprefixed);
     ``label`` (filesystem-safe, free-form) names the sweep's table section.
     """

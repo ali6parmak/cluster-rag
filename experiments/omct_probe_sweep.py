@@ -6,7 +6,7 @@ experiment-table rows belong to the sweep command:
 
     uv run cluster-rag sweep --file experiments/omct_probe_sweep.py
 
-Cell labels are the bare run-id details — the `probe-aux` command adds the
+Cell labels are the bare run-id details — the `probe-omct` command adds the
 `omct-` dataset prefix itself, so this grid produces `results/omct-probe2-<model>/`
 folders and table sections "## OMCT — probe2" (+ "## OMCT — probe2 - groups").
 Model ids/prefixes/revisions are copied verbatim from the Phase 2 configs

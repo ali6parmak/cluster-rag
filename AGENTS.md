@@ -41,7 +41,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── preprocess.py
     │   ├── pairs.py             # auxiliary PairRecord model + loader/validation
     │   ├── dataset_stats.py     # UPR dataset statistics (pure functions)
-    │   ├── aux_probe.py         # auxiliary probe driver (numpy + eval metrics only)
+    │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── embed/
@@ -109,8 +109,8 @@ Every run (one CLI command execution or sweep cell) is identified by its
   `upr-embed-e5-base-v2`, `upr-eval-mf-topk2-val`, `omct-stats-base`,
   `omct-probe2-arctic2`. Datasets: `upr` (the UPR train/val/test data) and
   `omct` (the auxiliary OMCT pairwise data).
-- **Prefixes per command:** the OMCT commands (`probe-aux`, and `stats
-  --pairs`) add the `omct-` prefix themselves at run time — configs and sweep
+- **Prefixes per command:** the OMCT commands (`probe-omct`, and `stats
+  --omct`) add the `omct-` prefix themselves at run time — configs and sweep
   cells carry the bare detail (`run_id: stats-base` → `results/omct-stats-base/`);
   a run_id that already carries a dataset prefix is warned about (it would
   double up). The UPR commands (`stats`/`split`/`embed`/`evaluate`) take the
@@ -141,7 +141,7 @@ Every run (one CLI command execution or sweep cell) is identified by its
     uv run cluster-rag stats      --config configs/base.yaml
     uv run cluster-rag split      --config configs/base.yaml
     uv run cluster-rag embed      --config configs/experiments/embed_e5_base_v2.yaml
-    uv run cluster-rag probe-aux  --config configs/experiments/probe_e5_base_v2.yaml
+    uv run cluster-rag probe-omct --config configs/experiments/probe_e5_base_v2.yaml
     uv run cluster-rag sweep      --file experiments/baseline_eval_sweep.py
     uv run cluster-rag evaluate   --config configs/experiments/knn_proto.yaml --split val
     uv run cluster-rag clusters   --config configs/experiments/hdbscan.yaml

@@ -1,4 +1,4 @@
-# Phase 2 aux probe: BAAI/bge-m3 (sentence-transformers), the long-context HF
+# Phase 2 omct probe: BAAI/bge-m3 (sentence-transformers), the long-context HF
 # candidate: 8192-token context via XLM-R -> nothing in this dataset truncates.
 # BGE-M3 works without instruction prefixes (dense/CLS in its ST config).
 extends: ../base.yaml

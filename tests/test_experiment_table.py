@@ -18,8 +18,8 @@ from cluster_rag.experiment_table import (
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
     EVALUATE_KEY_COLUMNS,
-    PROBE_AUX_COLUMNS,
-    PROBE_AUX_KEY_COLUMNS,
+    PROBE_OMCT_COLUMNS,
+    PROBE_OMCT_KEY_COLUMNS,
     _separator,
     append_table_rows,
     intro_for,
@@ -50,12 +50,14 @@ def test_section_headings() -> None:
     """Sweep label first; command-based fallback; groups suffixed; UPR/OMCT tags."""
     assert section_heading("upr", command="embed", sweep_label="baselines") == "UPR — baselines"
     assert section_heading("upr", command="evaluate") == "UPR — evaluate"  # standalone run
-    assert section_heading("omct", command="probe-aux") == "OMCT — probe-aux"
+    assert section_heading("omct", command="probe-omct") == "OMCT — probe-omct"
     assert (
-        section_heading("omct", command="probe-aux", sweep_label="probe2", groups=True)
+        section_heading("omct", command="probe-omct", sweep_label="probe2", groups=True)
         == "OMCT — probe2 - groups"
     )
-    assert section_heading("omct", command="probe-aux", groups=True) == "OMCT — probe-aux - groups"
+    assert (
+        section_heading("omct", command="probe-omct", groups=True) == "OMCT — probe-omct - groups"
+    )
 
 
 def test_intro_per_dataset() -> None:
@@ -124,7 +126,7 @@ def test_multiple_headings_are_independent(tmp_path: Path) -> None:
     columns = ("run_id", "transform", "n_pairs", "pair_auc")
     append_table_rows(
         path,
-        heading="OMCT — probe-aux",
+        heading="OMCT — probe-omct",
         columns=columns,
         key_columns=("run_id",),
         rows=[
@@ -133,7 +135,7 @@ def test_multiple_headings_are_independent(tmp_path: Path) -> None:
     )
     append_table_rows(
         path,
-        heading="OMCT — probe-aux - groups",
+        heading="OMCT — probe-omct - groups",
         columns=columns,
         key_columns=("run_id", "transform"),
         rows=[{"run_id": "omct-x", "transform": "strip_block", "n_pairs": 845, "pair_auc": 0.4821}],
@@ -143,7 +145,7 @@ def test_multiple_headings_are_independent(tmp_path: Path) -> None:
     assert "0.5793" in text and "845" in text
     # the first table's row is intact and not inside the second section
     lines = text.splitlines()
-    assert lines.index("## OMCT — probe-aux") < lines.index("## OMCT — probe-aux - groups")
+    assert lines.index("## OMCT — probe-omct") < lines.index("## OMCT — probe-omct - groups")
     assert "| omct-x | strip_block | 1520 | 0.5793 |" in text
 
 
@@ -188,8 +190,8 @@ def test_column_groupings_match_the_phase35_contract() -> None:
     assert EVALUATE_COLUMNS[9:] == ("P@5", "R@10", "nDCG@5", "shortlist R@50", "n_texts", "seconds")
     assert EVALUATE_KEY_COLUMNS == ("run_id",)
     assert "cache_misses" in EMBED_COLUMNS
-    assert "run_id" in PROBE_AUX_COLUMNS and "pair_auc" in PROBE_AUX_COLUMNS
-    assert PROBE_AUX_KEY_COLUMNS == ("run_id", "transform")
+    assert "run_id" in PROBE_OMCT_COLUMNS and "pair_auc" in PROBE_OMCT_COLUMNS
+    assert PROBE_OMCT_KEY_COLUMNS == ("run_id", "transform")
 
 
 def test_separator_width() -> None:

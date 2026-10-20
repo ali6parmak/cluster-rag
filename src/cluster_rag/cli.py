@@ -5,17 +5,17 @@ Invocation (target CLI in AGENTS.md):
     uv run cluster-rag stats    --config configs/base.yaml
     python -m cluster_rag.cli stats    --config configs/base.yaml   # equivalent
 
-Commands: stats (--pairs for the auxiliary pairwise data), split, embed
-(Phase 2: dataset embedding through the disk cache), probe-aux (Phase 2: the
-auxiliary pairwise embedding probe), evaluate (Phase 3: any predictor on a
+Commands: stats (--omct for the OMCT pairwise data), split, embed
+(Phase 2: dataset embedding through the disk cache), probe-omct (Phase 2: the
+OMCT pairwise embedding probe), evaluate (Phase 3: any predictor on a
 fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
 cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
 ``run_id`` must be set in the config for any command. When the command's
 dataset's comparison table is set (``paths.experiment_table_upr`` /
-``paths.experiment_table_omct``), ``embed``, ``evaluate`` and ``probe-aux``
-also append one row per run (per transform for probe-aux) to it, upserted by
+``paths.experiment_table_omct``), ``embed``, ``evaluate`` and ``probe-omct``
+also append one row per run (per transform for probe-omct) to it, upserted by
 run key — the section heading comes from the run's ``table.sweep_label`` when
 the run came from a sweep, else ``## <UPR|OMCT> — <command>`` (Phase 3.5).
 """
@@ -37,7 +37,6 @@ import numpy as np
 import yaml
 
 from cluster_rag import __version__
-from cluster_rag.aux_probe import ProbeCacheOptions, run_probe
 from cluster_rag.config import AppConfig, load_config
 from cluster_rag.data import (
     SPLIT_NAMES,
@@ -59,14 +58,15 @@ from cluster_rag.experiment_table import (
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
     EVALUATE_KEY_COLUMNS,
-    PROBE_AUX_COLUMNS,
-    PROBE_AUX_GROUPS_COLUMNS,
-    PROBE_AUX_GROUPS_KEY_COLUMNS,
-    PROBE_AUX_KEY_COLUMNS,
+    PROBE_OMCT_COLUMNS,
+    PROBE_OMCT_GROUPS_COLUMNS,
+    PROBE_OMCT_GROUPS_KEY_COLUMNS,
+    PROBE_OMCT_KEY_COLUMNS,
     append_table_rows,
     intro_for,
     section_heading,
 )
+from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor
 from cluster_rag.predictors.base import PredictorContext
@@ -96,10 +96,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the YAML config file, e.g. configs/base.yaml.",
     )
     stats.add_argument(
-        "--pairs",
+        "--omct",
         action="store_true",
         help=(
-            "Summarize the auxiliary pairwise dataset (PLAN section 2), not the UPR "
+            "Summarize the OMCT pairwise dataset (PLAN section 2), not the UPR "
             "dataset. The run_id gets the 'omct-' dataset prefix (results/omct-<run_id>/)."
         ),
     )
@@ -150,11 +150,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "One matrix per kind is written; the cache separates them by prefix.",
     )
 
-    probe_aux = subparsers.add_parser(
-        "probe-aux",
-        help="Auxiliary pairwise-data probe: AUC + question retrieval per embedder (Phase 2).",
+    probe_omct = subparsers.add_parser(
+        "probe-omct",
+        help="OMCT pairwise-data probe: AUC + question retrieval per embedder (Phase 2).",
         description=(
-            "Embed paragraphs and GTI questions from the auxiliary pairwise dataset "
+            "Embed paragraphs and GTI questions from the OMCT pairwise dataset "
             "with the configured backend and compute cosine-similarity AUC (judged "
             "0 vs 1) plus hit@k/recall@k question retrieval in two scopes (all "
             "questions / same document), under the configured question transforms "
@@ -164,7 +164,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "prefix is added by the command itself (AGENTS.md run-id grammar)."
         ),
     )
-    probe_aux.add_argument(
+    probe_omct.add_argument(
         "--config",
         type=Path,
         required=True,
@@ -206,7 +206,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "with typed cells — EvalCell/EmbedCell/ProbeCell/SweepCell — and "
             "define_sweep(cells, dataset=..., label=...)) and execute its cells in "
             "order through the existing command functions (embed / evaluate / "
-            "probe-aux / stats / stats-pairs / split): one run folder per cell with "
+            "probe-omct / stats / stats-omct / split): one run folder per cell with "
             "the frozen resolved config, exactly as single runs. Embed cells run "
             "with the default kinds ('document'). The sweep file only produces "
             "configs; the first failing cell aborts the sweep with its exit code."
@@ -344,10 +344,10 @@ def _print_stats(report: LoadReport, dataset_stats: dict[str, Any]) -> None:
         )
 
 
-def _cmd_stats(config: AppConfig, pairs: bool = False) -> int:
+def _cmd_stats(config: AppConfig, omct: bool = False) -> int:
     """Run the stats command: compute, print and persist the dataset report."""
-    if pairs:
-        return _cmd_stats_pairs(config)
+    if omct:
+        return _cmd_stats_omct(config)
     run_id = _require_run_id(config)
     _warn_upr_prefix(run_id)
     report = load_jsonl(config.paths.data_raw)
@@ -382,7 +382,7 @@ def _cmd_stats(config: AppConfig, pairs: bool = False) -> int:
     return 0
 
 
-def _print_stats_pairs(
+def _print_stats_omct(
     report: PairLoadReport, pair_stats: dict[str, Any], results_dir: Path
 ) -> None:
     """Print a human-readable summary of the pairwise dataset to stdout."""
@@ -420,8 +420,8 @@ def _print_stats_pairs(
         )
 
 
-def _cmd_stats_pairs(config: AppConfig) -> int:
-    """Run `stats --pairs`: summarize the auxiliary pairwise dataset (omct-prefixed run)."""
+def _cmd_stats_omct(config: AppConfig) -> int:
+    """Run `stats --omct`: summarize the OMCT pairwise dataset (omct-prefixed run)."""
     run_id = _require_run_id(config)
     if config.paths.data_external is None:
         raise ValueError("paths.data_external must be set in the config to summarize pairs")
@@ -441,10 +441,10 @@ def _cmd_stats_pairs(config: AppConfig) -> int:
     results_dir = config.paths.results / prefixed_run_id
     results_dir.mkdir(parents=True, exist_ok=True)
     _write_resolved_config(results_dir, config)
-    (results_dir / "pairs_stats.json").write_text(
+    (results_dir / "stats.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    _print_stats_pairs(report, pair_stats, results_dir)
+    _print_stats_omct(report, pair_stats, results_dir)
     return 0
 
 
@@ -590,16 +590,16 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
     return 0
 
 
-def _cmd_probe_aux(config: AppConfig) -> int:
-    """Run probe-aux: the Phase 2 auxiliary evidence run (results/omct-<run_id>/)."""
+def _cmd_probe_omct(config: AppConfig) -> int:
+    """Run probe-omct: the Phase 2 auxiliary evidence run (results/omct-<run_id>/)."""
     started = time.perf_counter()
     run_id = _require_run_id(config)
     if config.embed is None:
         raise ValueError(
-            "the embed: section (backend, model_id, prefixes) is required for probe-aux"
+            "the embed: section (backend, model_id, prefixes) is required for probe-omct"
         )
     if config.paths.data_external is None:
-        raise ValueError("paths.data_external must be set in the config to run the aux probe")
+        raise ValueError("paths.data_external must be set in the config to run the omct probe")
 
     pair_report = load_pairs(config.paths.data_external)
     spec = build_preprocess_spec(config.preprocess)
@@ -617,7 +617,7 @@ def _cmd_probe_aux(config: AppConfig) -> int:
 
     payload = {
         "run_id": omct_run_id,
-        "command": "probe-aux",
+        "command": "probe-omct",
         "source": str(config.paths.data_external),
         "source_sha256": file_sha256(config.paths.data_external),
         "n_valid_pairs": pair_report.n_valid,
@@ -692,24 +692,24 @@ def _cmd_probe_aux(config: AppConfig) -> int:
         heading_label = config.table.sweep_label
         append_table_rows(
             config.paths.experiment_table_omct,
-            heading=section_heading("omct", command="probe-aux", sweep_label=heading_label),
-            columns=PROBE_AUX_COLUMNS,
-            key_columns=PROBE_AUX_KEY_COLUMNS,
+            heading=section_heading("omct", command="probe-omct", sweep_label=heading_label),
+            columns=PROBE_OMCT_COLUMNS,
+            key_columns=PROBE_OMCT_KEY_COLUMNS,
             intro=intro_for("omct"),
             rows=variant_rows,
         )
         append_table_rows(
             config.paths.experiment_table_omct,
             heading=section_heading(
-                "omct", command="probe-aux", sweep_label=heading_label, groups=True
+                "omct", command="probe-omct", sweep_label=heading_label, groups=True
             ),
-            columns=PROBE_AUX_GROUPS_COLUMNS,
-            key_columns=PROBE_AUX_GROUPS_KEY_COLUMNS,
+            columns=PROBE_OMCT_GROUPS_COLUMNS,
+            key_columns=PROBE_OMCT_GROUPS_KEY_COLUMNS,
             intro=intro_for("omct"),
             rows=group_rows,
         )
 
-    print(f"Auxiliary probe: {omct_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
+    print(f"OMCT probe: {omct_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
     print(
         f"  corpus: {pair_report.n_valid} judged pairs "
         f"({payload['probe']['corpus']['n_positive_pairs']} positive), "
@@ -1069,12 +1069,12 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_evaluate(run.config)
         elif run.command == "stats":  # plain UPR dataset statistics
             code = _cmd_stats(run.config)
-        elif run.command == "stats-pairs":  # the omct pairwise-data stats (stats --pairs)
-            code = _cmd_stats(run.config, pairs=True)
+        elif run.command == "stats-omct":  # the omct pairwise-data stats (stats --omct)
+            code = _cmd_stats(run.config, omct=True)
         elif run.command == "split":  # sweep cells never re-split silently (--force only via CLI)
             code = _cmd_split(run.config, force=False)
-        else:  # probe-aux
-            code = _cmd_probe_aux(run.config)
+        else:  # probe-omct
+            code = _cmd_probe_omct(run.config)
         if code != 0:
             logger.error(
                 "Sweep cell %d/%d (%s, label=%s) exited with code %d — aborting the sweep",
@@ -1099,15 +1099,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_sweep(args.file)
         config = load_config(args.config)
         if args.command == "stats":
-            return _cmd_stats(config, pairs=args.pairs)
+            return _cmd_stats(config, omct=args.omct)
         if args.command == "split":
             return _cmd_split(config, force=args.force)
         if args.command == "embed":
             return _cmd_embed(config, kinds=_parse_kinds(args.kinds))
         if args.command == "evaluate":
             return _cmd_evaluate(config, split=args.split)
-        if args.command == "probe-aux":
-            return _cmd_probe_aux(config)
+        if args.command == "probe-omct":
+            return _cmd_probe_omct(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

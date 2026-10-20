@@ -1,4 +1,4 @@
-"""Tests for preprocessing variants (Phase 2): raw/lowercase/strip + aux block strip."""
+"""Tests for preprocessing variants (Phase 2): raw/lowercase/strip + omct question-block strip."""
 
 from __future__ import annotations
 

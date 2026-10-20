@@ -1,4 +1,4 @@
-# Phase 2 aux probe: intfloat/e5-base-v2 (sentence-transformers).
+# Phase 2 omct probe: intfloat/e5-base-v2 (sentence-transformers).
 # Model card: "query: " on the query side, "passage: " on the indexed side.
 # Paragraphs = indexed (document kind), questions = queries. 512-token context.
 extends: ../base.yaml

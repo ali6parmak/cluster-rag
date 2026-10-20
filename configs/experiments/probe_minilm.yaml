@@ -1,4 +1,4 @@
-# Phase 2 aux probe: the fast baseline, sentence-transformers/all-MiniLM-L6-v2.
+# Phase 2 omct probe: the fast baseline, sentence-transformers/all-MiniLM-L6-v2.
 # Model card: no prefixes/tasks prompts; a 256-token model -> truncation-prone
 # on the ~890-char auxiliary paragraphs, which is exactly one thing to measure.
 extends: ../base.yaml
