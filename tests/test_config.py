@@ -256,3 +256,22 @@ def test_load_config_eval_split_restricted_and_grids_positive(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="positive"):
         load_config(bad_grid)
+
+
+def test_load_config_embed_kinds(tmp_path) -> None:
+    """embed_kinds validates (known kinds, non-empty) and defaults to document."""
+    config = load_config_str(CONFIG_YAML, tmp_path)
+    assert config.embed_kinds == ("document",)
+
+    kinds = load_config_str(CONFIG_YAML + "\nembed_kinds: [query, document]\n", tmp_path)
+    assert kinds.embed_kinds == ("query", "document")
+
+    unknown = tmp_path / "kinds.yaml"
+    unknown.write_text(CONFIG_YAML + "\nembed_kinds: [vectors]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unknown encode kind"):
+        load_config(unknown)
+
+    empty = tmp_path / "empty.yaml"
+    empty.write_text(CONFIG_YAML + "\nembed_kinds: []\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="at least one encode kind"):
+        load_config(empty)

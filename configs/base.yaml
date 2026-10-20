@@ -8,6 +8,11 @@
 run_id: base      # results are written to results/<run_id>/ from Phase 3 on
 seed: 42          # fix all random seeds (numpy/random/torch/UMAP) for reproducibility
 
+# Kinds the `embed` command encodes for, one matrix per kind (encode kinds
+# document/query/label from src/cluster_rag/embed/base.py). Sweep cells carry
+# their own kinds (EmbedCell.kinds); standalone `--kinds` overrides this.
+embed_kinds: [document]
+
 paths:
   data_raw: data/raw/upr.jsonl    # original JSONL dataset, read-only
   data_processed: data/processed

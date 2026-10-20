@@ -211,3 +211,25 @@ def test_embed_command_kinds_flag(
     with caplog.at_level(logging.ERROR):
         assert main(["embed", "--config", str(config_file), "--kinds", "documents"]) == 1
     assert any("expected one of" in record.message for record in caplog.records)
+
+
+def test_embed_command_kinds_from_config(sample_jsonl, write_config, monkeypatch, tmp_path) -> None:
+    """Without a --kinds flag the config's embed_kinds decides, in its order."""
+    created: list[FakeEmbedder] = []
+
+    def factory(config):
+        fake = FakeEmbedder(model_id="fake-embedder", dimension=6, prefixes={"query": "query: "})
+        created.append(fake)
+        return fake
+
+    monkeypatch.setattr(cli, "build_embedder", factory)
+    config_file = write_config(
+        sample_jsonl,
+        run_id="embed-cfg-kinds",
+        extra=EMBED_CONFIG_EXTRA + "\nembed_kinds: [query, document]\n",
+    )
+    assert main(["embed", "--config", str(config_file)]) == 0
+    npz = np.load(tmp_path / "results" / "embed-cfg-kinds" / "embeddings.npz")
+    assert set(npz.files) == {"ids", "vectors_query", "vectors_document"}
+    meta = json.loads((tmp_path / "results" / "embed-cfg-kinds" / "meta.json").read_text("utf-8"))
+    assert meta["kinds"] == ["query", "document"]

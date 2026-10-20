@@ -21,12 +21,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 
-EncodeKind = Literal["query", "document", "label"]
-KINDS: tuple[EncodeKind, ...] = ("query", "document", "label")
+# EncodeKind/KINDS are owned by the config schema (cluster_rag.config) — see
+# there; this protocol module re-exports them so backends, caches and tests
+# keep importing the embed API surface from here.
+from cluster_rag.config import KINDS, EncodeKind  # noqa: F401  (re-export)
+
 CONTENT_PLACEHOLDER = "{content}"
 
 

@@ -12,6 +12,7 @@ first failure.
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,68 @@ def test_typed_cells_reject_unknown_fields() -> None:
         EvalCell(label="upr-eval-x", predictor="random", k=2, split="train")
     with pytest.raises(ValueError, match="filesystem-safe"):
         EvalCell(label="sub/dir", predictor="random", k=2)
+
+
+def test_embed_cell_kinds_field() -> None:
+    """EmbedCell.kinds validates (known, non-empty) and lands in the overrides."""
+    default = EmbedCell(label="upr-embed-a", embed=EmbedderConfig(backend="hf", model_id="m"))
+    assert default.kinds == ("document",)
+    assert default.overrides["embed_kinds"] == ["document"]
+
+    both = EmbedCell(
+        label="upr-embed-b",
+        embed=EmbedderConfig(backend="hf", model_id="m"),
+        kinds=("document", "query"),
+    )
+    assert both.overrides["embed_kinds"] == ["document", "query"]
+
+    with pytest.raises(ValueError, match="Unknown encode kind"):
+        EmbedCell(
+            label="upr-embed-c",
+            embed=EmbedderConfig(backend="hf", model_id="m"),
+            kinds=("vectors",),
+        )
+    with pytest.raises(ValueError, match="must name at least one encode kind"):
+        EmbedCell(label="upr-embed-d", embed=EmbedderConfig(backend="hf", model_id="m"), kinds=())
+
+
+def test_define_sweep_resolves_embed_kinds(repo_root: Path) -> None:
+    """An EmbedCell's kinds become the resolved config's embed_kinds."""
+    cells = [
+        EmbedCell(
+            label="upr-embed-a",
+            embed=EmbedderConfig(backend="hf", model_id="m"),
+            kinds=("document", "query"),
+        )
+    ]
+    runs = define_sweep(cells, dataset="upr", label="embed_pool")
+    assert runs[0].config.embed_kinds == ("document", "query")
+
+
+def test_sweep_file_imports_sibling_module(repo_root: Path) -> None:
+    """The sweep loader exposes the file's directory for sibling imports.
+
+    Sweep files share the embedder pool (experiments/embedder_pool.py); the
+    loader must therefore make the file's directory importable while it
+    executes and restore sys.path afterwards. The files live in a subdirectory
+    of the fixture root, so the import works only via the loader, never via
+    an ambient sys.path entry.
+    """
+    subdir = repo_root / "pool_sweeps"
+    subdir.mkdir()
+    (subdir / "mini_pool.py").write_text("MODEL_IDS = ['mini-a', 'mini-b']\n", encoding="utf-8")
+    (subdir / "mini_sweep.py").write_text(
+        "from mini_pool import MODEL_IDS\n"
+        "from cluster_rag.sweep import SweepCell, define_sweep\n"
+        "cells = [SweepCell(label='upr-stats-' + m, command='stats') for m in MODEL_IDS]\n"
+        "SWEEP = define_sweep(cells, dataset='upr', label='mini')\n",
+        encoding="utf-8",
+    )
+    subdir_resolved = str(subdir.resolve())
+    assert subdir_resolved not in sys.path
+    runs = cli._load_sweep_runs(subdir / "mini_sweep.py")
+    assert [run.label for run in runs] == ["upr-stats-mini-a", "upr-stats-mini-b"]
+    assert subdir_resolved not in sys.path  # removed again after the load
 
 
 def test_define_sweep_resolves_typed_cells(repo_root: Path) -> None:

@@ -44,6 +44,7 @@ from cluster_rag.config import (
     load_config,
     merge_configs,
 )
+from cluster_rag.embed.base import KINDS
 
 # ``stats-omct`` is the sweep command for `stats --omct` (separate name, so
 # the dataset decides nothing at execution time); ``stats`` is the plain UPR
@@ -154,15 +155,31 @@ class EvalCell(_LabelledCell):
 
 
 class EmbedCell(_LabelledCell):
-    """One ``embed`` cell: a full, typed :class:`~cluster_rag.config.EmbedderConfig`.
+    """One ``embed`` cell: backend/model config + the encode kinds for the run.
 
-    Executed with the default encode kind (``document``); the ``--kinds``
-    flag on standalone runs chooses more. ``preprocess=None`` keeps the base
-    config's variant (usually ``raw``).
+    ``kinds`` (validated against the ``KINDS`` encode kinds) names the matrices
+    the run writes, one per kind (Phase 4 kind sweeps use ``("document",
+    "query")``); the UPR dataset text is embedded under each kind's configured
+    prefix. ``preprocess=None`` keeps the base config's variant (usually
+    ``raw``).
     """
 
     embed: EmbedderConfig
+    kinds: tuple[str, ...] = ("document",)
     preprocess: PreprocessConfig | None = None
+
+    @field_validator("kinds")
+    @classmethod
+    def _kinds_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject unknown/empty kind lists before any run resolves."""
+        if not value:
+            raise ValueError("EmbedCell kinds must name at least one encode kind")
+        unknown = [kind for kind in value if kind not in KINDS]
+        if unknown:
+            raise ValueError(
+                f"Unknown encode kind(s) {unknown} in EmbedCell; expected values in {KINDS}"
+            )
+        return value
 
     @property
     def command(self) -> str:
@@ -171,8 +188,11 @@ class EmbedCell(_LabelledCell):
 
     @property
     def overrides(self) -> dict[str, Any]:
-        """The cell's config overrides (``embed`` plus an optional preprocessing)."""
-        payload: dict[str, Any] = {"embed": self.embed.model_dump(mode="python")}
+        """The cell's config overrides (``embed``/``embed_kinds`` + optional preprocessing)."""
+        payload: dict[str, Any] = {
+            "embed": self.embed.model_dump(mode="python"),
+            "embed_kinds": list(self.kinds),
+        }
         if self.preprocess is not None:
             payload["preprocess"] = self.preprocess.model_dump(mode="python")
         return payload

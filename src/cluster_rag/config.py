@@ -14,12 +14,18 @@ working directory. Run the CLI from the repository root, as in AGENTS.md.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cluster_rag.eval.multilabel import DECISION_RULES
+
+# The encode kinds (embed/backends' protocol contract). Owned here because
+# kinds are schema-level values (embed_kinds config, PrefixesConfig keys);
+# cluster_rag.embed.base re-exports them for the backend API surface.
+EncodeKind = Literal["query", "document", "label"]
+KINDS: tuple[EncodeKind, ...] = ("query", "document", "label")
 
 # Default formulaic openers for the ``strip_leading_formulaic`` preprocessing
 # variant (Phase 2). Derived from the Phase 1 prefix analysis (results/base/
@@ -354,11 +360,28 @@ class AppConfig(BaseModel):
     stats: StatsConfig = Field(default_factory=StatsConfig)
     splits: SplitsConfig = Field(default_factory=SplitsConfig)
     embed: EmbedderConfig | None = None
+    # Kinds the `embed` command encodes for (one matrix per kind; one per
+    # prefix in the cache). Sweeps carry it per cell (EmbedCell.kinds); the
+    # CLI ``--kinds`` flag overrides a config value.
+    embed_kinds: tuple[str, ...] = ("document",)
     preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
     eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
     table: TableConfig = Field(default_factory=TableConfig)  # Phase 3.5: sweep bookkeeping
+
+    @field_validator("embed_kinds")
+    @classmethod
+    def _kinds_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Restrict the embed command's kinds to the known encode kinds."""
+        if not value:
+            raise ValueError("embed_kinds must name at least one encode kind")
+        unknown = [kind for kind in value if kind not in KINDS]
+        if unknown:
+            raise ValueError(
+                f"Unknown encode kind(s) {unknown} in embed_kinds; expected values in {KINDS}"
+            )
+        return value
 
 
 def _parse_yaml_mapping(path: Path) -> dict[str, Any]:

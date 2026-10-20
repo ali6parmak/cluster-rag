@@ -145,9 +145,10 @@ def _build_parser() -> argparse.ArgumentParser:
     embed.add_argument(
         "--kinds",
         type=str,
-        default="document",
-        help="Comma-separated encode kinds to embed for (default: document). "
-        "One matrix per kind is written; the cache separates them by prefix.",
+        default=None,
+        help="Comma-separated encode kinds to embed for; overrides the config's "
+        "embed_kinds (default there: document). One matrix per kind is written; "
+        "the cache separates them by prefix.",
     )
 
     probe_omct = subparsers.add_parser(
@@ -1031,10 +1032,20 @@ def _load_sweep_runs(path: Path) -> list[Any]:
         raise ValueError(f"cannot load sweep file {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
+    # Sweep files may import sibling experiment modules (e.g. the shared
+    # embedder pool): their directory goes on sys.path only while the file
+    # executes, and only if the execution added it.
+    sweep_dir = str(path.parent.resolve())
+    added_sweep_dir = sweep_dir not in sys.path
+    if added_sweep_dir:
+        sys.path.insert(0, sweep_dir)
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 -- any import error aborts with its cause
         raise ValueError(f"loading sweep file {path} failed: {exc}") from exc
+    finally:
+        if added_sweep_dir:
+            sys.path.remove(sweep_dir)
     sweep = getattr(module, "SWEEP", None)
     if not isinstance(sweep, list) or not sweep:
         raise ValueError(
@@ -1064,8 +1075,8 @@ def _cmd_sweep(path: Path) -> int:
     for index, run in enumerate(runs, start=1):
         print(f"  [{index}/{total}] {run.command} label={run.label} (run_id={run.config.run_id})")
         started_cell = time.perf_counter()
-        if run.command == "embed":  # single kind; standalone runs choose with --kinds
-            code = _cmd_embed(run.config, kinds=("document",))
+        if run.command == "embed":  # kinds come from the cell's resolved config
+            code = _cmd_embed(run.config, kinds=run.config.embed_kinds)
         elif run.command == "evaluate":  # split comes from the cell's eval.split
             code = _cmd_evaluate(run.config)
         elif run.command == "stats":  # plain UPR dataset statistics
@@ -1104,7 +1115,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "split":
             return _cmd_split(config, force=args.force)
         if args.command == "embed":
-            return _cmd_embed(config, kinds=_parse_kinds(args.kinds))
+            # The --kinds flag wins over the config's embed_kinds; both end up
+            # in the run's meta.json, so the record is unambiguous either way.
+            kinds = _parse_kinds(args.kinds) if args.kinds else config.embed_kinds
+            return _cmd_embed(config, kinds=kinds)
         if args.command == "evaluate":
             return _cmd_evaluate(config, split=args.split)
         if args.command == "probe-omct":
