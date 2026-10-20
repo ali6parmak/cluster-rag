@@ -292,3 +292,38 @@ def test_eval_embedding_run_id_validation() -> None:
     # a path is not a run id (the loader resolves against paths.results itself)
     with pytest.raises(ValueError, match="filesystem-safe"):
         EvalConfig.model_validate({"predictor": {"name": "knn"}, "embedding_run_id": "results/x"})
+
+
+def test_eval_label_embedding_run_id_validation() -> None:
+    """eval.label_embedding_run_id: only upr-labelembed-* ids validate."""
+    filled = EvalConfig.model_validate(
+        {"predictor": {"name": "zeroshot"}, "label_embedding_run_id": "upr-labelembed-x"}
+    )
+    assert filled.label_embedding_run_id == "upr-labelembed-x"
+    assert EvalConfig.model_validate({"predictor": {"name": "knn"}}).label_embedding_run_id is None
+    with pytest.raises(ValueError, match="upr-labelembed-"):
+        EvalConfig.model_validate(
+            {"predictor": {"name": "zeroshot"}, "label_embedding_run_id": "upr-embed-e5-base-v2"}
+        )
+
+
+def test_label_texts_variants() -> None:
+    """variant 'name' vs 'template': the {label} placeholder rules are enforced."""
+    from cluster_rag.config import LabelTextsConfig
+
+    name = LabelTextsConfig.model_validate({"variant": "name"})
+    assert name.render_text("Discrimination") == "Discrimination"
+
+    templated = LabelTextsConfig.model_validate(
+        {"variant": "template", "template": "This recommendation is about {label}."}
+    )
+    assert templated.render_text("Discrimination") == (
+        "This recommendation is about Discrimination."
+    )
+
+    with pytest.raises(ValueError, match="requires template"):
+        LabelTextsConfig.model_validate({"variant": "template"})
+    with pytest.raises(ValueError, match="\\{label\\} placeholder"):
+        LabelTextsConfig.model_validate({"variant": "template", "template": "About things."})
+    with pytest.raises(ValueError, match="must not set template"):
+        LabelTextsConfig.model_validate({"variant": "name", "template": "oops"})

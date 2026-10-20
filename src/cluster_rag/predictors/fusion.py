@@ -1,25 +1,26 @@
 """Fusion predictor (Phase 4): weighted mix of the retrieval signals.
 
 PLAN Phase 4 "Fusion": ``score = a*knn + b*proto + c*zeroshot``, tuned on val.
-This class implements the a- and b-terms over one embedding artifact (the same
-context/geometry the component predictors use — knn votes from
-:func:`cluster_rag.retrieve.knn.knn_vote_scores`, prototype cosines from
-:func:`cluster_rag.retrieve.prototypes.prototype_scores`/``label_prototypes``);
-the c-term joins once the zero-shot label-embedding artifact mechanism is
-reviewer-approved (a second artifact kind feeds it; until then ``c`` is not an
-accepted parameter, so a config that sets it fails loudly instead of silently
-ignoring zero-shot).
+All three terms are implemented over artifacts the evaluate command wires from
+one model space: kNN vote sums (:func:`cluster_rag.retrieve.knn.knn_vote_scores`),
+prototype cosines (:func:`~cluster_rag.retrieve.prototypes.prototype_scores`),
+and — only when ``c > 0`` — query↔label-name cosines from a prior
+``upr-labelembed-*`` run (``eval.label_embedding_run_id``, the reviewer-approved
+zero-shot mechanism). With ``c = 0`` (or absent) the predictor is exactly the
+pool-cut mix and needs no label artifact, so the ``fusion_weight_sweep`` cells
+stay valid as-is.
 
 Scale/ratio note: the components live on different native scales (kNN vote sums
-in ~[0, k], prototype cosines in [-1, 1]). With a rank-based decision rule
-(``top_k``) only the *ratio* a:b matters for any fixed (k, power) — scaling
-both weights by a constant rescales the mixed sum and cannot change a ranking.
+in ~[0, k], both cosines in [-1, 1]). With a rank-based decision rule
+(``top_k``) only the *ratios* matter for any fixed (k, power) — scaling all
+weights by a constant rescales the mixed sum and cannot change a ranking.
 The weight sweep therefore fixes b = 1 and explores a as the ratio, with the
 pure corners (a=1,b=0 -> knn; a=0,b=1 -> prototype) reproducing the component
 predictors exactly — that equivalence is unit-tested.
 
-Pure module: no model clients, no I/O; both components come from the same
-train-only document matrix.
+Pure module: no model clients, no I/O; all components come from the same
+train-only document matrix, plus label name vectors that carry no example
+information (train-legal).
 """
 
 from __future__ import annotations
@@ -36,12 +37,18 @@ from cluster_rag.retrieve.prototypes import label_prototypes, prototype_scores
 
 
 class FusionPredictor:
-    """Scores labels by ``a * knn_votes(k, power) + b * prototype_cosines``."""
+    """Scores labels by ``a*knn_votes(k, power) + b*proto + c*zeroshot``."""
 
     REQUIRES_EMBEDDINGS: bool = True
     REQUIRED_KINDS: tuple[str, ...] = ("document", "query")
-    ALLOWED_PARAMS: frozenset[str] = frozenset({"a", "b", "k", "power"})
+    ALLOWED_PARAMS: frozenset[str] = frozenset({"a", "b", "c", "k", "power"})
     NAME: str = "fusion"
+
+    @classmethod
+    def needs_label_artifact(cls, params: Mapping[str, Any]) -> bool:
+        """Label vectors are wired only when the zero-shot term is active."""
+        weight = params.get("c", 0.0)
+        return isinstance(weight, (int, float)) and not isinstance(weight, bool) and weight > 0
 
     def __init__(
         self,
@@ -60,8 +67,9 @@ class FusionPredictor:
                 )
         self._a = self._weight(params["a"], "a")
         self._b = self._weight(params["b"], "b")
-        if self._a + self._b <= 0:
-            raise ValueError("fusion weights must have a + b > 0 (at least one signal)")
+        self._c = self._weight(params.get("c", 0.0), "c")
+        if self._a + self._b + self._c <= 0:
+            raise ValueError("fusion weights must have a + b + c > 0 (at least one signal)")
         k = params["k"]
         if not isinstance(k, int) or isinstance(k, bool) or k < 1:
             raise ValueError(f"params['k'] must be a positive integer, got {k!r}")
@@ -75,6 +83,7 @@ class FusionPredictor:
         self._label_matrix = build_label_matrix(context.train_records, context.labels)
         self._train_vectors = context.require_train_vectors()
         self._prototypes = label_prototypes(self._train_vectors, self._label_matrix)
+        self._label_vectors = context.require_label_vectors() if self._c > 0 else None
         self._n_train = len(context.train_records)
 
     @staticmethod
@@ -105,6 +114,9 @@ class FusionPredictor:
         )
         proto_scores = prototype_scores(self._prototypes, query)
         fused = self._a * knn_scores + self._b * proto_scores
+        if self._c > 0:
+            assert self._label_vectors is not None  # guaranteed by the constructor
+            fused = fused + self._c * (query @ self._label_vectors.T)
         return fused.astype(np.float32)
 
     def describe(self) -> dict[str, Any]:
@@ -113,6 +125,7 @@ class FusionPredictor:
             "name": self.NAME,
             "a": self._a,
             "b": self._b,
+            "c": self._c,
             "k": self._k,
             "power": self._power,
             "n_train_examples": self._n_train,

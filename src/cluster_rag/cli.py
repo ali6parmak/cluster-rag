@@ -6,7 +6,8 @@ Invocation (target CLI in AGENTS.md):
     python -m cluster_rag.cli stats    --config configs/base.yaml   # equivalent
 
 Commands: stats (--omct for the OMCT pairwise data), split, embed
-(Phase 2: dataset embedding through the disk cache), probe-omct (Phase 2: the
+(Phase 2: dataset embedding through the disk cache), labelembed (Phase 4:
+the zero-shot label-text artifact), probe-omct (Phase 2: the
 OMCT pairwise embedding probe), evaluate (Phase 3: any predictor on a
 fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
 cells). Run from the repository root so relative
@@ -50,7 +51,12 @@ from cluster_rag.data import (
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
-from cluster_rag.embed_artifact import EmbeddingArtifact, load_embedding_artifact
+from cluster_rag.embed_artifact import (
+    EmbeddingArtifact,
+    LabelEmbeddingArtifact,
+    load_embedding_artifact,
+    load_label_embedding_artifact,
+)
 from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
 from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
@@ -69,7 +75,7 @@ from cluster_rag.experiment_table import (
 )
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
-from cluster_rag.predictors import build_predictor, predictor_embedding_requirements
+from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
 
@@ -152,6 +158,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "the cache separates them by prefix.",
     )
 
+    labelembed = subparsers.add_parser(
+        "labelembed",
+        help="Embed one text per dataset label for zero-shot scoring (Phase 4).",
+        description=(
+            "Build the zero-shot label-embedding artifact: render one text per "
+            "label from the dataset's sorted unique labels (config-driven via "
+            "the label_texts: section — variant 'name' or a template with a "
+            "{label} placeholder), embed them under the model's card-verified "
+            "label-kind prefix through the disk cache, and write "
+            "results/<run_id>/label_embeddings.npz plus meta.json. Consumed by "
+            "the 'zeroshot' predictor and by 'fusion' with c > 0 through "
+            "eval.label_embedding_run_id. Run ids follow the grammar "
+            "upr-labelembed-<model>[-<variant>]."
+        ),
+    )
+    labelembed.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to a YAML config with embed:, label_texts: (or sweep-resolved "
+        "configs; experiment values live in experiments/*.py sweeps).",
+    )
+
     probe_omct = subparsers.add_parser(
         "probe-omct",
         help="OMCT pairwise-data probe: AUC + question retrieval per embedder (Phase 2).",
@@ -209,13 +238,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run a Python sweep file: typed cells, each executed as its own run (Phases 2.5+).",
         description=(
             "Load a sweep file (a Python module exposing SWEEP: list[SweepRun], built "
-            "with typed cells — EvalCell/EmbedCell/ProbeCell/SweepCell — and "
-            "define_sweep(cells, dataset=..., label=...)) and execute its cells in "
-            "order through the existing command functions (embed / evaluate / "
-            "probe-omct / stats / stats-omct / split): one run folder per cell with "
-            "the frozen resolved config, exactly as single runs. Embed cells run "
-            "with the default kinds ('document'). The sweep file only produces "
-            "configs; the first failing cell aborts the sweep with its exit code."
+            "with typed cells — EvalCell/EmbedCell/LabelEmbedCell/ProbeCell/SweepCell — "
+            "and define_sweep(cells, dataset=..., label=...)) and execute its cells in "
+            "order through the existing command functions (embed / labelembed / "
+            "evaluate / probe-omct / stats / stats-omct / split): one run folder per "
+            "cell with the frozen resolved config, exactly as single runs. Embed "
+            "cells run with the default kinds ('document'). The sweep file only "
+            "produces configs; the first failing cell aborts the sweep with its "
+            "exit code."
         ),
     )
     sweep.add_argument(
@@ -596,6 +626,158 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
     return 0
 
 
+def _cmd_labelembed(config: AppConfig) -> int:
+    """Run labelembed: embed one text per dataset label (zero-shot artifact, Phase 4).
+
+    Labels are the dataset's sorted unique labels (no catalog file, PLAN.md
+    section 7); the per-label texts come from the config's ``label_texts:``
+    section (variant ``name`` or a ``{label}`` template). Rendered texts go
+    through the same preprocessing spec and disk cache as dataset texts, under
+    the model's card-verified ``label`` prefix. Writes
+    ``results/<run_id>/label_embeddings.npz`` (``labels`` + ``vectors_label``,
+    row order = sorted label order) plus ``meta.json`` with the full lineage;
+    consumed through ``eval.label_embedding_run_id``.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.embed is None:
+        raise ValueError(
+            "the embed: section (backend, model_id, prefixes) is required for "
+            "the `labelembed` command"
+        )
+    if config.label_texts is None:
+        raise ValueError(
+            "the label_texts: section (variant 'name' or a {label} template) is "
+            "required for the `labelembed` command"
+        )
+    report = load_jsonl(config.paths.data_raw)
+    if report.errors:
+        logger.warning("%d malformed line(s) dropped before label embedding", report.n_invalid)
+    labels = sorted({label for record in report.records for label in record.labels})
+    if not labels:
+        raise ValueError("the dataset has no labels; nothing to embed")
+    texts = [config.label_texts.render_text(label) for label in labels]
+
+    spec = build_preprocess_spec(config.preprocess)
+    processed = spec.apply(texts)
+    preprocess_meta = spec.describe(texts)
+
+    embedder = build_embedder(config.embed)
+    info = embedder.info
+    if config.cache.enabled:
+        embedder = CachedEmbedder(embedder, config.paths.cache, preprocessing_version=spec.version)
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+
+    def _cache_counters() -> tuple[int, int, int]:
+        return (
+            getattr(embedder, "cache_hits", 0),
+            getattr(embedder, "cache_misses", 0),
+            getattr(embedder, "n_stored", 0),
+        )
+
+    vectors = embedder.encode(processed, "label")
+    if (
+        vectors.ndim != 2
+        or vectors.shape[0] != len(labels)
+        or (info.dimension is not None and vectors.shape[1] != info.dimension)
+    ):
+        raise ValueError(
+            f"label embedding produced shape {vectors.shape}, expected "
+            f"({len(labels)}, {info.dimension}); refusing to write the artifact"
+        )
+    np.savez_compressed(
+        results_dir / "label_embeddings.npz",
+        labels=np.asarray(labels),
+        vectors_label=vectors,
+    )
+
+    totals = _cache_counters()
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "command": "labelembed",
+        "n_labels": len(labels),
+        "label_texts": {
+            "variant": config.label_texts.variant,
+            "template": config.label_texts.template,
+            "label_space": "sorted unique labels of the dataset (no catalog file)",
+            "rendered_example": texts[0],
+        },
+        "source_sha256": file_sha256(config.paths.data_raw),
+        "n_malformed_lines": report.n_invalid,
+        "embedder": {
+            "backend": info.backend,
+            "model_id": info.model_id,
+            "dimension": info.dimension,
+            "revision_or_digest": info.revision_or_digest,
+            "context_tokens": info.context_tokens,
+            "prefixes": dict(info.prefixes),
+            "extra": info.extra,
+        },
+        "cache": {
+            "enabled": config.cache.enabled,
+            "path": str(config.paths.cache) if config.cache.enabled else None,
+            "cache_hits": totals[0],
+            "cache_misses": totals[1],
+            "n_stored": totals[2],
+        },
+        "preprocess": preprocess_meta,
+        "label_stats": {
+            "dimension": int(vectors.shape[1]),
+            "l2_rows": float(np.linalg.norm(vectors, axis=1).mean()) if len(vectors) else 1.0,
+        },
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    (results_dir / "meta.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    if config.paths.experiment_table_upr is not None:
+        append_table_rows(
+            config.paths.experiment_table_upr,
+            heading=section_heading(
+                "upr", command="labelembed", sweep_label=config.table.sweep_label
+            ),
+            columns=EMBED_COLUMNS,
+            key_columns=EMBED_KEY_COLUMNS,
+            intro=intro_for("upr"),
+            rows=[
+                {
+                    "run_id": run_id,
+                    "date": date.today().isoformat(),
+                    "backend": info.backend,
+                    "model": info.model_id,
+                    "model_version": (info.revision_or_digest or "")[:12],
+                    "dim": info.dimension,
+                    "ctx": info.context_tokens,
+                    "kinds": "label",
+                    "preprocess": spec.variant,
+                    "n_texts": len(labels),
+                    "seconds": payload["total_seconds"],
+                    "cache_hits": totals[0],
+                    "cache_misses": totals[1],
+                }
+            ],
+        )
+
+    print(
+        f"Embedded {len(labels)} label text(s) with {info.backend}:{info.model_id} -> {results_dir}"
+    )
+    print(
+        f"  label_texts: {config.label_texts.variant}"
+        + (f" ({config.label_texts.template})" if config.label_texts.template else "")
+        + f", dimension: {info.dimension}, preprocess: {spec.variant}"
+    )
+    print(
+        f"  cache: {totals[0]} hit(s), {totals[1]} miss(es), {totals[2]} stored, "
+        f"{payload['total_seconds']}s total"
+    )
+    return 0
+
+
 def _cmd_probe_omct(config: AppConfig) -> int:
     """Run probe-omct: the Phase 2 auxiliary evidence run (results/omct-<run_id>/)."""
     started = time.perf_counter()
@@ -796,12 +978,17 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     eval_records = select_records_by_ids(full_report.records, ids_by_split[split_name])
     train_records = select_records_by_ids(full_report.records, ids_by_split["train"])
 
-    # Phase 4 wiring (PLAN Phase 4 opening D): resolve the embedding-run
-    # reference against the declared needs of the predictor. The artifact holds
-    # the full dataset's vectors, but only the train rows reach the predictor's
-    # construction context and only the eval split's query rows reach score().
-    requires, required_kinds = predictor_embedding_requirements(eval_config.predictor.name)
+    # Phase 4 wiring (PLAN Phase 4 opening D + zero-shot): resolve the
+    # embedding-run references against the declared needs of the predictor
+    # (params included — fusion needs label vectors only when c > 0). The
+    # artifact holds the full dataset's vectors, but only the train rows reach
+    # the predictor's construction context and only the eval split's query rows
+    # reach score().
+    requires, required_kinds, needs_labels = predictor_requirements(
+        eval_config.predictor.name, eval_config.predictor.params
+    )
     artifact: EmbeddingArtifact | None = None
+    label_artifact: LabelEmbeddingArtifact | None = None
     if eval_config.embedding_run_id and not requires:
         logger.warning(
             "eval.embedding_run_id %r is set but predictor %r does not use "
@@ -822,8 +1009,40 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
             required_kinds=required_kinds,
             source_sha256=source_sha,
         )
+    if eval_config.label_embedding_run_id and not needs_labels:
+        logger.warning(
+            "eval.label_embedding_run_id %r is set but predictor %r does not use "
+            "zero-shot label vectors; ignoring it (no lineage is recorded).",
+            eval_config.label_embedding_run_id,
+            eval_config.predictor.name,
+        )
+    elif needs_labels:
+        if not requires or artifact is None:
+            raise ValueError(
+                f"predictor {eval_config.predictor.name!r} wants zero-shot label "
+                "vectors but does not consume the primary embedding run — label "
+                "vectors are only defined inside one model's space; this predictor "
+                "combination is unsupported"
+            )
+        if not eval_config.label_embedding_run_id:
+            raise ValueError(
+                f"predictor {eval_config.predictor.name!r} requires zero-shot label "
+                "vectors; set eval.label_embedding_run_id to a prior UPR "
+                "label-embedding run_id (e.g. 'upr-labelembed-jina-v5-about') — "
+                "see PLAN.md Phase 4 zero-shot"
+            )
 
     labels = sorted({label for record in full_report.records for label in record.labels})
+    if needs_labels:
+        assert artifact is not None  # guarded by the needs_labels branch above
+        label_artifact = load_label_embedding_artifact(
+            config.paths.results,
+            eval_config.label_embedding_run_id,
+            labels=labels,
+            source_sha256=source_sha,
+            model_id=artifact.meta["embedder"]["model_id"],
+            dimension=artifact.meta["embedder"]["dimension"],
+        )
     dataset_counts: Counter[str] = Counter()
     for record in full_report.records:
         dataset_counts.update(record.labels)
@@ -838,7 +1057,9 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     )
 
     train_vectors = (
-        artifact.select("document", ids_by_split["train"]) if artifact is not None else None
+        artifact.select("document", ids_by_split["train"])
+        if artifact is not None and "document" in required_kinds
+        else None  # zero-shot predictors use query vectors only
     )
     predictor = build_predictor(
         eval_config.predictor.name,
@@ -847,6 +1068,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
             labels=tuple(labels),
             train_records=tuple(train_records),
             train_document_vectors=train_vectors,
+            label_vectors=label_artifact.vectors if label_artifact is not None else None,
         ),
         seed=config.seed,
     )
@@ -899,6 +1121,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         "seed": config.seed,
         "predictor": predictor.describe(),
         "embedding_run": artifact.lineage if artifact is not None else None,
+        "label_embedding_run": (label_artifact.lineage if label_artifact is not None else None),
         "decision": decision.model_dump(),
         "metrics_config": eval_config.metrics.model_dump(),
         "buckets": {
@@ -1129,6 +1352,8 @@ def _cmd_sweep(path: Path) -> int:
         started_cell = time.perf_counter()
         if run.command == "embed":  # kinds come from the cell's resolved config
             code = _cmd_embed(run.config, kinds=run.config.embed_kinds)
+        elif run.command == "labelembed":  # the zero-shot label-text artifact
+            code = _cmd_labelembed(run.config)
         elif run.command == "evaluate":  # split comes from the cell's eval.split
             code = _cmd_evaluate(run.config)
         elif run.command == "stats":  # plain UPR dataset statistics
@@ -1171,6 +1396,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             # in the run's meta.json, so the record is unambiguous either way.
             kinds = _parse_kinds(args.kinds) if args.kinds else config.embed_kinds
             return _cmd_embed(config, kinds=kinds)
+        if args.command == "labelembed":
+            return _cmd_labelembed(config)
         if args.command == "evaluate":
             return _cmd_evaluate(config, split=args.split)
         if args.command == "probe-omct":

@@ -89,6 +89,129 @@ class EmbeddingArtifact:
         return rows.astype(np.float32, copy=False)
 
 
+@dataclass(frozen=True)
+class LabelEmbeddingArtifact:
+    """A validated ``labelembed`` run artifact: one vector per label."""
+
+    run_id: str
+    labels: tuple[str, ...]
+    meta: dict[str, Any]
+    vectors: np.ndarray
+
+    @property
+    def lineage(self) -> dict[str, Any]:
+        """Provenance block for the consuming run's metrics.json."""
+        embedder = self.meta["embedder"]
+        return {
+            "run_id": self.run_id,
+            "backend": embedder["backend"],
+            "model_id": embedder["model_id"],
+            "revision_or_digest": embedder["revision_or_digest"],
+            "dimension": embedder["dimension"],
+            "prefixes": dict(embedder["prefixes"]),
+            "label_texts": dict(self.meta["label_texts"]),
+            "source_sha256": self.meta["source_sha256"],
+            "n_labels": len(self.labels),
+        }
+
+
+def load_label_embedding_artifact(
+    results_root: Path,
+    run_id: str,
+    *,
+    labels: Sequence[str],
+    source_sha256: str,
+    model_id: str,
+    dimension: int,
+) -> LabelEmbeddingArtifact:
+    """Load and hard-validate ``results/run_id/label_embeddings.npz`` (+ meta.json).
+
+    Zero-shot vectors are only coherent inside one model's space, so beyond the
+    artifact-level checks the loader enforces the match with the *primary*
+    embedding run: identical ``model_id`` and dimension, and the label list
+    exactly equal (order included) to the harness label space.
+
+    Args:
+        results_root: The configured ``paths.results`` directory.
+        run_id: The ``upr-labelembed-*`` run's id (``eval.label_embedding_run_id``).
+        labels: The harness label space (sorted, full) the predictor scores into.
+        source_sha256: The sha256 of the current raw dataset (label names derive
+            from it).
+        model_id: The primary embedding run's model — must match exactly.
+        dimension: The primary embedding run's output dimension.
+
+    Returns:
+        The validated :class:`LabelEmbeddingArtifact` (``vectors`` row ``i`` is
+        ``labels[i]``'s label-kind embedding).
+
+    Raises:
+        ValueError: On existence/provenance/label-space/model/dimension/contract
+            violations, always with the fix named.
+    """
+    artifact_dir = Path(results_root) / run_id
+    npz_path = artifact_dir / "label_embeddings.npz"
+    meta_path = artifact_dir / "meta.json"
+    if not npz_path.is_file() or not meta_path.is_file():
+        raise ValueError(
+            f"label-embedding run {run_id!r} not found: expected {npz_path} plus "
+            "meta.json. Run the labelembed first (cluster-rag labelembed, or the "
+            "upr-labelembed-* sweep cells), then point eval.label_embedding_run_id "
+            "at that run_id."
+        )
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("command") != "labelembed":
+        raise ValueError(
+            f"run {run_id!r} meta.json says command={meta.get('command')!r}; "
+            "eval.label_embedding_run_id must reference a labelembed run"
+        )
+    if _required(meta, "source_sha256") != source_sha256:
+        raise ValueError(
+            f"label-embedding run {run_id!r} was built from a different dataset "
+            "(source_sha256 mismatch): the label list and the current data disagree; "
+            "re-run labelembed — do not evaluate against stale vectors."
+        )
+    meta_model_id = _required(meta, "embedder.model_id")
+    if meta_model_id != model_id:
+        raise ValueError(
+            f"label-embedding run {run_id!r} was built with model {meta_model_id!r} but "
+            f"the primary embedding run uses {model_id!r} — zero-shot similarity is "
+            "undefined across embedding spaces; build the label vectors with the "
+            "same model"
+        )
+    artifact_meta_dimension = _required(meta, "embedder.dimension")
+    if artifact_meta_dimension != dimension:
+        raise ValueError(
+            f"label-embedding run {run_id!r} dimension {artifact_meta_dimension} "
+            f"disagrees with the primary embedding run's {dimension}"
+        )
+
+    with np.load(npz_path) as data:
+        artifact_labels = [str(item) for item in np.asarray(data["labels"])]
+        vectors = np.asarray(data["vectors_label"])
+    _check_artifact_matrix(vectors, run_id=run_id, kind="label", dimension=dimension)
+    if tuple(artifact_labels) != tuple(labels):
+        missing = [label for label in labels if label not in set(artifact_labels)]
+        extra = [label for label in artifact_labels if label not in set(labels)]
+        raise ValueError(
+            f"label-embedding run {run_id!r} label space mismatches the harness "
+            f"label space ({len(artifact_labels)} labels vs {len(labels)}; first "
+            f"missing {list(missing[:3])}, first extra {list(extra[:3])}) — the "
+            "column order would silently mis-score labels; re-run labelembed on "
+            "the current dataset"
+        )
+    if vectors.shape[0] != len(labels):
+        raise ValueError(
+            f"label-embedding run {run_id!r} has {vectors.shape[0]} vectors for "
+            f"{len(labels)} labels; re-run labelembed"
+        )
+    return LabelEmbeddingArtifact(
+        run_id=run_id,
+        labels=tuple(labels),
+        meta=meta,
+        vectors=vectors.astype(np.float32, copy=False),
+    )
+
+
 def _required(mapping: dict[str, Any], key_path: str) -> Any:
     """Fetch a ``meta.json`` entry, failing with the full path in the message."""
     node: Any = mapping

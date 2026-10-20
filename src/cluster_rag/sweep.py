@@ -1,16 +1,16 @@
 """Experiment sweeps as Python (Phase 2.5/3.5): typed cells -> resolved configs.
 
 A sweep file under ``experiments/`` declares typed cells built with plain
-Python loops — :class:`EvalCell`, :class:`EmbedCell` and :class:`ProbeCell`
-(validated fields, no dict/YAML wiring), plus the generic
-:class:`SweepCell` (label + command + config overrides) for the commands
-without a dedicated cell (``stats``/``stats-omct``/``split``).
+Python loops — :class:`EvalCell`, :class:`EmbedCell`, :class:`LabelEmbedCell`
+and :class:`ProbeCell` (validated fields, no dict/YAML wiring), plus the
+generic :class:`SweepCell` (label + command + config overrides) for the
+commands without a dedicated cell (``stats``/``stats-omct``/``split``).
 :func:`define_sweep` resolves every cell over ``configs/base.yaml`` into one
 validated :class:`~cluster_rag.config.AppConfig` per run. Sweeps only
 *produce* configs: the ``sweep`` CLI command executes the resolved cells
-through the existing command functions (``embed`` / ``evaluate`` /
-``probe-omct`` / ``stats`` / ``split``), so run folders, frozen configs, logs
-and experiment-table rows are exactly what single runs produce.
+through the existing command functions (``embed`` / ``labelembed`` /
+``evaluate`` / ``probe-omct`` / ``stats`` / ``split``), so run folders, frozen
+configs, logs and experiment-table rows are exactly what single runs produce.
 
 A sweep is authored for exactly **one dataset** (:func:`define_sweep`'s
 ``dataset``, ``upr`` or ``omct``): it validates each cell's command against
@@ -39,21 +39,31 @@ from cluster_rag.config import (
     EmbedderConfig,
     EvalDecisionConfig,
     EvalMetricsConfig,
+    LabelTextsConfig,
     PreprocessConfig,
     ProbeConfig,
     load_config,
     merge_configs,
     validate_embedding_run_id,
+    validate_label_embedding_run_id,
 )
 from cluster_rag.embed.base import KINDS
 
 # ``stats-omct`` is the sweep command for `stats --omct` (separate name, so
 # the dataset decides nothing at execution time); ``stats`` is the plain UPR
 # dataset statistics run.
-UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "evaluate")
+UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "labelembed", "evaluate")
 OMCT_COMMANDS: tuple[str, ...] = ("stats-omct", "probe-omct")
 DATASET_COMMANDS: dict[str, tuple[str, ...]] = {"upr": UPR_COMMANDS, "omct": OMCT_COMMANDS}
-COMMANDS: tuple[str, ...] = ("stats", "stats-omct", "split", "embed", "evaluate", "probe-omct")
+COMMANDS: tuple[str, ...] = (
+    "stats",
+    "stats-omct",
+    "split",
+    "embed",
+    "labelembed",
+    "evaluate",
+    "probe-omct",
+)
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
 # to the working directory the CLI is run from (the repository root).
@@ -123,6 +133,9 @@ class EvalCell(_LabelledCell):
     split: Literal["val", "test"] = "val"
     metrics: EvalMetricsConfig | None = None
     embedding_run: str | None = None
+    # Zero-shot label vectors (Phase 4): a prior `upr-labelembed-*` run; needed
+    # by predictor `zeroshot` and by `fusion` with c > 0 only.
+    label_embedding_run: str | None = None
 
     @field_validator("embedding_run")
     @classmethod
@@ -131,6 +144,14 @@ class EvalCell(_LabelledCell):
         if value is None:
             return None
         return validate_embedding_run_id(value)
+
+    @field_validator("label_embedding_run")
+    @classmethod
+    def _label_embedding_run_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        if value is None:
+            return None
+        return validate_label_embedding_run_id(value)
 
     @property
     def command(self) -> str:
@@ -161,6 +182,7 @@ class EvalCell(_LabelledCell):
                 "decision": decision.model_dump(mode="python"),
                 "split": self.split,
                 "embedding_run_id": self.embedding_run,
+                "label_embedding_run_id": self.label_embedding_run,
             }
         }
         if self.metrics is not None:
@@ -212,6 +234,37 @@ class EmbedCell(_LabelledCell):
         return payload
 
 
+class LabelEmbedCell(_LabelledCell):
+    """One ``labelembed`` cell: label texts + embedder (the zero-shot artifact).
+
+    ``label_texts`` picks what stands in for each dataset label (variant
+    ``name`` or a ``{label}`` template, :class:`~cluster_rag.config.LabelTextsConfig`);
+    the artifacts it produces are consumed through ``eval.label_embedding_run_id``
+    by the ``zeroshot`` predictor and by ``fusion`` with ``c > 0``.
+    ``preprocess=None`` keeps the base config's variant (usually ``raw``).
+    """
+
+    embed: EmbedderConfig
+    label_texts: LabelTextsConfig
+    preprocess: PreprocessConfig | None = None
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "labelembed"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (``embed`` + ``label_texts`` + preprocess)."""
+        payload: dict[str, Any] = {
+            "embed": self.embed.model_dump(mode="python"),
+            "label_texts": self.label_texts.model_dump(mode="python"),
+        }
+        if self.preprocess is not None:
+            payload["preprocess"] = self.preprocess.model_dump(mode="python")
+        return payload
+
+
 class ProbeCell(_LabelledCell):
     """One ``probe-omct`` cell: embedder + probe options on the pairwise dataset.
 
@@ -240,7 +293,7 @@ class ProbeCell(_LabelledCell):
         return payload
 
 
-Cell = SweepCell | EvalCell | EmbedCell | ProbeCell
+Cell = SweepCell | EvalCell | EmbedCell | LabelEmbedCell | ProbeCell
 
 
 @dataclass(frozen=True)

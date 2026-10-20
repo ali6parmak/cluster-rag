@@ -84,6 +84,47 @@ class PathsConfig(BaseModel):
     data_external: Path | None = None  # auxiliary pairwise dataset (PLAN.md section 2)
 
 
+class LabelTextsConfig(BaseModel):
+    """What text stands in for each label zero-shot (Phase 4 label-embedding artifact).
+
+    The 68 UPR labels are known from annotations only (no catalog file with
+    descriptions, PLAN.md section 7), so the artifact embeds one configurable
+    text per label under the model's ``prefixes.label``:
+
+    - ``variant: name`` — the bare label name ("Discrimination");
+    - ``variant: template`` — a config-provided template with a ``{label}``
+      placeholder (e.g. ``"This recommendation is about {label}."``), rendered
+      per label.
+
+    A later ``descriptions`` variant would need the absent label catalog; it is
+    deliberately not implemented ahead of that file existing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    variant: Literal["name", "template"] = "name"
+    template: str | None = None
+
+    @model_validator(mode="after")
+    def _template_matches_variant(self) -> LabelTextsConfig:
+        """Template variant needs a template with the placeholder; name forbids one."""
+        if self.variant == "name":
+            if self.template is not None:
+                raise ValueError("label_texts variant 'name' must not set template")
+        elif not self.template:
+            raise ValueError("label_texts variant 'template' requires template")
+        elif "{label}" not in self.template:
+            raise ValueError("label_texts template must contain the {label} placeholder")
+        return self
+
+    def render_text(self, label: str) -> str:
+        """The embeddable text for one label (deterministic, config-driven)."""
+        if self.variant == "name":
+            return label
+        assert self.template is not None  # guaranteed by the validator
+        return self.template.replace("{label}", label)
+
+
 class StatsConfig(BaseModel):
     """Parameters of the ``stats`` command (Phase 1 descriptive statistics)."""
 
@@ -304,6 +345,36 @@ def validate_embedding_run_id(value: str) -> str:
     return value
 
 
+LABEL_EMBEDDING_RUN_ID_PREFIX = "upr-labelembed-"  # run-id grammar for labelembed commands
+
+
+def validate_label_embedding_run_id(value: str) -> str:
+    """Validate a reference to a prior zero-shot label-embedding run (Phase 4).
+
+    ``eval.label_embedding_run_id`` names the ``upr-labelembed-*`` run whose
+    ``results/<run_id>/label_embeddings.npz`` a zero-shot-capable predictor
+    consumes (the ``zeroshot`` predictor, or ``fusion`` with ``c > 0``). Same
+    discipline as :func:`validate_embedding_run_id`: syntactic here
+    (filesystem-safe + the prefix), existence and consistency (label space,
+    model/dimension match with the primary embedding run) at run time.
+
+    Raises:
+        ValueError: If the value is not filesystem-safe or lacks the prefix.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise ValueError(
+            f"label_embedding_run_id must be filesystem-safe ([A-Za-z0-9._-]+), got {value!r}"
+        )
+    if not value.startswith(LABEL_EMBEDDING_RUN_ID_PREFIX):
+        raise ValueError(
+            f"label_embedding_run_id {value!r} must name a UPR label-embedding run and "
+            f"start with {LABEL_EMBEDDING_RUN_ID_PREFIX!r} (AGENTS.md run-id grammar; "
+            "e.g. 'upr-labelembed-jina-v5-about') — dataset records and label texts "
+            "live in different artifacts"
+        )
+    return value
+
+
 class EvalConfig(BaseModel):
     """Phase 3 evaluation section: predictor, decision rule and metric grids.
 
@@ -325,6 +396,9 @@ class EvalConfig(BaseModel):
     metrics: EvalMetricsConfig = Field(default_factory=EvalMetricsConfig)
     split: str = "val"
     embedding_run_id: str | None = None
+    # Zero-shot label vectors (Phase 4): a prior `upr-labelembed-*` run, needed
+    # by the `zeroshot` predictor and by `fusion` with `c > 0` only.
+    label_embedding_run_id: str | None = None
 
     @field_validator("split")
     @classmethod
@@ -339,6 +413,12 @@ class EvalConfig(BaseModel):
     def _embedding_run_id_is_valid(cls, value: str | None) -> str | None:
         """Syntactic check of the embedding-run reference (fail at config time)."""
         return None if value is None else validate_embedding_run_id(value)
+
+    @field_validator("label_embedding_run_id")
+    @classmethod
+    def _label_embedding_run_id_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check of the label-embedding-run reference."""
+        return None if value is None else validate_label_embedding_run_id(value)
 
 
 class ProbeConfig(BaseModel):
@@ -413,6 +493,9 @@ class AppConfig(BaseModel):
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
     eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
     table: TableConfig = Field(default_factory=TableConfig)  # Phase 3.5: sweep bookkeeping
+    # Zero-shot label texts (Phase 4): required by the `labelembed` command,
+    # which embeds one text per dataset label into the label-embedding artifact.
+    label_texts: LabelTextsConfig | None = None
 
     @field_validator("embed_kinds")
     @classmethod

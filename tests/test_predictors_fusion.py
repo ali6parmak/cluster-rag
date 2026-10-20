@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from cluster_rag.data import Record
-from cluster_rag.predictors import build_predictor, predictor_embedding_requirements
+from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 
 LABELS = ("A", "B", "C", "Z")
@@ -82,10 +82,13 @@ def test_fusion_requires_positive_total_weight_and_valid_params() -> None:
         build_predictor("fusion", {"a": -1.0, "b": 1.0, "k": 5}, _context(), seed=0)
     with pytest.raises(ValueError, match="must be a number"):
         build_predictor("fusion", {"a": "half", "b": 1.0, "k": 5}, _context(), seed=0)
-    with pytest.raises(ValueError, match="a \\+ b > 0"):
-        build_predictor("fusion", {"a": 0.0, "b": 0.0, "k": 5}, _context(), seed=0)
-    with pytest.raises(ValueError, match="does not support parameter"):
-        build_predictor("fusion", {"a": 1.0, "b": 1.0, "k": 5, "c": 1.0}, _context(), seed=0)
+    with pytest.raises(ValueError, match="a \\+ b \\+ c > 0"):
+        build_predictor("fusion", {"a": 0.0, "b": 0.0, "c": 0.0, "k": 5}, _context(), seed=0)
+    # c > 0 activates the zero-shot term and therefore demands label vectors
+    with pytest.raises(ValueError, match="label_embedding_run_id"):
+        build_predictor("fusion", {"a": 1.0, "b": 1.0, "c": 1.0, "k": 5}, _context(), seed=0)
+    with pytest.raises(ValueError, match="non-negative finite number"):
+        build_predictor("fusion", {"a": 1.0, "b": 1.0, "c": -0.5, "k": 5}, _context(), seed=0)
 
 
 def test_fusion_unseen_labels_stay_at_zero() -> None:
@@ -96,15 +99,75 @@ def test_fusion_unseen_labels_stay_at_zero() -> None:
 
 def test_fusion_registry_wiring_and_describe() -> None:
     """Registry declares the same embedding needs as its components."""
-    assert predictor_embedding_requirements("fusion") == (True, ("document", "query"))
+    assert predictor_requirements("fusion") == (True, ("document", "query"), False)
+    # c > 0 flips the label-artifact need; c = 0 / absent keep the Phase-4 mix
+    assert predictor_requirements("fusion", {"c": 0.0}) == (True, ("document", "query"), False)
+    assert predictor_requirements("fusion", {"c": 0.5}) == (True, ("document", "query"), True)
     predictor = build_predictor("fusion", {"a": 0.5, "b": 1.0, "k": 2}, _context(), seed=0)
     assert predictor.describe() == {
         "name": "fusion",
         "a": 0.5,
         "b": 1.0,
+        "c": 0.0,
         "k": 2,
         "power": 1.0,
         "n_train_examples": 3,
         "dimension": 2,
         "n_labels": 4,
     }
+
+
+# --- the zero-shot c-term (Phase 4): fusion with label vectors ---
+
+LABEL_VECTORS = np.asarray(
+    [[1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [0.7071, 0.7071]], dtype=np.float32
+)
+
+
+def _label_context() -> PredictorContext:
+    return PredictorContext(
+        labels=LABELS,
+        train_records=TRAIN_RECORDS,
+        train_document_vectors=TRAIN_VECTORS,
+        label_vectors=LABEL_VECTORS,
+    )
+
+
+def _scores(
+    name: str, params: dict, queries: np.ndarray, *, labels_vectors: bool = False
+) -> np.ndarray:
+    context = _label_context() if labels_vectors else _context()
+    predictor = build_predictor(name, params, context, seed=0)
+    return predictor.score(["q1", "q2", "q3"], query_vectors=queries)
+
+
+def test_fusion_c_term_mixes_the_zero_shot_scores() -> None:
+    """score = a*knn + b*proto + c*(query @ label_vectors.T), computed exactly."""
+    params = {"a": 1.0, "b": 1.0, "c": 0.5, "k": 2}
+    fused = _scores("fusion", params, QUERIES, labels_vectors=True)
+    knn = _scores("knn", {"k": 2}, QUERIES)
+    proto = _scores("prototype", {}, QUERIES)
+    zeroshot = (QUERIES @ LABEL_VECTORS.T).astype(np.float32)
+    np.testing.assert_allclose(
+        fused.astype(np.float64),
+        knn.astype(np.float64) + proto.astype(np.float64) + 0.5 * zeroshot.astype(np.float64),
+        rtol=0,
+        atol=1e-5,
+    )
+
+
+def test_fusion_c_term_scores_unseen_labels() -> None:
+    """With c > 0 the Z column is no longer structurally zero (label names carry it)."""
+    scores = _scores("fusion", {"a": 1.0, "b": 1.0, "c": 1.0, "k": 3}, QUERIES, labels_vectors=True)
+    assert (scores[:, LABELS.index("Z")] > 0).any()
+    # and without c the same rows keep Z at exactly 0
+    plain = _scores("fusion", {"a": 1.0, "b": 1.0, "c": 0.0, "k": 3}, QUERIES)
+    assert np.all(plain[:, LABELS.index("Z")] == 0.0)
+
+
+def test_fusion_c_term_describe_reports_the_weight() -> None:
+    """describe() carries c so the run's metrics.json states the full formula."""
+    predictor = build_predictor(
+        "fusion", {"a": 0.5, "b": 1.0, "c": 0.25, "k": 2}, _label_context(), seed=0
+    )
+    assert predictor.describe()["c"] == 0.25

@@ -14,7 +14,11 @@ import numpy as np
 import pytest
 
 from cluster_rag.embed.base import l2_normalize
-from cluster_rag.embed_artifact import EmbeddingArtifact, load_embedding_artifact
+from cluster_rag.embed_artifact import (
+    EmbeddingArtifact,
+    load_embedding_artifact,
+    load_label_embedding_artifact,
+)
 
 SOURCE_SHA = "93ba79cc0104c4cb1529864a4053e1c18497050ab135ec7ddb2d067649e9e50f"
 IDS = ["r0", "r1", "r2", "r3"]
@@ -194,3 +198,159 @@ def test_ids_row_count_mismatch_and_duplicate_ids(tmp_path: Path) -> None:
     (run_dir / "meta.json").write_text(json.dumps(_meta()), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate ids"):
         _load(tmp_path / "results", run_id="upr-embed-dup")
+
+
+# --- the zero-shot label-embedding artifact (Phase 4, `labelembed` runs) ---
+
+LABELS = ("Discrimination", "General", "Special procedures")
+
+
+def _write_label_run(
+    tmp_path: Path,
+    run_id: str = "upr-labelembed-fix",
+    *,
+    labels: tuple[str, ...] = LABELS,
+    dim: int = DIM,
+    meta: dict | None = None,
+    vectors: np.ndarray | None = None,
+) -> Path:
+    """Write a synthetic labelembed run; returns its results root."""
+    base = _meta(
+        command="labelembed",
+        n_records=len(labels),
+        label_texts={"variant": "name", "template": None, "rendered_example": labels[0]},
+    )
+    matrix = (
+        l2_normalize(np.random.default_rng(3).uniform(size=(len(labels), dim)).astype(np.float32))
+        if vectors is None
+        else vectors
+    )
+    run_dir = tmp_path / "results" / run_id
+    run_dir.mkdir(parents=True)
+    np.savez_compressed(
+        run_dir / "label_embeddings.npz", labels=np.asarray(labels), vectors_label=matrix
+    )
+    (run_dir / "meta.json").write_text(json.dumps(meta or base), encoding="utf-8")
+    return tmp_path / "results"
+
+
+def _load_labels(
+    results_root: Path,
+    run_id="upr-labelembed-fix",
+    labels=LABELS,
+    model_id="fake-embedder",
+    dimension=DIM,
+):
+    return load_label_embedding_artifact(
+        results_root,
+        run_id,
+        labels=labels,
+        source_sha256=SOURCE_SHA,
+        model_id=model_id,
+        dimension=dimension,
+    )
+
+
+def test_load_label_artifact_validates_and_lineage(tmp_path: Path) -> None:
+    """Happy path: rows follow the label order; lineage block for metrics.json."""
+    results_root = _write_label_run(tmp_path)
+    artifact = _load_labels(results_root)
+    assert artifact.labels == LABELS
+    assert artifact.vectors.shape == (3, DIM) and artifact.vectors.dtype == np.float32
+    lineage = artifact.lineage
+    assert lineage["run_id"] == "upr-labelembed-fix"
+    assert lineage["model_id"] == "fake-embedder"
+    assert lineage["label_texts"] == {
+        "variant": "name",
+        "template": None,
+        "rendered_example": LABELS[0],
+    }
+    assert lineage["n_labels"] == 3
+
+
+def test_load_label_artifact_row_order_follows_labels(tmp_path: Path) -> None:
+    """Row i corresponds to labels[i] — the invariant zeroshot scoring relies on."""
+    results_root = _write_label_run(tmp_path)
+    artifact = _load_labels(results_root)
+    position = {label: row for row, label in enumerate(LABELS)}
+    npz_path = tmp_path / "results" / "upr-labelembed-fix" / "label_embeddings.npz"
+    with np.load(npz_path) as data:
+        stored = np.asarray(data["vectors_label"])
+    assert np.array_equal(artifact.vectors[position["General"]], stored[1])
+
+
+def test_load_label_artifact_failures(tmp_path: Path) -> None:
+    """Every hard-failure contract fires with a named fix."""
+    with pytest.raises(ValueError, match="not found"):
+        _load_labels(_write_label_run(tmp_path), run_id="upr-labelembed-other")
+
+    meta = _meta(command="evaluate")
+    with pytest.raises(ValueError, match="must reference a labelembed run"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-cmd", meta=meta),
+            run_id="upr-labelembed-cmd",
+        )
+
+    sha_meta = _meta(command="labelembed", source_sha256="other-sha")
+    with pytest.raises(ValueError, match="source_sha256 mismatch"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-sha", meta=sha_meta),
+            run_id="upr-labelembed-sha",
+        )
+
+    model_meta = _meta(
+        command="labelembed",
+        embedder={
+            "backend": "fake",
+            "model_id": "other-model",
+            "dimension": DIM,
+            "revision_or_digest": "x",
+            "prefixes": {},
+        },
+    )
+    with pytest.raises(ValueError, match="built with model .*other-model"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-model", meta=model_meta),
+            run_id="upr-labelembed-model",
+        )
+
+    dim_meta = _meta(
+        command="labelembed",
+        embedder={
+            "backend": "fake",
+            "model_id": "fake-embedder",
+            "dimension": 256,
+            "revision_or_digest": "x",
+            "prefixes": {},
+        },
+    )
+    with pytest.raises(ValueError, match="dimension 256 disagrees"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-dim", meta=dim_meta),
+            run_id="upr-labelembed-dim",
+        )
+
+    wrong_labels = LABELS[:-1]  # one label missing
+    with pytest.raises(ValueError, match="label space mismatches"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-space"),
+            run_id="upr-labelembed-space",
+            labels=wrong_labels,
+        )
+
+    one_row = l2_normalize(np.random.default_rng(4).uniform(size=(1, DIM)).astype(np.float32))
+    with pytest.raises(ValueError, match="1 vectors for 3 labels"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-rows", vectors=one_row),
+            run_id="upr-labelembed-rows",
+        )
+
+
+def test_load_label_artifact_contract_rejections(tmp_path: Path) -> None:
+    """Non-unit or float64 vectors are rejected (never repaired)."""
+    bad = np.zeros((3, DIM), dtype=np.float32)  # zero rows
+    with pytest.raises(ValueError, match="unit-norm"):
+        _load_labels(
+            _write_label_run(tmp_path, run_id="upr-labelembed-unit", vectors=bad),
+            run_id="upr-labelembed-unit",
+        )

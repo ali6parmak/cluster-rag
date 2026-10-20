@@ -25,6 +25,7 @@ from cluster_rag.sweep import (
     DATASET_COMMANDS,
     EmbedCell,
     EvalCell,
+    LabelEmbedCell,
     ProbeCell,
     SweepCell,
     SweepRun,
@@ -61,9 +62,17 @@ def test_sweep_cell_validation() -> None:
         SweepCell(label="sub/dir", command="embed")
     with pytest.raises(ValueError, match="Extra inputs"):
         SweepCell(label="x", command="embed", run_id="y")  # type: ignore[call-arg]
-    assert COMMANDS == ("stats", "stats-omct", "split", "embed", "evaluate", "probe-omct")
+    assert COMMANDS == (
+        "stats",
+        "stats-omct",
+        "split",
+        "embed",
+        "labelembed",
+        "evaluate",
+        "probe-omct",
+    )
     assert DATASET_COMMANDS == {
-        "upr": ("stats", "split", "embed", "evaluate"),
+        "upr": ("stats", "split", "embed", "labelembed", "evaluate"),
         "omct": ("stats-omct", "probe-omct"),
     }
 
@@ -418,3 +427,62 @@ def test_define_sweep_resolves_embedding_run(repo_root: Path) -> None:
     runs = define_sweep(cells, dataset="upr", label="pool_sweep")
     assert runs[0].config.eval.embedding_run_id == "upr-embed-jina-v5"
     assert runs[0].config.eval.predictor.params == {"k": 3}
+
+
+def test_eval_cell_label_embedding_run_field() -> None:
+    """EvalCell.label_embedding_run validates and lands as eval.label_embedding_run_id."""
+    cell = EvalCell(
+        label="upr-eval-zeroshot-x",
+        predictor="zeroshot",
+        k=2,
+        embedding_run="upr-embed-e5-base-v2",
+        label_embedding_run="upr-labelembed-e5-base-v2-name",
+    )
+    assert cell.overrides["eval"]["label_embedding_run_id"] == "upr-labelembed-e5-base-v2-name"
+    with pytest.raises(ValueError, match="upr-labelembed-"):
+        EvalCell(label="upr-eval-x", predictor="zeroshot", k=2, label_embedding_run="upr-embed-x")
+
+
+def test_label_embed_cell_field() -> None:
+    """LabelEmbedCell carries the embedder + label_texts into its overrides."""
+    from cluster_rag.config import LabelTextsConfig
+
+    cell = LabelEmbedCell(
+        label="upr-labelembed-jina-v5-about",
+        embed=EmbedderConfig(backend="hf", model_id="m"),
+        label_texts=LabelTextsConfig(variant="template", template="About {label}."),
+    )
+    assert cell.command == "labelembed"
+    assert cell.overrides["label_texts"] == {"variant": "template", "template": "About {label}."}
+    with pytest.raises(ValueError, match="Extra inputs"):
+        LabelEmbedCell(
+            label="upr-labelembed-x",
+            embed=EmbedderConfig(backend="hf", model_id="m"),
+            label_texts=LabelTextsConfig(),
+            kinds=("label",),  # type: ignore[call-arg]
+        )
+
+
+def test_define_sweep_resolves_label_cells(repo_root: Path) -> None:
+    """LabelEmbedCell and zeroshot EvalCells resolve over the base config."""
+    from cluster_rag.config import LabelTextsConfig
+
+    cells = [
+        LabelEmbedCell(
+            label="upr-labelembed-jina-v5-about",
+            embed=EmbedderConfig(backend="hf", model_id="m"),
+            label_texts=LabelTextsConfig(variant="template", template="About {label}."),
+        ),
+        EvalCell(
+            label="upr-eval-zeroshot-jina-v5-about",
+            predictor="zeroshot",
+            k=2,
+            embedding_run="upr-embed-jina-v5",
+            label_embedding_run="upr-labelembed-jina-v5-about",
+        ),
+    ]
+    runs = define_sweep(cells, dataset="upr", label="zeroshot")
+    assert runs[0].command == "labelembed"
+    assert runs[0].config.label_texts.render_text("General") == "About General."
+    assert runs[1].config.eval.label_embedding_run_id == "upr-labelembed-jina-v5-about"
+    assert runs[1].config.eval.embedding_run_id == "upr-embed-jina-v5"

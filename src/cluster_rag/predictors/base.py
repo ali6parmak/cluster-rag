@@ -69,11 +69,18 @@ class PredictorContext:
             from a prior embedding run (``eval.embedding_run_id``). ``None``
             for embedding-free predictors. Still the train split only: no
             val/test document vector ever reaches construction.
+        label_vectors: Zero-shot label-kind embeddings, one row per entry of
+            ``labels`` (row ``i`` is ``labels[i]``), wired from a prior
+            ``upr-labelembed-*`` run. Name/template vectors carry no example
+            information, so they are train-legal even for held-out labels
+            (AGENTS.md leakage discipline). ``None`` unless the predictor
+            needs them (``zeroshot``; ``fusion`` with ``c > 0``).
     """
 
     labels: tuple[str, ...]
     train_records: tuple[Record, ...] = field(default=())
     train_document_vectors: np.ndarray | None = None
+    label_vectors: np.ndarray | None = None
 
     def require_train_vectors(self) -> np.ndarray:
         """Return the validated train document vectors (embedding predictors).
@@ -99,6 +106,26 @@ class PredictorContext:
             name="train_document_vectors",
             n_rows=len(self.train_records),
         )
+
+    def require_label_vectors(self) -> np.ndarray:
+        """Return the validated zero-shot label vectors (column-aligned).
+
+        Row ``i`` must be ``labels[i]``'s label-kind embedding; the evaluate
+        command verifies that exact label list against the artifact, this
+        re-checks the predictor boundary.
+
+        Raises:
+            ValueError: If no vectors were provided (the message names the
+                config key that fixes it) or any contract/alignment check
+                fails.
+        """
+        if self.label_vectors is None:
+            raise ValueError(
+                "this predictor requires zero-shot label vectors; the evaluate "
+                "command wires them from eval.label_embedding_run_id (a prior "
+                "upr-labelembed-* run_id) — see PLAN.md Phase 4 zero-shot"
+            )
+        return check_vectors(self.label_vectors, name="label_vectors", n_rows=len(self.labels))
 
 
 def check_no_extra_params(params: Mapping[str, Any], allowed: Mapping[str, Any], name: str) -> None:

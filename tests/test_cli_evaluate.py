@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 import yaml
 
+from cluster_rag import cli
 from cluster_rag.cli import main
 from cluster_rag.data import load_jsonl
 from cluster_rag.dataset_stats import file_sha256
@@ -293,3 +294,213 @@ def test_evaluate_table_row_carries_embedding_column(evaluate_run, sample_jsonl,
     header = next(line for line in content.splitlines() if line.startswith("| run_id"))
     assert header.index("predictor") < header.index("embedding") < header.index("f1 decision")
     assert "| upr-eval-knn-table |" in content and "| fix |" in content
+
+
+# --- Phase 4 zero-shot: the labelembed artifact and its consumers ---
+
+LABEL_RUN_ID = "upr-labelembed-fake-name"
+LABEL_RUN_EXTRA = """
+embed:
+  backend: fake
+  model_id: fake-embedder
+label_texts:
+  variant: name
+"""
+
+
+def _sorted_fixture_labels(sample_jsonl) -> list[str]:
+    from cluster_rag.data import load_jsonl
+
+    return sorted({label for record in load_jsonl(sample_jsonl).records for label in record.labels})
+
+
+def _run_labelembed(
+    sample_jsonl, write_config, tmp_path, monkeypatch, run_id=LABEL_RUN_ID, extra=LABEL_RUN_EXTRA
+):
+    """Run the labelembed command with a fake embedder; returns (code, artifacts)."""
+    created: list[FakeEmbedder] = []
+
+    def factory(config):
+        fake = FakeEmbedder(model_id="fake-embedder", dimension=8)
+        created.append(fake)
+        return fake
+
+    monkeypatch.setattr(cli, "build_embedder", factory)
+    config_file = write_config(sample_jsonl, run_id=run_id, extra=extra)
+    code = main(["labelembed", "--config", str(config_file)])
+    results_dir = tmp_path / "results" / run_id
+    npz_path = results_dir / "label_embeddings.npz"
+    npz = np.load(npz_path) if npz_path.is_file() else None
+    meta = (
+        json.loads((results_dir / "meta.json").read_text("utf-8"))
+        if (results_dir / "meta.json").is_file()
+        else None
+    )
+    return code, npz, meta, created, config_file
+
+
+def test_labelembed_command_artifacts(sample_jsonl, write_config, tmp_path, monkeypatch) -> None:
+    """label_embeddings.npz: sorted labels, unit rows, meta lineage, table row."""
+    code, npz, meta, _, _ = _run_labelembed(sample_jsonl, write_config, tmp_path, monkeypatch)
+    assert code == 0
+    labels = _sorted_fixture_labels(sample_jsonl)
+    assert [str(item) for item in npz["labels"]] == labels
+    vectors = np.asarray(npz["vectors_label"])
+    assert vectors.shape == (len(labels), 8) and vectors.dtype == np.float32
+    assert np.allclose(np.linalg.norm(vectors, axis=1), 1.0)
+    assert meta["command"] == "labelembed" and meta["n_labels"] == len(labels)
+    assert meta["label_texts"]["variant"] == "name"
+    assert meta["embedder"]["model_id"] == "fake-embedder"
+    assert meta["embedder"]["revision_or_digest"] == "fake-revision"
+    # the vectors are exactly the fake embedder's label-kind hashes in label order
+    fake = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    expected = fake.encode(labels, "label")
+    assert np.allclose(vectors, expected)
+
+
+def test_labelembed_requires_embed_and_label_texts_sections(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """Missing label_texts: or embed: exits 1 without artifacts."""
+    code, npz, meta, _, _ = _run_labelembed(
+        sample_jsonl, write_config, tmp_path, monkeypatch, extra="embed:\n  backend: fake\n"
+    )
+    assert code == 1 and npz is None and meta is None
+
+
+def _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch):
+    """Pre-create the primary embedding artifact + the (fake-backend) label artifact.
+
+    No split here: evaluate_run splits itself, and the split command refuses a
+    silent overwrite.
+    """
+    _write_embedding_run(tmp_path / "results", sample_jsonl)
+    _, _, _, _, label_config = _run_labelembed(sample_jsonl, write_config, tmp_path, monkeypatch)
+    return label_config
+
+
+def test_evaluate_zeroshot_consumes_both_artifacts(
+    evaluate_run, sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """zeroshot reads eval.embedding_run_id + eval.label_embedding_run_id."""
+    _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch)
+    zeroshot_extra = """
+eval:
+  predictor:
+    name: zeroshot
+  embedding_run_id: upr-embed-fix
+  label_embedding_run_id: upr-labelembed-fake-name
+  decision:
+    rule: top_k
+    k: 2
+"""
+    code, metrics, _, _ = evaluate_run(run_id="upr-eval-zeroshot-fix", extra=zeroshot_extra)
+    assert code == 0
+    assert metrics["predictor"]["name"] == "zeroshot"
+    assert metrics["embedding_run"]["run_id"] == "upr-embed-fix"
+    label_lineage = metrics["label_embedding_run"]
+    assert label_lineage is not None
+    assert label_lineage["run_id"] == "upr-labelembed-fake-name"
+    assert label_lineage["label_texts"]["variant"] == "name"
+    assert label_lineage["n_labels"] == metrics["n_labels"]
+
+
+def test_evaluate_fusion_c_term_end_to_end(
+    evaluate_run, sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """fusion with c > 0 wires both runs and reports the full weight set."""
+    _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch)
+    fusion_extra = """
+eval:
+  predictor:
+    name: fusion
+    params:
+      a: 1.0
+      b: 1.0
+      c: 0.5
+      k: 2
+  embedding_run_id: upr-embed-fix
+  label_embedding_run_id: upr-labelembed-fake-name
+  decision:
+    rule: top_k
+    k: 2
+"""
+    code, metrics, _, _ = evaluate_run(run_id="upr-eval-fusion-c-fix", extra=fusion_extra)
+    assert code == 0
+    assert metrics["predictor"]["c"] == 0.5
+    assert metrics["label_embedding_run"]["run_id"] == "upr-labelembed-fake-name"
+
+
+def test_evaluate_zeroshot_without_label_run_fails(
+    evaluate_run, sample_jsonl, write_config, tmp_path, monkeypatch, caplog
+) -> None:
+    """A zeroshot config with no eval.label_embedding_run_id fails, naming the key."""
+    _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch)
+    zeroshot_extra = """
+eval:
+  predictor:
+    name: zeroshot
+  embedding_run_id: upr-embed-fix
+  decision:
+    rule: top_k
+    k: 2
+"""
+    with caplog.at_level(logging.ERROR):
+        code, metrics, _, results_dir = evaluate_run(
+            run_id="upr-eval-zeroshot-nowire", extra=zeroshot_extra
+        )
+    assert code == 1 and metrics is None
+    assert not (results_dir / "metrics.json").exists()
+    assert any("requires zero-shot label vectors" in record.message for record in caplog.records)
+
+
+def test_evaluate_label_space_mismatch_fails(
+    evaluate_run, sample_jsonl, write_config, tmp_path, monkeypatch, caplog
+) -> None:
+    """A tampered label artifact (label dropped) is refused, never mis-scored."""
+    _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch)
+    npz_path = tmp_path / "results" / "upr-labelembed-fake-name" / "label_embeddings.npz"
+    with np.load(npz_path) as data:
+        labels = [str(item) for item in np.asarray(data["labels"])]
+        vectors = np.asarray(data["vectors_label"])
+    np.savez_compressed(
+        npz_path,
+        labels=np.asarray(labels[:-1]),
+        vectors_label=vectors[:-1],
+    )
+    zeroshot_extra = """
+eval:
+  predictor:
+    name: zeroshot
+  embedding_run_id: upr-embed-fix
+  label_embedding_run_id: upr-labelembed-fake-name
+  decision:
+    rule: top_k
+    k: 2
+"""
+    with caplog.at_level(logging.ERROR):
+        code, metrics, _, _ = evaluate_run(
+            run_id="upr-eval-zeroshot-tampered", extra=zeroshot_extra
+        )
+    assert code == 1 and metrics is None
+    assert any("label space mismatches" in record.message for record in caplog.records)
+
+
+def test_evaluate_warns_and_ignores_label_run_for_free_predictors(
+    evaluate_run, sample_jsonl, write_config, tmp_path, monkeypatch, caplog
+) -> None:
+    """most_frequent + label_embedding_run_id: runs proceed, warning logged, lineage None."""
+    _zero_shot_setup(sample_jsonl, write_config, tmp_path, monkeypatch)
+    mf_extra = (
+        EVAL_CONFIG_EXTRA
+        + "  embedding_run_id: upr-embed-fix\n"
+        + "  label_embedding_run_id: upr-labelembed-fake-name\n"
+    )
+    with caplog.at_level(logging.WARNING):
+        code, metrics, _, _ = evaluate_run(run_id="upr-eval-mf-labelwarn", extra=mf_extra)
+    assert code == 0
+    assert metrics["label_embedding_run"] is None
+    assert any(
+        "zero-shot label vectors" in record.message and "ignoring it" in record.message
+        for record in caplog.records
+    )

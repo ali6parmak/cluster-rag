@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from cluster_rag.data import Record
-from cluster_rag.predictors import build_predictor, predictor_embedding_requirements
+from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 
 LABELS = ("A", "B", "C", "Z")  # Z is the unseen holdout-label stand-in
@@ -36,11 +36,12 @@ def _context(vectors: np.ndarray | None = TRAIN_VECTORS) -> PredictorContext:
 
 def test_embedding_requirements_are_declared_per_predictor() -> None:
     """The registry exposes needs (evaluate-side wiring reads exactly this)."""
-    assert predictor_embedding_requirements("knn") == (True, ("document", "query"))
-    assert predictor_embedding_requirements("prototype") == (True, ("document", "query"))
-    assert predictor_embedding_requirements("most_frequent") == (False, ())
+    knn_needs = (True, ("document", "query"), False)
+    assert predictor_requirements("knn") == knn_needs
+    assert predictor_requirements("prototype") == knn_needs
+    assert predictor_requirements("most_frequent") == (False, (), False)
     with pytest.raises(ValueError, match="Unknown predictor"):
-        predictor_embedding_requirements("no_such_predictor")
+        predictor_requirements("no_such_predictor")
 
 
 def test_knn_predictor_votes_match_the_pure_core() -> None:
@@ -164,7 +165,7 @@ def test_maxsim_predictor_matches_the_core_and_never_suggests_unseen() -> None:
         "dimension": 2,
         "n_labels": 4,
     }
-    assert predictor_embedding_requirements("maxsim") == (True, ("document", "query"))
+    assert predictor_requirements("maxsim") == (True, ("document", "query"), False)
 
 
 def test_maxsim_predictor_validates_params_and_score_inputs() -> None:
@@ -178,3 +179,75 @@ def test_maxsim_predictor_validates_params_and_score_inputs() -> None:
         predictor.score(["a", "b"], query_vectors=np.asarray([[0.0, 1.0]], dtype=np.float32))
     with pytest.raises(ValueError, match="unit-norm|L2-normalized"):
         predictor.score(["a"], query_vectors=np.asarray([[2.0, 0.0]], dtype=np.float32))
+
+
+# --- zero-shot (Phase 4): query ↔ label-text cosines, no train examples ---
+
+# label vectors (2-d, unit rows) for LABELS = (A, B, C, Z): distinct directions
+LABEL_VECTORS = np.asarray(
+    [[1.0, 0.0], [0.0, 1.0], [0.0, -1.0], [0.7071, 0.7071]], dtype=np.float32
+)
+
+
+def _label_context() -> PredictorContext:
+    return PredictorContext(
+        labels=LABELS,
+        train_records=TRAIN_RECORDS,
+        train_document_vectors=TRAIN_VECTORS,
+        label_vectors=LABEL_VECTORS,
+    )
+
+
+def test_zero_shot_requirements_and_scores() -> None:
+    """zeroshot consumes query vectors + label vectors only; scores are cosines."""
+    assert predictor_requirements("zeroshot") == (True, ("query",), True)
+    predictor = build_predictor("zeroshot", {}, _label_context(), seed=0)
+    queries = np.asarray([[0.0, 1.0]], dtype=np.float32)  # aligned with LABEL_VECTORS axis
+    scores = predictor.score(["q"], query_vectors=queries)
+    assert scores.shape == (1, 4) and scores.dtype == np.float32
+    np.testing.assert_allclose(scores[0], [0.0, 1.0, -1.0, 0.7071], atol=1e-6)
+    assert predictor.describe() == {"name": "zeroshot", "n_labels": 4, "dimension": 2}
+
+
+def test_zero_shot_can_score_unseen_labels() -> None:
+    """Unlike the example-based families, held-out labels score from their names."""
+    predictor = build_predictor("zeroshot", {}, _label_context(), seed=0)
+    queries = np.asarray([[0.70710677, 0.70710677]], dtype=np.float32)
+    scores = predictor.score(["q"], query_vectors=queries)
+    assert scores[0][LABELS.index("Z")] > 0.9  # the Z label vector matches
+    assert (
+        predictor.score(["q"], query_vectors=np.asarray([[0.0, 1.0]], dtype=np.float32))[0][
+            LABELS.index("A")
+        ]
+        == 0.0
+    )  # and orthogonal label names score 0
+
+
+def test_zero_shot_wiring_errors_name_the_config_key() -> None:
+    """Missing/misaligned label vectors fail with the eval wiring message."""
+    with pytest.raises(ValueError, match="label_embedding_run_id"):
+        build_predictor("zeroshot", {}, _context(), seed=0)  # context without label vectors
+    short = LABEL_VECTORS[:2]  # 2 rows for 4 labels
+    with pytest.raises(ValueError, match="align row-by-row"):
+        PredictorContext(
+            labels=LABELS,
+            train_records=TRAIN_RECORDS,
+            label_vectors=short,
+        ).require_label_vectors()
+    predictor = build_predictor("zeroshot", {}, _label_context(), seed=0)
+    with pytest.raises(ValueError, match="requires query_vectors"):
+        predictor.score(["q"])
+    with pytest.raises(ValueError, match="unit-norm|L2-normalized"):
+        PredictorContext(
+            labels=LABELS,
+            train_records=TRAIN_RECORDS,
+            label_vectors=np.asarray(
+                [[1.0, 0.0], [0.0, 2.0], [0.0, -1.0], [0.0, 1.0]], dtype=np.float32
+            ),
+        ).require_label_vectors()
+    with pytest.raises(ValueError, match="float32"):
+        PredictorContext(
+            labels=LABELS,
+            train_records=TRAIN_RECORDS,
+            label_vectors=LABEL_VECTORS.astype(np.float64),
+        ).require_label_vectors()
