@@ -19,9 +19,8 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── PLAN.md
     ├── AGENTS.md
     ├── pyproject.toml
-    ├── configs/                 # YAML experiment configs
-    │   ├── base.yaml
-    │   └── experiments/*.yaml
+    ├── configs/                 # the single base config (paths, defaults)
+    │   └── base.yaml            # experiments live in experiments/*.py sweeps, authored in Python
     ├── data/                    # gitignored
     │   ├── raw/                 # original JSONL (read-only)
     │   ├── external/            # auxiliary datasets from collaborators (see PLAN §2)
@@ -140,14 +139,20 @@ Every run (one CLI command execution or sweep cell) is identified by its
 
     uv run cluster-rag stats      --config configs/base.yaml
     uv run cluster-rag split      --config configs/base.yaml
-    uv run cluster-rag embed      --config configs/experiments/embed_e5_base_v2.yaml
-    uv run cluster-rag probe-omct --config configs/experiments/probe_e5_base_v2.yaml
-    uv run cluster-rag sweep      --file experiments/baseline_eval_sweep.py
-    uv run cluster-rag evaluate   --config configs/experiments/knn_proto.yaml --split val
-    uv run cluster-rag clusters   --config configs/experiments/hdbscan.yaml
-    uv run cluster-rag simulate   --config configs/experiments/feedback_sim.yaml
+    uv run cluster-rag sweep      --file experiments/omct_probe_sweep.py
+    uv run cluster-rag embed      --config <yaml with an embed: section>
+    uv run cluster-rag probe-omct --config <yaml with an embed: section>
+    uv run cluster-rag evaluate   --config <yaml with an eval: section> --split val
+    uv run cluster-rag clusters   --config <yaml with a clusters: section>
+    uv run cluster-rag simulate   --config <yaml with a simulate: section>
 
-`uv run` auto-syncs the environment first. The equivalent low-level form is `python -m cluster_rag.cli <command> ...` (same commands and flags); the `cluster-rag` console script is defined in `pyproject.toml` under `[project.scripts]`.
+`uv run` auto-syncs the environment first. Experiments are **defined only in
+Python sweep files** (`experiments/*.py`, typed cells resolved by
+`define_sweep` over `configs/base.yaml`); the only authored YAML is
+`configs/base.yaml` (paths + defaults + the stats/split standalone entry).
+The equivalent low-level form is `python -m cluster_rag.cli <command> ...`
+(same commands and flags); the `cluster-rag` console script is defined in
+`pyproject.toml` under `[project.scripts]`.
 
 Each command writes to `results/<run_id>/`: `config.yaml` (resolved), `metrics.json`, and any artifacts.
 

@@ -2,7 +2,10 @@
 
 Every CLI command takes ``--config`` pointing at a YAML file (see
 ``configs/base.yaml``). Values live in the config, never in the code, so the
-same code can be reused across experiments (``configs/experiments/*.yaml``).
+same code can be reused across experiments (``experiments/*.py`` sweep files
+resolve configs in Python; ``configs/experiments/*.yaml`` was retired once
+sweeps covered every experiment — the frozen ``results/<run_id>/config.yaml``
+is every run's record).
 
 Path resolution: relative paths in a config are resolved against the current
 working directory. Run the CLI from the repository root, as in AGENTS.md.

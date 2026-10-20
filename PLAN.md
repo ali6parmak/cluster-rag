@@ -187,6 +187,16 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 - [ ] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
   explain and wait for the reviewer per AGENTS.md §3), then implement — how an
   `evaluate` config points at a prior `embed` run's artifact.
+- [x] **E. Repo config cleanup (housekeeping).** The 9 authored experiment
+  YAMLs in `configs/experiments/` are deleted: every experiment since Phase
+  2.5 is defined in Python sweep files, nothing (code/tests/sweeps) reads the
+  stale copies, and every past run's settings stay reproducible from its
+  frozen `results/<run_id>/config.yaml`. `configs/base.yaml` remains (the
+  `define_sweep` base + the stats/split standalone entry). *(done 2026-10-20:
+  9 files deleted — 6 `probe_*`, 2 `embed_*`, `eval_baseline_most_frequent`;
+  docstring/help references in `config.py`/`cli.py` and the stale migration
+  comment reworded; AGENTS.md layout + "Running things" examples moved to
+  sweeps; 191 unit + 12 integration tests green, ruff clean)*
 
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute)*

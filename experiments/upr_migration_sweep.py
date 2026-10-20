@@ -16,9 +16,9 @@ from __future__ import annotations
 from cluster_rag.config import EmbedderConfig, PrefixesConfig
 from cluster_rag.sweep import EmbedCell, SweepCell, define_sweep
 
-# Model ids/prefixes/revisions copied verbatim from configs/experiments/embed_*.yaml
-# (checked against the model cards in Phase 2); preprocessing stays the base
-# config's raw variant.
+# Model ids/prefixes/revisions copied verbatim from the per-run frozen configs
+# (results/upr-embed-*/config.yaml; checked against the model cards in Phase 2);
+# preprocessing stays the base config's raw variant.
 cells = [
     SweepCell(label="upr-stats-base", command="stats"),
     EmbedCell(

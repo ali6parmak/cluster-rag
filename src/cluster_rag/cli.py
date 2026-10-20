@@ -139,8 +139,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         required=True,
-        help="Path to the YAML config file with an embed: section, "
-        "e.g. configs/experiments/embed_e5_base_v2.yaml.",
+        help="Path to a YAML config with an embed: section (or sweep-resolved configs; "
+        "experiment values live in experiments/*.py sweeps).",
     )
     embed.add_argument(
         "--kinds",
@@ -189,7 +189,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         required=True,
-        help="Path to the YAML config with an eval: section, e.g. configs/experiments/eval_*.yaml.",
+        help="Path to a YAML config with an eval: section (or sweep-resolved configs; "
+        "experiment values live in experiments/*.py sweeps).",
     )
     evaluate.add_argument(
         "--split",
