@@ -175,12 +175,22 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
   loader context, text window is 8K). Run the per-model exactly-once prefix
   sanity checks, then `cluster-rag sweep --file experiments/omct_probe_sweep.py`
   → `omct-probe2-*` rows (6 warm, 8 fresh) and the log note.
+  *(done 2026-10-20, code committed `b5b1e96`, runs executed + verified
+  2026-10-20: 14/14 cells → `omct-probe2-*`; the 6 re-run cells digit-for-digit
+  identical vs the 3.6-era table (embeddinggemma digest drift `3a2d26…`→`82f0…`
+  noted — cache served identical vectors); 204/204 artifact checks; log notes
+  in `docs/experiments.md`; peft added for jina-v5's own loading mechanism)*
 - [ ] **B. Typed embedding kinds + full UPR kind sweep.** `EmbedCell` gains a
   validated `kinds` field (default stays `("document",)`; the resolved config
   carries it so the frozen config.yaml tells the whole run). New UPR sweep
   embedding kinds `document,query` for all 14 pool models
   (`upr-embed-<detail>`; the two existing embed runs refresh their meta.json
   kinds lists, document side warm). Verify + log note.
+  *(done 2026-10-20, code committed `167f44e`, sweep executed + verified
+  2026-10-20: 14 runs × `document,query`, matrices (3000, d) float32
+  unit-norm, dims as listed in the log; e5-base-v2/arctic2 refresh in place
+  (document warm), no-prefix models' shared-key cache reuse verified correct;
+  204/204 artifact checks; log note in `docs/experiments.md`)*
 - [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN + prototype
   evidence on UPR val across the pool BEFORE any fusion/preprocess weight
   grids ("embed all, ablate few" — no 14³ factorial).

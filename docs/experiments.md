@@ -173,3 +173,48 @@ Verification: the two omct sweeps re-ran warm (7 runs; frozen `config.yaml` + pa
 ## 2026-10-20 — housekeeping: authored experiment YAMLs retired
 
 `configs/experiments/*.yaml` (6 `probe_*`, 2 `embed_*`, `eval_baseline_most_frequent`) are deleted. They duplicated Python sweep cells since Phase 2.5/3.5 and nothing in code, tests or sweeps read them. `configs/base.yaml` remains the single authored config: the `define_sweep` resolution base and the stats/split standalone entry. No runs were executed and no metrics changed; nothing is recomputed — every run's settings stay reproducible from its frozen `results/<run_id>/config.yaml` (the 18 post-migration + later runs). AGENTS.md layout/"Running things" and the CLI `--config` help strings were updated to point at the sweep files.
+
+## Phase 4 opening: pool widening → 14-embedder OMCT probe (2026-10-20)
+
+Scope: `data/external/omct_pairs.json` only (auxiliary OMCT pairs, never a UPR metric). Corpus unchanged from Phase 2: 1520 judged pairs (524 positive / 996 negative), 225 distinct paragraphs, 294 distinct questions, question transform `strip_block` only (the Phase 2 default). Question = query kind, paragraph = document kind (per-model card prefixes; re-verified at wiring 2026-10-20). New pool entries were wired into `experiments/embedder_pool.py` (shared with the UPR embed sweep); per-model wiring notes at the end of this section. The 6 pre-existing cells re-ran warm: metrics/dims/contexts digit-for-digit identical vs the Phase 3.6-era table — **verified, 204/204 artifact checks** (exempt: `*seconds*`, cache counters). One provenance change among them: `embeddinggemma:latest` was re-pulled before the run and its Ollama digest changed `3a2d262bdb75` → `82f094e4c0e1`; metrics reproduce exactly because the disk cache (keyed by model id, prefix, preprocessing, text) served the Phase 2.5-era stored vectors — the digest field identifies server bytes, the metrics identify the cache lineage. *(Cache keys not including the Ollama digest is a known trade-off: a re-pulled model silently reuses old cached vectors. Fine while re-pull events are rare and logged; revisit if a digest drift produces a metrics change.)*
+
+| run_id (omct-) | model (backend) | dim | ctx | pair-AUC | same-doc hit@1 | hit@10 | recall@10 | paras over ctx |
+|---|---|---|---|---|---|---|---|---|
+| `omct-probe2-minilm` | all-MiniLM-L6-v2 (hf) | 384 | 256 | 0.4526 | 0.381 | 0.748 | 0.508 | 4/225 (1.8%) |
+| `omct-probe2-e5-base-v2` | intfloat/e5-base-v2 (hf) | 768 | 512 | 0.5793 | 0.374 | 0.774 | 0.540 | 0 |
+| `omct-probe2-bge-m3` | BAAI/bge-m3 (hf) | 1024 | 8192 | 0.4687 | 0.361 | 0.748 | 0.476 | 0 |
+| `omct-probe2-arctic2` | snowflake-arctic-embed2 (ollama) | 1024 | 8192 | 0.4680 | 0.355 | 0.813 | 0.570 | 0 |
+| `omct-probe2-embeddinggemma` | embeddinggemma:latest (ollama, Q4 QAT) | 768 | 2048 | 0.5371 | 0.458 | 0.794 | 0.582 | 0 |
+| `omct-probe2-mxbai` | mxbai-embed-large:latest (ollama) | 1024 | 512 | 0.5552 | 0.413 | 0.768 | 0.558 | 1/225 (0.4%) |
+| `omct-probe2-e5-large-v2` | intfloat/e5-large-v2 (hf) | 1024 | 512 | 0.5112 | 0.400 | 0.826 | 0.594 | 0 |
+| `omct-probe2-mpnet` | all-mpnet-base-v2 (hf) | 768 | 384 | 0.4523 | 0.355 | 0.703 | 0.458 | 1/225 (0.4%) |
+| `omct-probe2-nomic-v2-moe` | nomic-embed-text-v2-moe:latest (ollama) | 768 | 512 | 0.4492 | 0.400 | 0.703 | 0.463 | 1/225 (0.4%) |
+| `omct-probe2-jina-v5` | jinaai/jina-embeddings-v5-text-small (hf) | 1024 | 32768 | 0.5394 | 0.465 | 0.813 | 0.589 | 0 |
+| `omct-probe2-voyage-4-nano` | voyageai/voyage-4-nano (hf) | 2048 | 32768 | 0.5004 | 0.355 | 0.716 | 0.474 | 0 |
+| `omct-probe2-granite-english-r2` | granite-embedding-english-r2 (hf) | 768 | 8192 | 0.5130 | 0.406 | 0.781 | 0.557 | 0 |
+| `omct-probe2-f2llm-80m` | codefuse-ai/F2LLM-v2-80M (hf) | 320 | 40960 | 0.5986 | 0.297 | 0.697 | 0.475 | 0 |
+| `omct-probe2-embeddinggemma2` | embeddinggemma-2:latest (ollama) | 768 | 8192* | 0.5815 | 0.374 | 0.755 | 0.564 | 0 |
+
+(8192* = the explicit config context override — see the wiring notes below.)
+All-scope `pair_auc` / `same-document` hit@k / recall@k as in each run's
+`probe_report.json`; "paras over ctx" = paragraphs exceeding the model's
+context (truncation diagnostics).
+
+**Findings (OMCT, auxiliary-only evidence):**
+1. **All-scope AUC leader: f2llm-80m (0.5986)** — the smallest pool model, with its Instruct-prefixed queries; runner-ups embeddinggemma2 (0.5815) and e5-base-v2 (0.5793). But f2llm pays at the ranking top: same-doc hit@1 0.297 (weakest of the 14) — its strong AUC comes from whole-ranking separation, not from top placement.
+2. **Same-document retrieval leaders: e5-large-v2** (hit@10 0.826, recall@10 0.594 — best of the pool on both) and **jina-v5** (0.813 / 0.589 with the best hit@1 0.465). embeddinggemma (v1, Q4) keeps the Phase 2 claim of a strong top-1 (0.458).
+3. **Balance view: jina-v5 is the only model in the top 4 on all-scope AUC *and* a top-3 same-document retriever**; mpnet (0.452) and nomic-v2-moe (0.449) underdeliver on this corpus relative to reputation (nomic's multilingual-retrieval training; both are prefix-reliant recipes).
+4. **Truncation stays immaterial on OMCT**: every model ≤1.8% (MiniLM's 256-ctx 1.8% is the unchanged Phase 2 value; nomic/mpnet 0.4%).
+5. **Scope discipline**: modest absolute AUCs (0.45–0.60), as Phase 2 already found — these rank models relatively on a different domain; the pool cut uses UPR val classification evidence, not this table alone.
+
+**Wiring notes (Phase 4 opening change set):** `peft` added as jina-v5's own loading mechanism (its checkpoint ships per-task adapters; `set_adapter("retrieval")` during encode; no generative model involved). jina-v5's custom ST module needs `model_kwargs={"default_task": "retrieval"}` at load (else every encode raises) and does not report its output dimension — pinned 1024 via `embed.dimension` (`dimension_source: config_pin` in meta, contract-enforced at encode). embeddinggemma-2: `/api/show` reports the pre-projection `embedding_length` 512 while `/api/embed` serves 768-d (projection inside the GGUF) — config pins `dimension: 768` (`dimension_source: config_override`); `/api/show` also reports the 256K modality-loader context, overridden to the card's 8192 text window (`configured_context_tokens: 8192`). nomic-v2-moe: `search_query: `/`search_document: ` prefixes REQUIRED per card, wired per kind. New `EmbedderConfig` fields carry both knobs: `model_kwargs` (HF constructor passthrough) and `context_tokens` (explicit context override; discovered values still recorded in meta.extra). Per-model exactly-once prefix checks (config-prefix encode vs manually-prefixed prefix-free encode ≈ identical) ran as 12 integration tests, all green before the sweep.
+
+## Phase 4 opening: UPR kind sweep — 14 embedders × document,query (2026-10-20)
+
+UPR dataset scope: the full dataset, 3000 records (no split, `raw` preprocessing), both encode kinds per model — `document` (the indexed side: labeled example texts) and `query` (the side a text being classified embeds on). No UPR metric exists in this section: these runs are the vector-factory layer Phase 4's retrieval predictors (kNN votes, prototypes, fusion) consume. Runs: `upr-embed-<model>` (the two Phase 2 run ids refresh in place), table section `## UPR — embed_pool`; the frozen per-run configs now record `embed_kinds` (EmbedCell.kinds, the Phase 4 opening checkbox B).
+
+Cache behavior (verified against `kind_stats` + the .npz matrices): `upr-embed-e5-base-v2` / `upr-embed-arctic2` = document side warm (3000 hits, 0 stored — the Phase 2.5-era vectors) + query side fresh (3000 stored); the four **prefix-free** models (`minilm`, `bge-m3`, `mpnet`, `granite-english-r2`) share **one cache key across kinds** (both kinds' prefix is ""), so the query encode legally re-read the document-kind entries — meta shows query side 3000 hits / 0 stored and `vectors_document == vectors_query` elementwise, which is **correct**: a prefix-free model produces exactly one kind of vector (recorded as cache accounting, not a data issue). All prefix/template-carrying models encoded both kinds fresh (0 hits / 6000 stored).
+
+Dimensions as served and verified: minilm 384, e5-base-v2 768, bge-m3 1024, arctic2 1024, embeddinggemma 768, mxbai 1024, e5-large-v2 **1024** (the settled-pool note's "768d" slip, corrected in PLAN), mpnet 768, nomic-v2-moe 768, jina-v5 1024, voyage-4-nano **2048** (default MRL head), granite-english-r2 768, f2llm-80m **320** (MRL), embeddinggemma-2 768 — all matrices (3000, d) float32, unit-norm; wall time 2.6–21.6 s per two-kind run (HF, GPU) and 19.6–41.6 s (Ollama HTTP).
+
+**Next:** Phase 4 retrieval predictors (kNN voting, prototypes) over these artifacts on UPR val — pending the reviewer's OK on the eval↔embedding-artifact wiring (the `embedding_run` field, work-order item 5); the pool cut (checkbox C) follows that evidence.
