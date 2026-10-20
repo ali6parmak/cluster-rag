@@ -19,6 +19,7 @@ dependencies = [
     "sentence-transformers>=3.0",
     # Multi-label iterative stratification for the Phase 1 splits.
     "iterative-stratification>=0.0.7",
+    "peft>=0.21.2",
 ]
 
 # Keep this in sync with [dependency-groups] below (uv installs the dev group

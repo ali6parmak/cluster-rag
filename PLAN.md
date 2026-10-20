@@ -145,6 +145,49 @@ Follow-up to Phase 3.5, settled with the reviewer 2026-10-20: dataset-scoped com
 
 **Exit:** every experiment is defined in a Python sweep file; every comparison row lives in its dataset's file under its sweep's section; no artifact or doc row needs the old naming to be found.
 
+### Phase 4 opening: embedding-pool widening (settled with the reviewer 2026-10-20)
+
+Decided, not re-litigated: the candidate pool widens from the recorded 6 to **14
+single-vector text embedders** (bi-encoders only — the no-LLM ruling also excludes
+generative and multi-vector/late-interaction models from the pool; multi-vector
+rerankers remain a Phase 6 topic). New entries with card-verified prefixes, pinned
+HF revisions / Ollama digests at run time: `embeddinggemma-2` (Ollama; v1 task
+templates), `nomic-embed-text-v2-moe` (Ollama; `search_query: ` / `search_document: `
+required, ctx 512), `jinaai/jina-embeddings-v5-text-small` (cc-by-nc-4.0 accepted for
+research; ST config prompts `Query: ` / `Document: ` + `default_task`),
+`voyageai/voyage-4-nano` (Apache-2.0; retrieval prompts, 2048d default MRL),
+`ibm-granite/granite-embedding-english-r2` (no prefixes, 768d, ctx 8192),
+`codefuse-ai/F2LLM-v2-80M` (Instruct query prompt, bare documents, 320d MRL),
+`intfloat/e5-large-v2` (e5 prefixes, **1024d** — the earlier 768d note was a slip),
+`sentence-transformers/all-mpnet-base-v2` (no prefixes, ctx 128 — truncates long OMCT
+paragraphs; UPR texts fit). Work order, one checkbox per change set:
+
+- [ ] **A. OMCT probe sweep widened to the 14-model pool.** Extend
+  `experiments/omct_probe_sweep.py` with the 8 new `ProbeCell`s (label
+  `probe2-<detail>`, card-verified `PrefixesConfig`, revisions pinned / digests
+  recorded at run time). Wiring accommodations for the new models (small, in
+  `embed/` + `config.py`): `embed.model_kwargs` passthrough for jina-v5's
+  required `default_task`; Ollama dimension = trust a set `embed.dimension`
+  over a disagreeing `/api/show embedding_length` (embeddinggemma-2 reports its
+  pre-projection 512, serves 768d) with the encode-time contract check still
+  hard-failing; `embed.context_tokens` explicit context override for honest
+  truncation diagnostics (embeddinggemma-2's `/api/show` reports the 256K
+  loader context, text window is 8K). Run the per-model exactly-once prefix
+  sanity checks, then `cluster-rag sweep --file experiments/omct_probe_sweep.py`
+  → `omct-probe2-*` rows (6 warm, 8 fresh) and the log note.
+- [ ] **B. Typed embedding kinds + full UPR kind sweep.** `EmbedCell` gains a
+  validated `kinds` field (default stays `("document",)`; the resolved config
+  carries it so the frozen config.yaml tells the whole run). New UPR sweep
+  embedding kinds `document,query` for all 14 pool models
+  (`upr-embed-<detail>`; the two existing embed runs refresh their meta.json
+  kinds lists, document side warm). Verify + log note.
+- [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN + prototype
+  evidence on UPR val across the pool BEFORE any fusion/preprocess weight
+  grids ("embed all, ablate few" — no 14³ factorial).
+- [ ] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
+  explain and wait for the reviewer per AGENTS.md §3), then implement — how an
+  `evaluate` config points at a prior `embed` run's artifact.
+
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute)*
 - [ ] **Label prototypes:** mean of the example embeddings per label.
@@ -231,7 +274,7 @@ Follow-up to Phase 3.5, settled with the reviewer 2026-10-20: dataset-scoped com
 - Auxiliary pairwise data: commit `data/external/omct_pairs.json` to the repo or keep it external? *(decided 2026-10-16: keep it gitignored/external — collaborator-owned file; the sha256 recorded in the `aux-` runs is its provenance)*
 - Auxiliary pairwise data: is the "Answer choices" text inside `question_text` signal or noise for embeddings? *(answered by the Phase 2 probe, 2026-10-16: mostly noise — `strip_block` raises pair-AUC for all 6 embedders (e5 +0.087, mxbai +0.068, MiniLM +0.034, bge-m3 +0.019, arctic2 +0.017, embeddinggemma +0.013) and same-doc hit@1 for 4/6; occasional hit@10 losses (arctic2, embeddinggemma) mean the block sometimes carries signal too. Default question-side transform for aux runs: `strip_block`.)*
 - Auxiliary pairwise data: annotation provenance — single annotator or merged/verified several times? (affects how much we trust it for threshold calibration)
-- Embedding-model pool: stay with the recorded 6 candidates, or widen — more models already in the local HF/Ollama caches (e.g. all-mpnet-base-v2, nomic-embed-text-v1.5) and/or other models worth testing — before Phase 4 grids are locked? *(a sweep-file extension is a few lines and minutes to run; decide with Phase 3 val evidence in hand)*
+- Embedding-model pool: stay with the recorded 6 candidates, or widen — more models already in the local HF/Ollama caches (e.g. all-mpnet-base-v2, nomic-embed-text-v1.5) and/or other models worth testing — before Phase 4 grids are locked? *(decided 2026-10-20 at Phase 4 opening: widen to 14 single-vector text embedders — the recorded 6 plus embeddinggemma-2, nomic-embed-text-v2-moe, jina-embeddings-v5-text-small, voyage-4-nano, granite-embedding-english-r2, F2LLM-v2-80M, e5-large-v2, all-mpnet-base-v2; bi-encoders only, no generative/multi-vector models — the OMCT-probe and UPR-val evidence (checkboxes A–C) narrow the pool to 3–4 semifinalists before any grids; nomic-embed-text-v1.5 stays out for now: same family as v2-moe with an older recipe)*
 
 ## 8. Milestones
 1. **M1:** Phases 0-3, the evaluation harness with baselines. (Phase 1.5 auxiliary data + probe included, the Phase 2.5 review touch-ups, and the Phase 3.5 naming/UX rework.)

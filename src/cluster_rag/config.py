@@ -143,20 +143,32 @@ class EmbedderConfig(BaseModel):
     """Which embedding backend and model to use, and how to call it.
 
     ``host``/``timeout`` only apply to the Ollama backend; ``device``/
-    ``revision``/``trust_remote_code`` only to the HF backend. Irrelevant keys
-    are ignored with the backend that does not use them.
+    ``revision``/``trust_remote_code``/``model_kwargs`` only to the HF backend.
+    Irrelevant keys are ignored with the backend that does not use them.
+    ``context_tokens`` (both backends) is an explicit model-input-context
+    override for run provenance and truncation diagnostics — some servers
+    report the loader context (Ollama /api/show for embeddinggemma-2: the 256K
+    modality loader) instead of the text window (8K per the model card); when
+    set, it replaces the discovered value, which is still recorded in the
+    embedder's ``extra`` metadata.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     backend: str  # "hf" (sentence-transformers) or "ollama" (/api/embed)
     model_id: str = Field(min_length=1)
-    dimension: int | None = Field(default=None, ge=1)  # Ollama fallback if /api/show hides the size
+    dimension: int | None = Field(default=None, ge=1)  # set = pinned output dimension
     prefixes: PrefixesConfig = Field(default_factory=PrefixesConfig)
     batch_size: int = Field(default=64, ge=1)
     device: str | None = None  # HF only: null = let sentence-transformers pick (cuda if present)
     revision: str | None = None  # HF only: pin the model revision (AGENTS.md)
     trust_remote_code: bool = False  # HF only
+    # Both HF-only constructor passthroughs: model_kwargs carries extra
+    # SentenceTransformer(...) kwargs (e.g. remote-code modules requiring
+    # {"default_task": "retrieval"}). context_tokens is an explicit context
+    # override for provenance/diagnostics (None = backend-discovered value).
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+    context_tokens: int | None = Field(default=None, ge=1)
     host: str = "http://localhost:11434"  # Ollama only; env OLLAMA_HOST overrides an unset value
     timeout: float = Field(default=120.0, gt=0)  # Ollama HTTP timeout in seconds
 

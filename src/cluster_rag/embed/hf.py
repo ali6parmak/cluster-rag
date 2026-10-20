@@ -64,23 +64,63 @@ class HFEmbedder:
         from sentence_transformers import SentenceTransformer  # deferred heavy import
 
         self._config = config
+        # model_kwargs flows model-side constructor kwargs to the loaded
+        # modules (e.g. jina-embeddings-v5's remote-code module requires
+        # {"default_task": "retrieval"}; plain encode() raises without it).
         self._model = SentenceTransformer(
             config.model_id,
             revision=config.revision,
             device=config.device,
             trust_remote_code=config.trust_remote_code,
+            model_kwargs=dict(config.model_kwargs),
         )
         # sentence-transformers 6 renamed the method; keep 5.x compatibility
         get_dimension = getattr(
             self._model, "get_embedding_dimension", self._model.get_sentence_embedding_dimension
         )
-        dimension = get_dimension()
+        discovered_dimension = int(d) if (d := get_dimension()) else None
+        if config.dimension is not None:
+            if discovered_dimension is not None and discovered_dimension != config.dimension:
+                logger.warning(
+                    "The model reports output dimension %d but the config pins dimension %d "
+                    "for %r; trusting the config (some remote-code modules do not report "
+                    "their true output size) — the encode-time contract check still "
+                    "hard-fails on any returned vector that mismatches",
+                    discovered_dimension,
+                    config.dimension,
+                    config.model_id,
+                )
+            elif discovered_dimension is None:
+                logger.warning(
+                    "The model does not report an embedding dimension; using the pinned "
+                    "embed.dimension=%d for %r (no model-side confirmation)",
+                    config.dimension,
+                    config.model_id,
+                )
+            dimension = config.dimension
+            dimension_source = (
+                "config_pin" if discovered_dimension != config.dimension else "model_reported"
+            )
+        else:
+            dimension = discovered_dimension
+            dimension_source = "model_reported"
         if not dimension:
             raise ValueError(
                 f"Could not infer the embedding dimension of {config.model_id!r} "
-                "(get_sentence_embedding_dimension() returned None)"
+                "(get_sentence_embedding_dimension() returned None); pin embed.dimension "
+                "in the config"
             )
         max_seq_length = getattr(self._model, "max_seq_length", None)
+        context_tokens = int(max_seq_length) if max_seq_length else None
+        if config.context_tokens is not None and context_tokens != config.context_tokens:
+            logger.warning(
+                "Overriding the discovered context %s of %r with the configured "
+                "context_tokens=%d (both values are recorded in run metadata)",
+                context_tokens,
+                config.model_id,
+                config.context_tokens,
+            )
+            context_tokens = config.context_tokens
         resolved = config.revision or _resolved_revision(config) or None
         import sentence_transformers  # already imported above (deferred heavy import)
 
@@ -90,12 +130,15 @@ class HFEmbedder:
             dimension=dimension,
             revision_or_digest=resolved,
             prefixes=config.prefixes.model_dump(),
-            context_tokens=int(max_seq_length) if max_seq_length else None,
+            context_tokens=context_tokens,
             extra={
                 "device": str(self._model.device),
                 "max_seq_length": max_seq_length,
                 "requested_revision": config.revision,
                 "resolved_revision": resolved,
+                "model_kwargs": dict(config.model_kwargs),
+                "dimension_source": dimension_source,
+                "discovered_dimension": discovered_dimension,
                 "sentence_transformers_version": sentence_transformers.__version__,
                 "loader_summary": (
                     f"device: {self._model.device}; max_seq_length: {max_seq_length}; "

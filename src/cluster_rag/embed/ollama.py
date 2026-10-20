@@ -81,27 +81,37 @@ class OllamaEmbedder:
         self._host = _resolve_host(config)
         self._client = client or httpx.Client(base_url=self._host, timeout=config.timeout)
         digests, parameter_size = self._fetch_digests()
-        dimension, context_tokens = self._fetch_model_info()
+        api_dimension, api_context_tokens = self._fetch_model_info()
         if config.dimension is not None:
-            if dimension is not None and dimension != config.dimension:
-                raise RuntimeError(
-                    f"Config dimension {config.dimension} disagrees with the Ollama-reported "
-                    f"dimension {dimension} for {self._model_id!r}; fix the config"
+            if api_dimension is not None and api_dimension != config.dimension:
+                logger.warning(
+                    "/api/show reports embedding_length %d for %r but the config pins "
+                    "dimension %d; trusting the config (some Ollama packages report the "
+                    "pre-projection size) — the encode-time contract check still hard-fails "
+                    "on any returned vector that mismatches",
+                    api_dimension,
+                    self._model_id,
+                    config.dimension,
                 )
-            if dimension is None:
+                dimension, dimension_source = config.dimension, "config_override"
+            elif api_dimension is None:
                 logger.warning(
                     "/api/show did not expose an embedding length for %r; using the config "
                     "fallback dimension %d (no server-side confirmation)",
                     self._model_id,
                     config.dimension,
                 )
-                dimension = config.dimension
+                dimension, dimension_source = config.dimension, "config_fallback"
+            else:
+                dimension, dimension_source = api_dimension, "ollama_api"
+        else:
+            dimension, dimension_source = api_dimension, "ollama_api"
+        context_tokens = config.context_tokens or api_context_tokens
         if dimension is None:
             raise RuntimeError(
                 f"Could not discover the embedding dimension of {self._model_id!r}: neither "
                 "`/api/show` model_info nor the `embed.dimension` config fallback provided it"
             )
-        dimension_source = "config_fallback" if config.dimension is not None else "ollama_api"
         self._info = EmbedderInfo(
             model_id=self._model_id,
             backend="ollama",
@@ -116,6 +126,9 @@ class OllamaEmbedder:
                 "host_from_env": "OLLAMA_HOST" in os.environ
                 and "host" not in config.model_fields_set,
                 "dimension_source": dimension_source,
+                "api_embedding_length": api_dimension,
+                "discovered_context_tokens": api_context_tokens,
+                "configured_context_tokens": config.context_tokens,
             },
         )
         logger.info(
@@ -240,7 +253,15 @@ class OllamaEmbedder:
                     f"Ollama /api/embed returned {count} embeddings for a batch of "
                     f"{len(batch)} inputs (model {self._model_id!r}, host {self._host})"
                 )
-            out[row : row + len(batch)] = np.asarray(embeddings, dtype=np.float32)
+            vectors = np.asarray(embeddings, dtype=np.float32)
+            if vectors.ndim != 2 or vectors.shape[1] != self._info.dimension:
+                width = vectors.shape[1] if vectors.ndim == 2 else "non-matrix"
+                raise RuntimeError(
+                    f"Ollama /api/embed returned {width}-dim embeddings, but the "
+                    f"model/config dimension is {self._info.dimension} "
+                    f"(model {self._model_id!r}; check the embed.dimension config)"
+                )
+            out[row : row + len(batch)] = vectors
             row += len(batch)
         matrix = out[:row]
         if matrix.size and not np.isfinite(matrix).all():

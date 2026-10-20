@@ -8,6 +8,7 @@ integration tests hit a real `ollama serve` and are skipped by default.
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import numpy as np
@@ -125,14 +126,66 @@ def test_construction_missing_dimension_falls_back_to_config() -> None:
     assert embedder.info.extra["dimension_source"] == "config_fallback"
 
 
-def test_construction_dimension_conflict_between_config_and_server() -> None:
-    """A config dimension disagreeing with the server is a hard error."""
+def test_construction_dimension_override_trusts_config(caplog) -> None:
+    """A set config dimension wins over a disagreeing /api/show (warn only).
+
+    covers the embeddinggemma-2 case: the server metadata reports the
+    pre-projection hidden size while the endpoint serves the projected
+    vectors; the encode-time contract check still validates real output.
+    """
     routes = {
         ("GET", "/api/tags"): {"models": [TAG_ENTRY]},
-        ("POST", "/api/show"): SHOW_BODY,
+        ("POST", "/api/show"): {
+            "model_info": {"bert.embedding_length": 512, "bert.context_length": 512}
+        },
+        ("POST", "/api/embed"): lambda request: httpx.Response(
+            200,
+            json={"embeddings": [[1.0] + [0.0] * 767] * len(json.loads(request.read())["input"])},
+        ),
     }
-    with pytest.raises(RuntimeError, match="disagrees"):
-        OllamaEmbedder(make_config(dimension=8), client=mock_client(routes))
+    with caplog.at_level(logging.WARNING, logger="cluster_rag.embed.ollama"):
+        embedder = OllamaEmbedder(make_config(dimension=768), client=mock_client(routes))
+    assert "trusting the config" in caplog.text
+    assert embedder.info.dimension == 768
+    assert embedder.info.extra["dimension_source"] == "config_override"
+    assert embedder.info.extra["api_embedding_length"] == 512
+    out = embedder.encode(["one"], "query")
+    assert out.shape == (1, 768) and out.dtype == np.float32
+
+
+def test_encode_rejects_vectors_mismatching_pinned_dimension() -> None:
+    """A pinned dimension that mismatches the real output vectors fails hard."""
+    routes = {
+        ("GET", "/api/tags"): {"models": [TAG_ENTRY]},
+        ("POST", "/api/show"): {
+            "model_info": {"bert.embedding_length": 512, "bert.context_length": 512}
+        },
+        ("POST", "/api/embed"): lambda request: httpx.Response(
+            200,
+            json={"embeddings": [[0.0] * 4] * len(json.loads(request.read())["input"])},
+        ),
+    }
+    embedder = OllamaEmbedder(make_config(dimension=768), client=mock_client(routes))
+    with pytest.raises(RuntimeError, match="returned 4-dim embeddings"):
+        embedder.encode(["one"], "query")
+
+
+def test_construction_context_override_beats_server_value() -> None:
+    """An explicit embed.context_tokens replaces the server-reported context."""
+    routes = {
+        ("GET", "/api/tags"): {"models": [TAG_ENTRY]},
+        ("POST", "/api/show"): {
+            "model_info": {"bert.embedding_length": 4, "bert.context_length": 262144}
+        },
+        ("POST", "/api/embed"): lambda request: httpx.Response(
+            200,
+            json={"embeddings": [[1.0, 0.0, 0.0, 0.5]] * len(json.loads(request.read())["input"])},
+        ),
+    }
+    embedder = OllamaEmbedder(make_config(context_tokens=8192), client=mock_client(routes))
+    assert embedder.info.context_tokens == 8192
+    assert embedder.info.extra["discovered_context_tokens"] == 262144
+    assert embedder.info.extra["configured_context_tokens"] == 8192
 
 
 def test_encode_batches_and_applies_prefix() -> None:
@@ -225,3 +278,76 @@ def test_ollama_real_server_smoke() -> None:
     assert out.shape[1] == embedder.info.dimension
     assert np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
     assert embedder.info.revision_or_digest  # a digest was recorded
+
+
+# --- Phase 4 pool additions (real-server wiring checks) ----------------------
+
+RAW_TEXT = "Ensure that all children have access to free education."
+
+
+@pytest.mark.integration
+def test_ollama_embeddinggemma2_wiring() -> None:
+    """embeddinggemma-2 serves 768-d despite /api/show reporting 512 (config pins it);
+
+    template prefixes apply exactly once; the configured 8192 context overrides the
+    server's 256K loader context in recorded metadata.
+    """
+    config = EmbedderConfig(
+        backend="ollama",
+        model_id="embeddinggemma-2:latest",
+        batch_size=4,
+        dimension=768,
+        context_tokens=8192,
+        prefixes=PrefixesConfig(
+            query="task: search result | query: {content}",
+            document="title: none | text: {content}",
+        ),
+    )
+    embedder = OllamaEmbedder(config)
+    assert embedder.info.dimension == 768
+    assert embedder.info.context_tokens == 8192
+    assert embedder.info.extra["api_embedding_length"] == 512
+    assert embedder.info.extra["dimension_source"] == "config_override"
+    prefixed = embedder.encode([RAW_TEXT], "query")
+    assert prefixed.shape == (1, 768)
+    assert np.allclose(np.linalg.norm(prefixed, axis=1), 1.0, atol=1e-5)
+    # exactly-once: the manually expanded template embedded prefix-free equals
+    # the prefixed encode through the backend
+    bare = OllamaEmbedder(
+        EmbedderConfig(
+            backend="ollama",
+            model_id="embeddinggemma-2:latest",
+            batch_size=4,
+            dimension=768,
+            context_tokens=8192,
+        )
+    )
+    manual = bare.encode(["task: search result | query: " + RAW_TEXT], "query")[0]
+    assert float(manual @ prefixed[0]) > 0.999999
+    bare_raw = bare.encode([RAW_TEXT], "query")[0]
+    assert abs(float(bare_raw @ prefixed[0])) < 0.999999  # the template is not a no-op
+
+
+@pytest.mark.integration
+def test_ollama_nomic_v2_moe_wiring() -> None:
+    """nomic-embed-text-v2-moe: auto-discovered 768d/512 ctx; search prefixes exact-once."""
+    config = EmbedderConfig(
+        backend="ollama",
+        model_id="nomic-embed-text-v2-moe:latest",
+        batch_size=4,
+        prefixes=PrefixesConfig(
+            query="search_query: ", document="search_document: ", label="search_query: "
+        ),
+    )
+    embedder = OllamaEmbedder(config)
+    assert embedder.info.dimension == 768
+    assert embedder.info.context_tokens == 512
+    out = embedder.encode([RAW_TEXT], "query")
+    assert out.shape == (1, 768) and np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
+    bare = OllamaEmbedder(
+        EmbedderConfig(backend="ollama", model_id="nomic-embed-text-v2-moe:latest", batch_size=4)
+    )
+    manual = bare.encode(["search_query: " + RAW_TEXT], "query")[0]
+    assert float(manual @ out[0]) > 0.999999
+    bare_raw = bare.encode([RAW_TEXT], "query")[0]
+    assert abs(float(bare_raw @ out[0])) < 0.999999
