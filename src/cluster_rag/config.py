@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from cluster_rag.eval.multilabel import DECISION_RULES
 
 # Default formulaic openers for the ``strip_leading_formulaic`` preprocessing
 # variant (Phase 2). Derived from the Phase 1 prefix analysis (results/base/
@@ -181,6 +183,97 @@ class PreprocessConfig(BaseModel):
     strip_openers: tuple[str, ...] = DEFAULT_STRIP_OPENERS
 
 
+class EvalPredictorConfig(BaseModel):
+    """Which predictor the ``evaluate`` command runs (name + its parameters).
+
+    The name resolves through the registry in
+    :mod:`cluster_rag.predictors` (``most_frequent`` / ``random`` in Phase 3);
+    ``params`` are validated by the predictor class itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvalDecisionConfig(BaseModel):
+    """The operating point turning scores into F1/coverage decisions.
+
+    Rules (the Phase 4 thresholding options, defined once in Phase 3):
+    ``top_k`` predicts the k best-ranked labels per record; ``score_threshold``
+    predicts every label with ``score >= threshold``; ``top_k_min_score``
+    predicts at most k labels, each additionally passing ``min_score``.
+    Parameter completeness is validated here so a bad config fails at load.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule: str = "top_k"  # one of eval.multilabel.DECISION_RULES
+    k: int = Field(default=2, ge=1)  # mean gold labels/record = 1.91 (Phase 1 stats)
+    threshold: float | None = None
+    min_score: float | None = None
+
+    @field_validator("rule")
+    @classmethod
+    def _rule_is_known(cls, value: str) -> str:
+        """Reject unknown rules at config time (fail before any run)."""
+        if value not in DECISION_RULES:
+            raise ValueError(f"Unknown decision rule {value!r}; expected one of {DECISION_RULES}")
+        return value
+
+    @model_validator(mode="after")
+    def _params_complete_for_rule(self) -> EvalDecisionConfig:
+        """Each rule needs exactly its own parameters, none of the others."""
+        if self.rule == "score_threshold" and self.threshold is None:
+            raise ValueError("decision rule 'score_threshold' requires decision.threshold")
+        if self.rule == "top_k_min_score" and self.min_score is None:
+            raise ValueError("decision rule 'top_k_min_score' requires decision.min_score")
+        return self
+
+
+class EvalMetricsConfig(BaseModel):
+    """Grids for the rank-based metrics (k) and shortlist recall (m)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ks: tuple[int, ...] = (1, 3, 5, 10)
+    shortlist_ms: tuple[int, ...] = (20, 50, 100)
+
+    @field_validator("ks", "shortlist_ms")
+    @classmethod
+    def _values_are_positive(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """Non-empty grids of positive integers only."""
+        if not value or any(k < 1 for k in value):
+            raise ValueError(f"metric grids must be non-empty with positive values, got {value}")
+        return value
+
+
+class EvalConfig(BaseModel):
+    """Phase 3 evaluation section: predictor, decision rule and metric grids.
+
+    ``split`` names the evaluated fixed split (``val`` default; ``test`` only
+    for final reported numbers) — the CLI ``--split`` flag and sweep overrides
+    win over this default. Only val/test are allowed: train is an index source,
+    never an evaluation split, per the AGENTS.md leakage discipline.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    predictor: EvalPredictorConfig
+    decision: EvalDecisionConfig = Field(default_factory=EvalDecisionConfig)
+    metrics: EvalMetricsConfig = Field(default_factory=EvalMetricsConfig)
+    split: str = "val"
+
+    @field_validator("split")
+    @classmethod
+    def _split_is_evaluable(cls, value: str) -> str:
+        """Restrict to val/test (evaluating on train would only re-measure leakage)."""
+        if value not in ("val", "test"):
+            raise ValueError("eval.split must be 'val' or 'test' (the fixed evaluation splits)")
+        return value
+
+
 class ProbeConfig(BaseModel):
     """Parameters of the Phase 2 auxiliary probe on the pairwise dataset.
 
@@ -232,6 +325,7 @@ class AppConfig(BaseModel):
     preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
+    eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
 
 
 def _parse_yaml_mapping(path: Path) -> dict[str, Any]:

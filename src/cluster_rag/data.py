@@ -369,6 +369,58 @@ def select_label_holdout(
     return picked
 
 
+def load_split_ids(splits_dir: Path, split: str) -> tuple[list[str], dict[str, Any]]:
+    """Load one split's fixed id list from ``data_splits`` (never re-split silently).
+
+    Args:
+        splits_dir: The configured splits directory (``paths.data_splits``).
+        split: One of :data:`SPLIT_NAMES`.
+
+    Returns:
+        ``(ids, provenance)`` — the id list in file order, plus the manifest's
+        provenance fields (``split``, ``run_id``, ``source``, ``source_sha256``)
+        for downstream consistency checks.
+
+    Raises:
+        FileNotFoundError: If the id file does not exist (run `cluster-rag split`).
+        ValueError: For an unknown split name, a mismatched ``split`` field or
+            a malformed ids payload.
+    """
+    if split not in SPLIT_NAMES:
+        raise ValueError(f"unknown split {split!r}; expected one of {SPLIT_NAMES}")
+    path = splits_dir / f"{split}_ids.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"split id file {path} is missing (run `cluster-rag split` first)")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("split") != split:
+        raise ValueError(f"{path} declares split={payload.get('split')!r}, expected {split!r}")
+    ids = payload.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(rid, str) for rid in ids):
+        raise ValueError(f"{path} must carry a list of string ids")
+    provenance = {
+        key: payload[key] for key in ("run_id", "source", "source_sha256") if key in payload
+    }
+    return list(ids), {"split": split, **provenance}
+
+
+def select_records_by_ids(records: Sequence[Record], ids: Sequence[str]) -> list[Record]:
+    """Project records onto a fixed id list, in that exact order.
+
+    A stale id list (e.g. the raw dataset changed after ``cluster-rag split``)
+    fails loudly instead of producing a silently shifted evaluation set.
+    """
+    by_id = {record.id: record for record in records}
+    if len(by_id) != len(records):
+        raise ValueError("duplicate record ids in the dataset; cannot project a split")
+    missing = [rid for rid in ids if rid not in by_id]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} split id(s) missing from the dataset (stale split? do not "
+            f"re-split silently), e.g. {missing[:5]}"
+        )
+    return [by_id[rid] for rid in ids]
+
+
 def build_splits(records: Sequence[Record], splits: SplitsConfig, seed: int) -> dict[str, Any]:
     """Run the full Phase 1 split pipeline and return a manifest-ready dict.
 

@@ -7,14 +7,15 @@ Invocation (target CLI in AGENTS.md):
 
 Commands: stats (--pairs for the auxiliary pairwise data), split, embed
 (Phase 2: dataset embedding through the disk cache), probe-aux (Phase 2: the
-auxiliary pairwise embedding probe), sweep (Phase 2.5: run a Python sweep
-file's resolved cells). Run from the repository root so relative
+auxiliary pairwise embedding probe), evaluate (Phase 3: any predictor on a
+fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
+cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
 ``run_id`` must be set in the config for any command. When
-``paths.experiment_table`` is set, ``embed`` and ``probe-aux`` also append one
-row per run (per transform for probe-aux) to the comparison tables in
-``docs/experiments_table.md``, upserted by run key (Phase 2.5).
+``paths.experiment_table`` is set, ``embed``, ``evaluate`` and ``probe-aux``
+also append one row per run (per transform for probe-aux) to the comparison
+tables in ``docs/experiments_table.md``, upserted by run key (Phase 2.5).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import json
 import logging
 import sys
 import time
+from collections import Counter
 from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
@@ -35,14 +37,28 @@ import yaml
 from cluster_rag import __version__
 from cluster_rag.aux_probe import ProbeCacheOptions, run_probe
 from cluster_rag.config import AppConfig, load_config
-from cluster_rag.data import SPLIT_NAMES, LoadReport, build_splits, load_jsonl
+from cluster_rag.data import (
+    SPLIT_NAMES,
+    LoadReport,
+    build_label_matrix,
+    build_splits,
+    load_jsonl,
+    load_split_ids,
+    select_records_by_ids,
+)
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
+from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
+from cluster_rag.eval.multilabel import apply_decision_rule
+from cluster_rag.eval.report import build_label_report
 from cluster_rag.experiment_table import (
     EMBED_COLUMNS,
     EMBED_HEADING,
     EMBED_KEY_COLUMNS,
+    EVALUATE_COLUMNS,
+    EVALUATE_HEADING,
+    EVALUATE_KEY_COLUMNS,
     PROBE_AUX_COLUMNS,
     PROBE_AUX_GROUPS_COLUMNS,
     PROBE_AUX_GROUPS_HEADING,
@@ -52,6 +68,8 @@ from cluster_rag.experiment_table import (
     append_table_rows,
 )
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
+from cluster_rag.predictors import build_predictor
+from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
 
 logger = logging.getLogger(__name__)
@@ -150,15 +168,42 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to the YAML config with embed: and paths.data_external set.",
     )
 
+    evaluate = subparsers.add_parser(
+        "evaluate",
+        help="Evaluate any predictor on val or test (Phase 3 metrics; no embeddings needed).",
+        description=(
+            "Load the dataset and the fixed split ids (never re-split), build the "
+            "configured predictor (eval.predictor; trivial baselines now, retrieval "
+            "predictors in Phase 4) from train context only, score the eval split "
+            "and report P@k / R@k / nDCG@k, micro/macro/sample-F1 at the configured "
+            "decision rule, label coverage and shortlist recall@m — each per "
+            "frequency bucket (head/torso/tail/unseen) and overall. Writes "
+            "results/<run_id>/metrics.json. Exit criterion: one command evaluates "
+            "any predictor on val or test."
+        ),
+    )
+    evaluate.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with an eval: section, e.g. configs/experiments/eval_*.yaml.",
+    )
+    evaluate.add_argument(
+        "--split",
+        choices=("val", "test"),
+        default=None,
+        help="Which fixed split to evaluate (default: eval.split in the config, itself 'val').",
+    )
+
     sweep = subparsers.add_parser(
         "sweep",
         help="Run a Python sweep file: each resolved cell executes as its own run (Phase 2.5).",
         description=(
             "Load a sweep file (a Python module exposing SWEEP: list[SweepRun], built "
             "with define_sweep) and execute its cells in order through the existing "
-            "command functions (embed / probe-aux): one run folder per cell with the "
-            "frozen resolved config, exactly as single runs. Embed cells run with "
-            "the default kinds ('document'). The sweep file only produces configs; "
+            "command functions (embed / evaluate / probe-aux): one run folder per cell "
+            "with the frozen resolved config, exactly as single runs. Embed cells run "
+            "with the default kinds ('document'). The sweep file only produces configs; "
             "the first failing cell aborts the sweep with its exit code."
         ),
     )
@@ -650,6 +695,189 @@ def _cmd_probe_aux(config: AppConfig) -> int:
     return 0
 
 
+def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
+    """Run the evaluate command: any predictor on a fixed split (Phase 3 exit criterion).
+
+    Loads the dataset and the fixed split ids (with a provenance sha check, never
+    re-splitting), constructs the configured predictor from **train** context only,
+    scores the evaluation split and assembles the per-bucket report. Writes
+    ``results/<run_id>/{config.yaml, metrics.json}`` and the auto table row.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    if config.eval is None:
+        raise ValueError(
+            "the eval: section (predictor, decision) is required for the `evaluate` command"
+        )
+    eval_config = config.eval
+    split_name = split or eval_config.split
+
+    full_report = load_jsonl(config.paths.data_raw)
+    if full_report.errors:
+        logger.warning("%d malformed line(s) dropped before evaluating", full_report.n_invalid)
+    source_sha = file_sha256(config.paths.data_raw)
+
+    ids_by_split: dict[str, list[str]] = {}
+    provenances: dict[str, dict[str, Any]] = {}
+    for name in (split_name, "train"):
+        ids, provenance = load_split_ids(config.paths.data_splits, name)
+        recorded = provenance.get("source_sha256")
+        if recorded and recorded != source_sha:
+            raise ValueError(
+                f"{name}_ids.json was built from a different data source (sha256 mismatch): "
+                "the fixed splits and the dataset disagree; do not re-split silently."
+            )
+        ids_by_split[name] = ids
+        provenances[name] = provenance
+
+    eval_records = select_records_by_ids(full_report.records, ids_by_split[split_name])
+    train_records = select_records_by_ids(full_report.records, ids_by_split["train"])
+
+    labels = sorted({label for record in full_report.records for label in record.labels})
+    dataset_counts: Counter[str] = Counter()
+    for record in full_report.records:
+        dataset_counts.update(record.labels)
+    train_counts: Counter[str] = Counter()
+    for record in train_records:
+        train_counts.update(record.labels)
+    buckets = assign_label_buckets(
+        dataset_counts,
+        train_counts,
+        head_min=config.stats.frequency_head_min,
+        torso_min=config.stats.frequency_torso_min,
+    )
+
+    predictor = build_predictor(
+        eval_config.predictor.name,
+        eval_config.predictor.params,
+        PredictorContext(labels=tuple(labels), train_records=tuple(train_records)),
+        seed=config.seed,
+    )
+    texts = [record.text for record in eval_records]
+    scores = predictor.score(texts)
+    expected_shape = (len(eval_records), len(labels))
+    if scores.shape != expected_shape:
+        raise ValueError(
+            f"predictor {eval_config.predictor.name!r} returned scores of shape {scores.shape}, "
+            f"expected {expected_shape} (n_eval_records, n_labels)"
+        )
+
+    gold = build_label_matrix(eval_records, labels)
+    decision = eval_config.decision
+    predicted = apply_decision_rule(
+        scores,
+        rule=decision.rule,
+        k=decision.k,
+        threshold=decision.threshold,
+        min_score=decision.min_score,
+    )
+    report = build_label_report(
+        scores,
+        gold,
+        labels,
+        buckets,
+        predicted,
+        ks=eval_config.metrics.ks,
+        shortlist_ms=eval_config.metrics.shortlist_ms,
+    )
+    overall = report["overall"]
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    payload: dict[str, Any] = {
+        "run_id": run_id,
+        "command": "evaluate",
+        "split": split_name,
+        "source": str(config.paths.data_raw),
+        "source_sha256": source_sha,
+        "split_provenance": provenances,
+        "n_records": len(eval_records),
+        "n_records_train_context": len(train_records),
+        "n_labels": len(labels),
+        "seed": config.seed,
+        "predictor": predictor.describe(),
+        "decision": decision.model_dump(),
+        "metrics_config": eval_config.metrics.model_dump(),
+        "buckets": {
+            "thresholds": {
+                "head_min": config.stats.frequency_head_min,
+                "torso_min": config.stats.frequency_torso_min,
+            },
+            "n_labels_per_bucket": {
+                name: len(subset) for name, subset in labels_by_bucket(buckets).items()
+            },
+            "labels_by_bucket": labels_by_bucket(buckets),
+        },
+        "report": report,
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    (results_dir / "metrics.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    if config.paths.experiment_table is not None:
+        decision_cell = {
+            "top_k": f"top_k k={decision.k}",
+            "score_threshold": f"thr={decision.threshold}",
+            "top_k_min_score": f"top_k k={decision.k} min={decision.min_score}",
+        }[decision.rule]
+        append_table_rows(
+            config.paths.experiment_table,
+            heading=EVALUATE_HEADING,
+            columns=EVALUATE_COLUMNS,
+            key_columns=EVALUATE_KEY_COLUMNS,
+            rows=[
+                {
+                    "run_id": run_id,
+                    "date": date.today().isoformat(),
+                    "split": split_name,
+                    "predictor": eval_config.predictor.name,
+                    "decision": decision_cell,
+                    "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
+                    "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
+                    "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
+                    "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
+                    "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),
+                    "sample-F1": _fmt(overall["f1"]["sample_f1"], 4),
+                    "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
+                    "coverage": _fmt(overall["coverage"]["coverage"], 3),
+                    "n_texts": len(eval_records),
+                    "seconds": payload["total_seconds"],
+                }
+            ],
+        )
+
+    ranking = overall["ranking"]
+    print(
+        f"Evaluated {len(eval_records)} record(s) [{split_name}] with predictor "
+        f"'{eval_config.predictor.name}' ({len(labels)} label columns)"
+    )
+    print(
+        f"  decision: {decision.rule} (k={decision.k}, threshold={decision.threshold}, "
+        f"min_score={decision.min_score})"
+    )
+    p5 = ranking.get("precision@5", 0.0)
+    r10 = ranking.get("recall@10", 0.0)
+    ndcg5 = ranking.get("ndcg@5", 0.0)
+    shortlist50 = overall["shortlist"].get("recall@50", 0.0)
+    print(
+        f"  overall: P@5 {p5:.4f}, R@10 {r10:.4f}, nDCG@5 {ndcg5:.4f}, "
+        f"micro-F1 {overall['f1']['micro_f1']:.4f}, macro-F1 {overall['f1']['macro_f1']:.4f}, "
+        f"sample-F1 {overall['f1']['sample_f1']:.4f}, "
+        f"coverage {overall['coverage']['coverage']:.3f}, shortlist R@50 {shortlist50:.4f}"
+    )
+    for bucket, section in report["per_bucket"].items():
+        print(
+            f"  {bucket:>6s} (labels {section['n_labels']}, with_gold "
+            f"{section['n_labels_with_gold']}, rows_with_gold {section['n_rows_with_gold']}): "
+            f"micro-F1 {section['f1']['micro_f1']:.4f}, macro-F1 {section['f1']['macro_f1']:.4f}, "
+            f"coverage {section['coverage']['coverage']:.3f}"
+        )
+    print(f"Report written to {results_dir / 'metrics.json'}")
+    return 0
+
+
 def _write_split_files(
     report: dict[str, Any], splits_dir: Path, run_id: str, source_path: Path
 ) -> None:
@@ -779,7 +1007,9 @@ def _cmd_sweep(path: Path) -> int:
         started_cell = time.perf_counter()
         if run.command == "embed":
             code = _cmd_embed(run.config, kinds=("document",))
-        else:  # probe-aux, the only other allowed command (SweepCell validator)
+        elif run.command == "evaluate":  # split comes from the cell's eval.split override
+            code = _cmd_evaluate(run.config)
+        else:  # probe-aux
             code = _cmd_probe_aux(run.config)
         if code != 0:
             logger.error(
@@ -810,6 +1040,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_split(config, force=args.force)
         if args.command == "embed":
             return _cmd_embed(config, kinds=_parse_kinds(args.kinds))
+        if args.command == "evaluate":
+            return _cmd_evaluate(config, split=args.split)
         if args.command == "probe-aux":
             return _cmd_probe_aux(config)
         if args.command == "sweep":

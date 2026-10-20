@@ -45,3 +45,16 @@ own artifacts; counts sit next to numbers; "n/a" = not reported by the run.
 | aux-probe2-mxbai | strip_block | Human rights in Colombia Amnesty International | OMCT GTI - Test - Reports 01 - 3 AI.csv | 99 | 79 | 20 | 0.6886 | 0.543 | 0.886 | 35 |
 | aux-probe2-mxbai | strip_block | Observaciones preliminares colombia 2024 | OMCT GTI - Test - Reports 01 - 2 CIDH.csv | 576 | 234 | 342 | 0.6569 | 0.351 | 0.743 | 74 |
 | aux-probe2-mxbai | strip_block | Concluding observations on the sixth periodic report of Colombia** | OMCT GTI - Test - Reports 01 - 1 NU.csv | 845 | 211 | 634 | 0.5074 | 0.413 | 0.717 | 46 |
+
+## Phase 3 — evaluate
+
+| run_id | date | split | predictor | decision | P@5 | R@10 | nDCG@5 | micro-F1 | macro-F1 | sample-F1 | shortlist R@50 | coverage | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ev-mf-topk1-val | 2026-10-19 | val | most_frequent | top_k k=1 | 0.0936 | 0.3023 | 0.1854 | 0.0862 | 0.0034 | 0.0828 | 0.6764 | 0.015 | 660 | 0.017 |
+| ev-mf-topk2-val | 2026-10-19 | val | most_frequent | top_k k=2 | 0.0936 | 0.3023 | 0.1854 | 0.1413 | 0.0073 | 0.1327 | 0.6764 | 0.029 | 660 | 0.017 |
+| ev-mf-topk3-val | 2026-10-19 | val | most_frequent | top_k k=3 | 0.0936 | 0.3023 | 0.1854 | 0.1543 | 0.0100 | 0.1441 | 0.6764 | 0.044 | 660 | 0.015 |
+| ev-random-topk1-val | 2026-10-19 | val | random | top_k k=1 | 0.0294 | 0.1496 | 0.0533 | 0.0183 | 0.0170 | 0.0172 | 0.7792 | 1.000 | 660 | 0.041 |
+| ev-random-topk2-val | 2026-10-19 | val | random | top_k k=2 | 0.0294 | 0.1496 | 0.0533 | 0.0304 | 0.0248 | 0.0290 | 0.7792 | 1.000 | 660 | 0.019 |
+| ev-random-topk3-val | 2026-10-19 | val | random | top_k k=3 | 0.0294 | 0.1496 | 0.0533 | 0.0346 | 0.0294 | 0.0333 | 0.7792 | 1.000 | 660 | 0.019 |
+| ev-mf-topk2-test | 2026-10-19 | test | most_frequent | top_k k=2 | 0.0940 | 0.2954 | 0.1762 | 0.1433 | 0.0074 | 0.1283 | 0.6808 | 0.029 | 664 | 0.015 |
+| ev-random-topk2-test | 2026-10-19 | test | random | top_k k=2 | 0.0274 | 0.1438 | 0.0463 | 0.0234 | 0.0196 | 0.0209 | 0.7308 | 1.000 | 664 | 0.019 |

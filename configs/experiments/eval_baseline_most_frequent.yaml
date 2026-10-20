@@ -1,0 +1,20 @@
+# Phase 3 reference run: most-frequent trivial baseline, val split, top-2 decision.
+#
+# Standalone example of the Phase 3 exit criterion (one command evaluates any
+# predictor on val or test):
+#
+#     uv run cluster-rag evaluate --config configs/experiments/eval_baseline_most_frequent.yaml --split val
+#
+# Same run_id as the sweep cell ev-mf-topk2-val in experiments/baseline_eval_sweep.py
+# (the table upserts by run_id; the sweep file remains the grid source of truth).
+extends: ../base.yaml
+
+run_id: ev-mf-topk2-val
+
+eval:
+  predictor:
+    name: most_frequent
+  decision:
+    rule: top_k
+    k: 2
+  split: val

@@ -88,6 +88,26 @@ PROBE_AUX_GROUPS_KEY_COLUMNS: tuple[str, ...] = (
     "source_csv",
 )
 
+EVALUATE_HEADING = "Phase 3 — evaluate"
+EVALUATE_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "predictor",
+    "decision",
+    "P@5",
+    "R@10",
+    "nDCG@5",
+    "micro-F1",
+    "macro-F1",
+    "sample-F1",
+    "shortlist R@50",
+    "coverage",
+    "n_texts",
+    "seconds",
+)
+EVALUATE_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 
 def _cell(value: Any) -> str:
     """Render one table cell; ``None``/missing/empty becomes "n/a"."""

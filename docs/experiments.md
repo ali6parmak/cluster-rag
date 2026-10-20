@@ -100,3 +100,36 @@ Verified on `data/external/omct_pairs.json` and recorded in the `aux-base` rerun
 - New CLI surface for Phase 3+: `cluster-rag sweep --file <sweep.py>` (typed cells → frozen per-run configs; cells only produce configs).
 
 **Next:** Phase 3 evaluation harness, before any Phase 4 modeling.
+
+## Phase 3: evaluation harness (built + trivial-baseline runs, 2026-10-19)
+
+**Built (all pure/`numpy`, heavy imports only inside constructors; 43 new unit tests, suite 179 green, ruff clean):**
+- `eval/multilabel.py`: stable-descending ranking (ties → earlier column, same convention as the pairwise metrics); `ranking_metrics` P@k / R@k / nDCG@k (binary gains 2^rel−1, log2 discount, IDCG from min(n_gold, k) ideal ones, raw score ranking); `apply_decision_rule` with one operating point per run (top_k | score_threshold | top_k_min_score); `decision_f1_metrics` micro/macro/sample-F1 (F1 = 0 on zero division, explicitly reported; macro averaged over labels with ≥1 gold in view, goldless ones counted, not averaged; micro TP/FP/FN over the full masked population so a record whose gold lies outside a bucket still contributes its in-bucket false positives); `shortlist_recall` gold-cell recall@m — **full-view**: the ranking is always global, `cell_mask` only restricts which gold cells count; `label_coverage` from the decision matrix (covered = ever suggested, denominator = labels with ≥1 gold in the split).
+- `eval/buckets.py`: head/torso/tail from **full-dataset counts** (identical to the Phase 1 `stats` artifact, thresholds from the stats config) + `unseen` = absent from train, taking precedence.
+- `eval/report.py`: one `overall` section (same code path, no mask) + one restricted-view section per bucket; every number carries n_records / n_rows_with_gold / n_gold_cells / n_labels_in_macro counts.
+- `predictors/`: `Predictor` protocol (`score(texts) -> (n, n_labels)` matrix + `describe()` lineage; construction context carries the label space and **train-only records** — the leakage boundary), trivial baselines `MostFrequentPredictor` (train-count scores, constant across records, never covers unseen/tail below them) and `RandomPredictor` (seeded uniform), registry `build_predictor`; `eval:` config schema (predictor + decision + metrics + split). Sweep cells may run `evaluate`.
+- Exit criterion: `cluster-rag evaluate --config <cfg> --split val|test` writes `results/<run_id>/{config.yaml, metrics.json}` + the auto "Phase 3 — evaluate" table row; split ids come from `data/splits/` with a source-sha256 consistency check (never re-split).
+
+**Runs** (`experiments/baseline_eval_sweep.py`, 8 cells, pure CPU, 0.2 s total; `mf` = most_frequent): {mf, random} × top-k k∈{1,2,3} on val, then the k=2 pair on test once. Buckets on the evaluated splits: head 16 / torso 26 / tail 18 / unseen 8 labels (all 8 holdout labels were torso-range, 72–80 examples, so torso lost 8 to unseen). **All 68 labels have val/test gold** (coverage_min_total=3), so `n_labels_with_gold` = 68 per eval split.
+
+| run_id | split | overall P@5 / R@10 / nDCG@5 | micro-F1 | macro-F1 | sample-F1 | shortlist R@50 | coverage | head/torso/tail/unseen micro-F1 |
+|---|---|---|---|---|---|---|---|---|
+| `ev-mf-topk1-val` | val | 0.0936 / 0.3023 / 0.1854 | 0.0862 | 0.0034 | 0.0828 | 0.6764 | 0.015 | 0.137 / 0 / 0 / 0 |
+| `ev-mf-topk2-val` | val | 0.0936 / 0.3023 / 0.1854 | 0.1413 | 0.0073 | 0.1327 | 0.6764 | 0.029 | 0.196 / 0 / 0 / 0 |
+| `ev-mf-topk3-val` | val | 0.0936 / 0.3023 / 0.1854 | 0.1543 | 0.0100 | 0.1441 | 0.6764 | 0.044 | 0.199 / 0 / 0 / 0 |
+| `ev-random-topk1-val` | val | 0.0294 / 0.1496 / 0.0533 | 0.0183 | 0.0170 | 0.0172 | 0.7792 | 1.000 | 0.021 / 0.008 / 0.027 / 0.021 |
+| `ev-random-topk2-val` | val | 0.0294 / 0.1496 / 0.0533 | 0.0304 | 0.0248 | 0.0290 | 0.7792 | 1.000 | 0.035 / 0.016 / 0.025 / 0.052 |
+| `ev-random-topk3-val` | val | 0.0294 / 0.1496 / 0.0533 | 0.0346 | 0.0294 | 0.0333 | 0.7792 | 1.000 | 0.046 / 0.019 / 0.024 / 0.055 |
+| `ev-mf-topk2-test` | test | 0.0940 / 0.2954 / 0.1762 | 0.1433 | 0.0074 | 0.1283 | 0.6808 | 0.029 | 0.199 / 0 / 0 / 0 |
+| `ev-random-topk2-test` | test | 0.0274 / 0.1438 / 0.0463 | 0.0234 | 0.0196 | 0.0209 | 0.7308 | 1.000 | 0.033 / 0.010 / 0.008 / 0.043 |
+
+**Harness findings (val unless stated; all from the runs above):**
+1. The trivial baselines behave exactly as designed: `most_frequent` predicts the same k head labels for every record — head-only micro-F1, **zero** torso/tail/unseen F1 and coverage; at the val k=2 operating point P@1 0.1288 yet micro-F1 only 0.1413 — it over-predicts popular labels onto usually single-gold records.
+2. `random` achieves coverage 1.000 — it suggests every label including all 8 unseen — at tiny F1/P@k; the coverage-vs-precision contrast is precisely what the two views are for.
+3. F1 rises with k (0.086 → 0.154 for mf k=1→3) while P@k/R@k/nDCG@k are decision-rule-independent (same ranking) — top-k and threshold views separate cleanly as intended.
+4. The unseen bucket has real support: 294 val / 296 test records contain at least one held-out label (test: 296), so Phase 4 zero-shot discovery is evaluable, not a footnote.
+5. Shortlist R@50: mf 0.6764 (its constant ranking misses the 18 lowest-count labels entirely — 0.6764 = share of gold cells outside the missed 18 at m=50) vs random 0.7792 (m=50 < 68 leaves ~18 random labels out). These are the reranker-ceiling reference numbers for Phase 4.
+
+Per-run bucket detail, thresholds and predictor lineage live in each `results/ev-*/metrics.json`; table rows auto-appended under "Phase 3 — evaluate".
+
+**Next:** Phase 4 retrieval baselines (kNN / label prototypes / zero-shot label embeddings, fusion + thresholding) against this harness; model-pool decision uses val rows (see PLAN §7).

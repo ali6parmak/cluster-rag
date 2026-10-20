@@ -39,12 +39,12 @@ def base_yaml(tmp_path: Path) -> Path:
 def test_cell_validation_rejects_bad_command_and_label() -> None:
     """Unknown commands and unsafe labels fail at cell construction time."""
     with pytest.raises(ValueError, match="Unknown sweep command"):
-        SweepCell(label="x", command="evaluate")
+        SweepCell(label="x", command="magic")
     with pytest.raises(ValueError, match="filesystem-safe"):
         SweepCell(label="sub/dir", command="embed")
     with pytest.raises(ValueError, match="Extra inputs"):
         SweepCell(label="x", command="embed", run_id="y")  # type: ignore[call-arg]
-    assert COMMANDS == ("embed", "probe-aux")
+    assert COMMANDS == ("embed", "evaluate", "probe-aux")
 
 
 def test_define_sweep_resolves_cells_over_base(base_yaml: Path) -> None:

@@ -170,3 +170,89 @@ def load_config_str(text: str, directory: Path):
     config_file = directory / "cfg.yaml"
     config_file.write_text(text, encoding="utf-8")
     return load_config(config_file)
+
+
+EVAL_SECTION = """\
+
+eval:
+  predictor:
+    name: most_frequent
+"""
+
+
+def test_load_config_eval_defaults(tmp_path) -> None:
+    """eval defaults: top_k k=2 decision, k/m grids, val split, empty params."""
+    config = load_config_str(CONFIG_YAML + EVAL_SECTION, tmp_path)
+    assert config.eval is not None
+    assert config.eval.predictor.name == "most_frequent"
+    assert config.eval.predictor.params == {}
+    assert config.eval.decision.rule == "top_k" and config.eval.decision.k == 2
+    assert config.eval.decision.threshold is None and config.eval.decision.min_score is None
+    assert config.eval.metrics.ks == (1, 3, 5, 10)
+    assert config.eval.metrics.shortlist_ms == (20, 50, 100)
+    assert config.eval.split == "val"
+
+
+def test_load_config_eval_overrides(tmp_path) -> None:
+    """Decision rules carry their own params; grids and split are configurable."""
+    text = (
+        CONFIG_YAML
+        + """\
+
+eval:
+  predictor:
+    name: random
+    params: {}
+  decision:
+    rule: top_k_min_score
+    k: 3
+    min_score: 0.25
+  metrics:
+    ks: [1, 2, 5]
+    shortlist_ms: [10, 20]
+  split: test
+"""
+    )
+    config = load_config_str(text, tmp_path)
+    eval_config = config.eval
+    assert eval_config is not None
+    assert eval_config.predictor.name == "random"
+    assert eval_config.decision.rule == "top_k_min_score" and eval_config.decision.k == 3
+    assert eval_config.decision.min_score == 0.25
+    assert eval_config.metrics.ks == (1, 2, 5)
+    assert eval_config.metrics.shortlist_ms == (10, 20)
+    assert eval_config.split == "test"
+
+
+def test_load_config_eval_rejects_unknown_rule_and_missing_params(tmp_path) -> None:
+    """Unknown rules and rule-params mismatches fail at load time."""
+    for bad_section, match in (
+        ("    name: x\n  decision:\n    rule: magic\n", "Unknown decision rule"),
+        (
+            "    name: x\n  decision:\n    rule: score_threshold\n",
+            "requires decision.threshold",
+        ),
+        (
+            "    name: x\n  decision:\n    rule: top_k_min_score\n    k: 3\n",
+            "requires decision.min_score",
+        ),
+    ):
+        bad = tmp_path / "bad.yaml"
+        bad.write_text(CONFIG_YAML + "\neval:\n  predictor:\n" + bad_section, encoding="utf-8")
+        with pytest.raises(ValueError, match=match):
+            load_config(bad)
+
+
+def test_load_config_eval_split_restricted_and_grids_positive(tmp_path) -> None:
+    """Only val/test are evaluable splits; metric grids need positive values."""
+    bad_split = tmp_path / "split.yaml"
+    bad_split.write_text(CONFIG_YAML + EVAL_SECTION + "  split: train\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be 'val' or 'test'"):
+        load_config(bad_split)
+
+    bad_grid = tmp_path / "grid.yaml"
+    bad_grid.write_text(
+        CONFIG_YAML + EVAL_SECTION + "  metrics:\n    ks: [0, 1]\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="positive"):
+        load_config(bad_grid)

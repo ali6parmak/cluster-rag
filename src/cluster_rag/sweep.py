@@ -5,8 +5,9 @@ A sweep file (e.g. ``experiments/aux_probe_sweep.py``) declares typed cells
 loops, and resolves them with :func:`define_sweep` into one validated
 :class:`~cluster_rag.config.AppConfig` per cell. Sweeps only *produce*
 configs: the ``sweep`` CLI command executes the resolved cells through the
-existing command functions (``embed`` / ``probe-aux``), so run folders, frozen
-configs, logs and experiment-table rows are exactly what single runs produce.
+existing command functions (``embed`` / ``evaluate`` / ``probe-aux``), so run
+folders, frozen configs, logs and experiment-table rows are exactly what
+single runs produce.
 
 Guards: the label doubles as the run_id (unique across the sweep,
 filesystem-safe), and ``run_id`` / ``extends`` may not be overridden — the
@@ -25,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from cluster_rag.config import AppConfig, load_config, merge_configs
 
-COMMANDS: tuple[str, ...] = ("embed", "probe-aux")
+COMMANDS: tuple[str, ...] = ("embed", "evaluate", "probe-aux")
 
 
 class SweepCell(BaseModel):
