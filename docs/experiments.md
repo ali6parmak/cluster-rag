@@ -427,3 +427,119 @@ top_k_min_score, calibrated on val; OMCT pair score distributions as the
 auxiliary, separately-reported evidence), then the preprocess ablation on the
 semifinalists only, optional BM25 hybrid, then the single untouched-test run
 of the best config.
+
+## Phase 4 closing: decision rules, OMCT threshold evidence, preprocess ablation, exit test (2026-10-20)
+
+UPR dataset scope: **val split only** for calibration (660 records, 68 labels,
+decision varies by design in this change set — that is its point) and the ONE
+**test** run only (664 records); artifact side `raw-v1` unless named. 65 new
+runs: `experiments/threshold_sweep.py` (24, `## UPR — thresholds`),
+`experiments/omct_threshold_sweep.py` (4 OMCT probe re-runs, `## OMCT —
+thresholds` — auxiliary line), `experiments/preprocess_ablation_sweep.py` (24,
+`## UPR — preprocess_ablation`), `experiments/threshold_refine_sweep.py` (6,
+`## UPR — thresholds_refine`), `experiments/final_test_eval.py` (1,
+`## UPR — phase4_final`). One code addition: `omct_probe.run_probe` reports a
+`score_distributions` block per transform variant (judged-pair cosines by
+label = 0/1 + the "should answer nothing" rows' best same-document
+similarity; pure numpy, 2 new tests).
+Verification: 24/24 + 6/6 + 1/1 UPR artifacts field-checked (params, decision,
+split scope, embedding + label lineage, digest continuity with the raw runs);
+4/4 OMCT reports carry the distributions block (quantiles monotone, 70/225
+goldless rows each) — 0 problems.
+
+**1. Decision rules on the champion scale (UPR val; embeddinggemma raw,
+fusion a=0.5 b=1.0 c=1.0 knn k=10; incumbent top_k2 for comparability):**
+
+| rule | operating point | micro | macro | tail macro | preds/rec |
+|---|---|---|---|---|---|
+| top_k | k=1 | 0.4878 | 0.4082 | 0.3390 | 1.00 |
+| top_k (incumbent) | k=2 | 0.5479 | 0.5006 | 0.5181 | 2.00 |
+| top_k | k=3 | 0.5049 | 0.4646 | 0.5058 | 3.00 |
+| top_k_min_score | t=1.25 | 0.5756 | 0.5334 | 0.5616 | 1.76 |
+| top_k_min_score | t=1.6 (best micro) | 0.5852 | 0.5172 | 0.4932 | 1.38 |
+| score_threshold | t=1.75 (best micro) | **0.5988** | 0.5201 | 0.4489 | 1.39 |
+| score_threshold | t=1.5 (balanced) | 0.5917 | 0.5278 | 0.5133 | 1.83 |
+
+**The thresholded rules beat the rank rules clearly**: best
+   `score_threshold` +5.10 pp micro over the top_k2 incumbent (val grid
+   {0.75..2.0} — full curve in the table); `top_k_min_score` +3.73 pp; the
+   k=2 budget itself was leaving precision on the table (precision 0.73 /
+   recall 0.51 at t=1.75 vs p 0.54 / r 0.55 at topk2). Grid placement was
+   val-calibrated (rank-2 non-gold q75 ≈ 0.70 vs rank-2 gold q25 ≈ 1.64 — the
+   gap is wide, which is WHY a threshold works: ~1-2 gold cells decide
+   neighbors).
+**Every rule choice trades tail for micro** at the micro-optimal operating
+   point: st t=1.75 loses 6.9 pp tail macro vs topk2; `st t=1.5` keeps the
+   tail at 0.5133 at −0.7 pp micro; `tkms t=1.25` is the Pareto point vs the
+   incumbent (micro 0.5756, macro 0.5334, tail 0.5616 — all three better).
+   The Phase-4 pick follows the standing convention (best micro, tail
+   tiebreak) → `score_threshold t=1.75`; the balanced alternatives are
+   documented here for the reviewer.
+**Thresholds are scale-specific**: they ride on the pinned fused scale
+   (a=0.5, b=1, c=1, k=10); any other weights/preprocess needs its own val
+   recalibration (done below for the one config that could displace this
+   one).
+
+**2. OMCT threshold-calibration evidence (auxiliary line only, never a UPR
+metric — 4 runs `omct-probe-thresholds-<model>`):** judged-pair cosines barely
+separate the labels (strip-block AUC 0.47–0.54 across the semifinalists;
+label-1 IQR [0.30, 0.44]-ish overlapping label-0's); the **label-0 pairs'
+maximum (0.66–0.79) exceeds the label-1 p95 (0.51–0.58)** — a single cosine
+on (paragraph, question) furniture-heavy OMCT texts is a weak same-topic
+signal, and the **goldless rows ("should answer nothing") reach best
+same-document similarities up to 0.66–0.79 as well** (70/225 rows; medians
+0.44–0.51). Verdict: the OMCT distributions do NOT license importing an
+absolute threshold into the UPR line — they support the decision to calibrate
+operating points on UPR val — and they strengthen the annotation-provenance
+open question (a label-0 pair scoring above every positive suggests noisy
+negatives or annotation ambiguity).
+
+**3. Preprocess ablation, semifinalists only (24 runs; each model's tuned
+fusion weights; decision top_k k=2 for comparability with the raw cells):**
+
+| model | raw (tuned) micro | strip micro | lower micro |
+|---|---|---|---|
+| embeddinggemma | **0.5479** | 0.5388 | 0.5350 |
+| jina-v5 | 0.5426 | **0.5486** | 0.5395 |
+| voyage-4-nano | 0.5395 | **0.5410** | 0.5350 |
+| arctic2 | 0.5426 | 0.5456 | **0.5479** |
+
+**No preprocess variant is a clean winner**: strip helps jina-v5 (+0.61 pp)
+   and arctic2 (+0.30 pp) but hurts embeddinggemma (−0.91 pp); lowercase helps
+   arctic2 (+0.53 pp) and hurts the other three. All deltas are 1–9 gold
+   cells of 1312 — the raw champion's 0.5479 stays within noise of the
+   absolute best 0.5486 (`upr-eval-abl-jina-v5-strip`), so the standing rule
+   (micro, tail tiebreak: 0.5250 vs 0.5181) nominally prefers jina-strip —
+   resolved below by the rule-calibration stage, where the champion wins
+   back the lead. Preprocess is a per-model axis, worth revisiting per model
+   only (Phase 9).
+
+**4. Threshold refinement for the runner-up (6 runs, jina-v5 + strip +
+fusion(a=0.5, b=1, c=0.5, k=10)):** its own scale's recalibrated peaks —
+best `score_threshold` t=2.1: 0.5906 micro; best `top_k_min_score` t=1.9:
+0.5726 — both **below the champion's 0.5988**. The preprocess variant does
+not survive the rule comparison: **final config = embeddinggemma raw +
+fusion(0.5, 1, 1, k=10) + decision score_threshold t=1.75**.
+
+**5. Phase-4 exit — the ONE test run (`upr-eval-best-embeddinggemma-st1.75-test`,
+test 664 records, val-calibrated t=1.75 carried unedited):** **micro-F1 0.5979**
+(test floors: most_frequent topk2 0.1433, random 0.0234 — **4.2× the mf
+floor**; macro 0.5287, sample 0.5430, tail macro 0.5395, head 0.7717, torso
+0.5704, coverage 0.853, shortlist R@50 0.7378, preds/rec 1.39). The val
+operating point transfers cleanly (val 0.5988 → test 0.5979, −0.09 pp).
+Consistent with Phase 4's logged caveats: unseen coverage 0 behind this
+top-threshold decision (the standalone zeroshot route remains the unseen-label
+handler), and the fused ranking keeps the shortlist-compression profile
+(0.7378 ≪ kNN's 0.89–0.96 — Phase 6 keeps the kNN shortlist role).
+
+**Phase 4 exit criterion met:** the best config was chosen on val across
+{model, preprocess, fusion weights, decision rule} and test was reported once,
+clearly beating the trivial baselines (`0.5979 vs 0.1433` micro-F1 topk2 mf
+floor on test). Proposed frozen Phase-4 config: embedder embeddinggemma(raw),
+fusion `a=0.5, b=1.0, c=1.0`, kNN `k=10`, decision `score_threshold`
+`threshold=1.75` (calibrated on UPR val; scale-specific). Optional BM25 hybrid
+and per-label thresholds deferred — see PLAN section 7 (both need reviewer
+input: a new dependency + a new mechanism respectively).
+
+**Next:** Phase 5 (clustering: discovery + routing) on the same artifacts;
+the Phase 4 artifacts stay the no-clustering baseline to beat.

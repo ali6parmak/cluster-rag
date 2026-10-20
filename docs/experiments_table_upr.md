@@ -262,3 +262,78 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-fusionc-arctic2-k20-c0.25 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5380 | 0.4745 | 0.5177 | 0.868 | 0.2742 | 0.7125 | 0.6632 | 0.7337 | 660 | 0.151 |
 | upr-eval-fusionc-arctic2-k20-c0.5 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5380 | 0.4744 | 0.5177 | 0.868 | 0.2742 | 0.7125 | 0.6625 | 0.7337 | 660 | 0.146 |
 | upr-eval-fusionc-arctic2-k20-c1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5372 | 0.4745 | 0.5171 | 0.868 | 0.2745 | 0.7133 | 0.6631 | 0.7393 | 660 | 0.149 |
+
+## UPR — thresholds
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-thr-embeddinggemma-tk1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=1 | 0.4878 | 0.4082 | 0.5004 | 0.794 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.163 |
+| upr-eval-thr-embeddinggemma-tk3 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=3 | 0.5049 | 0.4646 | 0.4774 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.141 |
+| upr-eval-thr-embeddinggemma-st0.75 | 2026-10-20 | val | fusion | embeddinggemma | thr=0.75 | 0.2614 | 0.2362 | 0.3047 | 0.882 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.143 |
+| upr-eval-thr-embeddinggemma-tk2m0.75 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=0.75 | 0.5491 | 0.5029 | 0.5289 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.151 |
+| upr-eval-thr-embeddinggemma-st0.9 | 2026-10-20 | val | fusion | embeddinggemma | thr=0.9 | 0.3779 | 0.3477 | 0.4046 | 0.882 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.131 |
+| upr-eval-thr-embeddinggemma-tk2m0.9 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=0.9 | 0.5520 | 0.5081 | 0.5348 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.134 |
+| upr-eval-thr-embeddinggemma-st1 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.0 | 0.4413 | 0.4142 | 0.4594 | 0.882 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.138 |
+| upr-eval-thr-embeddinggemma-tk2m1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.0 | 0.5554 | 0.5133 | 0.5393 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.15 |
+| upr-eval-thr-embeddinggemma-st1.1 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.1 | 0.4889 | 0.4581 | 0.4926 | 0.882 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.141 |
+| upr-eval-thr-embeddinggemma-tk2m1.1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.1 | 0.5597 | 0.5179 | 0.5431 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.152 |
+| upr-eval-thr-embeddinggemma-st1.25 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.25 | 0.5484 | 0.5138 | 0.5357 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.182 |
+| upr-eval-thr-embeddinggemma-tk2m1.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.25 | 0.5756 | 0.5334 | 0.5546 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.132 |
+| upr-eval-thr-embeddinggemma-st1.4 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.4 | 0.5746 | 0.5263 | 0.5434 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.133 |
+| upr-eval-thr-embeddinggemma-tk2m1.4 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.4 | 0.5778 | 0.5253 | 0.5484 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.142 |
+| upr-eval-thr-embeddinggemma-st1.5 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.5 | 0.5917 | 0.5278 | 0.5486 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.145 |
+| upr-eval-thr-embeddinggemma-tk2m1.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.5 | 0.5841 | 0.5229 | 0.5471 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.132 |
+| upr-eval-thr-embeddinggemma-st1.6 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.6 | 0.5943 | 0.5210 | 0.5437 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.142 |
+| upr-eval-thr-embeddinggemma-tk2m1.6 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.6 | 0.5852 | 0.5172 | 0.5417 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.146 |
+| upr-eval-thr-embeddinggemma-st1.75 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.75 | 0.5988 | 0.5201 | 0.5379 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.156 |
+| upr-eval-thr-embeddinggemma-tk2m1.75 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.75 | 0.5842 | 0.5106 | 0.5322 | 0.853 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.142 |
+| upr-eval-thr-embeddinggemma-st1.9 | 2026-10-20 | val | fusion | embeddinggemma | thr=1.9 | 0.5824 | 0.4829 | 0.5113 | 0.838 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.151 |
+| upr-eval-thr-embeddinggemma-tk2m1.9 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=1.9 | 0.5711 | 0.4752 | 0.5088 | 0.838 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.138 |
+| upr-eval-thr-embeddinggemma-st2 | 2026-10-20 | val | fusion | embeddinggemma | thr=2.0 | 0.5772 | 0.4710 | 0.5018 | 0.794 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.146 |
+| upr-eval-thr-embeddinggemma-tk2m2 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 min=2.0 | 0.5645 | 0.4617 | 0.4982 | 0.794 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.146 |
+
+## UPR — preprocess_ablation
+
+| run_id | date | backend | model | model_version | dim | ctx | kinds | preprocess | n_texts | seconds | cache_hits | cache_misses |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-embed-embeddinggemma-strip | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | document,query | strip_leading_formulaic | 3000 | 26.317 | 0 | 6000 |
+| upr-labelembed-embeddinggemma-strip-about | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | strip_leading_formulaic | 68 | 0.277 | 0 | 68 |
+| upr-eval-abl-embeddinggemma-strip | 2026-10-20 | val | fusion | embeddinggemma-strip | top_k k=2 | 0.5388 | 0.4817 | 0.5171 | 0.853 | 0.2782 | 0.7133 | 0.6666 | 0.7514 | 660 | 0.14 |
+| upr-embed-embeddinggemma-lower | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | document,query | lowercase | 3000 | 24.77 | 0 | 6000 |
+| upr-labelembed-embeddinggemma-lower-about | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | lowercase | 68 | 0.289 | 0 | 68 |
+| upr-eval-abl-embeddinggemma-lower | 2026-10-20 | val | fusion | embeddinggemma-lower | top_k k=2 | 0.5350 | 0.4866 | 0.5155 | 0.853 | 0.2748 | 0.7087 | 0.6662 | 0.7429 | 660 | 0.142 |
+| upr-embed-jina-v5-strip | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | document,query | strip_leading_formulaic | 3000 | 21.944 | 0 | 6000 |
+| upr-labelembed-jina-v5-strip-about | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | label | strip_leading_formulaic | 68 | 4.532 | 0 | 68 |
+| upr-eval-abl-jina-v5-strip | 2026-10-20 | val | fusion | jina-v5-strip | top_k k=2 | 0.5486 | 0.4956 | 0.5275 | 0.868 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.183 |
+| upr-embed-jina-v5-lower | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | document,query | lowercase | 3000 | 19.656 | 0 | 6000 |
+| upr-labelembed-jina-v5-lower-about | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | label | lowercase | 68 | 4.689 | 0 | 68 |
+| upr-eval-abl-jina-v5-lower | 2026-10-20 | val | fusion | jina-v5-lower | top_k k=2 | 0.5395 | 0.4905 | 0.5197 | 0.868 | 0.2764 | 0.7170 | 0.6738 | 0.7337 | 660 | 0.185 |
+| upr-embed-voyage-4-nano-strip | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | document,query | strip_leading_formulaic | 3000 | 7.356 | 0 | 6000 |
+| upr-labelembed-voyage-4-nano-strip-about | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | label | strip_leading_formulaic | 68 | 1.164 | 0 | 68 |
+| upr-eval-abl-voyage-4-nano-strip | 2026-10-20 | val | fusion | voyage-4-nano-strip | top_k k=2 | 0.5410 | 0.4958 | 0.5217 | 0.868 | 0.2761 | 0.7157 | 0.6713 | 0.7463 | 660 | 0.234 |
+| upr-embed-voyage-4-nano-lower | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | document,query | lowercase | 3000 | 7.274 | 0 | 6000 |
+| upr-labelembed-voyage-4-nano-lower-about | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | label | lowercase | 68 | 1.198 | 0 | 68 |
+| upr-eval-abl-voyage-4-nano-lower | 2026-10-20 | val | fusion | voyage-4-nano-lower | top_k k=2 | 0.5350 | 0.4921 | 0.5167 | 0.868 | 0.2730 | 0.7120 | 0.6663 | 0.7345 | 660 | 0.24 |
+| upr-embed-arctic2-strip | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | document,query | strip_leading_formulaic | 3000 | 32.367 | 0 | 6000 |
+| upr-labelembed-arctic2-strip-about | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | strip_leading_formulaic | 68 | 0.361 | 0 | 68 |
+| upr-eval-abl-arctic2-strip | 2026-10-20 | val | fusion | arctic2-strip | top_k k=2 | 0.5456 | 0.4851 | 0.5246 | 0.868 | 0.2733 | 0.7054 | 0.6694 | 0.7337 | 660 | 0.139 |
+| upr-embed-arctic2-lower | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | document,query | lowercase | 3000 | 31.405 | 0 | 6000 |
+| upr-labelembed-arctic2-lower-about | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | lowercase | 68 | 0.48 | 0 | 68 |
+| upr-eval-abl-arctic2-lower | 2026-10-20 | val | fusion | arctic2-lower | top_k k=2 | 0.5479 | 0.4937 | 0.5262 | 0.868 | 0.2767 | 0.7135 | 0.6706 | 0.7337 | 660 | 0.149 |
+
+## UPR — thresholds_refine
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-thr-jina-v5-st1.9 | 2026-10-20 | val | fusion | jina-v5-strip | thr=1.9 | 0.5880 | 0.5119 | 0.5455 | 0.868 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.186 |
+| upr-eval-thr-jina-v5-st2.1 | 2026-10-20 | val | fusion | jina-v5-strip | thr=2.1 | 0.5906 | 0.5099 | 0.5372 | 0.838 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.205 |
+| upr-eval-thr-jina-v5-st2.3 | 2026-10-20 | val | fusion | jina-v5-strip | thr=2.3 | 0.5836 | 0.4887 | 0.5265 | 0.824 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.193 |
+| upr-eval-thr-jina-v5-tk2m1.75 | 2026-10-20 | val | fusion | jina-v5-strip | top_k k=2 min=1.75 | 0.5692 | 0.5003 | 0.5443 | 0.868 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.213 |
+| upr-eval-thr-jina-v5-tk2m1.9 | 2026-10-20 | val | fusion | jina-v5-strip | top_k k=2 min=1.9 | 0.5726 | 0.4949 | 0.5406 | 0.853 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.188 |
+| upr-eval-thr-jina-v5-tk2m2.1 | 2026-10-20 | val | fusion | jina-v5-strip | top_k k=2 min=2.1 | 0.5710 | 0.4908 | 0.5283 | 0.838 | 0.2755 | 0.7155 | 0.6705 | 0.7337 | 660 | 0.182 |
+
+## UPR — phase4_final
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-best-embeddinggemma-st1.75-test | 2026-10-20 | test | fusion | embeddinggemma | thr=1.75 | 0.5979 | 0.5287 | 0.5430 | 0.853 | 0.2720 | 0.7110 | 0.6647 | 0.7378 | 664 | 0.134 |
