@@ -191,9 +191,24 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
   unit-norm, dims as listed in the log; e5-base-v2/arctic2 refresh in place
   (document warm), no-prefix models' shared-key cache reuse verified correct;
   204/204 artifact checks; log note in `docs/experiments.md`)*
-- [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN, prototype
+- [x] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN, prototype
   and per-label max-similarity evidence on UPR val across the pool BEFORE any
   fusion/preprocess weight grids ("embed all, ablate few" — no 14³ factorial).
+  *(done + verified 2026-10-20: 98/98 sweep cells `upr-eval-*` (knn k∈{1,3,5,
+  10,20} × prototype × max-sim × 14 models) on val, decision top_k k=2; all
+  three candidate families measured — reviewer's family note satisfied: the
+  cut ranks by best micro-F1 across a model's 7 cells, tie-broken by best tail
+  macro-F1. **Semifinalists {embeddinggemma, jina-v5, voyage-4-nano, arctic2}**;
+  slot 4 is a measured near-tie (arctic2 0.5372 wins the tail tiebreak vs
+  e5-large-v2 0.5372/0.5625; embeddinggemma2 0.5365 best-balanced tail) with a
+  one-tuple swap protocol in the fusion sweep. Findings: k rises to the grid
+  edge everywhere; prototype tail macro beats best-knn tail macro 14/14 while
+  micro-F1 ties it; **max-sim below both families on all buckets (the
+  "complements the mean for tail labels" prior did not hold on UPR val)**;
+  kNN shortlist R@50 0.89–0.96 vs proto ~0.73 flat; unseen coverage 0 as
+  designed. Evidence + decision table in `docs/experiments.md` Phase 4 pool-cut
+  section; all rows in the auto table `## UPR — pool_cut`; OMCT corroboration
+  noted as a separate line)*
 - [x] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
   explain and wait for the reviewer per AGENTS.md §3), then implement — how an
   `evaluate` config points at a prior `embed` run's artifact.
@@ -226,12 +241,12 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [x] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute; done 2026-10-20: `predictors/knn.py` (port) over the pure core `retrieve/knn.py` — votes = Σ max(cos,0)^p over the top-k train examples, p configurable (softmax-with-temperature deliberately deferred until a grid needs it), ties → earlier train row, k clamped to n_train; consumes the Phase 4 wiring (train-only document vectors at construction); fake-embedder unit tests incl. hand-computed votes, tie and clipping cases; val evidence arrives with Phase 4 opening C)*
 - [x] **Label prototypes:** mean of the example embeddings per label. *(done 2026-10-20: `predictors/prototype.py` over `retrieve/prototypes.py` — renormalized per-label mean of train document vectors (float64 accumulation → float32 output); zero-example labels carry zero prototypes and score 0, matching the trivial baselines' unseen-label behavior; max-sim aggregation over the same matrix joins with the checkbox-C sweep)*
-- [ ] **Per-label max-similarity:** label score = max cosine between the text
+- [x] **Per-label max-similarity:** label score = max cosine between the text
   and any single train example of that label (over the same sentence matrix
   the prototype mean uses — complements the mean for tail labels with few
   examples); same predictor interface, runs in the Phase 4 opening checkbox C
   val sweep (settle 2026-10-20 with the reviewer: the candidate family for
-  the pool cut is {knn, prototype, max-sim}).
+  the pool cut is {knn, prototype, max-sim}). *(done 2026-10-20: `predictors/maxsim.py` (registry name `maxsim`) over `retrieve/prototypes.py: max_sim_scores` — per-label max cosine on the same train document matrix the mean averages; labels with zero train examples score the cosine floor -1.0 so they can never enter a top-k decision (a 0-floor would ride above genuinely negative similarities); fake-embedder unit tests incl. hand maxima + contract rejections; the sweep cells themselves run under Phase 4 opening C — reviewer-approved grid {knn k in 1/3/5/10/20, prototype, max-sim} x 14 models in `experiments/pool_cut_sweep.py`)*
 - [ ] **Zero-shot label embeddings:** embed label names and descriptions, optionally with templates such as "This recommendation is about {label}."
 - [ ] **Fusion:** `score = a*knn + b*proto + c*zeroshot`. Tune the weights on val.
 - [ ] **Thresholding:** global, per-label (calibrated on val) and top-k with a minimum score. Compare them. *(calibration evidence, strictly aux-annotated: OMCT pair score distributions, including goldless paragraphs' top similarities — the "should answer nothing" rows; val decides any operating point)*

@@ -132,3 +132,54 @@ def test_prototype_scores_reject_dimension_mismatch() -> None:
             prototypes,
             np.zeros((1, 5), dtype=np.float32),
         )
+
+
+def test_max_sim_scores_match_hand_maxima() -> None:
+    """Label score = max cosine over that label's single train examples."""
+    from cluster_rag.retrieve.prototypes import max_sim_scores
+
+    scores = max_sim_scores(TRAIN, LABELS, Q_UP)
+    assert scores.shape == (1, 3) and scores.dtype == np.float32
+    # sims to (r1, r2, r3) = (0, 1, -1): A = max(0, 1) = 1; B = max(0) = 0; C = -1
+    np.testing.assert_allclose(scores[0], [1.0, 0.0, -1.0], atol=1e-7)
+    diag = max_sim_scores(TRAIN, LABELS, Q_DIAG)
+    s = 1.0 / np.sqrt(2.0)
+    np.testing.assert_allclose(diag[0], [s, s, -s], atol=1e-6)
+
+
+def test_max_sim_single_example_labels_use_that_example() -> None:
+    """A one-example label scores exactly the query's cosine to the example."""
+    from cluster_rag.retrieve.prototypes import max_sim_scores
+
+    scores = max_sim_scores(TRAIN, LABELS, Q_RIGHT)  # sims: r1 1, r2 0, r3 0
+    # A = max(r1, r2) = max(1, 0) = 1; B = max(r1) = 1; C = max(r3) = 0
+    np.testing.assert_allclose(scores[0], [1.0, 1.0, 0.0], atol=1e-7)
+
+
+def test_max_sim_zero_example_labels_get_the_cosine_floor() -> None:
+    """No train examples -> -1.0 in every row: below every real candidate."""
+    from cluster_rag.retrieve.prototypes import (
+        MAX_SIM_NO_EXAMPLES_SCORE,
+        max_sim_scores,
+    )
+
+    matrix = np.zeros((3, 4), dtype=bool)
+    matrix[:, :3] = LABELS
+    scores = max_sim_scores(TRAIN, matrix, Q_UP)
+    assert np.all(scores[:, 3] == MAX_SIM_NO_EXAMPLES_SCORE)
+    # the floor can never win a ranking against real evidence
+    assert (scores[:, :3].max(axis=1) > scores[:, 3]).all()
+
+
+def test_max_sim_rejects_bad_shapes_and_dtypes() -> None:
+    """Contract violations fail loudly, like every scoring core."""
+    from cluster_rag.retrieve.prototypes import max_sim_scores
+
+    with pytest.raises(ValueError, match="2-D"):
+        max_sim_scores(TRAIN[0], LABELS, Q_UP)
+    with pytest.raises(ValueError, match="n_train matching"):
+        max_sim_scores(TRAIN, LABELS[:2], Q_UP)
+    with pytest.raises(ValueError, match="float32"):
+        max_sim_scores(TRAIN.astype(np.float64), LABELS, Q_UP)
+    with pytest.raises(ValueError, match="float32"):
+        max_sim_scores(TRAIN, LABELS, Q_UP.astype(np.float64))

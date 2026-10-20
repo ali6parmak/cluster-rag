@@ -16,7 +16,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from cluster_rag.predictors.base import Predictor, PredictorContext
+from cluster_rag.predictors.fusion import FusionPredictor
 from cluster_rag.predictors.knn import KNNVotingPredictor
+from cluster_rag.predictors.maxsim import MaxSimPredictor
 from cluster_rag.predictors.prototype import PrototypePredictor
 from cluster_rag.predictors.trivial import MostFrequentPredictor, RandomPredictor
 
@@ -25,6 +27,8 @@ PREDICTORS: dict[str, type] = {
     "random": RandomPredictor,
     "knn": KNNVotingPredictor,
     "prototype": PrototypePredictor,
+    "maxsim": MaxSimPredictor,
+    "fusion": FusionPredictor,
 }
 
 

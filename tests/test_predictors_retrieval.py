@@ -149,3 +149,32 @@ def test_determinism_and_seed_irrelevance() -> None:
     first = a.score(["q"], query_vectors=queries)
     assert np.array_equal(first, b.score(["q"], query_vectors=queries))
     assert a.describe() == b.describe()
+
+
+def test_maxsim_predictor_matches_the_core_and_never_suggests_unseen() -> None:
+    """maxsim = per-label max cosine; unseen labels sit at the -1 floor."""
+    predictor = build_predictor("maxsim", {}, _context(), seed=0)
+    queries = np.asarray([[0.0, 1.0]], dtype=np.float32)  # sims r1 0, r2 1, r3 -1
+    scores = predictor.score(["q"], query_vectors=queries)
+    assert scores.shape == (1, 4) and scores.dtype == np.float32
+    np.testing.assert_allclose(scores[0], [1.0, 0.0, -1.0, -1.0], atol=1e-7)
+    assert predictor.describe() == {
+        "name": "maxsim",
+        "n_train_examples": 3,
+        "dimension": 2,
+        "n_labels": 4,
+    }
+    assert predictor_embedding_requirements("maxsim") == (True, ("document", "query"))
+
+
+def test_maxsim_predictor_validates_params_and_score_inputs() -> None:
+    """No params accepted; missing/unaligned query vectors fail loudly."""
+    with pytest.raises(ValueError, match="does not support parameter"):
+        build_predictor("maxsim", {"k": 2}, _context(), seed=0)
+    predictor = build_predictor("maxsim", {}, _context(), seed=0)
+    with pytest.raises(ValueError, match="requires query_vectors"):
+        predictor.score(["q"])
+    with pytest.raises(ValueError, match="align row-by-row"):
+        predictor.score(["a", "b"], query_vectors=np.asarray([[0.0, 1.0]], dtype=np.float32))
+    with pytest.raises(ValueError, match="unit-norm|L2-normalized"):
+        predictor.score(["a"], query_vectors=np.asarray([[2.0, 0.0]], dtype=np.float32))

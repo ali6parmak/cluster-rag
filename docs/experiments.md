@@ -218,3 +218,80 @@ Cache behavior (verified against `kind_stats` + the .npz matrices): `upr-embed-e
 Dimensions as served and verified: minilm 384, e5-base-v2 768, bge-m3 1024, arctic2 1024, embeddinggemma 768, mxbai 1024, e5-large-v2 **1024** (the settled-pool note's "768d" slip, corrected in PLAN), mpnet 768, nomic-v2-moe 768, jina-v5 1024, voyage-4-nano **2048** (default MRL head), granite-english-r2 768, f2llm-80m **320** (MRL), embeddinggemma-2 768 — all matrices (3000, d) float32, unit-norm; wall time 2.6–21.6 s per two-kind run (HF, GPU) and 19.6–41.6 s (Ollama HTTP).
 
 **Next:** Phase 4 retrieval predictors (kNN voting, prototypes) over these artifacts on UPR val — pending the reviewer's OK on the eval↔embedding-artifact wiring (the `embedding_run` field, work-order item 5); the pool cut (checkbox C) follows that evidence.
+## Phase 4: pool cut — knn / prototype / max-sim over the 14 embedders on UPR val (2026-10-20)
+
+UPR dataset scope: **val split only** (660 records, fixed ids, top_k k=2 decision
+everywhere — apples-to-apples with the `upr-eval-mf-topk2-val` / `upr-eval-random-*`
+baselines), artifact-side preprocessing `raw-v1` (preprocessing ablations come
+after the cut, per the "no fusion/preprocess weight grids before the pool cut"
+order). 98 sweep runs from `experiments/pool_cut_sweep.py`
+(review-approved grid: knn k∈{1,3,5,10,20} × prototype × max-sim × 14 pool
+models), all consuming their model's prior `upr-embed-<model>` artifact through
+`eval.embedding_run_id` — **nothing re-encoded**: each cell is a pure numpy
+scoring pass (12.5 s total across all 98). Every cell's `metrics.json` carries
+per-bucket numbers + the embedding run's full lineage; all 98 rows live in the
+auto table under `## UPR — pool_cut`; verification: 98/98 artifacts checked
+(clean lineage run-ids, decision, split, frozen-config sweep label), 0 problems.
+
+Decision view (per model: best kNN over the k grid by micro-F1; numbers from the
+runs' metrics.json; the cut rule below ranks by **best micro-F1 across the
+model's 7 cells**, tie-broken by **best tail macro-F1 across those cells**):
+
+| rank | model | best knn k | knn micro | knn macro | knn tail Mc | knn SR@50 | proto micro | proto macro | proto tail Mc | maxsim micro | model score |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | embeddinggemma | 10 | 0.5388 | 0.4796 | 0.4761 | 0.9576 | 0.5228 | 0.5209 | 0.5551 | 0.4453 | 0.5388 |
+| 2 | jina-v5 | 20 | 0.5380 | 0.4760 | 0.4893 | 0.9605 | 0.5380 | 0.5281 | 0.5941 | 0.4559 | 0.5380 |
+| 3 | voyage-4-nano | 20 | 0.5380 | 0.4932 | 0.5686 | 0.9597 | 0.5182 | 0.5171 | 0.5857 | 0.4711 | 0.5380 |
+| 4 | arctic2 | 10 | 0.5372 | 0.4767 | 0.4825 | 0.9540 | 0.5312 | 0.5235 | 0.5808 | 0.4605 | 0.5372 |
+| 5 | e5-large-v2 | 10 | 0.5274 | 0.4786 | 0.4741 | 0.9479 | 0.5372 | 0.5286 | 0.5625 | 0.4498 | 0.5372 |
+| 6 | embeddinggemma2 | 20 | 0.5365 | 0.4956 | 0.5554 | 0.9535 | 0.5289 | 0.5189 | 0.5790 | 0.4658 | 0.5365 |
+| 7 | granite-english-r2 | 20 | 0.5319 | 0.4801 | 0.5146 | 0.9568 | 0.5327 | 0.5259 | 0.5678 | 0.4620 | 0.5327 |
+| 8 | mxbai | 10 | 0.5327 | 0.4718 | 0.4791 | 0.9545 | 0.5289 | 0.5154 | 0.5419 | 0.4498 | 0.5327 |
+| 9 | nomic-v2-moe | 10 | 0.5327 | 0.4642 | 0.4451 | 0.9514 | 0.5015 | 0.4916 | 0.5324 | 0.4400 | 0.5327 |
+| 10 | bge-m3 | 10 | 0.5099 | 0.4307 | 0.4120 | 0.9524 | 0.5205 | 0.5034 | 0.5569 | 0.4286 | 0.5205 |
+| 11 | e5-base-v2 | 10 | 0.5205 | 0.4710 | 0.5273 | 0.9481 | 0.5182 | 0.5087 | 0.5431 | 0.4453 | 0.5205 |
+| 12 | f2llm-80m | 20 | 0.5167 | 0.4497 | 0.4819 | 0.9559 | 0.5038 | 0.4804 | 0.4927 | 0.4407 | 0.5167 |
+| 13 | minilm | 20 | 0.5167 | 0.4472 | 0.4643 | 0.9567 | 0.5122 | 0.4926 | 0.5365 | 0.4422 | 0.5167 |
+| 14 | mpnet | 20 | 0.5061 | 0.4452 | 0.4639 | 0.9557 | 0.5053 | 0.4929 | 0.5242 | 0.4384 | 0.5061 |
+
+(knn SR@50 range 0.8918–0.9605, proto 0.7268–0.7345, maxsim below both
+everywhere; every knn/proto/maxsim cell beats the mf floor 0.1413 micro-F1 by
+≥3×)
+
+**Findings (UPR val):**
+1. **The pool top is tight**: ranks 1–7 span 0.5327–0.5388 micro-F1 (<0.7 pp).
+   The cut to 3–4 is therefore soft — fusion and threshold work may matter more
+   than the model choice; test numbers come later from the chosen best config.
+2. **kNN favors larger neighborhoods**: micro-F1 rises monotonically to the
+   grid edge for every model (k=1 ≈ 0.41–0.44 → k=10/20 ≈ 0.51–0.54); a k=50
+   probe joins the semifinalist stage. Best k is 10 (7 models) or 20 (7 models).
+3. **Prototype-mean ≈ kNN on micro-F1 and beats it on tail for every model**
+   (proto tail macro > best-knn tail macro 14/14) — the fusion ratio grid
+   (a·knn + b·proto) is the direct test of this trade.
+4. **max-sim underdelivered on UPR val**: 0.4286–0.4711 micro-F1, below both
+   other families on every frequency bucket for all 14 models — the PLAN prior
+   that it "complements the mean for tail labels" did **not** hold here (proto
+   tail macro 0.5324–0.5941 vs maxsim 0.3045–0.4523). Family measured for
+   completeness (the {knn, prototype, max-sim} candidate family is now
+   evidence-complete); no semifinalist predictor role.
+5. **Shortlist view**: kNN shortlist R@50 0.89–0.96 vs prototype 0.73 flat —
+   the 68-label prototype ranking compresses coverage; kNN's broad vote surface
+   is the retrieval-ceiling view, fusion may combine both.
+6. **Unseen labels**: coverage 0.0 for all three families as designed (no train
+   examples → no votes / zero prototype / -1 floor) — zero-shot label
+   embeddings remain the only route to never-seen labels.
+7. **Auxiliary corroboration (omct-, separate line, not a UPR metric)**: the
+   cut's winners were also the OMCT same-document retrieval leaders (jina-v5,
+   e5-large-v2) and all-scope AUC leaders (embeddinggemma/2) — consistent, not
+   decisive (PLAN scope discipline: the cut used UPR val evidence).
+
+**Cut (checkbox C): semifinalists = {embeddinggemma, jina-v5, voyage-4-nano,
+arctic2}** by the stated rule. Slot 4 is a measured near-tie: arctic2 wins the
+0.5372 tie vs e5-large-v2 on best tail macro-F1 (0.5808 vs 0.5625), with
+embeddinggemma2 one micro-F1 point behind (0.5365, the best-balanced tail of
+the contenders). Swap protocol: the fusion sweep's `SEMIFINALISTS` tuple is the
+single edit point if the reviewer prefers a different 4th — the fusion weight
+grid runs on these four before any further preprocessing ablation.
+
+**Next:** fusion predictor (a·knn + b·proto, c·zeroshot pending the
+zero-shot-artifact proposal) weight-tuned on val over the four semifinalists.
