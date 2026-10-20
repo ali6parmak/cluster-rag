@@ -295,3 +295,65 @@ grid runs on these four before any further preprocessing ablation.
 
 **Next:** fusion predictor (a·knn + b·proto, c·zeroshot pending the
 zero-shot-artifact proposal) weight-tuned on val over the four semifinalists.
+
+## Phase 4: fusion weights + zero-shot template comparison on UPR val (2026-10-20)
+
+UPR dataset scope: **val split only** (660 records), decision `top_k k=2` everywhere
+(comparability with all pool-cut rows), artifact-side preprocessing `raw-v1`.
+72 new runs from `experiments/fusion_weight_sweep.py` (48 cells: fusion
+`a·knn + b·proto`, b=1, a∈{0.25,0.5,1,2,4,8} × k∈{10,20} × the four checkbox-C
+semifinalists; c=0) and `experiments/zeroshot_sweep.py` (24 cells: 12
+`upr-labelembed-<model>-<variant>` label-text artifacts [68 labels each] + 12
+`upr-eval-zeroshot-<model>-<variant>` evaluations). Verification: 48/48 + 24/24
+evaluate artifacts field-checked (lineage run-ids, decision, split, no stray
+label lineage), 12/12 labelembed artifacts checked (labels = 68 sorted unique,
+unit rows, model/dimension/sha consistent with the model's primary embedding
+run) — 0 problems. Label-text variants: `name` (bare label) /
+`about` ("This recommendation is about {label}.") / `topic` ("Topic: {label}.").
+
+**Zero-shot alone (predictor `zeroshot`, UPR val):**
+
+| model | name micro | about micro | topic micro | about unseen micro | unseen coverage (all variants) |
+|---|---|---|---|---|---|
+| embeddinggemma | 0.3875 | 0.4301 | 0.4407 | 0.4797 | 0.75 |
+| jina-v5 | 0.4704 | 0.4894 | 0.4848 | 0.4959 | 0.62 name/about, 0.75 topic |
+| voyage-4-nano | 0.5015 | 0.5122 | 0.5023 | 0.5214 | 0.75 |
+| arctic2 | 0.4369 | 0.4635 | 0.4567 | 0.5142 | 0.62 |
+
+1. **Templates beat the bare label name 4/4** (up to +5.3 pp on embeddinggemma);
+   `about` wins 3/4 models and the best 4-model mean (0.4738 vs topic 0.4711,
+   name 0.4491) — `about` is the c-grid's template.
+2. **Zero-shot alone is below every example-based family** (best 0.5122
+   voyage-4-nano `about` vs pool-cut family bests 0.5327–0.5406…) — expected
+   with names only (no descriptions, no catalog file); its value is structural:
+   **unseen-bucket coverage 0.62–0.75 vs 0.00 for all example-based predictors**
+   (the only route to never-annotated labels), and a fusion ingredient.
+
+**Fusion weights (c = 0, UPR val):**
+
+| model | best cell | micro | model's pure best (pool cut) | gain |
+|---|---|---|---|---|
+| embeddinggemma | k10 a0.5 | 0.5464 | 0.5388 | +0.76 pp |
+| jina-v5 | k20 a0.25 | 0.5410 | 0.5380 | +0.30 pp |
+| voyage-4-nano | k10 a0.25 | 0.5395 | 0.5380 | +0.15 pp |
+| arctic2 | k10 a0.5/a2 | 0.5410 | 0.5372 | +0.38 pp |
+
+3. **Mixing helps, mildly**: the best fusion row per model beats its best pure
+   cell by +0.15 to +0.76 pp micro-F1; the top run is
+   `upr-eval-fusion-embeddinggemma-k10-a0.5` (0.5464, macro 0.5000, nDCG@5
+   0.6698).
+4. **Proto-heavy ratios win**: every model's best `a` is ≤ 0.5 (b=1), and the
+   a-landscape is flat (within-model spread at most ~0.7 pp across the whole
+   grid) — the prototype signal is doing real work, consistent with the pool
+   cut's 14/14 prototype-tail advantage.
+5. **Traded signal — shortlist breadth**: fusion shortlist R@50 ≈ 0.7337
+   (≈ prototype's 0.7268–0.7345) vs kNN's 0.89–0.96: the additive mix inherits
+   the prototype ranking's compression, not kNN's shortlist ceiling. If a
+   downstream reranker (Phase 6) needs candidate breadth, the kNN shortlist
+   should stay a separate artifact-level signal, not live inside the fused
+   ranking.
+
+**Next:** fusion c-grid over the winning `about` template
+(`experiments/fusion_c_sweep.py`: a=0.5, b=1, k∈{10,20}, c∈{0.1,0.25,0.5,1.0} ×
+the four semifinalists → 32 cells; the `upr-labelembed-*-about` artifacts are
+already built); then Phase 4 thresholding and the single final test run.

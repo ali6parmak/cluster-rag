@@ -143,3 +143,85 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-knn-embeddinggemma2-k20 | 2026-10-20 | val | knn | embeddinggemma2 | top_k k=2 | 0.5365 | 0.4956 | 0.5151 | 0.868 | 0.2691 | 0.6879 | 0.6579 | 0.9535 | 660 | 0.118 |
 | upr-eval-proto-embeddinggemma2 | 2026-10-20 | val | prototype | embeddinggemma2 | top_k k=2 | 0.5289 | 0.5189 | 0.5085 | 0.868 | 0.2764 | 0.7120 | 0.6607 | 0.7302 | 660 | 0.104 |
 | upr-eval-maxsim-embeddinggemma2 | 2026-10-20 | val | maxsim | embeddinggemma2 | top_k k=2 | 0.4658 | 0.4155 | 0.4507 | 0.868 | 0.2594 | 0.6900 | 0.5936 | 0.7330 | 660 | 0.089 |
+
+## UPR — fusion_weights
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-fusion-embeddinggemma-k10-a0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5456 | 0.4993 | 0.5254 | 0.868 | 0.2745 | 0.7081 | 0.6713 | 0.7337 | 660 | 0.139 |
+| upr-eval-fusion-embeddinggemma-k10-a0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.5000 | 0.5261 | 0.868 | 0.2739 | 0.7068 | 0.6698 | 0.7337 | 660 | 0.133 |
+| upr-eval-fusion-embeddinggemma-k10-a1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5426 | 0.4873 | 0.5228 | 0.853 | 0.2739 | 0.7068 | 0.6681 | 0.7337 | 660 | 0.157 |
+| upr-eval-fusion-embeddinggemma-k10-a2 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5441 | 0.4873 | 0.5237 | 0.853 | 0.2727 | 0.7064 | 0.6671 | 0.7337 | 660 | 0.134 |
+| upr-eval-fusion-embeddinggemma-k10-a4 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5395 | 0.4798 | 0.5190 | 0.853 | 0.2709 | 0.7069 | 0.6649 | 0.7337 | 660 | 0.138 |
+| upr-eval-fusion-embeddinggemma-k10-a8 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5388 | 0.4774 | 0.5184 | 0.853 | 0.2700 | 0.7066 | 0.6634 | 0.7337 | 660 | 0.135 |
+| upr-eval-fusion-embeddinggemma-k20-a0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5418 | 0.4956 | 0.5217 | 0.868 | 0.2764 | 0.7061 | 0.6667 | 0.7337 | 660 | 0.142 |
+| upr-eval-fusion-embeddinggemma-k20-a0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5403 | 0.4908 | 0.5201 | 0.868 | 0.2742 | 0.7057 | 0.6645 | 0.7337 | 660 | 0.147 |
+| upr-eval-fusion-embeddinggemma-k20-a1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5403 | 0.4926 | 0.5200 | 0.868 | 0.2739 | 0.7057 | 0.6638 | 0.7337 | 660 | 0.143 |
+| upr-eval-fusion-embeddinggemma-k20-a2 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5388 | 0.4864 | 0.5179 | 0.853 | 0.2730 | 0.7062 | 0.6621 | 0.7337 | 660 | 0.138 |
+| upr-eval-fusion-embeddinggemma-k20-a4 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5372 | 0.4838 | 0.5168 | 0.853 | 0.2724 | 0.7071 | 0.6610 | 0.7337 | 660 | 0.163 |
+| upr-eval-fusion-embeddinggemma-k20-a8 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5334 | 0.4779 | 0.5137 | 0.853 | 0.2718 | 0.7067 | 0.6599 | 0.7337 | 660 | 0.134 |
+| upr-eval-fusion-jina-v5-k10-a0.25 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4834 | 0.5207 | 0.868 | 0.2758 | 0.7110 | 0.6704 | 0.7337 | 660 | 0.178 |
+| upr-eval-fusion-jina-v5-k10-a0.5 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4835 | 0.5206 | 0.868 | 0.2761 | 0.7093 | 0.6704 | 0.7337 | 660 | 0.18 |
+| upr-eval-fusion-jina-v5-k10-a1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4832 | 0.5206 | 0.868 | 0.2755 | 0.7093 | 0.6701 | 0.7337 | 660 | 0.177 |
+| upr-eval-fusion-jina-v5-k10-a2 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5350 | 0.4742 | 0.5161 | 0.868 | 0.2748 | 0.7093 | 0.6677 | 0.7337 | 660 | 0.183 |
+| upr-eval-fusion-jina-v5-k10-a4 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5334 | 0.4702 | 0.5147 | 0.868 | 0.2736 | 0.7093 | 0.6661 | 0.7337 | 660 | 0.192 |
+| upr-eval-fusion-jina-v5-k10-a8 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5327 | 0.4704 | 0.5140 | 0.868 | 0.2727 | 0.7090 | 0.6649 | 0.7337 | 660 | 0.181 |
+| upr-eval-fusion-jina-v5-k20-a0.25 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5410 | 0.4845 | 0.5215 | 0.868 | 0.2764 | 0.7119 | 0.6681 | 0.7337 | 660 | 0.198 |
+| upr-eval-fusion-jina-v5-k20-a0.5 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5403 | 0.4842 | 0.5205 | 0.868 | 0.2764 | 0.7114 | 0.6671 | 0.7337 | 660 | 0.18 |
+| upr-eval-fusion-jina-v5-k20-a1 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5395 | 0.4796 | 0.5197 | 0.868 | 0.2764 | 0.7112 | 0.6672 | 0.7337 | 660 | 0.182 |
+| upr-eval-fusion-jina-v5-k20-a2 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5395 | 0.4789 | 0.5197 | 0.868 | 0.2755 | 0.7107 | 0.6659 | 0.7337 | 660 | 0.178 |
+| upr-eval-fusion-jina-v5-k20-a4 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5380 | 0.4768 | 0.5185 | 0.868 | 0.2748 | 0.7092 | 0.6649 | 0.7337 | 660 | 0.183 |
+| upr-eval-fusion-jina-v5-k20-a8 | 2026-10-20 | val | fusion | jina-v5 | top_k k=2 | 0.5372 | 0.4740 | 0.5177 | 0.868 | 0.2742 | 0.7069 | 0.6642 | 0.7337 | 660 | 0.207 |
+| upr-eval-fusion-voyage-4-nano-k10-a0.25 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5395 | 0.4893 | 0.5201 | 0.868 | 0.2730 | 0.7140 | 0.6654 | 0.7337 | 660 | 0.248 |
+| upr-eval-fusion-voyage-4-nano-k10-a0.5 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4842 | 0.5185 | 0.868 | 0.2721 | 0.7128 | 0.6641 | 0.7337 | 660 | 0.246 |
+| upr-eval-fusion-voyage-4-nano-k10-a1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4803 | 0.5172 | 0.868 | 0.2724 | 0.7128 | 0.6650 | 0.7337 | 660 | 0.266 |
+| upr-eval-fusion-voyage-4-nano-k10-a2 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4809 | 0.5172 | 0.868 | 0.2715 | 0.7128 | 0.6637 | 0.7337 | 660 | 0.246 |
+| upr-eval-fusion-voyage-4-nano-k10-a4 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5372 | 0.4783 | 0.5164 | 0.868 | 0.2700 | 0.7128 | 0.6622 | 0.7337 | 660 | 0.245 |
+| upr-eval-fusion-voyage-4-nano-k10-a8 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5372 | 0.4796 | 0.5163 | 0.868 | 0.2688 | 0.7128 | 0.6608 | 0.7337 | 660 | 0.261 |
+| upr-eval-fusion-voyage-4-nano-k20-a0.25 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4951 | 0.5188 | 0.868 | 0.2736 | 0.7115 | 0.6669 | 0.7337 | 660 | 0.245 |
+| upr-eval-fusion-voyage-4-nano-k20-a0.5 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5372 | 0.4922 | 0.5175 | 0.868 | 0.2718 | 0.7111 | 0.6637 | 0.7337 | 660 | 0.244 |
+| upr-eval-fusion-voyage-4-nano-k20-a1 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5388 | 0.4940 | 0.5187 | 0.868 | 0.2712 | 0.7111 | 0.6632 | 0.7337 | 660 | 0.246 |
+| upr-eval-fusion-voyage-4-nano-k20-a2 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5395 | 0.4931 | 0.5192 | 0.868 | 0.2709 | 0.7111 | 0.6628 | 0.7337 | 660 | 0.247 |
+| upr-eval-fusion-voyage-4-nano-k20-a4 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5388 | 0.4915 | 0.5184 | 0.868 | 0.2691 | 0.7088 | 0.6609 | 0.7337 | 660 | 0.263 |
+| upr-eval-fusion-voyage-4-nano-k20-a8 | 2026-10-20 | val | fusion | voyage-4-nano | top_k k=2 | 0.5380 | 0.4912 | 0.5178 | 0.868 | 0.2688 | 0.7083 | 0.6606 | 0.7337 | 660 | 0.247 |
+| upr-eval-fusion-arctic2-k10-a0.25 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5403 | 0.4887 | 0.5205 | 0.868 | 0.2733 | 0.7135 | 0.6650 | 0.7337 | 660 | 0.149 |
+| upr-eval-fusion-arctic2-k10-a0.5 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5410 | 0.4867 | 0.5210 | 0.868 | 0.2724 | 0.7117 | 0.6637 | 0.7337 | 660 | 0.145 |
+| upr-eval-fusion-arctic2-k10-a1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5395 | 0.4855 | 0.5197 | 0.868 | 0.2715 | 0.7117 | 0.6628 | 0.7337 | 660 | 0.147 |
+| upr-eval-fusion-arctic2-k10-a2 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5410 | 0.4877 | 0.5213 | 0.868 | 0.2709 | 0.7117 | 0.6623 | 0.7337 | 660 | 0.146 |
+| upr-eval-fusion-arctic2-k10-a4 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5388 | 0.4812 | 0.5191 | 0.868 | 0.2703 | 0.7114 | 0.6610 | 0.7337 | 660 | 0.145 |
+| upr-eval-fusion-arctic2-k10-a8 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5395 | 0.4798 | 0.5199 | 0.868 | 0.2694 | 0.7098 | 0.6599 | 0.7337 | 660 | 0.146 |
+| upr-eval-fusion-arctic2-k20-a0.25 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5350 | 0.4725 | 0.5152 | 0.868 | 0.2742 | 0.7120 | 0.6632 | 0.7337 | 660 | 0.18 |
+| upr-eval-fusion-arctic2-k20-a0.5 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5334 | 0.4705 | 0.5138 | 0.868 | 0.2730 | 0.7120 | 0.6618 | 0.7337 | 660 | 0.147 |
+| upr-eval-fusion-arctic2-k20-a1 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5334 | 0.4670 | 0.5141 | 0.868 | 0.2730 | 0.7114 | 0.6616 | 0.7337 | 660 | 0.148 |
+| upr-eval-fusion-arctic2-k20-a2 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5327 | 0.4668 | 0.5136 | 0.868 | 0.2712 | 0.7105 | 0.6593 | 0.7337 | 660 | 0.147 |
+| upr-eval-fusion-arctic2-k20-a4 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5312 | 0.4652 | 0.5125 | 0.868 | 0.2706 | 0.7101 | 0.6584 | 0.7337 | 660 | 0.146 |
+| upr-eval-fusion-arctic2-k20-a8 | 2026-10-20 | val | fusion | arctic2 | top_k k=2 | 0.5312 | 0.4688 | 0.5125 | 0.868 | 0.2703 | 0.7086 | 0.6584 | 0.7337 | 660 | 0.149 |
+
+## UPR — zeroshot
+
+| run_id | date | backend | model | model_version | dim | ctx | kinds | preprocess | n_texts | seconds | cache_hits | cache_misses |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-labelembed-embeddinggemma-name | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 1.836 | 0 | 68 |
+| upr-eval-zeroshot-embeddinggemma-name | 2026-10-20 | val | zeroshot | embeddinggemma | top_k k=2 | 0.3875 | 0.4060 | 0.3795 | 0.897 | 0.2197 | 0.6559 | 0.5216 | 0.8615 | 660 | 0.054 |
+| upr-labelembed-embeddinggemma-about | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.359 | 0 | 68 |
+| upr-eval-zeroshot-embeddinggemma-about | 2026-10-20 | val | zeroshot | embeddinggemma | top_k k=2 | 0.4301 | 0.4439 | 0.4186 | 0.941 | 0.2455 | 0.7021 | 0.5752 | 0.8664 | 660 | 0.05 |
+| upr-labelembed-embeddinggemma-topic | 2026-10-20 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.294 | 0 | 68 |
+| upr-eval-zeroshot-embeddinggemma-topic | 2026-10-20 | val | zeroshot | embeddinggemma | top_k k=2 | 0.4407 | 0.4576 | 0.4286 | 0.971 | 0.2470 | 0.6942 | 0.5872 | 0.8556 | 660 | 0.053 |
+| upr-labelembed-jina-v5-name | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | label | raw | 68 | 6.763 | 0 | 68 |
+| upr-eval-zeroshot-jina-v5-name | 2026-10-20 | val | zeroshot | jina-v5 | top_k k=2 | 0.4704 | 0.4809 | 0.4617 | 0.926 | 0.2548 | 0.7220 | 0.6211 | 0.8847 | 660 | 0.072 |
+| upr-labelembed-jina-v5-about | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | label | raw | 68 | 4.579 | 0 | 68 |
+| upr-eval-zeroshot-jina-v5-about | 2026-10-20 | val | zeroshot | jina-v5 | top_k k=2 | 0.4894 | 0.5029 | 0.4806 | 0.941 | 0.2630 | 0.7447 | 0.6442 | 0.8899 | 660 | 0.074 |
+| upr-labelembed-jina-v5-topic | 2026-10-20 | hf | jinaai/jina-embeddings-v5-text-small | dd76d535f544 | 1024 | 32768 | label | raw | 68 | 4.696 | 0 | 68 |
+| upr-eval-zeroshot-jina-v5-topic | 2026-10-20 | val | zeroshot | jina-v5 | top_k k=2 | 0.4848 | 0.5057 | 0.4741 | 0.941 | 0.2661 | 0.7359 | 0.6431 | 0.9018 | 660 | 0.076 |
+| upr-labelembed-voyage-4-nano-name | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | label | raw | 68 | 1.189 | 0 | 68 |
+| upr-eval-zeroshot-voyage-4-nano-name | 2026-10-20 | val | zeroshot | voyage-4-nano | top_k k=2 | 0.5015 | 0.5149 | 0.4877 | 0.956 | 0.2633 | 0.7357 | 0.6398 | 0.9068 | 660 | 0.253 |
+| upr-labelembed-voyage-4-nano-about | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | label | raw | 68 | 1.15 | 0 | 68 |
+| upr-eval-zeroshot-voyage-4-nano-about | 2026-10-20 | val | zeroshot | voyage-4-nano | top_k k=2 | 0.5122 | 0.5203 | 0.4998 | 0.956 | 0.2718 | 0.7490 | 0.6587 | 0.8842 | 660 | 0.119 |
+| upr-labelembed-voyage-4-nano-topic | 2026-10-20 | hf | voyageai/voyage-4-nano | 433ece5e27a1 | 2048 | 32768 | label | raw | 68 | 1.144 | 0 | 68 |
+| upr-eval-zeroshot-voyage-4-nano-topic | 2026-10-20 | val | zeroshot | voyage-4-nano | top_k k=2 | 0.5023 | 0.5191 | 0.4875 | 0.971 | 0.2624 | 0.7419 | 0.6410 | 0.8837 | 660 | 0.118 |
+| upr-labelembed-arctic2-name | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | raw | 68 | 1.481 | 0 | 68 |
+| upr-eval-zeroshot-arctic2-name | 2026-10-20 | val | zeroshot | arctic2 | top_k k=2 | 0.4369 | 0.4412 | 0.4290 | 0.941 | 0.2330 | 0.6692 | 0.5688 | 0.8644 | 660 | 0.064 |
+| upr-labelembed-arctic2-about | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | raw | 68 | 0.458 | 0 | 68 |
+| upr-eval-zeroshot-arctic2-about | 2026-10-20 | val | zeroshot | arctic2 | top_k k=2 | 0.4635 | 0.4741 | 0.4537 | 0.956 | 0.2473 | 0.6995 | 0.6015 | 0.8625 | 660 | 0.062 |
+| upr-labelembed-arctic2-topic | 2026-10-20 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | label | raw | 68 | 0.413 | 0 | 68 |
+| upr-eval-zeroshot-arctic2-topic | 2026-10-20 | val | zeroshot | arctic2 | top_k k=2 | 0.4567 | 0.4783 | 0.4477 | 0.941 | 0.2430 | 0.7051 | 0.5918 | 0.8777 | 660 | 0.061 |
