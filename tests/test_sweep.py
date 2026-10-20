@@ -1,9 +1,12 @@
-"""Tests for the Python sweep infrastructure (Phase 2.5).
+"""Tests for the typed Python sweep infrastructure (Phases 2.5 + 3.5).
 
-The contract under test: cells resolve into validated AppConfigs (pydantic
-covers every override), labels double as run_ids and must be unique, and the
-`sweep` CLI command executes the resolved cells through the existing command
-functions — in order, aborting on the first failure.
+Contracts under test: every cell resolves over configs/base.yaml into a
+validated AppConfig (pydantic covers every override value), labels are
+explicit filesystem-safe run ids with dataset prefix rules, a sweep is
+exactly one dataset (its allowed command set), the sweep label is injected
+as ``table.sweep_label``, and the `sweep` CLI command executes the resolved
+cells through the existing command functions — in order, aborting on the
+first failure.
 """
 
 from __future__ import annotations
@@ -15,7 +18,17 @@ import pytest
 
 from cluster_rag import cli
 from cluster_rag.cli import main
-from cluster_rag.sweep import COMMANDS, SweepCell, SweepRun, define_sweep
+from cluster_rag.config import EmbedderConfig, EvalDecisionConfig
+from cluster_rag.sweep import (
+    COMMANDS,
+    DATASET_COMMANDS,
+    EmbedCell,
+    EvalCell,
+    ProbeCell,
+    SweepCell,
+    SweepRun,
+    define_sweep,
+)
 
 BASE_YAML = """\
 run_id: base
@@ -30,112 +43,204 @@ paths:
 
 
 @pytest.fixture()
-def base_yaml(tmp_path: Path) -> Path:
-    path = tmp_path / "base.yaml"
-    path.write_text(BASE_YAML, encoding="utf-8")
-    return path
+def repo_root(tmp_path: Path, monkeypatch) -> Path:
+    """A fixture repo root: define_sweep resolves the literal configs/base.yaml
+    path against the CWD, so the test builds its own controlled base file."""
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "base.yaml").write_text(BASE_YAML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
 
 
-def test_cell_validation_rejects_bad_command_and_label() -> None:
-    """Unknown commands and unsafe labels fail at cell construction time."""
+def test_sweep_cell_validation() -> None:
+    """Generic cells: known commands only, filesystem-safe labels, no extras."""
     with pytest.raises(ValueError, match="Unknown sweep command"):
         SweepCell(label="x", command="magic")
     with pytest.raises(ValueError, match="filesystem-safe"):
         SweepCell(label="sub/dir", command="embed")
     with pytest.raises(ValueError, match="Extra inputs"):
         SweepCell(label="x", command="embed", run_id="y")  # type: ignore[call-arg]
-    assert COMMANDS == ("embed", "evaluate", "probe-aux")
+    assert COMMANDS == ("stats", "stats-pairs", "split", "embed", "evaluate", "probe-aux")
+    assert DATASET_COMMANDS == {
+        "upr": ("stats", "split", "embed", "evaluate"),
+        "omct": ("stats-pairs", "probe-aux"),
+    }
 
 
-def test_define_sweep_resolves_cells_over_base(base_yaml: Path) -> None:
-    """Cells merge over the base (defaults flow through, overrides win)."""
+def test_eval_cell_requires_decision_xor_k() -> None:
+    """`decision` and the `k` shorthand are exactly one thing."""
+    with pytest.raises(ValueError, match="not both"):
+        EvalCell(label="upr-eval-x", predictor="random", k=2, decision=EvalDecisionConfig(k=2))
+    with pytest.raises(ValueError, match="needs a decision rule"):
+        EvalCell(label="upr-eval-x", predictor="random")
+    # k is validated with the field first (a top_k shorthand must be positive)
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        EvalCell(label="upr-eval-x", predictor="random", k=0)
+    assert EvalCell(label="upr-eval-x", predictor="random", k=2).decision is None
+
+
+def test_typed_cells_reject_unknown_fields() -> None:
+    """Typed cells forbid extra fields and validate their values up front."""
+    with pytest.raises(ValueError, match="Extra inputs"):
+        EvalCell(label="upr-eval-x", predictor="random", k=2, run_id="y")  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="Extra inputs"):
+        EmbedCell(label="upr-embed-x", embed=EmbedderConfig(backend="hf", model_id="m"), k=2)
+    with pytest.raises(ValueError, match="Input should be 'val' or 'test'"):
+        EvalCell(label="upr-eval-x", predictor="random", k=2, split="train")
+    with pytest.raises(ValueError, match="filesystem-safe"):
+        EvalCell(label="sub/dir", predictor="random", k=2)
+
+
+def test_define_sweep_resolves_typed_cells(repo_root: Path) -> None:
+    """Typed cells merge over the fixture base (defaults flow, overrides win)."""
     cells = [
-        SweepCell(
-            label="probe2-a",
-            command="probe-aux",
-            overrides={
-                "embed": {"backend": "hf", "model_id": "model-a"},
-                "probe": {"recall_ks": [1, 5]},
-            },
+        EvalCell(label="upr-eval-a", predictor="random", k=2, split="val"),
+        EvalCell(
+            label="upr-eval-b",
+            predictor="most_frequent",
+            decision=EvalDecisionConfig(rule="top_k_min_score", k=3, min_score=0.1),
+            metrics=None,
         ),
-        SweepCell(
-            label="embed-b",
-            command="embed",
-            overrides={"embed": {"backend": "hf", "model_id": "model-b"}},
-        ),
+        SweepCell(label="upr-stats-base", command="stats"),
     ]
-    runs = define_sweep(cells, base=base_yaml)
+    runs = define_sweep(cells, dataset="upr", label="baselines")
     assert isinstance(runs[0], SweepRun)
-    assert [run.label for run in runs] == ["probe2-a", "embed-b"]
-    assert [run.command for run in runs] == ["probe-aux", "embed"]
-    assert [run.config.run_id for run in runs] == ["probe2-a", "embed-b"]
-    # overrides applied
-    assert runs[0].config.embed is not None and runs[0].config.embed.model_id == "model-a"
-    assert runs[1].config.embed is not None and runs[1].config.embed.model_id == "model-b"
-    assert runs[0].config.probe.recall_ks == (1, 5)
+    assert [run.label for run in runs] == ["upr-eval-a", "upr-eval-b", "upr-stats-base"]
+    assert [run.command for run in runs] == ["evaluate", "evaluate", "stats"]
+    assert [run.config.run_id for run in runs] == ["upr-eval-a", "upr-eval-b", "upr-stats-base"]
+    # the sweep label is injected into every resolved config
+    assert all(run.config.table.sweep_label == "baselines" for run in runs)
+    # the EvalCell shorthand becomes a full top_k decision
+    assert runs[0].config.eval.predictor.name == "random"
+    assert runs[0].config.eval.decision.rule == "top_k" and runs[0].config.eval.decision.k == 2
+    assert runs[0].config.eval.split == "val"
+    # the full decision passes through unchanged
+    assert runs[1].config.eval.decision.rule == "top_k_min_score"
+    assert runs[1].config.eval.decision.min_score == 0.1
     # base values flow through untouched
     assert all(run.config.seed == 7 for run in runs)
-    assert runs[0].config.preprocess.variant == "raw"
-    assert runs[0].config.probe.question_transforms == ("strip_block",)
+    assert runs[2].config.preprocess.variant == "raw"
 
 
-def test_define_sweep_rejects_duplicates_and_forbidden_overrides(base_yaml: Path) -> None:
-    """Duplicate labels collide on run_ids; run_id/extends overrides are banned."""
+def test_define_sweep_rejects_unknown_dataset_and_command(repo_root: Path) -> None:
+    """dataset is closed over {upr, omct}; cells must run that dataset's commands."""
+    with pytest.raises(ValueError, match="Unknown sweep dataset"):
+        define_sweep(
+            [EvalCell(label="upr-eval-x", predictor="random", k=2)], dataset="aux", label="x"
+        )
+    with pytest.raises(ValueError, match="not a 'omct' sweep command"):
+        define_sweep([EvalCell(label="x", predictor="random", k=2)], dataset="omct", label="x")
+    with pytest.raises(ValueError, match="not a 'upr' sweep command"):
+        define_sweep([SweepCell(label="upr-x", command="stats-pairs")], dataset="upr", label="x")
+    with pytest.raises(ValueError, match="not a 'omct' sweep command"):
+        define_sweep([SweepCell(label="x", command="split")], dataset="omct", label="x")
+
+
+def test_define_sweep_label_prefix_rules(repo_root: Path) -> None:
+    """upr cell labels carry upr-; omct cell labels are unprefixed."""
+    with pytest.raises(ValueError, match="must start with 'upr-'"):
+        define_sweep([EvalCell(label="eval-x", predictor="random", k=2)], dataset="upr", label="x")
+    with pytest.raises(ValueError, match="must not carry a dataset prefix"):
+        define_sweep(
+            [ProbeCell(label="omct-probe-x", embed=EmbedderConfig(backend="hf", model_id="m"))],
+            dataset="omct",
+            label="x",
+        )
+    with pytest.raises(ValueError, match="must not carry a dataset prefix"):
+        define_sweep(
+            [ProbeCell(label="upr-probe-x", embed=EmbedderConfig(backend="hf", model_id="m"))],
+            dataset="omct",
+            label="x",
+        )
+    # the sweep label itself is free-form (heading only), filesystem-safe only
+    runs = define_sweep(
+        [ProbeCell(label="probe-x", embed=EmbedderConfig(backend="hf", model_id="m"))],
+        dataset="omct",
+        label="probe2",
+    )
+    assert runs[0].config.table.sweep_label == "probe2"
+    with pytest.raises(ValueError, match="filesystem-safe"):
+        define_sweep(
+            [ProbeCell(label="probe-x", embed=EmbedderConfig(backend="hf", model_id="m"))],
+            dataset="omct",
+            label="pro be",
+        )
+
+
+def test_define_sweep_rejects_duplicates_and_forbidden_overrides(repo_root: Path) -> None:
+    """Duplicate labels collide on run_ids; run_id/extends/table.sweep_label are banned."""
     cells = [
-        SweepCell(
-            label="same", command="embed", overrides={"embed": {"backend": "hf", "model_id": "a"}}
-        ),
-        SweepCell(
-            label="same",
-            command="probe-aux",
-            overrides={"embed": {"backend": "hf", "model_id": "b"}},
-        ),
+        EvalCell(label="upr-eval-x", predictor="random", k=2),
+        EvalCell(label="upr-eval-x", predictor="most_frequent", k=2),
     ]
     with pytest.raises(ValueError, match="duplicate sweep cell label"):
-        define_sweep(cells, base=base_yaml)
+        define_sweep(cells, dataset="upr", label="x")
 
-    cells_single = [SweepCell(label="x", command="embed", overrides={"run_id": "y"})]
     with pytest.raises(ValueError, match="run_id comes from the label"):
-        define_sweep(cells_single, base=base_yaml)
-
-    cells_extends = [SweepCell(label="x", command="embed", overrides={"extends": "other.yaml"})]
+        define_sweep(
+            [SweepCell(label="upr-x", command="embed", overrides={"run_id": "y"})],
+            dataset="upr",
+            label="x",
+        )
     with pytest.raises(ValueError, match="extends belongs to the base"):
-        define_sweep(cells_extends, base=base_yaml)
+        define_sweep(
+            [SweepCell(label="upr-x", command="embed", overrides={"extends": "other.yaml"})],
+            dataset="upr",
+            label="x",
+        )
+    with pytest.raises(ValueError, match="table.sweep_label is injected"):
+        define_sweep(
+            [SweepCell(label="upr-x", command="embed", overrides={"table": {"sweep_label": "y"}})],
+            dataset="upr",
+            label="x",
+        )
 
 
-def test_define_sweep_validates_override_values(base_yaml: Path) -> None:
+def test_define_sweep_validates_override_values(repo_root: Path) -> None:
     """An invalid override fails resolution (pydantic) before any run starts."""
     cells = [
+        ProbeCell(
+            label="probe-x",
+            embed=EmbedderConfig(backend="hf", model_id="m"),
+            probe=None,
+            preprocess=None,
+        )
+    ]
+    # a valid typed cell resolves fine (probe defaults keep the schema default)
+    runs = define_sweep(cells, dataset="omct", label="probe")
+    assert runs[0].config.probe.question_transforms == ("strip_block",)
+
+    bad = [
         SweepCell(
-            label="x", command="probe-aux", overrides={"probe": {"question_transforms": ["wrong"]}}
+            label="probe-y",
+            command="probe-aux",
+            overrides={"probe": {"question_transforms": ["wrong"]}},
         )
     ]
     with pytest.raises(ValueError, match="Unknown question transform"):
-        define_sweep(cells, base=base_yaml)
+        define_sweep(bad, dataset="omct", label="probe")
 
 
-def _write_sweep_file(tmp_path: Path, base_yaml: Path, cells_literal: str) -> Path:
+def _write_sweep_file(tmp_path: Path, cells_literal: str) -> Path:
     """A temporary sweep file (module) exposing SWEEP built from `cells_literal`."""
     sweep_file = tmp_path / "sweep_file.py"
     sweep_file.write_text(
-        "from cluster_rag.sweep import SweepCell, define_sweep\n"
+        "from cluster_rag.config import EmbedderConfig\n"
+        "from cluster_rag.sweep import EvalCell, EmbedCell, ProbeCell, SweepCell, define_sweep\n"
         "CELLS = " + cells_literal + "\n"
-        f"SWEEP = define_sweep(CELLS, base={str(base_yaml)!r})\n",
+        'SWEEP = define_sweep(CELLS, dataset="upr", label="sweep-label")\n',
         encoding="utf-8",
     )
     return sweep_file
 
 
 TWO_CELLS = (
-    "[SweepCell(label='embed-a', command='embed', overrides=({'embed': {'backend': 'hf', "
-    "'model_id': 'a'}})), SweepCell(label='probe-b', command='probe-aux', overrides="
-    "({'embed': {'backend': 'hf', 'model_id': 'b'}}))]"
+    "[EmbedCell(label='upr-embed-a', embed=EmbedderConfig(backend='hf', model_id='a')), "
+    "EvalCell(label='upr-eval-b', predictor='random', k=2, split='val')]"
 )
 
 
-def test_sweep_command_executes_cells_in_order(
-    tmp_path: Path, base_yaml: Path, monkeypatch, capsys
-) -> None:
+def test_sweep_command_executes_cells_in_order(repo_root: Path, monkeypatch, capsys) -> None:
     """Cells run through the existing command functions, in order, with summaries."""
     calls: list[tuple[str, str]] = []
 
@@ -143,48 +248,75 @@ def test_sweep_command_executes_cells_in_order(
         calls.append(("embed", config.run_id))
         return 0
 
-    def fake_probe(config):
-        calls.append(("probe-aux", config.run_id))
+    def fake_evaluate(config):
+        calls.append(("evaluate", config.run_id))
         return 0
 
     monkeypatch.setattr(cli, "_cmd_embed", fake_embed)
-    monkeypatch.setattr(cli, "_cmd_probe_aux", fake_probe)
-    sweep_file = _write_sweep_file(tmp_path, base_yaml, TWO_CELLS)
+    monkeypatch.setattr(cli, "_cmd_evaluate", fake_evaluate)
+    sweep_file = _write_sweep_file(repo_root, TWO_CELLS)
     assert main(["sweep", "--file", str(sweep_file)]) == 0
     out = capsys.readouterr().out
-    assert calls == [("embed", "embed-a"), ("probe-aux", "probe-b")]
+    assert calls == [("embed", "upr-embed-a"), ("evaluate", "upr-eval-b")]
     assert "Sweep" in out and "2 cell(s)" in out and "Sweep finished" in out
 
 
-def test_sweep_command_aborts_on_first_failure(
-    tmp_path: Path, base_yaml: Path, monkeypatch, caplog
-) -> None:
+def test_sweep_command_runs_stats_by_command_name(repo_root: Path, monkeypatch) -> None:
+    """`stats` and `stats-pairs` cells dispatch to _cmd_stats with the pairs flag."""
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_stats(config, pairs=False):
+        calls.append(("stats", config.run_id, str(pairs)))
+        return 0
+
+    monkeypatch.setattr(cli, "_cmd_stats", fake_stats)
+    # One sweep per dataset (upr + omct in one file via SWEEP concatenation):
+    sweep_file = repo_root / "stats_sweep.py"
+    sweep_file.write_text(
+        "from cluster_rag.sweep import SweepCell, define_sweep\n"
+        "SWEEP = (\n"
+        "    define_sweep([SweepCell(label='upr-stats-base', command='stats')],\n"
+        "                 dataset='upr', label='s')\n"
+        "    + define_sweep([SweepCell(label='stats-base', command='stats-pairs')],\n"
+        "                   dataset='omct', label='s')\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    assert main(["sweep", "--file", str(sweep_file)]) == 0
+    # the omct cell's config.run_id is the bare label; the command adds omct-
+    assert calls == [
+        ("stats", "upr-stats-base", "False"),
+        ("stats", "stats-base", "True"),
+    ]
+
+
+def test_sweep_command_aborts_on_first_failure(repo_root: Path, monkeypatch, caplog) -> None:
     """A failing cell aborts the sweep with its exit code; later cells do not run."""
     calls: list[str] = []
 
     monkeypatch.setattr(
         cli, "_cmd_embed", lambda config, kinds: (calls.append(config.run_id), 1)[1]
     )
-    monkeypatch.setattr(cli, "_cmd_probe_aux", lambda config: (calls.append(config.run_id), 0)[1])
-    sweep_file = _write_sweep_file(tmp_path, base_yaml, TWO_CELLS)
+    monkeypatch.setattr(cli, "_cmd_evaluate", lambda config: (calls.append(config.run_id), 0)[1])
+    sweep_file = _write_sweep_file(repo_root, TWO_CELLS)
     with caplog.at_level(logging.ERROR):
         assert main(["sweep", "--file", str(sweep_file)]) == 1
-    assert calls == ["embed-a"]  # probe-b never executed
+    assert calls == ["upr-embed-a"]  # upr-eval-b never executed
     assert any("aborting the sweep" in record.message for record in caplog.records)
 
 
-def test_sweep_command_rejects_bad_files(tmp_path: Path, base_yaml: Path, caplog) -> None:
+def test_sweep_command_rejects_bad_files(repo_root: Path, caplog) -> None:
     """Missing SWEEP / broken module / missing file fail with clear messages."""
-    bare = tmp_path / "bare.py"
+    bare = repo_root / "bare.py"
     bare.write_text("x = 1\n", encoding="utf-8")
     with caplog.at_level(logging.ERROR):
         assert main(["sweep", "--file", str(bare)]) == 1
     assert any("SWEEP" in record.message for record in caplog.records)
 
-    broken = tmp_path / "broken.py"
+    broken = repo_root / "broken.py"
     broken.write_text("raise RuntimeError('boom')\n", encoding="utf-8")
     with caplog.at_level(logging.ERROR):
         assert main(["sweep", "--file", str(broken)]) == 1
     assert any("boom" in record.message for record in caplog.records)
 
-    assert main(["sweep", "--file", str(tmp_path / "missing.py")]) == 1
+    assert main(["sweep", "--file", str(repo_root / "missing.py")]) == 1

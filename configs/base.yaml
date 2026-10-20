@@ -16,7 +16,10 @@ paths:
   data_external: data/external/omct_pairs.json  # auxiliary pairwise dataset (PLAN.md section 2)
   cache: cache                    # embedding cache (gitignored)
   results: results                # run artifacts (gitignored)
-  experiment_table: docs/experiments_table.md  # markdown comparison tables, auto-appended (Phase 2.5)
+  # Per-dataset comparison tables, auto-appended by the CLI commands (Phase 3.5):
+  # a command's dataset picks the file, the run's sweep label picks the section.
+  experiment_table_upr: docs/experiments_table_upr.md
+  experiment_table_omct: docs/experiments_table_omct.md
 
 stats:
   # Label frequency buckets: head >= head_min, torso >= torso_min, tail below.
@@ -50,6 +53,14 @@ splits:
 #   probe:     {question_transforms: [strip_block],     # default; add "keep" for an
 #               question_block_markers: ["Answer choices:", "Notes:"],
 #               recall_ks: [1, 10]}          # explicit comparison; used by `probe-aux`
+#
+# Phase 3 eval defaults (schema defaults, commented — the predictor name is
+# per-run by design; sweep cells set it). `evaluate` requires eval.predictor:
+#   eval:      {predictor: {name: <per-run>, params: {}},
+#               decision: {rule: top_k, k: 2},      # top_k | score_threshold |
+#               metrics:  {ks: [1, 3, 5, 10],       #   top_k_min_score (k = mean
+#                          shortlist_ms: [20, 50, 100]},  # gold labels/record 1.91)
+#               split: val}                          # val | test (final numbers only)
 #
 # strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
 # start with "continue"); longest opener wins, so multi-word forms are listed

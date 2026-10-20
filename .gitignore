@@ -229,10 +229,9 @@ data/*
 # Embedding cache
 cache/
 
-# Run artifacts (one folder per run_id); summary files under
-# results/summaries/ may be committed.
+# Run artifacts (one folder per run_id, gitignored; the comparison tables in
+# docs/ are the committed summary of record - Phase 3.5)
 results/*
-!results/summaries/
 
 # Model weights and local model stores
 models/

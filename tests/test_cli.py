@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
@@ -37,10 +38,19 @@ def test_stats_command_on_fixture(sample_jsonl, write_config, tmp_path, capsys) 
     assert payload["dataset_stats"]["overview"]["n_records"] == 20
 
 
+def test_stats_command_warns_on_unprefixed_run_id(
+    sample_jsonl, write_config, tmp_path, caplog
+) -> None:
+    """UPR commands only warn (never fail) when the run_id lacks the upr- prefix."""
+    config_file = write_config(sample_jsonl)  # run_id "cli-test" carries no upr- prefix
+    with caplog.at_level(logging.WARNING):
+        assert main(["stats", "--config", str(config_file)]) == 0
+    assert any("upr-" in record.message for record in caplog.records)
+    assert (tmp_path / "results" / "cli-test" / "stats.json").is_file()
+
+
 def test_stats_command_requires_run_id(sample_jsonl, write_config, caplog) -> None:
     """Without run_id the command refuses to run: artifacts need a folder name."""
-    import logging
-
     config_file = write_config(sample_jsonl, run_id=None)
     with caplog.at_level(logging.ERROR):
         assert main(["stats", "--config", str(config_file)]) == 1

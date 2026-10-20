@@ -4,7 +4,8 @@ The collaborator-provided ``data/external/omct_pairs.json`` contains
 human-labeled paragraph ↔ GTI-question pairs with binary "same topic?"
 labels. It is strictly auxiliary (PLAN.md section 2): model selection,
 threshold calibration and optional reranker/fine-tune training. It is never
-merged into UPR train artifacts and its runs are prefixed ``aux-``.
+merged into UPR train artifacts and its runs get the ``omct-`` dataset prefix
+(the command adds it at run time).
 """
 
 from __future__ import annotations

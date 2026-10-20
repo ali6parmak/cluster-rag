@@ -65,9 +65,11 @@ class PathsConfig(BaseModel):
     data_splits: Path
     cache: Path
     results: Path
-    # Markdown comparison tables, auto-appended by CLI commands (Phase 2.5);
-    # unset in throwaway configs -> the append is skipped.
-    experiment_table: Path | None = None
+    # Per-dataset markdown comparison tables, auto-appended by CLI commands
+    # (Phase 3.5; command → dataset decides the file); unset in throwaway
+    # configs -> the append is skipped.
+    experiment_table_upr: Path | None = None
+    experiment_table_omct: Path | None = None
     label_catalog: Path | None = None
     data_external: Path | None = None  # auxiliary pairwise dataset (PLAN.md section 2)
 
@@ -303,6 +305,21 @@ class ProbeConfig(BaseModel):
         return value
 
 
+class TableConfig(BaseModel):
+    """Experiment-table bookkeeping carried into runs (Phase 3.5).
+
+    ``sweep_label`` names the sweep that produced the run; the CLI commands
+    append their comparison-table row under that sweep's section heading
+    (``## <UPR|OMCT> — <sweep_label>``) instead of the standalone
+    ``## <UPR|OMCT> — <command>`` heading. Only :func:`~cluster_rag.sweep.define_sweep`
+    sets it (sweep cells may not override it); single-run configs leave it unset.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sweep_label: str | None = None
+
+
 class AppConfig(BaseModel):
     """Root configuration validated from a YAML file.
 
@@ -326,6 +343,7 @@ class AppConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
     eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
+    table: TableConfig = Field(default_factory=TableConfig)  # Phase 3.5: sweep bookkeeping
 
 
 def _parse_yaml_mapping(path: Path) -> dict[str, Any]:

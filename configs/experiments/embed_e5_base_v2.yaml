@@ -1,11 +1,12 @@
-# Phase 2: full-dataset embedding with intfloat/e5-base-v2 (sentence-transformers).
+# Phase 2/3: full-dataset UPR embedding with intfloat/e5-base-v2
+# (sentence-transformers), warm-cache re-run in the Phase 3.5 migration.
 #
 # Model card prefixes (AGENTS.md): "query: " for texts being classified, "passage: "
 # for indexed documents. Labels are retrievable candidates, treated as the query
 # side here (Phase 4 may ablate "passage: " for labels).
 extends: ../base.yaml
 
-run_id: embed-e5-base-v2
+run_id: upr-embed-e5-base-v2
 
 embed:
   backend: hf

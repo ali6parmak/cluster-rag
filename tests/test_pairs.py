@@ -138,19 +138,28 @@ def test_summarize_pairs_counts_cross_document_repeats(tmp_path) -> None:
 
 
 def test_stats_pairs_command_end_to_end(sample_pairs, write_config, tmp_path, capsys) -> None:
-    """`stats --pairs` writes the aux-prefixed report next to the resolved config."""
+    """`stats --pairs` writes the omct-prefixed report next to the resolved config."""
     config_file = write_config(sample_pairs, run_id="pairs", data_external=sample_pairs)
     assert main(["stats", "--pairs", "--config", str(config_file)]) == 0
     out = capsys.readouterr().out
     assert "Pairs: 6 valid, 0 malformed entry/entries skipped" in out
     assert "3 positive / 3 negative" in out
 
-    results_dir = tmp_path / "results" / "aux-pairs"
+    results_dir = tmp_path / "results" / "omct-pairs"
     payload = json.loads((results_dir / "pairs_stats.json").read_text("utf-8"))
-    assert payload["run_id"] == "aux-pairs"
+    assert payload["run_id"] == "omct-pairs"
     assert payload["n_valid_pairs"] == 6
     assert payload["pair_stats"]["n_documents"] == 3
     assert (results_dir / "config.yaml").is_file()
+
+
+def test_stats_pairs_warns_on_prefixed_run_id(sample_pairs, write_config, tmp_path, caplog) -> None:
+    """A run_id that already carries a dataset prefix would double up: warn, don't fail."""
+    config_file = write_config(sample_pairs, run_id="omct-pairs", data_external=sample_pairs)
+    with caplog.at_level(logging.WARNING):
+        assert main(["stats", "--pairs", "--config", str(config_file)]) == 0
+    assert any("omct-omct-pairs" in record.message for record in caplog.records)
+    assert (tmp_path / "results" / "omct-omct-pairs" / "pairs_stats.json").is_file()
 
 
 def test_stats_pairs_requires_data_external(sample_pairs, write_config, caplog) -> None:

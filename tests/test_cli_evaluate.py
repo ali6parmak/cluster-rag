@@ -29,7 +29,9 @@ def evaluate_run(sample_jsonl, write_config, tmp_path):
     """Factory: run `split` then `evaluate` on the fixture; return the artifacts."""
 
     def run(args=None, run_id="evaluate-test", extra=EVAL_CONFIG_EXTRA, table=None):
-        config_file = write_config(sample_jsonl, run_id=run_id, extra=extra, experiment_table=table)
+        config_file = write_config(
+            sample_jsonl, run_id=run_id, extra=extra, experiment_table_upr=table
+        )
         assert main(["split", "--config", str(config_file)]) == 0
         argv = ["evaluate", "--config", str(config_file)]
         if args:
@@ -94,16 +96,20 @@ def test_evaluate_command_artifacts(evaluate_run, tmp_path) -> None:
 
 
 def test_evaluate_command_appends_table_row(evaluate_run, tmp_path) -> None:
-    """The auto table lands under 'Phase 3 — evaluate', upserted by run_id."""
+    """The auto table lands under '## UPR — evaluate', upserted by run_id."""
     table = tmp_path / "tables.md"
     code, metrics, _, _ = evaluate_run(run_id="evaluate-table", table=table)
     assert code == 0
     content = table.read_text("utf-8")
-    assert "## Phase 3 — evaluate" in content
+    assert "## UPR — evaluate" in content
     assert "| evaluate-table |" in content
     assert content.count("| evaluate-table |") == 1
     decision_cell = f"top_k k={metrics['decision']['k']}"  # rendered from the run artifacts
     assert decision_cell in content
+    # regrouped columns: the f1 decision block before the ranking block
+    header = next(line for line in content.splitlines() if line.startswith("| run_id"))
+    assert header.index("f1 decision") < header.index("micro-F1") < header.index("P@5")
+    assert "nDCG@5" in header and "shortlist R@50" in header and "coverage" in header
 
 
 def test_evaluate_command_deterministic_rerun(evaluate_run) -> None:

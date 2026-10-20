@@ -12,10 +12,12 @@ fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
 cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
-``run_id`` must be set in the config for any command. When
-``paths.experiment_table`` is set, ``embed``, ``evaluate`` and ``probe-aux``
-also append one row per run (per transform for probe-aux) to the comparison
-tables in ``docs/experiments_table.md``, upserted by run key (Phase 2.5).
+``run_id`` must be set in the config for any command. When the command's
+dataset's comparison table is set (``paths.experiment_table_upr`` /
+``paths.experiment_table_omct``), ``embed``, ``evaluate`` and ``probe-aux``
+also append one row per run (per transform for probe-aux) to it, upserted by
+run key — the section heading comes from the run's ``table.sweep_label`` when
+the run came from a sweep, else ``## <UPR|OMCT> — <command>`` (Phase 3.5).
 """
 
 from __future__ import annotations
@@ -54,18 +56,16 @@ from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
 from cluster_rag.experiment_table import (
     EMBED_COLUMNS,
-    EMBED_HEADING,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
-    EVALUATE_HEADING,
     EVALUATE_KEY_COLUMNS,
     PROBE_AUX_COLUMNS,
     PROBE_AUX_GROUPS_COLUMNS,
-    PROBE_AUX_GROUPS_HEADING,
     PROBE_AUX_GROUPS_KEY_COLUMNS,
-    PROBE_AUX_HEADING,
     PROBE_AUX_KEY_COLUMNS,
     append_table_rows,
+    intro_for,
+    section_heading,
 )
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor
@@ -98,7 +98,10 @@ def _build_parser() -> argparse.ArgumentParser:
     stats.add_argument(
         "--pairs",
         action="store_true",
-        help="Summarize the auxiliary pairwise dataset (PLAN section 2), not the UPR dataset.",
+        help=(
+            "Summarize the auxiliary pairwise dataset (PLAN section 2), not the UPR "
+            "dataset. The run_id gets the 'omct-' dataset prefix (results/omct-<run_id>/)."
+        ),
     )
 
     split = subparsers.add_parser(
@@ -157,8 +160,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "questions / same document), under the configured question transforms "
             "(default 'strip_block'; add 'keep' for an explicit comparison), with "
             "truncation diagnostics against the model context. Auxiliary evidence "
-            "only: results are written to results/aux-<run_id>/ and prefixed aux- "
-            "in the experiment log."
+            "only: results are written to results/omct-<run_id>/ — the omct- dataset "
+            "prefix is added by the command itself (AGENTS.md run-id grammar)."
         ),
     )
     probe_aux.add_argument(
@@ -197,21 +200,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sweep = subparsers.add_parser(
         "sweep",
-        help="Run a Python sweep file: each resolved cell executes as its own run (Phase 2.5).",
+        help="Run a Python sweep file: typed cells, each executed as its own run (Phases 2.5+).",
         description=(
             "Load a sweep file (a Python module exposing SWEEP: list[SweepRun], built "
-            "with define_sweep) and execute its cells in order through the existing "
-            "command functions (embed / evaluate / probe-aux): one run folder per cell "
-            "with the frozen resolved config, exactly as single runs. Embed cells run "
-            "with the default kinds ('document'). The sweep file only produces configs; "
-            "the first failing cell aborts the sweep with its exit code."
+            "with typed cells — EvalCell/EmbedCell/ProbeCell/SweepCell — and "
+            "define_sweep(cells, dataset=..., label=...)) and execute its cells in "
+            "order through the existing command functions (embed / evaluate / "
+            "probe-aux / stats / stats-pairs / split): one run folder per cell with "
+            "the frozen resolved config, exactly as single runs. Embed cells run "
+            "with the default kinds ('document'). The sweep file only produces "
+            "configs; the first failing cell aborts the sweep with its exit code."
         ),
     )
     sweep.add_argument(
         "--file",
         type=Path,
         required=True,
-        help="Path to the sweep file, e.g. experiments/aux_probe_sweep.py.",
+        help="Path to the sweep file, e.g. experiments/baseline_eval_sweep.py.",
     )
     return parser
 
@@ -224,6 +229,45 @@ def _require_run_id(config: AppConfig) -> str:
             "and the experiment log references the same run_id."
         )
     return config.run_id
+
+
+UPR_PREFIX = "upr-"  # UPR dataset runs (AGENTS.md "Runs and where things live")
+OMCT_PREFIX = "omct-"  # auxiliary OMCT pairwise-data runs
+
+
+def _warn_upr_prefix(run_id: str) -> None:
+    """Warn (never fail) when a UPR command's run_id lacks the `upr-` prefix.
+
+    UPR commands accept any run_id so existing configs keep working; the
+    warning keeps the `<dataset>-<command>-<detail>[-<split>]` grammar visible.
+    """
+    if not run_id.startswith(UPR_PREFIX):
+        logger.warning(
+            "run_id %r does not start with the UPR dataset prefix %r "
+            "(expected grammar: <dataset>-<command>-<detail>[-<split>] per AGENTS.md); "
+            "the run proceeds without it.",
+            run_id,
+            UPR_PREFIX,
+        )
+
+
+def _omct_run_id(run_id: str) -> str:
+    """Return the run_id with the `omct-` dataset prefix added by the command.
+
+    OMCT commands prefix the run id themselves (the config carries the bare
+    detail), so a config that already carries `omct-`/`upr-` would double up —
+    warned about, never fatal.
+    """
+    if run_id.startswith((OMCT_PREFIX, UPR_PREFIX)):
+        logger.warning(
+            "run_id %r already carries a dataset prefix; the command adds %r "
+            "itself, so artifacts land under results/%s%s/ (off-grammar but not fatal).",
+            run_id,
+            OMCT_PREFIX,
+            OMCT_PREFIX,
+            run_id,
+        )
+    return f"{OMCT_PREFIX}{run_id}"
 
 
 def _fmt(value: float | None, decimals: int) -> str | None:
@@ -305,6 +349,7 @@ def _cmd_stats(config: AppConfig, pairs: bool = False) -> int:
     if pairs:
         return _cmd_stats_pairs(config)
     run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
     report = load_jsonl(config.paths.data_raw)
     stats_config = config.stats
     dataset_stats = build_dataset_stats(
@@ -376,15 +421,15 @@ def _print_stats_pairs(
 
 
 def _cmd_stats_pairs(config: AppConfig) -> int:
-    """Run `stats --pairs`: summarize the auxiliary pairwise dataset (aux-prefixed run)."""
+    """Run `stats --pairs`: summarize the auxiliary pairwise dataset (omct-prefixed run)."""
     run_id = _require_run_id(config)
     if config.paths.data_external is None:
         raise ValueError("paths.data_external must be set in the config to summarize pairs")
     report = load_pairs(config.paths.data_external)
     pair_stats = summarize_pairs(report.records)
-    aux_run_id = f"aux-{run_id}"
+    prefixed_run_id = _omct_run_id(run_id)
     payload = {
-        "run_id": aux_run_id,
+        "run_id": prefixed_run_id,
         "source": str(config.paths.data_external),
         "source_sha256": file_sha256(config.paths.data_external),
         "n_valid_pairs": report.n_valid,
@@ -393,7 +438,7 @@ def _cmd_stats_pairs(config: AppConfig) -> int:
         "dataset_metadata": report.metadata,
         "pair_stats": pair_stats,
     }
-    results_dir = config.paths.results / aux_run_id
+    results_dir = config.paths.results / prefixed_run_id
     results_dir.mkdir(parents=True, exist_ok=True)
     _write_resolved_config(results_dir, config)
     (results_dir / "pairs_stats.json").write_text(
@@ -424,6 +469,7 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
     """
     started = time.perf_counter()
     run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
     if config.embed is None:
         raise ValueError(
             "the embed: section (backend, model_id, prefixes) is required for the `embed` command"
@@ -506,12 +552,13 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table is not None:
+    if config.paths.experiment_table_upr is not None:
         append_table_rows(
-            config.paths.experiment_table,
-            heading=EMBED_HEADING,
+            config.paths.experiment_table_upr,
+            heading=section_heading("upr", command="embed", sweep_label=config.table.sweep_label),
             columns=EMBED_COLUMNS,
             key_columns=EMBED_KEY_COLUMNS,
+            intro=intro_for("upr"),
             rows=[
                 {
                     "run_id": run_id,
@@ -544,7 +591,7 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
 
 
 def _cmd_probe_aux(config: AppConfig) -> int:
-    """Run probe-aux: the Phase 2 auxiliary evidence run (results/aux-<run_id>/)."""
+    """Run probe-aux: the Phase 2 auxiliary evidence run (results/omct-<run_id>/)."""
     started = time.perf_counter()
     run_id = _require_run_id(config)
     if config.embed is None:
@@ -566,10 +613,10 @@ def _cmd_probe_aux(config: AppConfig) -> int:
         cache=ProbeCacheOptions(root=str(config.paths.cache)) if config.cache.enabled else None,
     )
     embedder_info = embedder.info
-    aux_run_id = f"aux-{run_id}"
+    omct_run_id = _omct_run_id(run_id)
 
     payload = {
-        "run_id": aux_run_id,
+        "run_id": omct_run_id,
         "command": "probe-aux",
         "source": str(config.paths.data_external),
         "source_sha256": file_sha256(config.paths.data_external),
@@ -589,14 +636,14 @@ def _cmd_probe_aux(config: AppConfig) -> int:
         "probe": probe_report,
         "total_seconds": round(time.perf_counter() - started, 3),
     }
-    results_dir = config.paths.results / aux_run_id
+    results_dir = config.paths.results / omct_run_id
     results_dir.mkdir(parents=True, exist_ok=True)
     _write_resolved_config(results_dir, config)
     (results_dir / "probe_report.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table is not None:
+    if config.paths.experiment_table_omct is not None:
         variant_rows: list[dict[str, Any]] = []
         group_rows: list[dict[str, Any]] = []
         for variant in payload["probe"]["variants"]:
@@ -604,7 +651,7 @@ def _cmd_probe_aux(config: AppConfig) -> int:
             share_over = variant["truncation"].get("share_paragraphs_over_context")
             variant_rows.append(
                 {
-                    "run_id": aux_run_id,
+                    "run_id": omct_run_id,
                     "date": date.today().isoformat(),
                     "backend": embedder_info.backend,
                     "model": embedder_info.model_id,
@@ -629,7 +676,7 @@ def _cmd_probe_aux(config: AppConfig) -> int:
                 scope = group["same_document"]
                 group_rows.append(
                     {
-                        "run_id": aux_run_id,
+                        "run_id": omct_run_id,
                         "transform": variant["transform"],
                         "document": group["document"],
                         "source_csv": group["source_csv"],
@@ -642,22 +689,27 @@ def _cmd_probe_aux(config: AppConfig) -> int:
                         "n_rows_with_gold": group["n_rows_with_gold"],
                     }
                 )
+        heading_label = config.table.sweep_label
         append_table_rows(
-            config.paths.experiment_table,
-            heading=PROBE_AUX_HEADING,
+            config.paths.experiment_table_omct,
+            heading=section_heading("omct", command="probe-aux", sweep_label=heading_label),
             columns=PROBE_AUX_COLUMNS,
             key_columns=PROBE_AUX_KEY_COLUMNS,
+            intro=intro_for("omct"),
             rows=variant_rows,
         )
         append_table_rows(
-            config.paths.experiment_table,
-            heading=PROBE_AUX_GROUPS_HEADING,
+            config.paths.experiment_table_omct,
+            heading=section_heading(
+                "omct", command="probe-aux", sweep_label=heading_label, groups=True
+            ),
             columns=PROBE_AUX_GROUPS_COLUMNS,
             key_columns=PROBE_AUX_GROUPS_KEY_COLUMNS,
+            intro=intro_for("omct"),
             rows=group_rows,
         )
 
-    print(f"Auxiliary probe: {aux_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
+    print(f"Auxiliary probe: {omct_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
     print(
         f"  corpus: {pair_report.n_valid} judged pairs "
         f"({payload['probe']['corpus']['n_positive_pairs']} positive), "
@@ -705,6 +757,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     """
     started = time.perf_counter()
     run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
     if config.eval is None:
         raise ValueError(
             "the eval: section (predictor, decision) is required for the `evaluate` command"
@@ -816,32 +869,35 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table is not None:
+    if config.paths.experiment_table_upr is not None:
         decision_cell = {
             "top_k": f"top_k k={decision.k}",
             "score_threshold": f"thr={decision.threshold}",
             "top_k_min_score": f"top_k k={decision.k} min={decision.min_score}",
         }[decision.rule]
         append_table_rows(
-            config.paths.experiment_table,
-            heading=EVALUATE_HEADING,
+            config.paths.experiment_table_upr,
+            heading=section_heading(
+                "upr", command="evaluate", sweep_label=config.table.sweep_label
+            ),
             columns=EVALUATE_COLUMNS,
             key_columns=EVALUATE_KEY_COLUMNS,
+            intro=intro_for("upr"),
             rows=[
                 {
                     "run_id": run_id,
                     "date": date.today().isoformat(),
                     "split": split_name,
                     "predictor": eval_config.predictor.name,
-                    "decision": decision_cell,
-                    "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
-                    "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
-                    "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
+                    "f1 decision": decision_cell,
                     "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
                     "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),
                     "sample-F1": _fmt(overall["f1"]["sample_f1"], 4),
-                    "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
                     "coverage": _fmt(overall["coverage"]["coverage"], 3),
+                    "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
+                    "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
+                    "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
+                    "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
                     "n_texts": len(eval_records),
                     "seconds": payload["total_seconds"],
                 }
@@ -909,6 +965,7 @@ def _write_split_files(
 def _cmd_split(config: AppConfig, force: bool) -> int:
     """Run the split command: build the fixed splits and persist all artifacts."""
     run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
     splits_dir = config.paths.data_splits
     existing = [
         f"{name}_ids.json" for name in SPLIT_NAMES if (splits_dir / f"{name}_ids.json").exists()
@@ -964,7 +1021,7 @@ def _load_sweep_runs(path: Path) -> list[Any]:
 
     The file is a Python module executed once at load; its ``SWEEP`` must be a
     non-empty list of :class:`~cluster_rag.sweep.SweepRun` — i.e. the product
-    of ``define_sweep(cells, base=...)``.
+    of ``define_sweep(cells, dataset=..., label=...)`` over ``configs/base.yaml``.
     """
     import importlib.util
 
@@ -980,7 +1037,8 @@ def _load_sweep_runs(path: Path) -> list[Any]:
     sweep = getattr(module, "SWEEP", None)
     if not isinstance(sweep, list) or not sweep:
         raise ValueError(
-            f"sweep file {path} must expose a non-empty SWEEP list (define_sweep(cells, base=...))"
+            f"sweep file {path} must expose a non-empty SWEEP list "
+            "(define_sweep(cells, dataset=..., label=...))"
         )
     from cluster_rag.sweep import SweepRun
 
@@ -1005,10 +1063,16 @@ def _cmd_sweep(path: Path) -> int:
     for index, run in enumerate(runs, start=1):
         print(f"  [{index}/{total}] {run.command} label={run.label} (run_id={run.config.run_id})")
         started_cell = time.perf_counter()
-        if run.command == "embed":
+        if run.command == "embed":  # single kind; standalone runs choose with --kinds
             code = _cmd_embed(run.config, kinds=("document",))
-        elif run.command == "evaluate":  # split comes from the cell's eval.split override
+        elif run.command == "evaluate":  # split comes from the cell's eval.split
             code = _cmd_evaluate(run.config)
+        elif run.command == "stats":  # plain UPR dataset statistics
+            code = _cmd_stats(run.config)
+        elif run.command == "stats-pairs":  # the omct pairwise-data stats (stats --pairs)
+            code = _cmd_stats(run.config, pairs=True)
+        elif run.command == "split":  # sweep cells never re-split silently (--force only via CLI)
+            code = _cmd_split(run.config, force=False)
         else:  # probe-aux
             code = _cmd_probe_aux(run.config)
         if code != 0:

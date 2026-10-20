@@ -1,15 +1,24 @@
-"""Human-readable experiment tables: ``docs/experiments_table.md`` (Phase 2.5).
+"""Per-dataset experiment tables (Phase 3.5): ``docs/experiments_table_upr.md`` /
+``docs/experiments_table_omct.md``.
 
-CLI commands append one row per run to a markdown table under a phase +
-command heading (``## Phase 2 — embed``). Rows upsert by their key columns
-(``run_id``, plus ``transform``/group columns for multi-row commands): the
-table always shows the latest run per key, while the narrative log
-``docs/experiments.md`` stays append-only and records every pass. Values come
-from each run's own artifacts (written by the command right before the row),
-counts sit next to numbers, and "n/a" marks unreported values.
+CLI commands append one row per run to their **dataset's** table file
+(``upr`` for stats/split/embed/evaluate, ``omct`` for probe-aux and
+``stats --pairs`` — derived from the command, never from the run name),
+under a section heading: ``## <UPR|OMCT> — <sweep-label>`` for runs coming
+from a sweep (the sweep label is injected into the run's config as
+``table.sweep_label``; the probe's per-document breakdown appends
+``… - groups``), or the standalone ``## <UPR|OMCT> — <command>`` heading when
+no sweep was involved.
 
-The table path itself is config (``paths.experiment_table``); commands skip
-the append when it is unset (e.g. tests with throwaway results folders).
+Rows upsert by their key columns (``run_id``, plus ``transform``/group
+columns for multi-row commands): the table always shows the latest run per
+key, while the narrative log ``docs/experiments.md`` stays append-only and
+records every pass. Values come from each run's own artifacts (written by
+the command right before the row), counts sit next to numbers, and "n/a"
+marks unreported values. A table path is config
+(``paths.experiment_table_upr`` / ``paths.experiment_table_omct``); commands
+skip the append when their dataset's path is unset (e.g. tests with
+throwaway results folders).
 """
 
 from __future__ import annotations
@@ -18,17 +27,45 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+DATASET_TAGS: dict[str, str] = {"upr": "UPR", "omct": "OMCT"}
+
 INTRO = """\
 # Experiment tables
 
-Comparison tables keyed by run — one per (phase, command) — auto-appended by
-the CLI commands. The append-only narrative log is `docs/experiments.md`
-(one row per run, with full revisions/digests). Values come from each run's
-own artifacts; counts sit next to numbers; "n/a" = not reported by the run.
+Comparison tables keyed by run — auto-appended by the CLI commands. The
+append-only narrative log is `docs/experiments.md` (one row per run, with
+full revisions/digests). Values come from each run's own artifacts; counts
+sit next to numbers; "n/a" = not reported by the run.
 """
 
-# Headings and columns of the auto-appended tables (Phase 2 commands).
-EMBED_HEADING = "Phase 2 — embed"
+
+def intro_for(dataset: str) -> str:
+    """Intro text of a per-dataset table file (names the dataset)."""
+    tag = DATASET_TAGS[dataset]
+    return (
+        f"# {tag} experiment tables\n"
+        "\n"
+        "Comparison tables keyed by run — auto-appended by the CLI commands "
+        "(one file per dataset). The append-only narrative log is "
+        f"`docs/experiments.md` (one row per run, with full revisions/digests). "
+        "Values come from each run's own artifacts; counts sit next to numbers; "
+        '"n/a" = not reported by the run.\n'
+    )
+
+
+def section_heading(
+    dataset: str, *, command: str, sweep_label: str | None = None, groups: bool = False
+) -> str:
+    """Heading of one table section: the sweep label wins, else the command.
+
+    ``groups=True`` appends the probe's per-document breakdown suffix; the
+    standalone (no-sweep) heading is ``## <UPR|OMCT> — <command>``.
+    """
+    tag = DATASET_TAGS[dataset]
+    return f"{tag} — {sweep_label or command}" + (" - groups" if groups else "")
+
+
+# Columns of the auto-appended tables.
 EMBED_COLUMNS: tuple[str, ...] = (
     "run_id",
     "date",
@@ -46,7 +83,28 @@ EMBED_COLUMNS: tuple[str, ...] = (
 )
 EMBED_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
-PROBE_AUX_HEADING = "Phase 2 — probe-aux"
+# The evaluate table, regrouped (Phase 3.5): the f1 decision view first
+# (decision + its F1/coverage numbers), the ranking view (decision-rule
+# independent) second.
+EVALUATE_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "predictor",
+    "f1 decision",
+    "micro-F1",
+    "macro-F1",
+    "sample-F1",
+    "coverage",
+    "P@5",
+    "R@10",
+    "nDCG@5",
+    "shortlist R@50",
+    "n_texts",
+    "seconds",
+)
+EVALUATE_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 PROBE_AUX_COLUMNS: tuple[str, ...] = (
     "run_id",
     "date",
@@ -67,7 +125,6 @@ PROBE_AUX_COLUMNS: tuple[str, ...] = (
 )
 PROBE_AUX_KEY_COLUMNS: tuple[str, ...] = ("run_id", "transform")
 
-PROBE_AUX_GROUPS_HEADING = "Phase 2 — probe-aux groups"
 PROBE_AUX_GROUPS_COLUMNS: tuple[str, ...] = (
     "run_id",
     "transform",
@@ -87,26 +144,6 @@ PROBE_AUX_GROUPS_KEY_COLUMNS: tuple[str, ...] = (
     "document",
     "source_csv",
 )
-
-EVALUATE_HEADING = "Phase 3 — evaluate"
-EVALUATE_COLUMNS: tuple[str, ...] = (
-    "run_id",
-    "date",
-    "split",
-    "predictor",
-    "decision",
-    "P@5",
-    "R@10",
-    "nDCG@5",
-    "micro-F1",
-    "macro-F1",
-    "sample-F1",
-    "shortlist R@50",
-    "coverage",
-    "n_texts",
-    "seconds",
-)
-EVALUATE_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
 
 def _cell(value: Any) -> str:
@@ -165,13 +202,14 @@ def append_table_rows(
     columns: Sequence[str],
     key_columns: Sequence[str],
     rows: Sequence[Mapping[str, Any]],
+    intro: str = INTRO,
 ) -> None:
     """Append (or replace) run rows in the markdown table under ``heading``.
 
     Each row is a mapping of column name -> cell value; keys must appear in
     ``columns``. A row whose key cells match an existing data row replaces it
     in place (upsert-by-run); others append after the table's last data row.
-    A missing file starts with :data:`INTRO`; a missing heading starts a new
+    A missing file starts with ``intro``; a missing heading starts a new
     section at the end.
     """
     keys = list(key_columns)
@@ -185,7 +223,7 @@ def append_table_rows(
         lines = target.read_text(encoding="utf-8").splitlines()
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
-        lines = INTRO.splitlines()
+        lines = intro.splitlines()
 
     heading_index = _heading_line_of(lines, heading)
     if heading_index is None:

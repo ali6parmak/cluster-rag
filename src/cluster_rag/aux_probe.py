@@ -2,7 +2,7 @@
 
 Evidence for embedding-model choice on the collaborator pairwise dataset
 (``data/external/omct_pairs.json``, strictly auxiliary per PLAN.md section 2;
-runs are prefixed ``aux-`` and never reported as UPR metrics):
+runs get the ``omct-`` dataset prefix and are never reported as UPR metrics):
 
 per candidate embedder and question-text transform:
 

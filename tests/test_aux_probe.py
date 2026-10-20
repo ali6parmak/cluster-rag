@@ -239,7 +239,7 @@ preprocess:
 def test_probe_aux_command_end_to_end(
     sample_pairs, write_config, tmp_path, monkeypatch, capsys
 ) -> None:
-    """CLI: builds the embedder, writes results/aux-<run_id>/ and a frozen config."""
+    """CLI: builds the embedder, writes results/omct-<run_id>/ and a frozen config."""
     extra = PROBE_CONFIG_EXTRA + (
         "probe:\n"
         "  # explicit comparison (keep is no longer part of the schema default,\n"
@@ -254,12 +254,12 @@ def test_probe_aux_command_end_to_end(
     )
     assert main(["probe-aux", "--config", str(config_file)]) == 0
     out = capsys.readouterr().out
-    assert "Auxiliary probe: aux-probe-test" in out
+    assert "Auxiliary probe: omct-probe-test" in out
     assert "pair-AUC" in out
 
-    results_dir = tmp_path / "results" / "aux-probe-test"
+    results_dir = tmp_path / "results" / "omct-probe-test"
     payload = json.loads((results_dir / "probe_report.json").read_text("utf-8"))
-    assert payload["run_id"] == "aux-probe-test"
+    assert payload["run_id"] == "omct-probe-test"
     assert payload["n_valid_pairs"] == 6
     assert payload["embedder"]["model_id"] == "fake-embedder"
     assert [variant["transform"] for variant in payload["probe"]["variants"]] == [
@@ -299,13 +299,14 @@ def test_probe_aux_appends_experiment_tables(
         sample_pairs,
         run_id="probe-table",
         data_external=sample_pairs,
-        experiment_table=table,
+        experiment_table_omct=table,
         extra=extra,
     )
     assert main(["probe-aux", "--config", str(config_file)]) == 0
     lines = table.read_text("utf-8").splitlines()
-    assert "## Phase 2 — probe-aux" in lines and "## Phase 2 — probe-aux groups" in lines
-    rows = [line for line in lines if line.startswith("| aux-probe-table")]
+    # standalone run: the command names the section; groups get the suffix
+    assert "## OMCT — probe-aux" in lines and "## OMCT — probe-aux - groups" in lines
+    rows = [line for line in lines if line.startswith("| omct-probe-table")]
     assert len(rows) == 5  # one variant row + 4 group rows (the fixture's groups)
     variant_row = next(row for row in rows if "| 2026-" in row)
     assert "| strip_block |" in variant_row
@@ -328,7 +329,7 @@ def test_probe_aux_default_question_transform(
     )
     assert main(["probe-aux", "--config", str(config_file)]) == 0
     payload = json.loads(
-        (tmp_path / "results" / "aux-probe-default" / "probe_report.json").read_text("utf-8")
+        (tmp_path / "results" / "omct-probe-default" / "probe_report.json").read_text("utf-8")
     )
     assert [variant["transform"] for variant in payload["probe"]["variants"]] == ["strip_block"]
     assert payload["cache"]["cache_misses"] == 6 + 4  # paragraphs + one question set

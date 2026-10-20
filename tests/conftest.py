@@ -35,13 +35,21 @@ def write_config(tmp_path: Path):
         run_id: str | None = "cli-test",
         extra: str = "",
         data_external: Path | None = None,
-        experiment_table: Path | None = None,
+        experiment_table_upr: Path | None = None,
+        experiment_table_omct: Path | None = None,
     ) -> Path:
         config_file = tmp_path / "cfg.yaml"
         run_id_line = f"run_id: {run_id}\n" if run_id else ""
         external_line = f"  data_external: {data_external.as_posix()}\n" if data_external else ""
-        table_line = (
-            f"  experiment_table: {experiment_table.as_posix()}\n" if experiment_table else ""
+        upr_table_line = (
+            f"  experiment_table_upr: {experiment_table_upr.as_posix()}\n"
+            if experiment_table_upr
+            else ""
+        )
+        omct_table_line = (
+            f"  experiment_table_omct: {experiment_table_omct.as_posix()}\n"
+            if experiment_table_omct
+            else ""
         )
         config_file.write_text(
             run_id_line + "paths:\n"
@@ -49,7 +57,8 @@ def write_config(tmp_path: Path):
             f"  data_processed: {(tmp_path / 'processed').as_posix()}\n"
             f"  data_splits: {(tmp_path / 'splits').as_posix()}\n"
             + external_line
-            + table_line
+            + upr_table_line
+            + omct_table_line
             + f"  cache: {(tmp_path / 'cache').as_posix()}\n"
             f"  results: {(tmp_path / 'results').as_posix()}\n" + extra,
             encoding="utf-8",

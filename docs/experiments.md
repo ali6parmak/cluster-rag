@@ -133,3 +133,22 @@ Verified on `data/external/omct_pairs.json` and recorded in the `aux-base` rerun
 Per-run bucket detail, thresholds and predictor lineage live in each `results/ev-*/metrics.json`; table rows auto-appended under "Phase 3 — evaluate".
 
 **Next:** Phase 4 retrieval baselines (kNN / label prototypes / zero-shot label embeddings, fusion + thresholding) against this harness; model-pool decision uses val rows (see PLAN §7).
+
+## Phase 3.5: naming + experiment UX (migration note, 2026-10-20)
+
+Phase 3.5 settled the run-id grammar `<dataset>-<command>-<detail>[-<split>]` (datasets `upr`, `omct`), Python-only typed sweep files, and per-dataset comparison tables (`docs/experiments_table_upr.md`, `docs/experiments_table_omct.md`; see AGENTS.md "Runs and where things live"). All pre-3.5 results were re-run under the new ids — **all warm-cache/CPU, nothing re-encoded, no re-splitting** — and every new artifact was verified against the old one **field-for-field: numbers unchanged, verified** (script diff of the JSON artifacts; exemptions: `run_id`, `*seconds*` wall-clock timings, and the probe reports' `cache`/`probe.cache` hit-miss counters, which necessarily read 0→519 hits / 519→0 misses because the pre-3.5 probe2 passes built the aux cache entries and the migration passes are fully warm). The two embed runs' `embeddings.npz` id lists and vector matrices were additionally compared elementwise — identical.
+
+Old → new mapping (old folders deleted after verification; the sweep file `experiments/aux_probe_sweep.py` was renamed to `experiments/omct_probe_sweep.py`):
+
+| pre-3.5 run_id (folder deleted) | post-3.5 run_id | produced by / artifact |
+|---|---|---|
+| `base` (Phase 1) | `upr-stats-base` | `sweep --file experiments/upr_migration_sweep.py` → `stats.json` |
+| `embed-e5-base-v2` | `upr-embed-e5-base-v2` | same sweep, warm: 3000 hits / 0 encoded → `meta.json` (+ `embeddings.npz`) |
+| `embed-arctic2` | `upr-embed-arctic2` | same sweep, warm: 3000 hits / 0 encoded → `meta.json` (+ `embeddings.npz`); Ollama digest `30685f516da4...` re-read from the running server |
+| `aux-base` | `omct-stats-base` | `sweep --file experiments/omct_stats_sweep.py` (cell label `stats-base`; the command adds `omct-`) → `pairs_stats.json` |
+| `aux-probe2-{minilm,e5-base-v2,bge-m3,arctic2,embeddinggemma,mxbai}` | `omct-probe2-<model>` | `sweep --file experiments/omct_probe_sweep.py` → `probe_report.json`; strip_block numbers identical (e.g. AUC 0.4526/0.5793/0.4687/0.4680/0.5371/0.5552) |
+| `ev-{mf,random}-topk{1,2,3}-val`, `ev-{mf,random}-topk2-test` | `upr-eval-{mf,random}-topk{1,2,3}-val`, `upr-eval-{mf,random}-topk2-test` | `sweep --file experiments/baseline_eval_sweep.py` (now typed `EvalCell`s) → `metrics.json` |
+
+The 6 legacy Phase 2 probe folders (`aux-probe-*`, the pre-2.5 originals whose numbers live in the Phase 2 section above) were deleted with the rest — their surviving numbers are in this log, their `probe2-*` successors are the ones that re-ran. The frozen `config.yaml` inside each new folder differs from the pre-3.5 one only in the expected places: the `run_id`, the renamed table path keys (`paths.experiment_table_upr`/`_omct` instead of `paths.experiment_table`), and the `table.sweep_label` key injected by `define_sweep`.
+
+**Legacy-id note:** log rows written before 2026-10-20 keep the ids they were written with (`base`, `embed-*`, `aux-*`, `ev-*`); never rewrite them. Use this mapping to move between the old names as they appear in old rows and the current `results/` folders. Phase 2.5's "Phase 2 — embed/probe-aux" and Phase 3's "Phase 3 — evaluate" headings from the retired single `docs/experiments_table.md` now live per dataset: embeds under `## UPR — migration` and the baselines under `## UPR — baselines` in `docs/experiments_table_upr.md`; the probe grid under `## OMCT — probe2` (+ `- groups`) in `docs/experiments_table_omct.md`.

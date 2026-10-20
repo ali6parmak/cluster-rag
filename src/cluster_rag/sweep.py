@@ -1,17 +1,27 @@
-"""Experiment sweeps as Python (Phase 2.5, PLAN.md).
+"""Experiment sweeps as Python (Phase 2.5/3.5): typed cells -> resolved configs.
 
-A sweep file (e.g. ``experiments/aux_probe_sweep.py``) declares typed cells
-(:class:`SweepCell`: a command plus config overrides) built with plain Python
-loops, and resolves them with :func:`define_sweep` into one validated
-:class:`~cluster_rag.config.AppConfig` per cell. Sweeps only *produce*
-configs: the ``sweep`` CLI command executes the resolved cells through the
-existing command functions (``embed`` / ``evaluate`` / ``probe-aux``), so run
-folders, frozen configs, logs and experiment-table rows are exactly what
-single runs produce.
+A sweep file under ``experiments/`` declares typed cells built with plain
+Python loops — :class:`EvalCell`, :class:`EmbedCell` and :class:`ProbeCell`
+(validated fields, no dict/YAML wiring), plus the generic
+:class:`SweepCell` (label + command + config overrides) for the commands
+without a dedicated cell (``stats``/``stats-pairs``/``split``).
+:func:`define_sweep` resolves every cell over ``configs/base.yaml`` into one
+validated :class:`~cluster_rag.config.AppConfig` per run. Sweeps only
+*produce* configs: the ``sweep`` CLI command executes the resolved cells
+through the existing command functions (``embed`` / ``evaluate`` /
+``probe-aux`` / ``stats`` / ``split``), so run folders, frozen configs, logs
+and experiment-table rows are exactly what single runs produce.
 
-Guards: the label doubles as the run_id (unique across the sweep,
-filesystem-safe), and ``run_id`` / ``extends`` may not be overridden — the
-label defines the run id and the base file owns the ``extends`` chain.
+A sweep is authored for exactly **one dataset** (:func:`define_sweep`'s
+``dataset``, ``upr`` or ``omct``): it validates each cell's command against
+that dataset and takes the sweep ``label`` that names the comparison-table
+section — injected into every resolved config as ``table.sweep_label``.
+Cell labels are mandatory, explicit, filesystem-safe run ids: ``upr`` cells
+must start with ``upr-``; ``omct`` cells carry no dataset prefix (the
+command adds ``omct-`` itself). Guards: labels are unique within a sweep,
+and ``run_id`` / ``extends`` / ``table.sweep_label`` may not be overridden —
+the label defines the run id, the base file owns the ``extends`` chain, and
+the sweep label defines the table section.
 """
 
 from __future__ import annotations
@@ -20,36 +30,68 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from cluster_rag.config import AppConfig, load_config, merge_configs
+from cluster_rag.config import (
+    AppConfig,
+    EmbedderConfig,
+    EvalDecisionConfig,
+    EvalMetricsConfig,
+    PreprocessConfig,
+    ProbeConfig,
+    load_config,
+    merge_configs,
+)
 
-COMMANDS: tuple[str, ...] = ("embed", "evaluate", "probe-aux")
+# ``stats-pairs`` is the sweep command for `stats --pairs` (separate name, so
+# the dataset decides nothing at execution time); ``stats`` is the plain UPR
+# dataset statistics run.
+UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "evaluate")
+OMCT_COMMANDS: tuple[str, ...] = ("stats-pairs", "probe-aux")
+DATASET_COMMANDS: dict[str, tuple[str, ...]] = {"upr": UPR_COMMANDS, "omct": OMCT_COMMANDS}
+COMMANDS: tuple[str, ...] = ("stats", "stats-pairs", "split", "embed", "evaluate", "probe-aux")
+
+# The one base config every sweep resolves over (PLAN.md section 5); relative
+# to the working directory the CLI is run from (the repository root).
+BASE_CONFIG_PATH = Path("configs/base.yaml")
+
+_SWEEP_LABEL_ERROR = "sweep labels must be filesystem-safe ([A-Za-z0-9._-]+)"
 
 
-class SweepCell(BaseModel):
-    """One sweep cell: a command plus the config overrides that define its run.
+def _validate_label(value: str) -> str:
+    """Shared validation for cell labels (run ids) and the sweep label."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise ValueError(f"labels must be filesystem-safe ([A-Za-z0-9._-]+), got {value!r}")
+    return value
 
-    ``label`` becomes the cell's run_id (aux- commands add the aux- prefix
-    themselves at run time), so labels should read like run ids.
-    """
+
+class _LabelledCell(BaseModel):
+    """Base for typed sweep cells: a mandatory, explicit label (= run id)."""
 
     model_config = ConfigDict(extra="forbid")
 
     label: str
-    command: str
-    overrides: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("label")
     @classmethod
     def _label_is_run_id_safe(cls, value: str) -> str:
-        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-            raise ValueError(
-                f"sweep cell label {value!r} must be filesystem-safe ([A-Za-z0-9._-]+)"
-            )
-        return value
+        return _validate_label(value)
+
+
+class SweepCell(_LabelledCell):
+    """One generic sweep cell: a command plus the config overrides that define its run.
+
+    Used for commands without a dedicated typed cell (``stats``, ``stats-pairs``,
+    ``split``); ``evaluate`` / ``embed`` / ``probe-aux`` have :class:`EvalCell` /
+    :class:`EmbedCell` / :class:`ProbeCell`. ``label`` becomes the cell's
+    run_id (the omct- dataset commands add the ``omct-`` prefix themselves at
+    run time), so labels should read like run ids.
+    """
+
+    command: str
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("command")
     @classmethod
@@ -57,6 +99,114 @@ class SweepCell(BaseModel):
         if value not in COMMANDS:
             raise ValueError(f"Unknown sweep command {value!r}; expected one of {COMMANDS}")
         return value
+
+
+class EvalCell(_LabelledCell):
+    """One ``evaluate`` cell: a predictor plus its decision rule and split.
+
+    ``k`` is the shorthand for a ``top_k`` decision (the Phase 3 grid); a full
+    ``decision`` (:class:`~cluster_rag.config.EvalDecisionConfig`) is the
+    alternative for the other rules — exactly one of the two. ``metrics=None``
+    keeps the schema default grids; ``split`` is restricted to the fixed
+    evaluation splits.
+    """
+
+    predictor: str = Field(min_length=1)  # name from the predictors registry
+    params: dict[str, Any] = Field(default_factory=dict)
+    decision: EvalDecisionConfig | None = None
+    k: int | None = Field(default=None, ge=1)
+    split: Literal["val", "test"] = "val"
+    metrics: EvalMetricsConfig | None = None
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "evaluate"
+
+    @model_validator(mode="after")
+    def _decision_xor_k(self) -> EvalCell:
+        """``decision`` and the ``k`` shorthand are exactly one thing."""
+        if self.decision is not None and self.k is not None:
+            raise ValueError(
+                f"EvalCell {self.label!r}: give decision= or the top_k shorthand k=, not both"
+            )
+        if self.decision is None and self.k is None:
+            raise ValueError(
+                f"EvalCell {self.label!r}: needs a decision rule — pass the top_k "
+                "shorthand k= or a full decision="
+            )
+        return self
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides: the complete ``eval`` section."""
+        decision = self.decision or EvalDecisionConfig(rule="top_k", k=self.k)
+        payload: dict[str, Any] = {
+            "eval": {
+                "predictor": {"name": self.predictor, "params": self.params},
+                "decision": decision.model_dump(mode="python"),
+                "split": self.split,
+            }
+        }
+        if self.metrics is not None:
+            payload["eval"]["metrics"] = self.metrics.model_dump(mode="python")
+        return payload
+
+
+class EmbedCell(_LabelledCell):
+    """One ``embed`` cell: a full, typed :class:`~cluster_rag.config.EmbedderConfig`.
+
+    Executed with the default encode kind (``document``); the ``--kinds``
+    flag on standalone runs chooses more. ``preprocess=None`` keeps the base
+    config's variant (usually ``raw``).
+    """
+
+    embed: EmbedderConfig
+    preprocess: PreprocessConfig | None = None
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "embed"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (``embed`` plus an optional preprocessing)."""
+        payload: dict[str, Any] = {"embed": self.embed.model_dump(mode="python")}
+        if self.preprocess is not None:
+            payload["preprocess"] = self.preprocess.model_dump(mode="python")
+        return payload
+
+
+class ProbeCell(_LabelledCell):
+    """One ``probe-aux`` cell: embedder + probe options on the pairwise dataset.
+
+    ``probe=None`` keeps the schema defaults (``strip_block`` transforms; add
+    an explicit :class:`~cluster_rag.config.ProbeConfig` for a ``keep``
+    comparison). The command adds the ``omct-`` dataset prefix at run time.
+    """
+
+    embed: EmbedderConfig
+    probe: ProbeConfig | None = None
+    preprocess: PreprocessConfig | None = None
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "probe-aux"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (``embed`` plus optional probe/preprocess)."""
+        payload: dict[str, Any] = {"embed": self.embed.model_dump(mode="python")}
+        if self.probe is not None:
+            payload["probe"] = self.probe.model_dump(mode="python")
+        if self.preprocess is not None:
+            payload["preprocess"] = self.preprocess.model_dump(mode="python")
+        return payload
+
+
+Cell = SweepCell | EvalCell | EmbedCell | ProbeCell
 
 
 @dataclass(frozen=True)
@@ -68,37 +218,85 @@ class SweepRun:
     config: AppConfig
 
 
-def define_sweep(cells: Sequence[SweepCell], *, base: str | Path) -> list[SweepRun]:
-    """Resolve every cell over the base config into a validated :class:`SweepRun`.
+def _validate_sweep_label(label: str) -> str:
+    """The sweep label names the table section: filesystem-safe, no prefix rules."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", label):
+        raise ValueError(_SWEEP_LABEL_ERROR)
+    return label
 
-    The base (a YAML path whose ``extends`` chain is resolved by
+
+def _label_runs_allowed(label: str, dataset: str) -> None:
+    """Run-id prefix rules per sweep dataset (AGENTS.md run-id grammar)."""
+    if dataset == "upr":
+        if not label.startswith("upr-"):
+            raise ValueError(f"upr sweep cell label {label!r} must start with 'upr-'")
+        return
+    if label.startswith(("omct-", "upr-")):
+        raise ValueError(
+            f"omct sweep cell label {label!r} must not carry a dataset prefix: the "
+            f"command adds 'omct-' itself (run id omct-{label})"
+        )
+
+
+def _cell_parts(cell: Cell) -> tuple[str, str, dict[str, Any]]:
+    """Normalize any typed cell into (label, command, overrides)."""
+    return cell.label, cell.command, dict(cell.overrides)
+
+
+def define_sweep(
+    cells: Sequence[Cell], *, dataset: Literal["upr", "omct"], label: str
+) -> list[SweepRun]:
+    """Resolve every cell over ``configs/base.yaml`` into a validated :class:`SweepRun`.
+
+    The base (``configs/base.yaml``, whose ``extends`` chain is resolved by
     :func:`~cluster_rag.config.load_config`) is merged with the cell's
-    overrides (cell wins on every key, recursion included) and the run_id.
-    Pydantic re-validation covers every override value, so an invalid cell
-    fails here — before any run starts.
+    overrides (cell wins on every key, recursion included) plus the run_id and
+    the injected ``table.sweep_label``. Pydantic re-validation covers every
+    override value, so an invalid cell fails here — before any run starts.
+
+    Constraints: ``dataset`` selects the allowed commands (upr:
+    stats/split/embed/evaluate; omct: stats-pairs/probe-aux) and the cell-label
+    prefix rules (upr cells start with ``upr-``; omct cells are unprefixed);
+    ``label`` (filesystem-safe, free-form) names the sweep's table section.
     """
-    base_config = load_config(Path(base))
+    if dataset not in DATASET_COMMANDS:
+        raise ValueError(
+            f"Unknown sweep dataset {dataset!r}; expected one of {sorted(DATASET_COMMANDS)}"
+        )
+    _validate_sweep_label(label)
+    allowed = DATASET_COMMANDS[dataset]
+    base_config = load_config(BASE_CONFIG_PATH)
+
     runs: list[SweepRun] = []
     seen: set[str] = set()
     for cell in cells:
-        if cell.label in seen:
+        cell_label, command, overrides = _cell_parts(cell)
+        if cell_label in seen:
             raise ValueError(
-                f"duplicate sweep cell label {cell.label!r}: labels double as run_ids "
+                f"duplicate sweep cell label {cell_label!r}: labels double as run_ids "
                 "and must be unique within a sweep"
             )
-        seen.add(cell.label)
-        forbidden = [key for key in cell.overrides if key in ("run_id", "extends")]
+        seen.add(cell_label)
+        if command not in allowed:
+            raise ValueError(
+                f"sweep cell {cell_label!r} runs {command!r}, which is not a "
+                f"{dataset!r} sweep command (allowed: {allowed})"
+            )
+        _label_runs_allowed(cell_label, dataset)
+        forbidden = [key for key in overrides if key in ("run_id", "extends")]
+        if "table" in overrides and "sweep_label" in overrides.get("table", {}):
+            forbidden.append("table.sweep_label")
         if forbidden:
             raise ValueError(
-                f"sweep cell {cell.label!r} overrides {forbidden}: run_id comes from "
-                "the label and extends belongs to the base config file"
+                f"sweep cell {cell_label!r} overrides {forbidden}: run_id comes from "
+                "the label, table.sweep_label is injected by define_sweep, and "
+                "extends belongs to the base config file"
             )
         payload = merge_configs(
-            base_config.model_dump(mode="python"), {"run_id": cell.label, **cell.overrides}
+            base_config.model_dump(mode="python"),
+            {"run_id": cell_label, "table": {"sweep_label": label}, **overrides},
         )
         runs.append(
-            SweepRun(
-                label=cell.label, command=cell.command, config=AppConfig.model_validate(payload)
-            )
+            SweepRun(label=cell_label, command=command, config=AppConfig.model_validate(payload))
         )
     return runs

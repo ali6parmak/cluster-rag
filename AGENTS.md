@@ -11,7 +11,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
 3. **Explain before large changes.** For new dependencies, schema changes, or refactors touching more than 3 modules, describe the plan and wait for approval.
 4. **Never claim results you did not measure.** Every metric you report must come from a run in `results/` and appear in `docs/experiments.md`.
 5. **If something is ambiguous, ask.** Do not guess label semantics, data formats or thresholds. Add open questions to `PLAN.md` section 7.
-6. **Explain plainly and state the scope.** When discussing concepts, results or reviews: one concept per paragraph, short sentences, define jargon on first use, and pair formal definitions with a small concrete example. Always say which dataset a claim or metric applies to — the UPR train/val/test data or the auxiliary OMCT pairwise data (`aux-` runs) — and which split where relevant. Never leave the dataset implicit for the reader to guess.
+6. **Explain plainly and state the scope.** When discussing concepts, results or reviews: one concept per paragraph, short sentences, define jargon on first use, and pair formal definitions with a small concrete example. Always say which dataset a claim or metric applies to — the UPR train/val/test data or the auxiliary OMCT pairwise data (`omct-` runs) — and which split where relevant. Never leave the dataset implicit for the reader to guess.
 
 ## Repository layout (target)
 
@@ -28,10 +28,11 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── processed/
     │   └── splits/              # fixed split id lists (commit these, they are small)
     ├── cache/                   # gitignored: embedding cache
-    ├── results/                 # gitignored except summaries: one folder per run_id
+    ├── results/                 # gitignored: one folder per run_id
     ├── docs/
-    │   ├── experiments.md       # append-only experiment log
-    │   └── experiments_table.md # comparison tables, auto-appended by CLI commands
+    │   ├── experiments.md            # append-only experiment log
+    │   ├── experiments_table_upr.md  # UPR comparison tables, auto-appended by CLI commands
+    │   └── experiments_table_omct.md # OMCT comparison tables, auto-appended by CLI commands
     ├── notebooks/               # exploration only, no logic that others import
     ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
     ├── src/cluster_rag/
@@ -97,7 +98,43 @@ Check the prefixes against the model card before running experiments.
 - The label-holdout split must exclude the held-out labels everywhere in train artifacts, including label prototypes built from examples (zero-shot name/description embeddings are allowed).
 - The feedback simulator may reveal gold labels only for items the active learner selected, one at a time, and must log every revealed item.
 - Always report per frequency bucket (head / torso / tail / unseen) as well as overall numbers.
-- Auxiliary pairwise data in `data/external/` (e.g. OMCT GTI paragraph-question pairs) is for model selection, threshold calibration and optional reranker/fine-tune training only. It never enters UPR train artifacts and is never reported as a UPR metric; its runs use an `aux-` run_id prefix in the log.
+- Auxiliary pairwise data in `data/external/` (e.g. OMCT GTI paragraph-question pairs) is for model selection, threshold calibration and optional reranker/fine-tune training only. It never enters UPR train artifacts and is never reported as a UPR metric; its runs get the `omct-` run_id prefix (AGENTS.md "Runs and where things live").
+
+## Runs and where things live
+
+Every run (one CLI command execution or sweep cell) is identified by its
+`run_id`; all its artifacts live in `results/<run_id>/`.
+
+- **Run-id grammar:** `<dataset>-<command>-<detail>[-<split>]` — e.g.
+  `upr-embed-e5-base-v2`, `upr-eval-mf-topk2-val`, `omct-stats-base`,
+  `omct-probe2-arctic2`. Datasets: `upr` (the UPR train/val/test data) and
+  `omct` (the auxiliary OMCT pairwise data).
+- **Prefixes per command:** the OMCT commands (`probe-aux`, and `stats
+  --pairs`) add the `omct-` prefix themselves at run time — configs and sweep
+  cells carry the bare detail (`run_id: stats-base` → `results/omct-stats-base/`);
+  a run_id that already carries a dataset prefix is warned about (it would
+  double up). The UPR commands (`stats`/`split`/`embed`/`evaluate`) take the
+  run_id as configured and only **warn** when it lacks `upr-` (never a hard
+  error).
+- **`results/<run_id>/` contents:** the frozen resolved `config.yaml` plus the
+  command's artifact (`stats.json`, `split_report.json`, `embeddings.npz` +
+  `meta.json`, `probe_report.json`, `metrics.json`).
+- **Doc files:** `docs/experiments.md` is the append-only narrative log (one
+  row/section per run with revisions/digests and findings — old rows are never
+  edited). The comparison tables are per dataset:
+  `docs/experiments_table_upr.md` and `docs/experiments_table_omct.md`,
+  auto-appended by the CLI commands and upserted by run key (the latest run
+  per key wins). Never edit table rows by hand. A sweep owns its section
+  heading (`## UPR — <sweep-label>` / `## OMCT — <sweep-label>` plus
+  `… - groups` for the probe's per-document breakdown); standalone runs land
+  directly under `## <UPR|OMCT> — <command>`.
+- **Legacy ids (pre-2026-10-20):** runs recorded under the old naming
+  (`base`, `embed-*`, `ev-*`, `aux-*`) were migrated to `upr-`/`omct-` ids in
+  Phase 3.5 after a verified field-for-field re-run (see the migration note at
+  the end of `docs/experiments.md`); their old result folders were deleted.
+  Existing log rows keep the legacy ids they were written with — when a doc
+  row predates 2026-10-20 and names another prefix, see that mapping note
+  instead of renaming anything.
 
 ## Running things (target CLI)
 
@@ -105,7 +142,7 @@ Check the prefixes against the model card before running experiments.
     uv run cluster-rag split      --config configs/base.yaml
     uv run cluster-rag embed      --config configs/experiments/embed_e5_base_v2.yaml
     uv run cluster-rag probe-aux  --config configs/experiments/probe_e5_base_v2.yaml
-    uv run cluster-rag sweep      --file experiments/aux_probe_sweep.py
+    uv run cluster-rag sweep      --file experiments/baseline_eval_sweep.py
     uv run cluster-rag evaluate   --config configs/experiments/knn_proto.yaml --split val
     uv run cluster-rag clusters   --config configs/experiments/hdbscan.yaml
     uv run cluster-rag simulate   --config configs/experiments/feedback_sim.yaml
@@ -124,6 +161,10 @@ Each command writes to `results/<run_id>/`: `config.yaml` (resolved), `metrics.j
 Append one row per run:
 
     | date | run_id | phase | embedder | preprocess | method | split | P@5 | R@10 | micro-F1 | macro-F1 | shortlist R@50 | notes |
+
+Column cells may be omitted ("n/a") for stats/split runs. The auto-appended
+comparison tables live in the per-dataset table files (see "Runs and where
+things live"); do not write their rows by hand.
 
 ## Definition of done (per task)
 - [ ] Code + tests, and `pytest` and `ruff` pass.

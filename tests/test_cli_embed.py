@@ -121,7 +121,7 @@ def test_embed_command_cache_disabled(sample_jsonl, write_config, monkeypatch, t
 def test_embed_appends_experiment_table_row(
     sample_jsonl, write_config, monkeypatch, tmp_path
 ) -> None:
-    """paths.experiment_table: one row per run, upserted by run_id (Phase 2.5)."""
+    """paths.experiment_table_upr: one row per run, upserted by run_id."""
 
     def factory(config):
         return FakeEmbedder(
@@ -133,12 +133,12 @@ def test_embed_appends_experiment_table_row(
     config_file = write_config(
         sample_jsonl,
         run_id="embed-table",
-        experiment_table=table,
+        experiment_table_upr=table,
         extra=EMBED_CONFIG_EXTRA + "preprocess:\n  variant: raw\n",
     )
     assert main(["embed", "--config", str(config_file)]) == 0
     text = table.read_text("utf-8")
-    assert "## Phase 2 — embed" in text
+    assert "## UPR — embed" in text
     data_rows = [line for line in text.splitlines() if line.startswith("| embed-table")]
     assert len(data_rows) == 1 and "| 20 |" in data_rows[0]
 
@@ -149,6 +149,30 @@ def test_embed_appends_experiment_table_row(
     # the row now reports the cache-hit rerun counters
     cells = [cell.strip() for cell in data_rows[0].strip("|").split("|")]
     assert cells[-2:] == ["20", "0"]  # cache_hits / cache_misses
+    assert "## UPR — embed" in text  # standalone run: the command names the section
+
+
+def test_embed_table_row_under_sweep_heading(
+    sample_jsonl, write_config, monkeypatch, tmp_path
+) -> None:
+    """A run with table.sweep_label lands under '## UPR — <sweep-label>'."""
+
+    def factory(config):
+        return FakeEmbedder(
+            model_id="fake-embedder", dimension=6, prefixes={"document": "passage: "}
+        )
+
+    monkeypatch.setattr(cli, "build_embedder", factory)
+    table = tmp_path / "experiments_table.md"
+    config_file = write_config(
+        sample_jsonl,
+        run_id="upr-embed-swept",
+        experiment_table_upr=table,
+        extra=EMBED_CONFIG_EXTRA + "preprocess:\n  variant: raw\ntable:\n  sweep_label: my-sweep\n",
+    )
+    assert main(["embed", "--config", str(config_file)]) == 0
+    text = table.read_text("utf-8")
+    assert "## UPR — my-sweep" in text and "| upr-embed-swept |" in text
 
 
 def test_embed_command_requires_embed_section(sample_jsonl, write_config, caplog) -> None:

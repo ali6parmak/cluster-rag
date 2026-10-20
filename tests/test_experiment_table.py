@@ -1,8 +1,10 @@
-"""Tests for the auto-appended experiment tables (Phase 2.5).
+"""Tests for the auto-appended per-dataset experiment tables (Phase 3.5).
 
-Contract: one markdown table per (phase, command) heading; rows upsert by
-their key columns; a missing file/heading is created; counts and "n/a" cells
-render next to numbers.
+Contract: two table files (one per dataset); rows land under their sweep's
+``## <UPR|OMCT> — <sweep-label>`` heading (else the standalone
+``## <UPR|OMCT> — <command>`` heading); rows upsert by their key columns; a
+missing file/heading is created; counts and "n/a" cells render next to
+numbers.
 """
 
 from __future__ import annotations
@@ -14,17 +16,21 @@ import pytest
 from cluster_rag.experiment_table import (
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
+    EVALUATE_COLUMNS,
+    EVALUATE_KEY_COLUMNS,
     PROBE_AUX_COLUMNS,
     PROBE_AUX_KEY_COLUMNS,
     _separator,
     append_table_rows,
+    intro_for,
+    section_heading,
 )
 
 
 def _embed_row(run_id: str, **overrides: object) -> dict[str, object]:
     values: dict[str, object] = {
         "run_id": run_id,
-        "date": "2026-10-19",
+        "date": "2026-10-20",
         "backend": "hf",
         "model": "intfloat/e5-base-v2",
         "model_version": "f52bf8ec8c71",
@@ -40,26 +46,48 @@ def _embed_row(run_id: str, **overrides: object) -> dict[str, object]:
     return {**values, **overrides}
 
 
+def test_section_headings() -> None:
+    """Sweep label first; command-based fallback; groups suffixed; UPR/OMCT tags."""
+    assert section_heading("upr", command="embed", sweep_label="baselines") == "UPR — baselines"
+    assert section_heading("upr", command="evaluate") == "UPR — evaluate"  # standalone run
+    assert section_heading("omct", command="probe-aux") == "OMCT — probe-aux"
+    assert (
+        section_heading("omct", command="probe-aux", sweep_label="probe2", groups=True)
+        == "OMCT — probe2 - groups"
+    )
+    assert section_heading("omct", command="probe-aux", groups=True) == "OMCT — probe-aux - groups"
+
+
+def test_intro_per_dataset() -> None:
+    assert intro_for("upr").startswith("# UPR experiment tables")
+    assert intro_for("omct").startswith("# OMCT experiment tables")
+    assert "docs/experiments.md" in intro_for("omct")
+
+
 def test_append_creates_file_heading_and_rows(tmp_path: Path) -> None:
     """A missing file gets the intro plus the heading, header and data rows."""
-    path = tmp_path / "docs" / "experiments_table.md"
+    path = tmp_path / "docs" / "experiments_table_upr.md"
     append_table_rows(
         path,
-        heading="Phase 2 — embed",
+        heading=section_heading("upr", command="embed"),
         columns=EMBED_COLUMNS,
         key_columns=EMBED_KEY_COLUMNS,
-        rows=[_embed_row("embed-a"), _embed_row("embed-b", cache_hits=3000, cache_misses=0)],
+        intro=intro_for("upr"),
+        rows=[
+            _embed_row("upr-embed-a"),
+            _embed_row("upr-embed-b", cache_hits=3000, cache_misses=0),
+        ],
     )
     text = path.read_text("utf-8")
-    assert text.startswith("# Experiment tables")
-    assert "## Phase 2 — embed" in text
+    assert text.startswith("# UPR experiment tables")
+    assert "## UPR — embed" in text
     lines = text.splitlines()
-    assert lines[lines.index("## Phase 2 — embed") + 2] == "| " + " | ".join(EMBED_COLUMNS) + " |"
-    assert "| embed-a |" in text
-    assert "| embed-b |" in text and "3000" in text
+    assert lines[lines.index("## UPR — embed") + 2] == "| " + " | ".join(EMBED_COLUMNS) + " |"
+    assert "| upr-embed-a |" in text
+    assert "| upr-embed-b |" in text and "3000" in text
     # trailing newline, one heading only
     assert text.endswith("\n")
-    assert text.count("## Phase 2 — embed") == 1
+    assert text.count("## UPR — embed") == 1
 
 
 def test_append_upserts_by_key_columns(tmp_path: Path) -> None:
@@ -67,22 +95,27 @@ def test_append_upserts_by_key_columns(tmp_path: Path) -> None:
     path = tmp_path / "tables.md"
     append_table_rows(
         path,
-        heading="Phase 2 — embed",
+        heading="UPR — embed",
         columns=EMBED_COLUMNS,
         key_columns=EMBED_KEY_COLUMNS,
-        rows=[_embed_row("embed-a", seconds=4.937)],
+        rows=[_embed_row("upr-embed-a", seconds=4.937)],
     )
     append_table_rows(
         path,
-        heading="Phase 2 — embed",
+        heading="UPR — embed",
         columns=EMBED_COLUMNS,
         key_columns=EMBED_KEY_COLUMNS,
-        rows=[_embed_row("embed-a", seconds=3.453, cache_hits=3000, cache_misses=0)],
+        rows=[
+            _embed_row("upr-embed-a", seconds=3.453, cache_hits=3000, cache_misses=0),
+            _embed_row("upr-embed-c"),
+        ],
     )
     lines = path.read_text("utf-8").splitlines()
-    data_rows = [line for line in lines if line.startswith("| embed-")]
-    assert len(data_rows) == 1  # replaced in place, not duplicated
-    assert "3.453" in data_rows[0] and "cache_hits" not in data_rows[0]
+    data_rows = [line for line in lines if line.startswith("| upr-")]
+    assert len(data_rows) == 2  # one replaced row + the new one appended after it
+    assert "3.453" in data_rows[0] and "cache_misses" not in data_rows[0]
+    assert data_rows[0].startswith("| upr-embed-a |") and data_rows[1].startswith("| upr-embed-c")
+    assert lines.index("| " + " | ".join(EMBED_COLUMNS) + " |") < lines.index(data_rows[1])
 
 
 def test_multiple_headings_are_independent(tmp_path: Path) -> None:
@@ -91,25 +124,27 @@ def test_multiple_headings_are_independent(tmp_path: Path) -> None:
     columns = ("run_id", "transform", "n_pairs", "pair_auc")
     append_table_rows(
         path,
-        heading="Phase 2 — probe-aux",
+        heading="OMCT — probe-aux",
         columns=columns,
         key_columns=("run_id",),
-        rows=[{"run_id": "aux-x", "transform": "strip_block", "n_pairs": 1520, "pair_auc": 0.5793}],
+        rows=[
+            {"run_id": "omct-x", "transform": "strip_block", "n_pairs": 1520, "pair_auc": 0.5793}
+        ],
     )
     append_table_rows(
         path,
-        heading="Phase 2 — probe-aux groups",
+        heading="OMCT — probe-aux - groups",
         columns=columns,
         key_columns=("run_id", "transform"),
-        rows=[{"run_id": "aux-x", "transform": "strip_block", "n_pairs": 845, "pair_auc": 0.4821}],
+        rows=[{"run_id": "omct-x", "transform": "strip_block", "n_pairs": 845, "pair_auc": 0.4821}],
     )
     text = path.read_text("utf-8")
-    assert text.count("## Phase 2 —") == 2
+    assert text.count("## OMCT —") == 2
     assert "0.5793" in text and "845" in text
     # the first table's row is intact and not inside the second section
     lines = text.splitlines()
-    assert lines.index("## Phase 2 — probe-aux") < lines.index("## Phase 2 — probe-aux groups")
-    assert "| aux-x | strip_block | 1520 | 0.5793 |" in text
+    assert lines.index("## OMCT — probe-aux") < lines.index("## OMCT — probe-aux - groups")
+    assert "| omct-x | strip_block | 1520 | 0.5793 |" in text
 
 
 def test_missing_and_none_cells_render(tmp_path: Path) -> None:
@@ -146,14 +181,15 @@ def test_key_column_outside_columns_raises(tmp_path: Path) -> None:
         )
 
 
-def test_probe_row_shape_matches_probe_columns() -> None:
-    """Sanity: every probe column is a string, so the CLI mapping stays honest."""
-    assert "run_id" in PROBE_AUX_COLUMNS and "pair_auc" in PROBE_AUX_COLUMNS
-    assert "transform" in PROBE_AUX_COLUMNS and PROBE_AUX_KEY_COLUMNS == (
-        "run_id",
-        "transform",
-    )
+def test_column_groupings_match_the_phase35_contract() -> None:
+    """Sanity: the regrouped evaluate table (f1 decision first, ranking second)."""
+    assert EVALUATE_COLUMNS[:4] == ("run_id", "date", "split", "predictor")
+    assert EVALUATE_COLUMNS[4:9] == ("f1 decision", "micro-F1", "macro-F1", "sample-F1", "coverage")
+    assert EVALUATE_COLUMNS[9:] == ("P@5", "R@10", "nDCG@5", "shortlist R@50", "n_texts", "seconds")
+    assert EVALUATE_KEY_COLUMNS == ("run_id",)
     assert "cache_misses" in EMBED_COLUMNS
+    assert "run_id" in PROBE_AUX_COLUMNS and "pair_auc" in PROBE_AUX_COLUMNS
+    assert PROBE_AUX_KEY_COLUMNS == ("run_id", "transform")
 
 
 def test_separator_width() -> None:

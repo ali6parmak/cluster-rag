@@ -1,11 +1,12 @@
-# Phase 2: full-dataset embedding with Ollama snowflake-arctic-embed2 /api/embed.
+# Phase 2: full-dataset UPR embedding with Ollama snowflake-arctic-embed2
+# (/api/embed), warm-cache re-run in the Phase 3.5 migration.
 #
 # Model card (Snowflake arctic-embed v2.0): only queries take the "query: "
 # prefix; documents are embedded without one. 8192-token context: no UPR or
 # auxiliary text needs truncation.
 extends: ../base.yaml
 
-run_id: embed-arctic2
+run_id: upr-embed-arctic2
 
 embed:
   backend: ollama
