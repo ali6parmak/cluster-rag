@@ -191,9 +191,9 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
   unit-norm, dims as listed in the log; e5-base-v2/arctic2 refresh in place
   (document warm), no-prefix models' shared-key cache reuse verified correct;
   204/204 artifact checks; log note in `docs/experiments.md`)*
-- [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN + prototype
-  evidence on UPR val across the pool BEFORE any fusion/preprocess weight
-  grids ("embed all, ablate few" — no 14³ factorial).
+- [ ] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN, prototype
+  and per-label max-similarity evidence on UPR val across the pool BEFORE any
+  fusion/preprocess weight grids ("embed all, ablate few" — no 14³ factorial).
 - [ ] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
   explain and wait for the reviewer per AGENTS.md §3), then implement — how an
   `evaluate` config points at a prior `embed` run's artifact.
@@ -211,6 +211,12 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [ ] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute)*
 - [ ] **Label prototypes:** mean of the example embeddings per label.
+- [ ] **Per-label max-similarity:** label score = max cosine between the text
+  and any single train example of that label (over the same sentence matrix
+  the prototype mean uses — complements the mean for tail labels with few
+  examples); same predictor interface, runs in the Phase 4 opening checkbox C
+  val sweep (settle 2026-10-20 with the reviewer: the candidate family for
+  the pool cut is {knn, prototype, max-sim}).
 - [ ] **Zero-shot label embeddings:** embed label names and descriptions, optionally with templates such as "This recommendation is about {label}."
 - [ ] **Fusion:** `score = a*knn + b*proto + c*zeroshot`. Tune the weights on val.
 - [ ] **Thresholding:** global, per-label (calibrated on val) and top-k with a minimum score. Compare them. *(calibration evidence, strictly aux-annotated: OMCT pair score distributions, including goldless paragraphs' top similarities — the "should answer nothing" rows; val decides any operating point)*
