@@ -241,3 +241,5 @@ models/
 *.pt
 *.pth
 *.ckpt
+
+docs/past_experiment_ideas.md
