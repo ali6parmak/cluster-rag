@@ -4,7 +4,8 @@ Contract: two table files (one per dataset); rows land under their sweep's
 ``## <UPR|OMCT> — <sweep-label>`` heading (else the standalone
 ``## <UPR|OMCT> — <command>`` heading); rows upsert by their key columns; a
 missing file/heading is created; counts and "n/a" cells render next to
-numbers.
+numbers. The text-processing track owns its own pair of files, chosen by the
+command's (dataset, track) pair — never by a heuristic.
 """
 
 from __future__ import annotations
@@ -13,18 +14,25 @@ from pathlib import Path
 
 import pytest
 
+from cluster_rag.config import PathsConfig
 from cluster_rag.experiment_table import (
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
     EVALUATE_KEY_COLUMNS,
+    MAIN_TRACK,
     PROBE_OMCT_COLUMNS,
     PROBE_OMCT_KEY_COLUMNS,
+    TEXT_PROCESSING_TRACK,
+    TableTarget,
     _separator,
     append_table_rows,
     intro_for,
     section_heading,
+    table_path,
+    table_target,
 )
+from cluster_rag.sweep import COMMANDS
 
 
 def _embed_row(run_id: str, **overrides: object) -> dict[str, object]:
@@ -209,3 +217,63 @@ def test_column_groupings_match_the_phase35_contract() -> None:
 
 def test_separator_width() -> None:
     assert _separator(3) == "|---|---|---|"
+
+
+def _paths(**overrides: object) -> PathsConfig:
+    """A paths config with every table file set (overrides win)."""
+    values: dict[str, object] = {
+        "data_raw": Path("data/raw/x.jsonl"),
+        "data_processed": Path("data/processed"),
+        "data_splits": Path("data/splits"),
+        "cache": Path("cache"),
+        "results": Path("results"),
+        "experiment_table_upr": Path("docs/upr.md"),
+        "experiment_table_omct": Path("docs/omct.md"),
+        "experiment_table_text_processing_omct": Path("docs/tp_omct.md"),
+        "experiment_table_text_processing_upr": Path("docs/tp_upr.md"),
+    }
+    values.update(overrides)
+    return PathsConfig(**values)  # type: ignore[arg-type]
+
+
+def test_command_targets_map_dataset_and_track() -> None:
+    """Every command names its (dataset, track) pair; a typo fails loudly."""
+    assert table_target("embed") == TableTarget("upr", MAIN_TRACK)
+    assert table_target("evaluate") == TableTarget("upr", MAIN_TRACK)
+    assert table_target("probe-omct") == TableTarget("omct", MAIN_TRACK)
+    assert table_target("analyze-omct") == TableTarget("omct", TEXT_PROCESSING_TRACK)
+    assert table_target("chunk-omct") == TableTarget("omct", TEXT_PROCESSING_TRACK)
+    assert table_target("chunk-upr") == TableTarget("upr", TEXT_PROCESSING_TRACK)
+    with pytest.raises(ValueError, match="Unknown command"):
+        table_target("not-a-command")
+
+
+def test_every_sweep_command_has_a_table_target() -> None:
+    """No sweep command may lack a table (the mapping is command-derived)."""
+    for command in COMMANDS:
+        assert table_target(command).dataset in ("upr", "omct")
+
+
+def test_table_path_is_command_derived() -> None:
+    """The track's commands write to the track's files, never to the main ones."""
+    paths = _paths()
+    assert table_path(paths, "embed") == Path("docs/upr.md")
+    assert table_path(paths, "probe-omct") == Path("docs/omct.md")
+    assert table_path(paths, "analyze-omct") == Path("docs/tp_omct.md")
+    assert table_path(paths, "chunk-omct") == Path("docs/tp_omct.md")
+    assert table_path(paths, "chunk-upr") == Path("docs/tp_upr.md")
+
+
+def test_table_path_none_skips_the_append() -> None:
+    """An unset table file means "no table" (the append is skipped)."""
+    paths = _paths(experiment_table_text_processing_omct=None)
+    assert table_path(paths, "analyze-omct") is None
+    assert table_path(paths, "embed") == Path("docs/upr.md")
+
+
+def test_track_intro_names_the_track_log() -> None:
+    """The track's table files point at the track's own narrative log."""
+    intro = intro_for("omct", TEXT_PROCESSING_TRACK)
+    assert intro.startswith("# OMCT text-processing experiment tables")
+    assert "docs/experiments_text_processing.md" in intro
+    assert "docs/experiments.md" not in intro

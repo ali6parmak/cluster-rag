@@ -14,11 +14,14 @@ cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
 ``run_id`` must be set in the config for any command. When the command's
-dataset's comparison table is set (``paths.experiment_table_upr`` /
-``paths.experiment_table_omct``), ``embed``, ``evaluate`` and ``probe-omct``
-also append one row per run (per transform for probe-omct) to it, upserted by
-run key — the section heading comes from the run's ``table.sweep_label`` when
-the run came from a sweep, else ``## <UPR|OMCT> — <command>`` (Phase 3.5).
+comparison table is set (``paths.experiment_table_upr`` /
+``paths.experiment_table_omct``, or the text-processing track's
+``paths.experiment_table_text_processing_omct`` / ``_upr``), ``embed``,
+``labelembed``, ``evaluate`` and ``probe-omct`` also append one row per run
+(per transform for probe-omct) to it, upserted by run key — the file comes
+from the command's (dataset, track) pair, the section heading from the run's
+``table.sweep_label`` when the run came from a sweep, else
+``## <UPR|OMCT> — <command>`` (Phase 3.5).
 """
 
 from __future__ import annotations
@@ -72,12 +75,16 @@ from cluster_rag.experiment_table import (
     append_table_rows,
     intro_for,
     section_heading,
+    table_path,
+    table_target,
 )
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
+from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
+from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +259,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--file",
         type=Path,
         required=True,
-        help="Path to the sweep file, e.g. experiments/baseline_eval_sweep.py.",
+        help="Path to the sweep file, e.g. experiments/baseline_eval_sweep.py "
+        "(the text-processing track's sweeps live in experiments_text_processing/).",
     )
     return parser
 
@@ -265,6 +273,42 @@ def _require_run_id(config: AppConfig) -> str:
             "and the experiment log references the same run_id."
         )
     return config.run_id
+
+
+def _append_command_rows(
+    config: AppConfig,
+    command: str,
+    *,
+    columns: Sequence[str],
+    key_columns: Sequence[str],
+    rows: Sequence[dict[str, Any]],
+    groups: bool = False,
+) -> None:
+    """Append one command's rows to its comparison table (command-derived).
+
+    The command decides the ``(dataset, track)`` pair and therefore the file:
+    the main pipeline's commands write to the per-dataset tables, the
+    text-processing track's commands to the track's own pair of tables
+    (AGENTS.md "Runs and where things live"). An unset path skips the append
+    (throwaway configs in tests).
+    """
+    path = table_path(config.paths, command)
+    if path is None:
+        return
+    target = table_target(command)
+    append_table_rows(
+        path,
+        heading=section_heading(
+            target.dataset,
+            command=command,
+            sweep_label=config.table.sweep_label,
+            groups=groups,
+        ),
+        columns=columns,
+        key_columns=key_columns,
+        intro=intro_for(target.dataset, target.track),
+        rows=rows,
+    )
 
 
 UPR_PREFIX = "upr-"  # UPR dataset runs (AGENTS.md "Runs and where things live")
@@ -588,31 +632,29 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table_upr is not None:
-        append_table_rows(
-            config.paths.experiment_table_upr,
-            heading=section_heading("upr", command="embed", sweep_label=config.table.sweep_label),
-            columns=EMBED_COLUMNS,
-            key_columns=EMBED_KEY_COLUMNS,
-            intro=intro_for("upr"),
-            rows=[
-                {
-                    "run_id": run_id,
-                    "date": date.today().isoformat(),
-                    "backend": info.backend,
-                    "model": info.model_id,
-                    "model_version": (info.revision_or_digest or "")[:12],
-                    "dim": info.dimension,
-                    "ctx": info.context_tokens,
-                    "kinds": ",".join(kinds),
-                    "preprocess": spec.variant,
-                    "n_texts": len(ids),
-                    "seconds": payload["total_seconds"],
-                    "cache_hits": totals[0],
-                    "cache_misses": totals[1],
-                }
-            ],
-        )
+    _append_command_rows(
+        config,
+        "embed",
+        columns=EMBED_COLUMNS,
+        key_columns=EMBED_KEY_COLUMNS,
+        rows=[
+            {
+                "run_id": run_id,
+                "date": date.today().isoformat(),
+                "backend": info.backend,
+                "model": info.model_id,
+                "model_version": (info.revision_or_digest or "")[:12],
+                "dim": info.dimension,
+                "ctx": info.context_tokens,
+                "kinds": ",".join(kinds),
+                "preprocess": spec.variant,
+                "n_texts": len(ids),
+                "seconds": payload["total_seconds"],
+                "cache_hits": totals[0],
+                "cache_misses": totals[1],
+            }
+        ],
+    )
 
     print(f"Embedded {len(ids)} record(s) with {info.backend}:{info.model_id} -> {results_dir}")
     print(
@@ -735,33 +777,29 @@ def _cmd_labelembed(config: AppConfig) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table_upr is not None:
-        append_table_rows(
-            config.paths.experiment_table_upr,
-            heading=section_heading(
-                "upr", command="labelembed", sweep_label=config.table.sweep_label
-            ),
-            columns=EMBED_COLUMNS,
-            key_columns=EMBED_KEY_COLUMNS,
-            intro=intro_for("upr"),
-            rows=[
-                {
-                    "run_id": run_id,
-                    "date": date.today().isoformat(),
-                    "backend": info.backend,
-                    "model": info.model_id,
-                    "model_version": (info.revision_or_digest or "")[:12],
-                    "dim": info.dimension,
-                    "ctx": info.context_tokens,
-                    "kinds": "label",
-                    "preprocess": spec.variant,
-                    "n_texts": len(labels),
-                    "seconds": payload["total_seconds"],
-                    "cache_hits": totals[0],
-                    "cache_misses": totals[1],
-                }
-            ],
-        )
+    _append_command_rows(
+        config,
+        "labelembed",
+        columns=EMBED_COLUMNS,
+        key_columns=EMBED_KEY_COLUMNS,
+        rows=[
+            {
+                "run_id": run_id,
+                "date": date.today().isoformat(),
+                "backend": info.backend,
+                "model": info.model_id,
+                "model_version": (info.revision_or_digest or "")[:12],
+                "dim": info.dimension,
+                "ctx": info.context_tokens,
+                "kinds": "label",
+                "preprocess": spec.variant,
+                "n_texts": len(labels),
+                "seconds": payload["total_seconds"],
+                "cache_hits": totals[0],
+                "cache_misses": totals[1],
+            }
+        ],
+    )
 
     print(
         f"Embedded {len(labels)} label text(s) with {info.backend}:{info.model_id} -> {results_dir}"
@@ -831,71 +869,66 @@ def _cmd_probe_omct(config: AppConfig) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table_omct is not None:
-        variant_rows: list[dict[str, Any]] = []
-        group_rows: list[dict[str, Any]] = []
-        for variant in payload["probe"]["variants"]:
-            same_doc = variant["retrieval"]["same_document"]
-            share_over = variant["truncation"].get("share_paragraphs_over_context")
-            variant_rows.append(
+    variant_rows: list[dict[str, Any]] = []
+    group_rows: list[dict[str, Any]] = []
+    for variant in payload["probe"]["variants"]:
+        same_doc = variant["retrieval"]["same_document"]
+        share_over = variant["truncation"].get("share_paragraphs_over_context")
+        variant_rows.append(
+            {
+                "run_id": omct_run_id,
+                "date": date.today().isoformat(),
+                "backend": embedder_info.backend,
+                "model": embedder_info.model_id,
+                "model_version": (embedder_info.revision_or_digest or "")[:12],
+                "dim": embedder_info.dimension,
+                "ctx": embedder_info.context_tokens,
+                "transform": variant["transform"],
+                "pair_auc": _fmt(variant["pair_auc"], 4),
+                "same-doc hit@1": _fmt(same_doc.get("hit@1"), 3),
+                "same-doc hit@10": _fmt(same_doc.get("hit@10"), 3),
+                "same-doc recall@10": _fmt(same_doc.get("recall@10"), 3),
+                "paras>ctx": None if share_over is None else f"{share_over:.1%}",
+                "n_paras": variant["retrieval"]["all"]["n_rows"],
+                "n_pairs(pos)": (
+                    f"{payload['probe']['corpus']['n_pairs']}"
+                    f" ({payload['probe']['corpus']['n_positive_pairs']})"
+                ),
+                "seconds": variant["seconds"],
+            }
+        )
+        for group in variant["group_breakdown"]["groups"]:
+            scope = group["same_document"]
+            group_rows.append(
                 {
                     "run_id": omct_run_id,
-                    "date": date.today().isoformat(),
-                    "backend": embedder_info.backend,
-                    "model": embedder_info.model_id,
-                    "model_version": (embedder_info.revision_or_digest or "")[:12],
-                    "dim": embedder_info.dimension,
-                    "ctx": embedder_info.context_tokens,
                     "transform": variant["transform"],
-                    "pair_auc": _fmt(variant["pair_auc"], 4),
-                    "same-doc hit@1": _fmt(same_doc.get("hit@1"), 3),
-                    "same-doc hit@10": _fmt(same_doc.get("hit@10"), 3),
-                    "same-doc recall@10": _fmt(same_doc.get("recall@10"), 3),
-                    "paras>ctx": None if share_over is None else f"{share_over:.1%}",
-                    "n_paras": variant["retrieval"]["all"]["n_rows"],
-                    "n_pairs(pos)": (
-                        f"{payload['probe']['corpus']['n_pairs']}"
-                        f" ({payload['probe']['corpus']['n_positive_pairs']})"
-                    ),
-                    "seconds": variant["seconds"],
+                    "document": group["document"],
+                    "source_csv": group["source_csv"],
+                    "n_pairs": group["n_pairs"],
+                    "pos": group["n_positive"],
+                    "neg": group["n_negative"],
+                    "pair_auc": _fmt(group["pair_auc"], 4),
+                    "same-doc hit@1": None if scope is None else _fmt(scope.get("hit@1"), 3),
+                    "same-doc hit@10": None if scope is None else _fmt(scope.get("hit@10"), 3),
+                    "n_rows_with_gold": group["n_rows_with_gold"],
                 }
             )
-            for group in variant["group_breakdown"]["groups"]:
-                scope = group["same_document"]
-                group_rows.append(
-                    {
-                        "run_id": omct_run_id,
-                        "transform": variant["transform"],
-                        "document": group["document"],
-                        "source_csv": group["source_csv"],
-                        "n_pairs": group["n_pairs"],
-                        "pos": group["n_positive"],
-                        "neg": group["n_negative"],
-                        "pair_auc": _fmt(group["pair_auc"], 4),
-                        "same-doc hit@1": None if scope is None else _fmt(scope.get("hit@1"), 3),
-                        "same-doc hit@10": None if scope is None else _fmt(scope.get("hit@10"), 3),
-                        "n_rows_with_gold": group["n_rows_with_gold"],
-                    }
-                )
-        heading_label = config.table.sweep_label
-        append_table_rows(
-            config.paths.experiment_table_omct,
-            heading=section_heading("omct", command="probe-omct", sweep_label=heading_label),
-            columns=PROBE_OMCT_COLUMNS,
-            key_columns=PROBE_OMCT_KEY_COLUMNS,
-            intro=intro_for("omct"),
-            rows=variant_rows,
-        )
-        append_table_rows(
-            config.paths.experiment_table_omct,
-            heading=section_heading(
-                "omct", command="probe-omct", sweep_label=heading_label, groups=True
-            ),
-            columns=PROBE_OMCT_GROUPS_COLUMNS,
-            key_columns=PROBE_OMCT_GROUPS_KEY_COLUMNS,
-            intro=intro_for("omct"),
-            rows=group_rows,
-        )
+    _append_command_rows(
+        config,
+        "probe-omct",
+        columns=PROBE_OMCT_COLUMNS,
+        key_columns=PROBE_OMCT_KEY_COLUMNS,
+        rows=variant_rows,
+    )
+    _append_command_rows(
+        config,
+        "probe-omct",
+        columns=PROBE_OMCT_GROUPS_COLUMNS,
+        key_columns=PROBE_OMCT_GROUPS_KEY_COLUMNS,
+        rows=group_rows,
+        groups=True,
+    )
 
     print(f"OMCT probe: {omct_run_id} with {embedder_info.backend}:{embedder_info.model_id}")
     print(
@@ -1141,45 +1174,41 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    if config.paths.experiment_table_upr is not None:
-        decision_cell = {
-            "top_k": f"top_k k={decision.k}",
-            "score_threshold": f"thr={decision.threshold}",
-            "top_k_min_score": f"top_k k={decision.k} min={decision.min_score}",
-        }[decision.rule]
-        append_table_rows(
-            config.paths.experiment_table_upr,
-            heading=section_heading(
-                "upr", command="evaluate", sweep_label=config.table.sweep_label
-            ),
-            columns=EVALUATE_COLUMNS,
-            key_columns=EVALUATE_KEY_COLUMNS,
-            intro=intro_for("upr"),
-            rows=[
-                {
-                    "run_id": run_id,
-                    "date": date.today().isoformat(),
-                    "split": split_name,
-                    "predictor": eval_config.predictor.name,
-                    "embedding": (
-                        eval_config.embedding_run_id.removeprefix("upr-embed-")
-                        if artifact is not None
-                        else None
-                    ),
-                    "f1 decision": decision_cell,
-                    "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
-                    "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),
-                    "sample-F1": _fmt(overall["f1"]["sample_f1"], 4),
-                    "coverage": _fmt(overall["coverage"]["coverage"], 3),
-                    "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
-                    "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
-                    "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
-                    "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
-                    "n_texts": len(eval_records),
-                    "seconds": payload["total_seconds"],
-                }
-            ],
-        )
+    decision_cell = {
+        "top_k": f"top_k k={decision.k}",
+        "score_threshold": f"thr={decision.threshold}",
+        "top_k_min_score": f"top_k k={decision.k} min={decision.min_score}",
+    }[decision.rule]
+    _append_command_rows(
+        config,
+        "evaluate",
+        columns=EVALUATE_COLUMNS,
+        key_columns=EVALUATE_KEY_COLUMNS,
+        rows=[
+            {
+                "run_id": run_id,
+                "date": date.today().isoformat(),
+                "split": split_name,
+                "predictor": eval_config.predictor.name,
+                "embedding": (
+                    eval_config.embedding_run_id.removeprefix("upr-embed-")
+                    if artifact is not None
+                    else None
+                ),
+                "f1 decision": decision_cell,
+                "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
+                "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),
+                "sample-F1": _fmt(overall["f1"]["sample_f1"], 4),
+                "coverage": _fmt(overall["coverage"]["coverage"], 3),
+                "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
+                "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
+                "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
+                "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
+                "n_texts": len(eval_records),
+                "seconds": payload["total_seconds"],
+            }
+        ],
+    )
 
     ranking = overall["ranking"]
     print(
@@ -1299,6 +1328,12 @@ def _load_sweep_runs(path: Path) -> list[Any]:
     The file is a Python module executed once at load; its ``SWEEP`` must be a
     non-empty list of :class:`~cluster_rag.sweep.SweepRun` — i.e. the product
     of ``define_sweep(cells, dataset=..., label=...)`` over ``configs/base.yaml``.
+
+    While the file executes, two directories are importable: the sweep file's
+    own directory (sibling modules) and the shared ``experiments/``
+    directory, so ``embedder_pool.MODELS`` stays shared no matter where the
+    sweep file lives (the text-processing track's sweeps live in
+    ``experiments_text_processing/``). Both are removed again afterwards.
     """
     import importlib.util
 
@@ -1307,20 +1342,23 @@ def _load_sweep_runs(path: Path) -> list[Any]:
         raise ValueError(f"cannot load sweep file {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    # Sweep files may import sibling experiment modules (e.g. the shared
-    # embedder pool): their directory goes on sys.path only while the file
-    # executes, and only if the execution added it.
-    sweep_dir = str(path.parent.resolve())
-    added_sweep_dir = sweep_dir not in sys.path
-    if added_sweep_dir:
-        sys.path.insert(0, sweep_dir)
+    # The sweep file's own directory first (its priority is the higher one),
+    # then the shared experiments directory.
+    candidates = [str(path.parent.resolve()), str(SHARED_EXPERIMENTS_DIR)]
+    added: list[str] = []
+    for entry in candidates:
+        if entry in added or entry in sys.path or not Path(entry).is_dir():
+            continue
+        added.append(entry)
+    for entry in added:
+        sys.path.insert(0, entry)
     try:
         spec.loader.exec_module(module)
     except Exception as exc:  # noqa: BLE001 -- any import error aborts with its cause
         raise ValueError(f"loading sweep file {path} failed: {exc}") from exc
     finally:
-        if added_sweep_dir:
-            sys.path.remove(sweep_dir)
+        for entry in added:
+            sys.path.remove(entry)
     sweep = getattr(module, "SWEEP", None)
     if not isinstance(sweep, list) or not sweep:
         raise ValueError(
@@ -1362,8 +1400,14 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_stats(run.config, omct=True)
         elif run.command == "split":  # sweep cells never re-split silently (--force only via CLI)
             code = _cmd_split(run.config, force=False)
-        else:  # probe-omct
+        elif run.command == "probe-omct":
             code = _cmd_probe_omct(run.config)
+        else:  # a command the CLI does not implement: fail loudly, never guess
+            raise ValueError(
+                f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
+                "does not implement (known commands: "
+                f"{', '.join(sorted(SWEEP_COMMANDS))})"
+            )
         if code != 0:
             logger.error(
                 "Sweep cell %d/%d (%s, label=%s) exited with code %d — aborting the sweep",

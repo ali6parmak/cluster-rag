@@ -80,6 +80,12 @@ class PathsConfig(BaseModel):
     # configs -> the append is skipped.
     experiment_table_upr: Path | None = None
     experiment_table_omct: Path | None = None
+    # The text-processing track's own pair of comparison tables
+    # (TEXT_PROCESSING_PLAN.md section 2): the track's command family owns
+    # them, so track rows never mix with the main pipeline's tables. The
+    # command → (dataset, track) mapping is in experiment_table.py.
+    experiment_table_text_processing_omct: Path | None = None
+    experiment_table_text_processing_upr: Path | None = None
     label_catalog: Path | None = None
     data_external: Path | None = None  # auxiliary pairwise dataset (PLAN.md section 2)
 

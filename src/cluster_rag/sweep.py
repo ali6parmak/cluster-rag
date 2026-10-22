@@ -22,6 +22,12 @@ command adds ``omct-`` itself). Guards: labels are unique within a sweep,
 and ``run_id`` / ``extends`` / ``table.sweep_label`` may not be overridden —
 the label defines the run id, the base file owns the ``extends`` chain, and
 the sweep label defines the table section.
+
+Sweep files may live in their own directory: the ``sweep`` command's loader
+puts the file's directory **and** the shared ``experiments/`` directory on
+``sys.path`` while the file executes (see :data:`SHARED_EXPERIMENTS_DIR`), so
+``embedder_pool.MODELS`` stays shared across the main pipeline's sweeps and
+the text-processing track's sweeps in ``experiments_text_processing/``.
 """
 
 from __future__ import annotations
@@ -68,6 +74,14 @@ COMMANDS: tuple[str, ...] = (
 # The one base config every sweep resolves over (PLAN.md section 5); relative
 # to the working directory the CLI is run from (the repository root).
 BASE_CONFIG_PATH = Path("configs/base.yaml")
+
+# The shared experiment modules (``experiments/embedder_pool.py``: the
+# card-verified model configs of the whole pool) stay importable from every
+# sweep file, wherever it lives: the ``sweep`` command's loader puts this
+# directory on ``sys.path`` next to the sweep file's own directory, so the
+# text-processing track's sweeps (in ``experiments_text_processing/``) can
+# still ``from embedder_pool import MODELS``.
+SHARED_EXPERIMENTS_DIR = Path(__file__).resolve().parents[2] / "experiments"
 
 _SWEEP_LABEL_ERROR = "sweep labels must be filesystem-safe ([A-Za-z0-9._-]+)"
 

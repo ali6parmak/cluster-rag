@@ -25,6 +25,11 @@ paths:
   # a command's dataset picks the file, the run's sweep label picks the section.
   experiment_table_upr: docs/experiments_table_upr.md
   experiment_table_omct: docs/experiments_table_omct.md
+  # The text-processing track's own pair of tables (TEXT_PROCESSING_PLAN.md):
+  # the track's command family writes to them, never to the files above.
+  # The UPR one turns on when the track's UPR stage (Stage 5) starts.
+  experiment_table_text_processing_omct: docs/experiments_table_text_processing_omct.md
+  experiment_table_text_processing_upr: null
 
 stats:
   # Label frequency buckets: head >= head_min, torso >= torso_min, tail below.

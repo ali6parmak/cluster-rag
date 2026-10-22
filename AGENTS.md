@@ -18,6 +18,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     .
     ├── PLAN.md
     ├── AGENTS.md
+    ├── TEXT_PROCESSING_PLAN.md  # satellite track: text processing / segmentation
     ├── pyproject.toml
     ├── configs/                 # the single base config (paths, defaults)
     │   └── base.yaml            # experiments live in experiments/*.py sweeps, authored in Python
@@ -31,9 +32,13 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── docs/
     │   ├── experiments.md            # append-only experiment log
     │   ├── experiments_table_upr.md  # UPR comparison tables, auto-appended by CLI commands
-    │   └── experiments_table_omct.md # OMCT comparison tables, auto-appended by CLI commands
+    │   ├── experiments_table_omct.md # OMCT comparison tables, auto-appended by CLI commands
+    │   ├── experiments_text_processing.md            # text-processing track log (append-only)
+    │   ├── experiments_table_text_processing_omct.md  # track tables, auto-appended
+    │   └── experiments_table_text_processing_upr.md   # track tables (UPR stage)
     ├── notebooks/               # exploration only, no logic that others import
     ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
+    ├── experiments_text_processing/  # the text-processing track's sweep files
     ├── src/cluster_rag/
     │   ├── config.py
     │   ├── data.py              # Record model, loading, validation, splits
@@ -43,6 +48,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
+    │   ├── text_processors/     # text-processing track: chunkers, features, combiners (pure)
     │   ├── embed/
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend
@@ -86,6 +92,7 @@ Check the prefixes against the model card before running experiments.
 - Embeddings are `np.float32`, shape `(n, d)`, L2-normalized. Assert this at index boundaries.
 - Pure functions for scoring and metrics, with no hidden global state. Components take a config object.
 - Dependency direction: `cli.py` orchestrates, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
+- The text-processing track's package (`text_processors/`) is a pure core too: it may import `cluster_rag.embed.base` (Protocol + numpy) and nothing heavier — no `torch`/`sentence-transformers`/`httpx`/`sqlite3`. Model clients (embedders, Ollama LLMs) are wired in CLI code, never inside the package. A test enforces this.
 - No hard-coded paths, thresholds or model names in the logic. Put them in `configs/`.
 - Pass explicit seeds (`numpy`, `random`, `torch`, UMAP `random_state`).
 - Logging uses the `logging` module, not `print`, in library code.
@@ -127,6 +134,20 @@ Every run (one CLI command execution or sweep cell) is identified by its
   heading (`## UPR — <sweep-label>` / `## OMCT — <sweep-label>` plus
   `… - groups` for the probe's per-document breakdown); standalone runs land
   directly under `## <UPR|OMCT> — <command>`.
+- **The text-processing track owns its own pair of tables and its own log**
+  (`TEXT_PROCESSING_PLAN.md`): `docs/experiments_text_processing.md` (the
+  track's append-only narrative log) and
+  `docs/experiments_table_text_processing_omct.md` /
+  `docs/experiments_table_text_processing_upr.md` (auto-appended, upserted by
+  run key). Which file a command writes to is **command-derived, never a
+  heuristic**: every command maps to a `(dataset, track)` pair in
+  `experiment_table.py` (`COMMAND_TARGETS`), and the track picks the file
+  (main pipeline → the per-dataset files; text processing → the track's
+  files). The config keys are `paths.experiment_table_upr` /
+  `_omct` and `paths.experiment_table_text_processing_omct` / `_upr`
+  (unset → the append is skipped). The track's sweeps live in
+  `experiments_text_processing/`; the sweep loader keeps `experiments/`
+  importable so `embedder_pool.MODELS` stays shared.
 - **Legacy ids (pre-2026-10-20):** runs recorded under the old naming
   (`base`, `embed-*`, `ev-*`, `aux-*`) were migrated to `upr-`/`omct-` ids in
   Phase 3.5 after a verified field-for-field re-run (see the migration note at
@@ -170,6 +191,13 @@ Append one row per run:
 Column cells may be omitted ("n/a") for stats/split runs. The auto-appended
 comparison tables live in the per-dataset table files (see "Runs and where
 things live"); do not write their rows by hand.
+
+The text-processing track keeps the same discipline in its own log,
+`docs/experiments_text_processing.md` (append-only, one short section per
+run: date, run_id, what, numbers, verdict), with its numbers in
+`docs/experiments_table_text_processing_omct.md` /
+`docs/experiments_table_text_processing_upr.md`. OMCT findings there
+annotate method choice; they are never a UPR metric.
 
 ## Definition of done (per task)
 - [ ] Code + tests, and `pytest` and `ruff` pass.

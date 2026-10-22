@@ -14,6 +14,15 @@ Build a system that suggests topic labels for short texts (e.g. UPR-style human-
 - Production deployment, auth, multi-user scaling.
 - Training large models from scratch.
 
+### Satellite track: text processing (`TEXT_PROCESSING_PLAN.md`)
+
+The text-processing layer — how text is chunked, segmented and structured before it is embedded — is the thinnest, least-explored layer of this pipeline. It is studied in a **satellite plan**: `TEXT_PROCESSING_PLAN.md` (revised 2026-10-23), OMCT-first, then a port of what survives to UPR.
+
+- **PLAN.md stays master.** A track result adopted downstream gets a note in the relevant phase here (e.g. the Phase 6 reranker slot, the Phase 9 fine-tuning pairs).
+- The track's runs are logged in `docs/experiments_text_processing.md` and compared in `docs/experiments_table_text_processing_omct.md` / `..._upr.md` — the command → (dataset, track) mapping decides the file, so track rows never mix with the tables below.
+- **OMCT findings annotate method choice; they are never a UPR metric.** The track's own leakage rules (no corpus-level question statistics, no document-identity feature, no pooling the two negative subsets) are stricter than the main plan's and bind every track artifact that is reused downstream.
+- The track's named deliverable is a **characterized pair-relevance benchmark on OMCT** (verified hard negatives + unjudged-proxy control + per-document strata), consumable by Phase 6 and Phase 9.
+
 ## 2. Data
 
 Input format is JSONL, one record per line:
@@ -265,6 +274,9 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 **Exit:** A documented decision on whether routing is worth it at the current data size, plus a cluster report artifact.
 
 ### Phase 6: Reranking (optional, after Phase 4 is solid)
+
+*Track input, not yet delivered:* the text-processing track's named deliverable is a **characterized pair-relevance benchmark on OMCT** (the reviewer-verified hard negatives, the unjudged-proxy control and the per-document strata) plus a combiner/feature scorer — i.e. exactly the negative-pair source this phase lacks today. See `TEXT_PROCESSING_PLAN.md` §8; nothing is adopted before its artifact lands in `results/`.
+
 - [ ] Cross-encoder reranker on (text, label name/description) pairs. Zero-shot first, then fine-tuned on the auxiliary pairwise data (Phase 1.5) plus hard negatives from rejected suggestions.
 - ~~LLM reranker via Ollama~~ **Skipped by decision (2026-10): no LLMs in the pipeline.**
 - [ ] Compare against fusion alone: quality gain vs latency and cost.
@@ -292,6 +304,9 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 **Exit:** At least one strategy beats random on the learning curve.
 
 ### Phase 9: Embedding / model fine-tuning
+
+*Track input, not yet delivered:* the text-processing track's "which unjudged pairs are safe negatives" rule (a similarity margin + a reviewer-confirmed spot-check) is the missing recipe for mining the 44k-cell unreviewed space; the track's combiner/feature scorer is the candidate feature set for the bi-encoder below. See `TEXT_PROCESSING_PLAN.md` §8.
+
 - [ ] Build training data from the labels plus accumulated feedback: (text, positive label/text, hard negative). Hard negatives come from rejected suggestions and confusable labels. The auxiliary pairwise pairs (Phase 1.5) join as (paragraph, question) positive/negative examples.
 - [ ] Leakage rule: fine-tune inputs may include the auxiliary pairwise data and UPR train only — never UPR val/test.
 - [ ] Options: SetFit, sentence-transformers `MultipleNegativesRankingLoss`, or a bi-encoder over (text, label description) pairs.
@@ -307,6 +322,7 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 - Every run gets a `run_id`, a frozen config and metrics in `results/`, plus a narrative row/section in `docs/experiments.md` (append-only).
 - Run-id grammar: `<dataset>-<command>-<detail>[-<split>]` with dataset prefixes `upr-` (UPR data) and `omct-` (auxiliary OMCT pairwise data). A sweep is authored for exactly one dataset (`define_sweep(cells, dataset=..., label=...)`), and the dataset decides which comparison table file a row lands in. *(reworked by Phase 3.5; the pre-3.5 `aux-` prefix and unprefixed/`ev-` UPR ids are legacy)*
 - Comparison tables: **per dataset only** — `docs/experiments_table_upr.md` and `docs/experiments_table_omct.md`. Every sweep owns its own section (`## UPR — <sweep-label>`, injected into its cells by `define_sweep`); standalone runs land under `## <UPR|OMCT> — <command>`. Rows are auto-appended by the CLI commands and upserted by run key (the latest run per key wins). The human-readable leaderboard. *(reworked by Phase 3.5; the pre-3.5 single global `docs/experiments_table.md` is retired on migration)*
+- The text-processing track (`TEXT_PROCESSING_PLAN.md`) keeps **its own pair of tables** — `docs/experiments_table_text_processing_omct.md` / `..._upr.md` — and **its own log** (`docs/experiments_text_processing.md`). Which file a command writes to is command-derived: every command maps to a `(dataset, track)` pair, so track rows never mix with the tables above. Its sweeps live in `experiments_text_processing/`; the sweep loader keeps `experiments/` importable so `embedder_pool.MODELS` stays shared.
 - Grids: sweep files under `experiments/` are **Python-only** — typed cells (`EvalCell`/`EmbedCell`/`ProbeCell` with explicit labels) resolved by `define_sweep(cells, dataset=..., label=...)` over `configs/base.yaml`; `cluster-rag sweep --file <file>.py` executes the cells through the existing command functions (one run folder per cell with the frozen config), so sweep code only produces configs.
 - Auxiliary-dataset runs get the `omct-` run_id prefix, live in their own table file, and are never reported as UPR metrics.
 - Fix all random seeds. Record model ids and versions — HF models pinned by revision in the config (the backend also records the loaded snapshot), Ollama by digest.

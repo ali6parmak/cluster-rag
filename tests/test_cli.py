@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
+from cluster_rag import cli
 from cluster_rag.cli import main
 
 
@@ -59,3 +61,44 @@ def test_stats_command_requires_run_id(sample_jsonl, write_config, caplog) -> No
 
 def test_stats_command_missing_config_returns_error() -> None:
     assert main(["stats", "--config", "does-not-exist.yaml"]) == 1
+
+
+def test_append_command_rows_uses_the_command_derived_file(tmp_path: Path) -> None:
+    """The command decides the table file; the track's file stays separate.
+
+    The text-processing track owns its own pair of comparison tables, so a
+    track command's rows must land there and never in the main pipeline's
+    per-dataset files.
+    """
+    from cluster_rag.config import AppConfig
+
+    upr_table = tmp_path / "docs" / "experiments_table_upr.md"
+    track_table = tmp_path / "docs" / "experiments_table_text_processing_omct.md"
+    config = AppConfig.model_validate(
+        {
+            "run_id": "x",
+            "paths": {
+                "data_raw": "data/raw/x.jsonl",
+                "data_processed": "data/processed",
+                "data_splits": "data/splits",
+                "cache": "cache",
+                "results": str(tmp_path / "results"),
+                "experiment_table_upr": str(upr_table),
+                "experiment_table_text_processing_omct": str(track_table),
+            },
+        }
+    )
+    columns = ("run_id", "value")
+    cli._append_command_rows(
+        config, "evaluate", columns=columns, key_columns=("run_id",), rows=[{"run_id": "r-1"}]
+    )
+    cli._append_command_rows(
+        config,
+        "analyze-omct",
+        columns=columns,
+        key_columns=("run_id",),
+        rows=[{"run_id": "r-2"}],
+    )
+    assert "| r-1 |" in upr_table.read_text(encoding="utf-8")
+    assert "| r-2 |" in track_table.read_text(encoding="utf-8")
+    assert "r-2" not in upr_table.read_text(encoding="utf-8")

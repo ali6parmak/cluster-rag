@@ -16,18 +16,99 @@ key, while the narrative log ``docs/experiments.md`` stays append-only and
 records every pass. Values come from each run's own artifacts (written by
 the command right before the row), counts sit next to numbers, and "n/a"
 marks unreported values. A table path is config
-(``paths.experiment_table_upr`` / ``paths.experiment_table_omct``); commands
-skip the append when their dataset's path is unset (e.g. tests with
-throwaway results folders).
+(``paths.experiment_table_upr`` / ``paths.experiment_table_omct`` and the
+track's two keys); commands skip the append when their file is unset (e.g.
+tests with throwaway results folders).
+
+The text-processing track (``TEXT_PROCESSING_PLAN.md`` section 2) owns its
+own pair of table files, ``docs/experiments_table_text_processing_omct.md``
+and ``docs/experiments_table_text_processing_upr.md``. Which file a command
+writes to is **command-derived**, never a heuristic: every command maps to a
+``(dataset, track)`` pair in :data:`COMMAND_TARGETS`, and the track picks the
+file (main pipeline -> the per-dataset files, text processing -> the track's
+files).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 DATASET_TAGS: dict[str, str] = {"upr": "UPR", "omct": "OMCT"}
+
+# The main pipeline's tables and the text-processing track's tables are
+# separate files; a command's track decides which pair it writes to.
+MAIN_TRACK = "main"
+TEXT_PROCESSING_TRACK = "text_processing"
+
+
+@dataclass(frozen=True)
+class TableTarget:
+    """Where a command's comparison rows go: one dataset, one track."""
+
+    dataset: str
+    track: str = MAIN_TRACK
+
+
+# The command -> (dataset, track) mapping. Command-derived, never a heuristic:
+# the track's command family (analyze-omct / chunk-omct / chunk-upr) maps to
+# dataset=omct|upr + track=text_processing, i.e. the track's own table files.
+COMMAND_TARGETS: dict[str, TableTarget] = {
+    "stats": TableTarget("upr"),
+    "stats-omct": TableTarget("omct"),
+    "split": TableTarget("upr"),
+    "embed": TableTarget("upr"),
+    "labelembed": TableTarget("upr"),
+    "evaluate": TableTarget("upr"),
+    "probe-omct": TableTarget("omct"),
+    # Text-processing track (TEXT_PROCESSING_PLAN.md section 2).
+    "analyze-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
+    "chunk-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
+    "chunk-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
+}
+
+
+def table_target(command: str) -> TableTarget:
+    """The ``(dataset, track)`` a command's rows belong to.
+
+    Raises:
+        ValueError: If the command is not registered (a typo must fail loudly
+            instead of silently writing to the wrong file).
+    """
+    try:
+        return COMMAND_TARGETS[command]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown command {command!r}; expected one of {sorted(COMMAND_TARGETS)}"
+        ) from exc
+
+
+class TablePaths(Protocol):
+    """The paths-config attributes the table writer needs (structural type)."""
+
+    experiment_table_upr: Path | None
+    experiment_table_omct: Path | None
+    experiment_table_text_processing_upr: Path | None
+    experiment_table_text_processing_omct: Path | None
+
+
+def table_path(paths: TablePaths, command: str) -> Path | None:
+    """The table file a command appends to (``None`` = unset -> skip).
+
+    The path comes from the command's ``(dataset, track)`` pair, so a track
+    command can never write into the main pipeline's table file.
+    """
+    target = table_target(command)
+    if target.track == TEXT_PROCESSING_TRACK:
+        if target.dataset == "upr":
+            return paths.experiment_table_text_processing_upr
+        return paths.experiment_table_text_processing_omct
+    if target.dataset == "upr":
+        return paths.experiment_table_upr
+    return paths.experiment_table_omct
+
 
 INTRO = """\
 # Experiment tables
@@ -39,9 +120,24 @@ sit next to numbers; "n/a" = not reported by the run.
 """
 
 
-def intro_for(dataset: str) -> str:
-    """Intro text of a per-dataset table file (names the dataset)."""
+def intro_for(dataset: str, track: str = MAIN_TRACK) -> str:
+    """Intro text of a table file (names the dataset and the track).
+
+    The text-processing track's files point at the track's own narrative log
+    (``docs/experiments_text_processing.md``), not at the main pipeline's.
+    """
     tag = DATASET_TAGS[dataset]
+    if track == TEXT_PROCESSING_TRACK:
+        return (
+            f"# {tag} text-processing experiment tables\n"
+            "\n"
+            "Comparison tables for the text-processing track "
+            "(`TEXT_PROCESSING_PLAN.md`), keyed by run — auto-appended by the "
+            "track's CLI commands. The append-only narrative log is "
+            "`docs/experiments_text_processing.md`. Values come from each run's "
+            "own artifacts; counts sit next to numbers; "
+            '"n/a" = not reported by the run.\n'
+        )
     return (
         f"# {tag} experiment tables\n"
         "\n"

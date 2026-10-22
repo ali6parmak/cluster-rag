@@ -408,9 +408,10 @@ sweeps are the orders.
 
 ## 7. First execution change sets
 
-Numbered, one per commit, in order:
+Numbered, one per commit, in order (the plan's style: one checkbox per change
+set):
 
-- **CS-0 — Skeleton.** `TEXT_PROCESSING_PLAN.md` (this content);
+- [x] **CS-0 — Skeleton.** `TEXT_PROCESSING_PLAN.md` (this content);
   `docs/experiments_text_processing.md` (header only);
   `experiments_text_processing/` + the sweep-loader tweak (+ docstring + test)
   so `embedder_pool.MODELS` stays shared; `src/cluster_rag/text_processors/`
@@ -418,11 +419,25 @@ Numbered, one per commit, in order:
   `paths.experiment_table_text_processing_omct` / `_upr` config keys and the
   command-derived table mapping; **AGENTS.md + PLAN.md updates** (new log, new
   tables, new package, satellite-plan pointer).
-- **CS-1 — `analyze-omct`.** The Stage-0 artifact command: per-pair scores for
+  *(done 2026-10-23: the package `src/cluster_rag/text_processors/` with the
+  `Chunker`/`FeatureExtractor`/`Combiner` ports, the `full_text` and `atoms`
+  chunkers and a 17-test unit suite (incl. a guard that the package imports no
+  model client); the chunking version composes into the *existing* cache
+  version slot and the identity chunker keeps the warm cache valid
+  (`cache_version("raw-v1") == "raw-v1"`); `experiments_text_processing/` with
+  the loader tweak (the file's dir **and** `experiments/` on `sys.path`, tested
+  by importing the real `embedder_pool` from a track-dir sweep file) and an
+  explicit sweep dispatch (an unimplemented command now aborts instead of
+  falling through to `probe-omct`); the command → (dataset, track) →
+  table-file mapping in `experiment_table.py` with the two new config keys and
+  a CLI helper that all four append sites now use; the track log + its OMCT
+  table file; AGENTS.md/PLAN.md updated (layout, log/table rules, pure-core
+  rule, satellite pointer, Phase 6/9 track-input notes). No run, no metric.)*
+- [ ] **CS-1 — `analyze-omct`.** The Stage-0 artifact command: per-pair scores for
   the selected models, the control set (seeded sampling, judged pairs
   excluded), per-document strata with base rates, the negative-enrichment
   measurement, per-label score distributions. Warm cache, no re-encoding.
-- **CS-2 — Stage 0 write-up.** The failure-mode classification and the
+- [ ] **CS-2 — Stage 0 write-up.** The failure-mode classification and the
   "what this data can answer" section in `docs/experiments_text_processing.md`,
   based on the CS-1 artifact (this is where §0.1's diagnostics become
   reportable numbers).

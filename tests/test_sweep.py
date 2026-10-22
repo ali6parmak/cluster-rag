@@ -23,6 +23,7 @@ from cluster_rag.config import EmbedderConfig, EvalDecisionConfig
 from cluster_rag.sweep import (
     COMMANDS,
     DATASET_COMMANDS,
+    SHARED_EXPERIMENTS_DIR,
     EmbedCell,
     EvalCell,
     LabelEmbedCell,
@@ -161,6 +162,48 @@ def test_sweep_file_imports_sibling_module(repo_root: Path) -> None:
     runs = cli._load_sweep_runs(subdir / "mini_sweep.py")
     assert [run.label for run in runs] == ["upr-stats-mini-a", "upr-stats-mini-b"]
     assert subdir_resolved not in sys.path  # removed again after the load
+
+
+def test_sweep_file_imports_the_shared_pool_from_another_directory(repo_root: Path) -> None:
+    """The shared embedder pool stays importable from any sweep directory.
+
+    The text-processing track's sweeps live in `experiments_text_processing/`
+    (parallel to `experiments/`), but they must use the same pool as the main
+    pipeline: the loader keeps `experiments/` on sys.path while the sweep file
+    executes, so `from embedder_pool import MODELS` works there too.
+    """
+    subdir = repo_root / "experiments_text_processing"
+    subdir.mkdir()
+    (subdir / "track_sweep.py").write_text(
+        "from embedder_pool import MODELS\n"
+        "from cluster_rag.sweep import SweepCell, define_sweep\n"
+        "model = sorted(MODELS)[0].replace('/', '_')\n"
+        "cells = [SweepCell(label='upr-stats-' + model, command='stats')]\n"
+        "SWEEP = define_sweep(cells, dataset='upr', label='track')\n",
+        encoding="utf-8",
+    )
+    # The import must go through the loader, not through a cached module.
+    sys.modules.pop("embedder_pool", None)
+    shared_resolved = str(SHARED_EXPERIMENTS_DIR.resolve())
+    runs = cli._load_sweep_runs(subdir / "track_sweep.py")
+    pool = sys.modules.get("embedder_pool")
+    assert pool is not None, "the sweep file did not import the shared embedder pool"
+    assert sorted(pool.MODELS)[0].replace("/", "_") in runs[0].label
+    assert shared_resolved not in sys.path  # removed again after the load
+
+
+def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path) -> None:
+    """A cell whose command the CLI does not implement aborts, never guesses."""
+    (repo_root / "bogus_sweep.py").write_text(
+        "from cluster_rag.sweep import SweepCell, SweepRun, define_sweep\n"
+        "runs = define_sweep([SweepCell(label='upr-stats-x', command='stats')],"
+        " dataset='upr', label='bogus')\n"
+        "SWEEP = [SweepRun(label=runs[0].label, command='not-a-command',"
+        " config=runs[0].config)]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not implement"):
+        cli._cmd_sweep(repo_root / "bogus_sweep.py")
 
 
 def test_define_sweep_resolves_typed_cells(repo_root: Path) -> None:
