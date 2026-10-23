@@ -1,16 +1,18 @@
 """Experiment sweeps as Python (Phase 2.5/3.5): typed cells -> resolved configs.
 
 A sweep file under ``experiments/`` declares typed cells built with plain
-Python loops — :class:`EvalCell`, :class:`EmbedCell`, :class:`LabelEmbedCell`
-and :class:`ProbeCell` (validated fields, no dict/YAML wiring), plus the
-generic :class:`SweepCell` (label + command + config overrides) for the
-commands without a dedicated cell (``stats``/``stats-omct``/``split``).
-:func:`define_sweep` resolves every cell over ``configs/base.yaml`` into one
-validated :class:`~cluster_rag.config.AppConfig` per run. Sweeps only
-*produce* configs: the ``sweep`` CLI command executes the resolved cells
-through the existing command functions (``embed`` / ``labelembed`` /
-``evaluate`` / ``probe-omct`` / ``stats`` / ``split``), so run folders, frozen
-configs, logs and experiment-table rows are exactly what single runs produce.
+Python loops — :class:`EvalCell`, :class:`EmbedCell`, :class:`LabelEmbedCell`,
+:class:`ProbeCell` and :class:`AnalyzeOmctCell` (validated fields, no
+dict/YAML wiring), plus the generic :class:`SweepCell` (label + command +
+config overrides) for the commands without a dedicated cell
+(``stats``/``stats-omct``/``split``). :func:`define_sweep` resolves every
+cell over ``configs/base.yaml`` into one validated
+:class:`~cluster_rag.config.AppConfig` per run. Sweeps only *produce*
+configs: the ``sweep`` CLI command executes the resolved cells through the
+existing command functions (``embed`` / ``labelembed`` / ``evaluate`` /
+``probe-omct`` / ``analyze-omct`` / ``stats`` / ``split``), so run folders,
+frozen configs, logs and experiment-table rows are exactly what single runs
+produce.
 
 A sweep is authored for exactly **one dataset** (:func:`define_sweep`'s
 ``dataset``, ``upr`` or ``omct``): it validates each cell's command against
@@ -41,6 +43,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from cluster_rag.config import (
+    AnalysisConfig,
     AppConfig,
     EmbedderConfig,
     EvalDecisionConfig,
@@ -59,7 +62,7 @@ from cluster_rag.embed.base import KINDS
 # the dataset decides nothing at execution time); ``stats`` is the plain UPR
 # dataset statistics run.
 UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "labelembed", "evaluate")
-OMCT_COMMANDS: tuple[str, ...] = ("stats-omct", "probe-omct")
+OMCT_COMMANDS: tuple[str, ...] = ("stats-omct", "probe-omct", "analyze-omct")
 DATASET_COMMANDS: dict[str, tuple[str, ...]] = {"upr": UPR_COMMANDS, "omct": OMCT_COMMANDS}
 COMMANDS: tuple[str, ...] = (
     "stats",
@@ -69,6 +72,7 @@ COMMANDS: tuple[str, ...] = (
     "labelembed",
     "evaluate",
     "probe-omct",
+    "analyze-omct",
 )
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
@@ -307,7 +311,34 @@ class ProbeCell(_LabelledCell):
         return payload
 
 
-Cell = SweepCell | EvalCell | EmbedCell | LabelEmbedCell | ProbeCell
+class AnalyzeOmctCell(_LabelledCell):
+    """One ``analyze-omct`` cell: the models to score with + the control design.
+
+    The text-processing track's Stage-0 artifact
+    (TEXT_PROCESSING_PLAN.md section 3, Stage 0.1): the per-pair scores of
+    the judged pairs, the control set (a seeded, proportional sample of the
+    *unjudged* same-document cells), the per-document strata and the
+    negative-enrichment measurement. ``analysis`` is the whole
+    :class:`~cluster_rag.config.AnalysisConfig` — the models (each with its
+    card-verified embedder config), the control size, the sampling rule, the
+    question transform and the chunker. The command adds the ``omct-``
+    dataset prefix at run time.
+    """
+
+    analysis: AnalysisConfig
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "analyze-omct"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (the complete ``analysis`` section)."""
+        return {"analysis": self.analysis.model_dump(mode="python")}
+
+
+Cell = SweepCell | EvalCell | EmbedCell | LabelEmbedCell | ProbeCell | AnalyzeOmctCell
 
 
 @dataclass(frozen=True)
@@ -356,9 +387,10 @@ def define_sweep(
     override value, so an invalid cell fails here — before any run starts.
 
     Constraints: ``dataset`` selects the allowed commands (upr:
-    stats/split/embed/evaluate; omct: stats-omct/probe-omct) and the cell-label
-    prefix rules (upr cells start with ``upr-``; omct cells are unprefixed);
-    ``label`` (filesystem-safe, free-form) names the sweep's table section.
+    stats/split/embed/evaluate; omct: stats-omct/probe-omct/analyze-omct) and
+    the cell-label prefix rules (upr cells start with ``upr-``; omct cells are
+    unprefixed); ``label`` (filesystem-safe, free-form) names the sweep's
+    table section.
     """
     if dataset not in DATASET_COMMANDS:
         raise ValueError(

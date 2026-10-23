@@ -21,6 +21,20 @@ CHUNKERS: dict[str, type[BaseChunker]] = {
     "atoms": AtomChunker,
 }
 
+
+def build_chunker(name: str) -> BaseChunker:
+    """Build the chunker of a config-facing name (the registry's factory).
+
+    Raises:
+        ValueError: If the name is not in the registry.
+    """
+    try:
+        chunker_class = CHUNKERS[name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown chunker {name!r}; expected one of {sorted(CHUNKERS)}") from exc
+    return chunker_class()
+
+
 __all__ = [
     "CHUNKERS",
     "DEFAULT_ABBREVIATIONS",
@@ -28,6 +42,7 @@ __all__ = [
     "AtomChunkerConfig",
     "BaseChunker",
     "FullTextChunker",
+    "build_chunker",
     "split_clauses",
     "split_sentences",
 ]

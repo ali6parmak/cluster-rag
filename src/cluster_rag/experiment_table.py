@@ -245,6 +245,35 @@ PROBE_OMCT_GROUPS_KEY_COLUMNS: tuple[str, ...] = (
     "source_csv",
 )
 
+# The text-processing track's Stage-0 analysis table (the `analyze-omct`
+# command): one row per model of a run. The discrimination number (the
+# reviewed set's pair AUC) sits next to the control-side counterparts (the
+# control's score level and the rank percentiles of the positives, the
+# verified negatives and the control) — the track's reporting rule: no
+# discrimination number is quoted without its control-side counterpart.
+ANALYZE_OMCT_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "backend",
+    "model",
+    "model_version",
+    "dim",
+    "ctx",
+    "transform",
+    "chunker",
+    "pair_auc",
+    "ctrl_mean",
+    "ctrl_p50",
+    "pos_rank_p50",
+    "neg_rank_p50",
+    "ctrl_rank_p50",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model")
+
 
 def _cell(value: Any) -> str:
     """Render one table cell; ``None``/missing/empty becomes "n/a"."""

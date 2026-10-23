@@ -456,6 +456,70 @@ class ProbeConfig(BaseModel):
         return value
 
 
+class AnalysisEmbedderConfig(BaseModel):
+    """One embedder the Stage-0 analysis scores with.
+
+    ``name`` is the short handle the run's table row and the artifact use
+    (e.g. ``embeddinggemma``); ``embed`` is the full, card-verified embedder
+    config (model id, prefixes, revision / digest) — the same object the main
+    pipeline's sweeps use, so the analysis and the pool never drift apart.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    embed: EmbedderConfig
+
+
+class AnalysisConfig(BaseModel):
+    """The text-processing track's Stage-0 analysis settings.
+
+    The ``analyze-omct`` command writes the Stage-0 artifact (the OMCT
+    pair-score benchmark: per-pair scores, the control set, the per-document
+    strata and the negative-enrichment measurement — TEXT_PROCESSING_PLAN.md
+    section 3, Stage 0.1).
+
+    - ``embedders``: the models to score with (each with its own card-verified
+      embedder config; several models share one run and one artifact).
+    - ``control_size``: the number of control cells (subset B) to draw from
+      the *unjudged* same-document cells. The default (4,000) is the plan's;
+      it is a plain config value, so a different size is a one-line change.
+    - ``sampling_rule``: how the control is drawn per document (the Stage-0
+      rule is proportional to the unjudged cells; the artifact records the
+      rule, the seed and the per-document quotas).
+    - ``question_transform`` / ``question_block_markers``: the question side's
+      text transform (``strip_block`` is the default: the "Answer
+      choices:"/"Notes:" furniture is mostly noise, PLAN.md section 7). The
+      markers mirror ``probe.question_block_markers``; the transform version
+      hashes them, so a difference can never pass unnoticed.
+    - ``chunker``: the chunker of the track's registry used for both sides
+      (``full_text`` is the Stage-0 baseline: one chunk per text, so the
+      embedding cache stays warm).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    embedders: tuple[AnalysisEmbedderConfig, ...] = ()
+    control_size: int = Field(default=4000, ge=1)
+    sampling_rule: Literal["proportional"] = "proportional"
+    question_transform: Literal["keep", "strip_block"] = "strip_block"
+    question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
+    chunker: str = "full_text"
+
+    @field_validator("chunker")
+    @classmethod
+    def _chunker_is_known(cls, value: str) -> str:
+        """Reject unknown chunker names at config time (fail before any run)."""
+        from cluster_rag.text_processors.chunkers import CHUNKERS
+
+        if value not in CHUNKERS:
+            raise ValueError(
+                f"Unknown chunker {value!r}; expected one of {sorted(CHUNKERS)} "
+                "(the text-processing track's chunker registry)"
+            )
+        return value
+
+
 class TableConfig(BaseModel):
     """Experiment-table bookkeeping carried into runs (Phase 3.5).
 
@@ -498,6 +562,9 @@ class AppConfig(BaseModel):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
     eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
+    # The text-processing track's Stage-0 analysis (the `analyze-omct`
+    # command): the models to score with and the control-set design.
+    analysis: AnalysisConfig | None = None
     table: TableConfig = Field(default_factory=TableConfig)  # Phase 3.5: sweep bookkeeping
     # Zero-shot label texts (Phase 4): required by the `labelembed` command,
     # which embeds one text per dataset label into the label-embedding artifact.

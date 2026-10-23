@@ -22,4 +22,8 @@ Two rules for a sweep file in this directory:
    prefixes, so a track row is still visibly auxiliary.
 
 The first sweep file (CS-1, `analyze-omct` — Stage 0.1's artifact command)
-lands here.
+is `omct_analysis_sweep.py`: one cell per Stage-0 model
+(`embeddinggemma`, `voyage-4-nano`, `arctic2`), so three runs
+(`omct-analyze-<model>`), each with its own artifact. The control set is
+model-independent and seeded, so the three runs draw exactly the same control
+cells.

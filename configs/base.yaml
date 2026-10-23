@@ -82,6 +82,20 @@ splits:
 #                 template: null}       # "{label}", e.g. "This recommendation
 #                                       # is about {label}."
 #
+# Text-processing track (TEXT_PROCESSING_PLAN.md): `cluster-rag analyze-omct`
+# writes the Stage-0 pair-score artifact — the OMCT benchmark (per-pair
+# scores, the unjudged control set, the per-document strata, the negative
+# enrichment). The models and the control design are per experiment, so they
+# live in the track's Python sweeps (experiments_text_processing/); the schema
+# defaults are:
+#   analysis: {embedders: [{name: <model handle>,   # e.g. "embeddinggemma"
+#                           embed: {backend, model_id, prefixes: {...}}}],
+#               control_size: 4000,        # unjudged control cells (subset B)
+#               sampling_rule: proportional,
+#               question_transform: strip_block,   # keep | strip_block
+#               question_block_markers: ["Answer choices:", "Notes:"],
+#               chunker: full_text}        # the track's chunker registry
+#
 # strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
 # start with "continue"); longest opener wins, so multi-word forms are listed
 # before their shorter prefixes.

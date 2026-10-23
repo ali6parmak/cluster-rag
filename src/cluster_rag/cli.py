@@ -8,7 +8,8 @@ Invocation (target CLI in AGENTS.md):
 Commands: stats (--omct for the OMCT pairwise data), split, embed
 (Phase 2: dataset embedding through the disk cache), labelembed (Phase 4:
 the zero-shot label-text artifact), probe-omct (Phase 2: the
-OMCT pairwise embedding probe), evaluate (Phase 3: any predictor on a
+OMCT pairwise embedding probe), analyze-omct (the text-processing track's
+Stage-0 pair-score artifact), evaluate (Phase 3: any predictor on a
 fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
 cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
@@ -17,8 +18,9 @@ paths in the config resolve. Commands write their artifacts to
 comparison table is set (``paths.experiment_table_upr`` /
 ``paths.experiment_table_omct``, or the text-processing track's
 ``paths.experiment_table_text_processing_omct`` / ``_upr``), ``embed``,
-``labelembed``, ``evaluate`` and ``probe-omct`` also append one row per run
-(per transform for probe-omct) to it, upserted by run key — the file comes
+``labelembed``, ``evaluate``, ``probe-omct`` and ``analyze-omct`` also append
+one row per run (per transform for probe-omct, per model for analyze-omct) to
+it, upserted by run key — the file comes
 from the command's (dataset, track) pair, the section heading from the run's
 ``table.sweep_label`` when the run came from a sweep, else
 ``## <UPR|OMCT> — <command>`` (Phase 3.5).
@@ -64,6 +66,8 @@ from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
 from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
 from cluster_rag.experiment_table import (
+    ANALYZE_OMCT_COLUMNS,
+    ANALYZE_OMCT_KEY_COLUMNS,
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
@@ -78,6 +82,12 @@ from cluster_rag.experiment_table import (
     table_path,
     table_target,
 )
+from cluster_rag.omct_analysis import (
+    build_analysis_report,
+    build_dataset_view,
+    score_model,
+    side_cache_versions,
+)
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
@@ -85,6 +95,7 @@ from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
+from cluster_rag.text_processors.chunkers import build_chunker
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +218,32 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to the YAML config with embed: and paths.data_external set.",
+    )
+
+    analyze_omct = subparsers.add_parser(
+        "analyze-omct",
+        help="Text-processing track: the Stage-0 pair-score artifact (analyze-omct).",
+        description=(
+            "The text-processing track's Stage-0 artifact "
+            "(TEXT_PROCESSING_PLAN.md, Stage 0.1): score every judged OMCT pair "
+            "and a seeded, proportional sample of the *unjudged* same-document "
+            "cells (the control, subset B) with the configured models, and report "
+            "the per-document strata, the score distributions per label and the "
+            "negative-enrichment measurement (the rank percentile of the verified "
+            "negatives next to the positives and the control). The control's "
+            "provenance (seed, sampling rule, per-document quotas, the excluded "
+            "judged cells) is recorded, so a later stage re-uses exactly the same "
+            "cells. Writes results/omct-<run_id>/analysis.json — the omct- dataset "
+            "prefix is added by the command itself (AGENTS.md run-id grammar); the "
+            "row goes to the track's own table."
+        ),
+    )
+    analyze_omct.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with an analysis: section (or sweep-resolved "
+        "configs; experiment values live in experiments_text_processing/*.py sweeps).",
     )
 
     evaluate = subparsers.add_parser(
@@ -968,6 +1005,171 @@ def _cmd_probe_omct(config: AppConfig) -> int:
     return 0
 
 
+def _cmd_analyze_omct(config: AppConfig) -> int:
+    """Run analyze-omct: the text-processing track's Stage-0 artifact.
+
+    Writes ``results/omct-<run_id>/{config.yaml, analysis.json}``: the
+    per-pair scores of the judged pairs, the control set (the sampled
+    unjudged same-document cells) with their scores and their provenance, the
+    per-document strata with their base rates, the score distributions per
+    label and the negative-enrichment measurement — per model. The command
+    adds the ``omct-`` dataset prefix itself (AGENTS.md run-id grammar), and
+    the row lands in the track's own table file (the command-derived
+    (dataset, track) mapping).
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    if config.analysis is None:
+        raise ValueError(
+            "the analysis: section (the models to score with and the control design) "
+            "is required for the `analyze-omct` command"
+        )
+    if config.paths.data_external is None:
+        raise ValueError("paths.data_external must be set in the config to run analyze-omct")
+    if not config.analysis.embedders:
+        raise ValueError("analysis.embedders must name at least one model to score with")
+
+    analysis = config.analysis
+    pair_report = load_pairs(config.paths.data_external)
+    spec = build_preprocess_spec(config.preprocess)
+    chunker = build_chunker(analysis.chunker)
+
+    view = build_dataset_view(
+        pair_report.records,
+        control_size=analysis.control_size,
+        seed=config.seed,
+        sampling_rule=analysis.sampling_rule,
+    )
+    paragraph_version, question_version = side_cache_versions(
+        chunker, spec, analysis.question_transform, analysis.question_block_markers
+    )
+
+    models: list[dict[str, Any]] = []
+    for entry in analysis.embedders:
+        embedder = build_embedder(entry.embed)
+        paragraph_embedder = embedder
+        question_embedder = embedder
+        if config.cache.enabled:
+            paragraph_embedder = CachedEmbedder(
+                embedder, config.paths.cache, preprocessing_version=paragraph_version
+            )
+            question_embedder = CachedEmbedder(
+                embedder, config.paths.cache, preprocessing_version=question_version
+            )
+        models.append(
+            score_model(
+                view,
+                model_name=entry.name,
+                paragraph_embedder=paragraph_embedder,
+                question_embedder=question_embedder,
+                chunker=chunker,
+                preprocess_spec=spec,
+                question_transform=analysis.question_transform,
+                question_block_markers=analysis.question_block_markers,
+            )
+        )
+
+    omct_run_id = _omct_run_id(run_id)
+    payload = build_analysis_report(
+        view,
+        models,
+        run_id=omct_run_id,
+        source=str(config.paths.data_external),
+        source_sha256=file_sha256(config.paths.data_external),
+        seed=config.seed,
+        control_size=analysis.control_size,
+        sampling_rule=analysis.sampling_rule,
+        question_transform=analysis.question_transform,
+        chunker_name=analysis.chunker,
+        n_valid_pairs=pair_report.n_valid,
+        n_malformed_pairs=pair_report.n_invalid,
+        total_seconds=time.perf_counter() - started,
+    )
+    results_dir = config.paths.results / omct_run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    (results_dir / "analysis.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    table_rows: list[dict[str, Any]] = []
+    for model in models:
+        info = model["embedder"]
+        distributions = model["score_distributions"]
+        enrichment = model["negative_enrichment"]["rank_percentile"]
+        table_rows.append(
+            {
+                "run_id": omct_run_id,
+                "date": date.today().isoformat(),
+                "backend": info["backend"],
+                "model": info["model_id"],
+                "model_version": (info["revision_or_digest"] or "")[:12],
+                "dim": info["dimension"],
+                "ctx": info["context_tokens"],
+                "transform": analysis.question_transform,
+                "chunker": analysis.chunker,
+                "pair_auc": _fmt(model["pair_auc"]["overall"], 4),
+                "ctrl_mean": _fmt(distributions["control"].get("mean"), 4),
+                "ctrl_p50": _fmt(distributions["control"].get("quantiles", {}).get("0.5"), 4),
+                "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
+                "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
+                "ctrl_rank_p50": _fmt(enrichment["control"].get("quantiles", {}).get("0.5"), 4),
+                "n_pairs": view.pooled["n_pairs"],
+                "n_control": view.control.n_cells,
+                "n_docs": view.pooled["n_documents"],
+                "seconds": payload["total_seconds"],
+            }
+        )
+    _append_command_rows(
+        config,
+        "analyze-omct",
+        columns=ANALYZE_OMCT_COLUMNS,
+        key_columns=ANALYZE_OMCT_KEY_COLUMNS,
+        rows=table_rows,
+    )
+
+    print(f"OMCT analysis (Stage 0): {omct_run_id}")
+    print(
+        f"  grid: {view.pooled['grid_cells']} same-document cells, "
+        f"{view.pooled['judged_cells']} judged "
+        f"({view.pooled['grid_coverage']:.1%} covered), "
+        f"{view.pooled['n_paragraphs']} paragraphs, {view.pooled['n_questions']} questions"
+    )
+    print(
+        f"  control: {view.control.n_cells} unjudged cells (seed {config.seed}, "
+        f"rule {analysis.sampling_rule}); "
+        f"quotas: "
+        + ", ".join(
+            f"{document} {quota}" for document, quota in sorted(view.control.quotas.items())
+        )
+    )
+    for model in models:
+        info = model["embedder"]
+        distributions = model["score_distributions"]
+        enrichment = model["negative_enrichment"]["rank_percentile"]
+        top1 = model["top1_candidate_provenance"]
+        print(
+            f"  [{model['name']}] {info['backend']}:{info['model_id']} "
+            f"(dim {info['dimension']}): pair-AUC "
+            f"{model['pair_auc']['overall']:.4f}; control mean "
+            f"{distributions['control']['mean']:.3f}, p50 "
+            f"{distributions['control']['quantiles']['0.5']:.3f}"
+        )
+        print(
+            f"      rank percentile (0 = top of the candidate list): positives "
+            f"{enrichment['label1']['quantiles']['0.5']:.3f}, negatives "
+            f"{enrichment['label0']['quantiles']['0.5']:.3f}, control "
+            f"{enrichment['control']['quantiles']['0.5']:.3f}"
+        )
+        print(
+            f"      top-1 candidate per paragraph (model-dependent): positive "
+            f"{top1['given_positive']}, negative {top1['given_negative']}, unjudged "
+            f"{top1['unjudged']} of {top1['n_paragraphs']}"
+        )
+    print(f"Report written to {results_dir / 'analysis.json'}")
+    return 0
+
+
 def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     """Run the evaluate command: any predictor on a fixed split (Phase 3 exit criterion).
 
@@ -1402,6 +1604,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_split(run.config, force=False)
         elif run.command == "probe-omct":
             code = _cmd_probe_omct(run.config)
+        elif run.command == "analyze-omct":  # the text-processing track's Stage 0
+            code = _cmd_analyze_omct(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
@@ -1446,6 +1650,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_evaluate(config, split=args.split)
         if args.command == "probe-omct":
             return _cmd_probe_omct(config)
+        if args.command == "analyze-omct":
+            return _cmd_analyze_omct(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

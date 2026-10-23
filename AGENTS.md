@@ -46,6 +46,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── pairs.py             # auxiliary PairRecord model + loader/validation
     │   ├── dataset_stats.py     # UPR dataset statistics (pure functions)
     │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
+    │   ├── omct_analysis.py     # track's Stage-0 analysis driver (analyze-omct)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── text_processors/     # text-processing track: chunkers, features, combiners (pure)

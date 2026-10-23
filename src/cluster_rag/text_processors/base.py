@@ -78,6 +78,15 @@ class Chunker(Protocol):
     def version(self) -> str:
         """Cache-facing version of this chunker's parameters."""
 
+    def cache_version(self, base_version: str) -> str:
+        """The embedding-cache version slot for chunks of ``base_version`` texts.
+
+        The chunking version is composed into the *existing* version slot, so
+        the effective cache key stays ``(model, prefix, version, sha1(chunk))``:
+        the cache layout never changes (an identity chunker returns
+        ``base_version`` unchanged, which keeps the warm cache valid).
+        """
+
     def segment(self, texts: Sequence[str]) -> list[list[str]]:
         """Split each text into its chunks."""
 

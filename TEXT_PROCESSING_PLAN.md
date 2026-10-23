@@ -33,6 +33,16 @@ are *indicative*, not reportable. Change set **CS-1** (`analyze-omct`) must
 re-derive every one of them through the harness before any of them enters a
 log row or a table, and Stage 0's written classification is based on the
 harness version.
+*(CS-1 re-derived them on 2026-10-23: every number about the **judged** set
+reproduces digit-for-digit — the score distributions, the pair AUC 0.4680, the
+rank percentiles 0.097 / 0.207 and the top-1 provenance 55 / 17 / 153. The
+**control** row below does *not* reproduce: that ad-hoc script's control
+construction was never recorded, and the control settled on 2026-10-23 is
+deliberately rank-unbiased (a uniform draw over the unjudged cells), so its
+cells score lower (mean 0.2436 vs 0.289 for arctic2) and sit at rank p50
+0.5021 (≈ random) instead of 0.565. The harness numbers live in
+`results/omct-analyze-*/analysis.json` and in
+`docs/experiments_text_processing.md`.)*
 
 Corpus shape (from the data file itself):
 
@@ -238,7 +248,7 @@ sweeps are the orders.
 
 ### Stage 0 — Diagnosis (no new methods; tick when failure modes are classified)
 
-- [ ] **0.1 The pair-score artifact (`analyze-omct`).** A new CLI command that
+- [x] **0.1 The pair-score artifact (`analyze-omct`).** A new CLI command that
   writes ONE artifact per run with: per-pair scores (paragraph x question) for
   the selected models, the **control set** (sampled unjudged same-document
   pairs, recorded with their sampling seed and the exclusion of all judged
@@ -301,6 +311,21 @@ sweeps are the orders.
     therefore only an approximation: report the **per-document** shift and
     correct per document, and measure the correlation between paragraph
     length and per-pair shift rather than assuming it away.
+  *(done 2026-10-23, CS-1: the `analyze-omct` command, the `analysis:` config
+  section, the pure core `text_processors/control.py` (the grid, the quota
+  allocation, the seeded draw, the rank percentile), the driver
+  `omct_analysis.py`, the `AnalyzeOmctCell` sweep cell, the track's table
+  columns and the track's first sweep (`experiments_text_processing/
+  omct_analysis_sweep.py`, three cells = three models = three runs:
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}`; 0 re-encodes — every
+  vector a cache hit). Every §0.1 number about the **judged** set reproduces
+  digit-for-digit (the score distributions, the pair AUC 0.4680, the rank
+  percentiles 0.097 / 0.207, the top-1 provenance 55 / 17 / 153), and the
+  artifact's pair AUCs reproduce the Phase-2 probe's AUCs for the same three
+  models; the §0.1 **control** row does *not* reproduce (that ad-hoc script's
+  control construction was never recorded, and the settled control is
+  deliberately rank-unbiased) — see the track log. The rank percentile uses
+  the numbers' convention (0 = top), not §0.1's parenthetical.)*
 - [ ] **0.2 The written failure-mode classification.** Into
   `docs/experiments_text_processing.md`: representation vs. aggregation vs.
   label-incompleteness vs. benchmark-construction, with the §0.1 numbers
@@ -494,10 +519,19 @@ set):
   a CLI helper that all four append sites now use; the track log + its OMCT
   table file; AGENTS.md/PLAN.md updated (layout, log/table rules, pure-core
   rule, satellite pointer, Phase 6/9 track-input notes). No run, no metric.)*
-- [ ] **CS-1 — `analyze-omct`.** The Stage-0 artifact command: per-pair scores for
+- [x] **CS-1 — `analyze-omct`.** The Stage-0 artifact command: per-pair scores for
   the selected models, the control set (seeded sampling, judged pairs
   excluded), per-document strata with base rates, the negative-enrichment
   measurement, per-label score distributions. Warm cache, no re-encoding.
+  *(done 2026-10-23: the command, the `analysis:` config section, the pure
+  core `text_processors/control.py`, the driver `omct_analysis.py`, the
+  `AnalyzeOmctCell` sweep cell, the track's table columns, the track's first
+  sweep and three runs — `omct-analyze-embeddinggemma`,
+  `omct-analyze-voyage-4-nano`, `omct-analyze-arctic2` — with the numbers in
+  the track log. The control is a seeded (42), proportional draw of 4,000
+  unjudged same-document cells (NU 1,619 / CIDH 2,210 / AI 171), identical
+  across the three runs; the artifact records the seed, the rule, the quotas,
+  the excluded judged cells and the drawn cell ids.)*
 - [ ] **CS-2 — Stage 0 write-up.** The failure-mode classification and the
   "what this data can answer" section in `docs/experiments_text_processing.md`,
   based on the CS-1 artifact (this is where §0.1's diagnostics become
