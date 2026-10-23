@@ -22,8 +22,9 @@ The rules that bind this log (AGENTS.md plus the track plan):
   independent AUCs.
 - **The two negative subsets are never pooled**: A = the reviewer-verified
   hard negatives (the evaluation set), B = sampled *unjudged* same-document
-  pairs ("presumed negative, unreviewed" — a control and a training source,
-  never ground truth).
+  pairs (a control and a training source, never ground truth). B carries no
+  label of its own: it is "unjudged", or "presumed-negative" where a
+  label-shaped number is unavoidable — always flagged as such.
 - **Raw data is read-only.** An LLM may score pairs; it may never relabel,
   curate or clean them.
 
@@ -40,6 +41,29 @@ Infrastructure change sets (no run artifact, hence no numbers):
   command-derived command → (dataset, track) → table-file mapping with the
   new `paths.experiment_table_text_processing_omct` / `_upr` config keys.
   No run, no metric.
+
+## Decisions (design, settled before the first run)
+
+Recorded here so the numbers in CS-1's artifact have a stated design behind
+them. The decisions themselves live in `TEXT_PROCESSING_PLAN.md` §3 Stage 0.
+
+- **2026-10-23 — the control set (subset B).** Built from the **unjudged**
+  cells (pairs with no record in `omct_pairs.json`): same-document grid →
+  drop every judged cell → group the rest by document → seeded, proportional
+  sample per document (seed from the config). Default **n = 4,000**
+  (NU ~1,618 / CIDH ~2,210 / AI ~171; the AI stratum is the binding
+  constraint). The dataset file is never modified — the control is derived
+  and reproducible from the seed.
+- **2026-10-23 — the reporting rule.** Every method number comes with its
+  control-side counterpart: the change in AUC on the reviewed set
+  (discrimination) sits next to the change in score level and rank position
+  on the control (scale and mechanical gain). A method counts as a win only
+  if the discrimination gain survives the scale shift.
+- **2026-10-23 — models for the Stage-0 artifact:** `embeddinggemma`,
+  `voyage-4-nano`, `arctic2` (warm cache; no re-encoding).
+- **2026-10-23 — no human labelling.** The rate at which the unjudged cells
+  hide true positives is **not measured**; the track's safe-negative rule
+  therefore ships as the margin half only. Stated as a limitation in CS-2.
 
 ## Runs
 

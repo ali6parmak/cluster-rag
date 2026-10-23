@@ -49,7 +49,7 @@ Corpus shape (from the data file itself):
 | answer options | overwhelmingly scales ("Very often", "Yes", "Generally, yes") — a **question-type** signal, not topical content |
 | question sharing across documents | 186/294 question numbers judged in >1 document; **101 are positive in one document and negative in another** |
 | paragraph sharing across documents | 0/225 (paragraph holdout is clean; question holdout is **not**) |
-| top-1 same-document candidate per paragraph (225 rows) | given positive 55, given negative 17, **unjudged 153** |
+| top-1 same-document candidate per paragraph (225 rows) | given positive 55, given negative 17, **unjudged 153** — ⚠ *model-dependent row*: this is arctic2's ranking intersected with the file's coverage, **not a property of the dataset**; it says "our model's top choice for 153 paragraphs has no record", never "153 paragraphs have no match". The dataset-only counterpart is in §5 (70/225 paragraphs carry no positive record) |
 
 Score structure (arctic2, `strip_block`, warm cache):
 
@@ -248,6 +248,45 @@ sweeps are the orders.
   cosine; the artifact is the *only* thing Stage 0's claims may cite.
   (The existing `omct-probe2-*` artifacts hold no per-pair scores, so this
   cannot be derived from them — hence the command.)
+  **Models: `embeddinggemma` + `voyage-4-nano` + `arctic2`** (settled
+  2026-10-23: the two Stage-2 axis models plus arctic2, whose full-text
+  `strip_block` scores produced §0.1's indicative numbers, so the artifact
+  re-derives them on the same footing; all three are warm in the cache).
+  **Control set — settled design (2026-10-23):**
+  - *What it is:* a seeded sample of the **unjudged** same-document cells
+    (the pairs with no record in `omct_pairs.json`), **not** a set of
+    negatives. Terms: subset **A** = the 996 reviewer-verified hard
+    negatives (ground truth, hard by construction); subset **C** = the 524
+    verified positives; subset **B** = the control sample — "unjudged" or,
+    where a label-shaped number is unavoidable, "presumed-negative", always
+    flagged as such.
+  - *How it is built (pure, deterministic):* build the same-document grid →
+    drop every judged cell → group the rest by document → draw a **seeded,
+    proportional** sample per document (`numpy.random.default_rng(seed)`,
+    seed from the config). Same data file + same seed → the same cells.
+    `omct_pairs.json` is never modified; the control is *derived*.
+  - *Size:* **n = 4,000** (config `analysis.control_size`), proportional →
+    NU ~1,618 / CIDH ~2,210 / AI ~171. The AI stratum is the binding
+    constraint (SE on its mean ≈ 0.008); 8,000 is a one-line change if that
+    stratum proves too thin. The artifact records the seed, the sampling
+    rule, the per-document quotas and the sampled cell ids, so any later
+    stage re-uses exactly the same cells.
+  - *Binding rules:* **never pooled with subset A**; every reported number
+    names its subset; label-free wherever possible (distributions, rank
+    positions, the scale check need no label at all); **every method number
+    comes with its control-side counterpart** — no AUC on the reviewed set is
+    quoted alone, and no absolute score is compared across methods without
+    the control-side shift beside it; comparisons stay **paired**.
+  - *Reporting rule that follows:* for each method, the change in AUC on the
+    reviewed set (discrimination) sits next to the change in score level and
+    rank position on the control (scale / mechanical gain). A method counts
+    as a win only if the discrimination gain survives the scale shift — the
+    cheap operational version: subtract the control's scale shift from the
+    method's reviewed-set scores and recompute the AUC; if the advantage
+    survives, it is a real change in ranking. (A uniform additive shift
+    cannot change an AUC, so an AUC gain on the reviewed set is never a pure
+    rescaling — but the *score level* is, and that is what the control
+    measures.)
 - [ ] **0.2 The written failure-mode classification.** Into
   `docs/experiments_text_processing.md`: representation vs. aggregation vs.
   label-incompleteness vs. benchmark-construction, with the §0.1 numbers
@@ -389,11 +428,19 @@ sweeps are the orders.
   negatives are exp18's model FPs; the two score distributions overlap almost
   completely). Stage 0 (CS-1) re-derives the numbers through the harness and
   records them; the anomaly is documented and designed-around, never corrected.
-- The *positive* set's completeness is still open: positives come from the
-  merged `Questions` column after reviewing exp18's FPs **and** FNs, so
-  unlisted pairs may hide unreviewed true positives. Stage 0 characterizes the
-  size of that gap (the 153 unjudged top-1 candidates per paragraph are the
-  leading symptom); no data is changed.
+- The *positive* set's completeness is still open, and it will stay **open
+  and unmeasured**: positives come from the merged `Questions` column after
+  reviewing exp18's FPs **and** FNs, so unlisted pairs may hide unreviewed
+  true positives. Measured directly from the data file (to be re-derived in
+  CS-1's artifact): **70 of 225 paragraphs carry no positive record at all**
+  (NU 29/75, CIDH 38/112, AI 3/38) — the positive set is demonstrably not
+  exhaustive. What we do **not** measure is the rate at which the ~43k
+  unjudged cells hide positives: that needs human labelling, which the
+  reviewer ruled out on 2026-10-23 (no time). Consequence, stated plainly:
+  the track's safe-negative rule (§8) ships as the **margin half only** — a
+  similarity-margin heuristic, without the reviewer-confirmed spot-check the
+  original formulation proposed — and CS-2's "what this data can and cannot
+  answer" section must say so. No data is changed.
 - Question `question_text_sources` / document idiosyncrasies: characterized in
   stage 0, not assumed.
 - `lightgbm`: a new dependency is only proposed if sklearn's HistGB is beaten
