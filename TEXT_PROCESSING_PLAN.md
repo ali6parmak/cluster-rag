@@ -253,6 +253,13 @@ sweeps are the orders.
   `strip_block` scores produced §0.1's indicative numbers, so the artifact
   re-derives them on the same footing; all three are warm in the cache).
   **Control set — settled design (2026-10-23):**
+  - *Why it exists:* the reviewed set is **rank-biased** — it is the pairs one
+    model (exp18) put on top, human-reviewed (§0.1 item 1) — so it is not a
+    sample of the grid and carries no "typical same-document pair". The
+    control is the **only rank-unbiased sample of the grid**: the one part
+    nobody's ranking chose. That is what makes it the reference for "what
+    does an ordinary same-document pair look like, and what does a method's
+    score inflation look like?" (§0.1 item 3).
   - *What it is:* a seeded sample of the **unjudged** same-document cells
     (the pairs with no record in `omct_pairs.json`), **not** a set of
     negatives. Terms: subset **A** = the 996 reviewer-verified hard
@@ -287,6 +294,13 @@ sweeps are the orders.
     cannot change an AUC, so an AUC gain on the reviewed set is never a pure
     rescaling — but the *score level* is, and that is what the control
     measures.)
+  - *Caveat on the correction:* the inflation is **not uniform**. A longer
+    paragraph yields more chunks and is inflated more, so the control's scale
+    shift is partly a *length* effect and partly a *document* effect (NU
+    paragraphs are much longer than AI's, §5). A single global shift is
+    therefore only an approximation: report the **per-document** shift and
+    correct per document, and measure the correlation between paragraph
+    length and per-pair shift rather than assuming it away.
 - [ ] **0.2 The written failure-mode classification.** Into
   `docs/experiments_text_processing.md`: representation vs. aggregation vs.
   label-incompleteness vs. benchmark-construction, with the §0.1 numbers
