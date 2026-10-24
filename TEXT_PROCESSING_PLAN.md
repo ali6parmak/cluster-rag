@@ -326,7 +326,7 @@ sweeps are the orders.
   control construction was never recorded, and the settled control is
   deliberately rank-unbiased) — see the track log. The rank percentile uses
   the numbers' convention (0 = top), not §0.1's parenthetical.)*
-- [ ] **0.2 The written failure-mode classification.** Into
+- [x] **0.2 The written failure-mode classification.** Into
   `docs/experiments_text_processing.md`: representation vs. aggregation vs.
   label-incompleteness vs. benchmark-construction, with the §0.1 numbers
   re-derived through the harness; the "what this data can and cannot answer"
@@ -334,6 +334,27 @@ sweeps are the orders.
   recorded as a **derived, quantified property of the hard-negative
   construction** (§0.1 items 1-2) — documented, designed-around, never
   "fixed".
+  *(done 2026-10-24, CS-2: the classification is the track log's "Stage 0.2 —
+  the failure-mode classification" section, built only on the three
+  `omct-analyze-*` artifacts plus numbers **derived** from their own
+  per-cell records (each derivation written out next to the number).
+  Verdict: **benchmark construction supported and dominant** — the reviewed
+  set is rank-selected (the control's top-fifth share 0.19–0.20 against the
+  verified negatives' 0.43–0.50) and all three models sit within ~2.4
+  unpaired SE of chance on it (AUC 0.4680 / 0.5004 / 0.5371); **label
+  incompleteness supported on the positive side** (70/225 paragraphs carry
+  no positive record; the unjudged cells' positive rate stays unmeasured —
+  no human labelling, so the safe-negative rule ships as the margin half
+  only); **representation plausible but not separable** (a measured floor —
+  5.6–8.6% of the control's ordinary cells outscore the median true match —
+  with an untested mechanism, n = 3); **aggregation unmeasured** (full text
+  only, no harness number). The write-up also states the limits (no "153
+  paragraphs have no match", no cross-model score comparison, no UPR claim)
+  and the stage-1 entry point: the paragraph side first, measured against the
+  control rather than against the AUC. One §0.1 claim is still *not*
+  harness-re-derived — the ad-hoc chunking-sensitivity table — so it stays
+  indicative and the aggregation axis is left to Stage 1/2; the Stage-0 exit
+  criteria are met for everything CS-1 measured.*
 - Exit: every claim in §0.1 re-derived from a `results/<run_id>/` artifact and
   logged; the two negative subsets (verified / unjudged-proxy) are defined and
   implemented for Stage 3; the control set exists as a reusable artifact.
@@ -484,6 +505,20 @@ sweeps are the orders.
   stage 0, not assumed.
 - `lightgbm`: a new dependency is only proposed if sklearn's HistGB is beaten
   (AGENTS §3 explain-first).
+- **The "same-report direction" mechanism (CS-2, 2026-10-24): a hypothesis,
+  not a measurement.** The Stage-0 artifact holds scores, rank positions and
+  distributions, not the embedding space, so the plan's candidate mechanism
+  for the measured floor (ordinary same-document cells averaging
+  0.2194–0.2436, with 5.6–8.6% of them above the median verified positive)
+  cannot be tested by it. Settling it needs a new measurement in
+  `analyze-omct` (e.g. the share of the similarity direction shared by all
+  paragraphs of one document) — a separate change set, with the reviewer's
+  approval, before the mechanism is called more than a hypothesis.
+- **The aggregation axis has no harness number (CS-2, 2026-10-24).** The
+  Stage-0 command scores full text against full text only, and §0.1's ad-hoc
+  chunking table was never re-derived, so the plan's chunking sensitivity
+  (~±0.03 AUC) stays indicative. Stage 1/2 must produce the axis
+  themselves, paired (Stage 2.5).
 
 ## 6. Milestones
 
@@ -532,10 +567,19 @@ set):
   unjudged same-document cells (NU 1,619 / CIDH 2,210 / AI 171), identical
   across the three runs; the artifact records the seed, the rule, the quotas,
   the excluded judged cells and the drawn cell ids.)*
-- [ ] **CS-2 — Stage 0 write-up.** The failure-mode classification and the
+- [x] **CS-2 — Stage 0 write-up.** The failure-mode classification and the
   "what this data can answer" section in `docs/experiments_text_processing.md`,
   based on the CS-1 artifact (this is where §0.1's diagnostics become
   reportable numbers).
+  *(done 2026-10-24: the write-up is the track log's "Stage 0.2 — the
+  failure-mode classification" section. Every number comes from the three
+  `omct-analyze-*` artifacts or is derived from their per-cell records with
+  the derivation stated; the two §0.1 facts CS-1 did not re-derive (the
+  ad-hoc chunking table, the corpus shape) are quoted only where they are
+  flagged as indicative, never as results; no number is computed from the
+  raw pair file. Plan checkboxes 0.2 and CS-2 ticked; Stage 1 is next, and
+  its entry point (paragraph side first, control-side measurement) is
+  recorded in the write-up and as an open question in §5.*
 - Then Stage 1.
 
 ## 8. The durable deliverable (named, so it is not lost)
