@@ -32,6 +32,7 @@ from cluster_rag.config import (
     PreprocessConfig,
 )
 from cluster_rag.omct_analysis import (
+    ChunkedSide,
     SideEncoding,
     build_dataset_view,
     compare_arms,
@@ -42,7 +43,7 @@ from cluster_rag.omct_analysis import (
 from cluster_rag.pairs import load_pairs
 from cluster_rag.preprocess import build_preprocess_spec
 from cluster_rag.text_processors.aggregation import parse_aggregation
-from cluster_rag.text_processors.chunkers import FullTextChunker
+from cluster_rag.text_processors.chunkers import FullTextChunker, build_chunker
 from cluster_rag.text_processors.control import (
     SAMPLING_RULE_PROPORTIONAL,
     DocumentGrid,
@@ -95,11 +96,146 @@ analysis:
 """
 
 
+ANALYSIS_LADDER_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker:
+    name: word_windows
+    params:
+      n_words: 3
+      stride: 2
+  question_chunker:
+    name: word_windows
+    params:
+      n_words: 3
+      stride: 2
+  aggregations: [max, "local_global:0.5:max", "decayed_top_k:2:0.5:0.25", "peak:2:0.05"]
+  bootstrap:
+    resamples: 20
+    seed: 3
+"""
+
+ANALYSIS_SEMANTIC_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker:
+    name: semantic
+    params:
+      threshold: 0.5
+  semantic_thresholds: [0.2, 0.8]
+  aggregations: [max]
+  bootstrap:
+    resamples: 20
+    seed: 3
+"""
+
+
 @pytest.fixture()
 def view(sample_pairs: Path):
     """The model-independent view of the pairwise fixture."""
     records = load_pairs(sample_pairs).records
     return build_dataset_view(records, control_size=3, seed=42)
+
+
+def test_analyze_omct_ladder_run_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """A Stage-2 ladder run: the chunked arms and the symmetric question side."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-ladder",
+        data_external=sample_pairs,
+        extra=ANALYSIS_LADDER_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-ladder"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    model = payload["models"][0]
+    arms = model["arms"]
+    # the four aggregation rules of the word-window chunker
+    assert set(arms) == {
+        "words3_max",
+        "words3_local_global_0.5_max",
+        "words3_decayed_top_k_2_0.5_0.25",
+        "words3_peak_2_0.05",
+    }
+    assert payload["analysis"]["chunker"] == "word_windows"
+    assert payload["analysis"]["question_chunker"] == "word_windows"
+    assert payload["analysis"]["aggregations"] == [
+        "max",
+        "local_global:0.5:max",
+        "decayed_top_k:2:0.5:0.25",
+        "peak:2:0.05",
+    ]
+    # the symmetric arm folds the question's chunks: the question side has
+    # more chunks than questions
+    question_side = arms["words3_max"]["sides"]["question"]
+    assert question_side["n_chunks"] > question_side["n_texts"]
+    # every arm is paired with the baseline on the same cells
+    for arm in arms.values():
+        assert [cell["cell_id"] for cell in arm["control_cells"]] == [
+            cell["cell_id"] for cell in model["control_cells"]
+        ]
+    assert "dAUC" in capsys.readouterr().out
+
+
+def test_analyze_omct_semantic_run_selects_the_threshold_on_the_fit_side(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """A swept run: the threshold is chosen per document on the fit side."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-semantic",
+        data_external=sample_pairs,
+        extra=ANALYSIS_SEMANTIC_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-semantic"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    model = payload["models"][0]
+    selection = model["threshold_selection"]
+    assert selection["grid"] == [0.2, 0.8]
+    assert selection["criterion"] == "auc"
+    assert len(selection["rotations"]) == 3
+    for rotation in selection["rotations"]:
+        assert rotation["holdout"] not in rotation["fit_documents"]
+        assert rotation["chosen"]["max"]["threshold"] in (0.2, 0.8)
+    assert payload["analysis"]["semantic_thresholds"] == [0.2, 0.8]
+    assert "semantic_max" in model["arms"]
 
 
 def test_grid_math_counts_cells_judged_and_unjudged(view) -> None:
@@ -378,6 +514,53 @@ def test_analysis_config_rejects_unknown_arms() -> None:
         AnalysisConfig(embedders=embedders, chunker={"name": "atoms", "params": {"nope": 1}})
 
 
+def test_analysis_config_validates_the_stage2_knobs() -> None:
+    """The Stage-2 knobs: the swept grid, the symmetric variant, the criterion."""
+    embedders = (
+        AnalysisEmbedderConfig(name="m", embed=EmbedderConfig(backend="hf", model_id="m")),
+    )
+    # the swept grid belongs to the semantic chunker
+    with pytest.raises(ValueError, match="only applies to the 'semantic' chunker"):
+        AnalysisConfig(
+            embedders=embedders,
+            chunker={"name": "atoms"},
+            aggregations=("max",),
+            semantic_thresholds=(0.3, 0.5),
+        )
+    with pytest.raises(ValueError, match="must not repeat a value"):
+        AnalysisConfig(
+            embedders=embedders,
+            chunker={"name": "semantic"},
+            semantic_thresholds=(0.3, 0.3),
+        )
+    with pytest.raises(ValueError, match=r"must be in \[-1, 1\]"):
+        AnalysisConfig(
+            embedders=embedders,
+            chunker={"name": "semantic"},
+            semantic_thresholds=(1.5,),
+        )
+    # a chunked question side needs the arms that fold it
+    with pytest.raises(ValueError, match="question_chunker needs aggregation rules"):
+        AnalysisConfig(
+            embedders=embedders,
+            chunker={"name": "atoms"},
+            question_chunker={"name": "word_windows", "params": {"n_words": 15}},
+        )
+    # a valid Stage-2 configuration loads
+    config = AnalysisConfig(
+        embedders=embedders,
+        chunker={"name": "semantic"},
+        aggregations=("max", "local_global:0.5:max"),
+        question_chunker={"name": "sentence_windows", "params": {"n_sentences": 2}},
+        semantic_thresholds=(0.3, 0.5),
+        semantic_selection="floor_gap",
+    )
+    assert config.semantic_thresholds == (0.3, 0.5)
+    assert config.semantic_selection == "floor_gap"
+    assert config.question_chunker is not None
+    assert config.question_chunker.name == "sentence_windows"
+
+
 def test_side_similarities_folds_the_paragraph_chunks() -> None:
     """A chunked paragraph side is folded by the aggregation rule."""
     paragraph_side = SideEncoding(
@@ -399,16 +582,150 @@ def test_side_similarities_folds_the_paragraph_chunks() -> None:
     assert top1[0, 0] == pytest.approx(1.0)
 
 
-def test_side_similarities_refuses_a_chunked_question_side() -> None:
-    """The question-side chunker is out of scope: a chunked side is refused."""
+def test_side_similarities_folds_a_chunked_question_side() -> None:
+    """A chunked question side is folded with the maximum (the symmetric arm)."""
     paragraph_side = SideEncoding(
         texts=("p",), chunk_lists=(("p1",),), vectors=np.array([[1.0, 0.0]])
     )
     question_side = SideEncoding(
         texts=("a",), chunk_lists=(("a1", "a2"),), vectors=np.array([[1.0, 0.0], [0.0, 1.0]])
     )
+    folded = side_similarities(paragraph_side, question_side, parse_aggregation("max"))
+    # the paragraph chunk matches the first question chunk perfectly
+    assert folded[0, 0] == pytest.approx(1.0)
+    # the baseline arm needs one chunk per text on both sides
     with pytest.raises(ValueError, match="one chunk per question"):
-        side_similarities(paragraph_side, question_side, parse_aggregation("max"))
+        side_similarities(paragraph_side, question_side, None)
+
+
+def test_side_similarities_blends_the_full_text_score() -> None:
+    """The local+global rule needs the full-text matrix as its second input."""
+    paragraph_side = SideEncoding(
+        texts=("p",), chunk_lists=(("p1", "p2"),), vectors=np.array([[1.0, 0.0], [0.0, 1.0]])
+    )
+    question_side = SideEncoding(
+        texts=("a",), chunk_lists=(("a1",),), vectors=np.array([[1.0, 0.0]])
+    )
+    global_matrix = np.array([[0.2]])
+    blended = side_similarities(
+        paragraph_side,
+        question_side,
+        parse_aggregation("local_global:0.5:max"),
+        global_similarities=global_matrix,
+    )
+    assert blended[0, 0] == pytest.approx(0.5 * 1.0 + 0.5 * 0.2)
+
+
+def test_swept_variant_chooses_the_threshold_on_the_fit_side(view) -> None:
+    """The swept parameter is chosen per document on the fit side only."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    sides = [
+        ChunkedSide(
+            chunker=build_chunker("semantic", {"threshold": threshold}, embedder=embedder),
+            paragraph_embedder=embedder,
+            threshold=threshold,
+        )
+        for threshold in (0.2, 0.8)
+    ]
+    report = score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+        swept_sides=sides,
+        aggregations=(parse_aggregation("max"),),
+        semantic_selection="auc",
+        bootstrap_resamples=20,
+        bootstrap_seed=1,
+    )
+    selection = report["threshold_selection"]
+    assert selection["grid"] == [0.2, 0.8]
+    assert selection["criterion"] == "auc"
+    assert len(selection["rotations"]) == 3
+    for rotation in selection["rotations"]:
+        assert rotation["holdout"] in {"Doc A", "Doc B", "Doc C"}
+        assert rotation["holdout"] not in rotation["fit_documents"]
+        chosen = rotation["chosen"]["max"]
+        assert chosen["threshold"] in (0.2, 0.8)
+        # the chosen threshold is the one with the best fit-side AUC
+        usable = {
+            float(threshold): block["max"]["fit"]["auc"]
+            for threshold, block in rotation["grid"].items()
+            if block["max"]["fit"]["auc"] is not None
+        }
+        assert chosen["threshold"] == max(
+            usable, key=lambda threshold: (usable[threshold], -threshold)
+        )
+        # the holdout's own numbers are reported beside the choice
+        assert chosen["holdout"]["n_pairs"] == rotation["n_holdout_pairs"]
+    # every document's threshold is recorded
+    assert set(selection["chosen_by_document"]["max"]) == {"Doc A", "Doc B", "Doc C"}
+    # the arm exists and carries the swept parameter's provenance
+    arm = report["arms"]["semantic_max"]
+    assert arm["sides"]["paragraph"]["swept_parameter"]["values"] == [0.2, 0.8]
+    assert arm["sides"]["paragraph"]["n_chunks_by_threshold"]
+    # the other fit-side criterion is wired too: on this fixture the control
+    # cells live in one document only, so the fit side of that document's
+    # holdout has no control cells, the floor gap is undefined and the
+    # selection fails loudly instead of silently falling back.
+    with pytest.raises(ValueError, match="no usable criterion value"):
+        score_model_arms(
+            view,
+            model_name="fake-model",
+            paragraph_embedder=embedder,
+            question_embedders={"strip_block": embedder},
+            baseline_chunker=FullTextChunker(),
+            question_transform="strip_block",
+            question_block_markers=("Answer choices:", "Notes:"),
+            preprocess_spec=spec,
+            swept_sides=sides,
+            aggregations=(parse_aggregation("max"),),
+            semantic_selection="floor_gap",
+            bootstrap_resamples=20,
+            bootstrap_seed=1,
+        )
+
+
+def test_swept_variant_covers_every_cell_of_the_baseline(view) -> None:
+    """The cross-fitted arm measures the same cells as the baseline arm."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    sides = [
+        ChunkedSide(
+            chunker=build_chunker("semantic", {"threshold": threshold}, embedder=embedder),
+            paragraph_embedder=embedder,
+            threshold=threshold,
+        )
+        for threshold in (0.2, 0.8)
+    ]
+    report = score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+        swept_sides=sides,
+        aggregations=(parse_aggregation("max"),),
+        bootstrap_resamples=20,
+        bootstrap_seed=1,
+    )
+    arm = report["arms"]["semantic_max"]
+    assert [cell["cell_id"] for cell in arm["control_cells"]] == [
+        cell["cell_id"] for cell in report["control_cells"]
+    ]
+    assert [pair["pair_id"] for pair in arm["judged_pairs"]] == [
+        pair["pair_id"] for pair in report["judged_pairs"]
+    ]
+    assert "semantic_max" in report["comparisons"]
+    assert report["comparisons"]["semantic_max"]["reference_arm"] == "full_text"
 
 
 def test_compare_arms_is_paired_and_carries_the_control_side(view) -> None:

@@ -36,13 +36,50 @@ from cluster_rag.text_processors.chunkers import (
     AtomChunker,
     AtomChunkerConfig,
     FullTextChunker,
+    SemanticChunker,
+    SemanticChunkerConfig,
+    SentenceWindowsChunker,
+    SentenceWindowsConfig,
+    WordWindowsChunker,
+    WordWindowsConfig,
     build_chunker,
     split_clauses,
     split_sentences,
 )
+from fake_embedder import FakeEmbedder
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "cluster_rag" / "text_processors"
 FORBIDDEN_IMPORTS = ("torch", "sentence_transformers", "httpx", "sqlite3", "requests")
+
+
+class ScriptedEmbedder:
+    """An embedder that returns a prescribed vector per text.
+
+    The semantic chunker finds its boundaries from the atom embeddings, so a
+    test needs to *choose* the adjacent similarities instead of hashing them.
+    """
+
+    def __init__(self, vectors: dict[str, list[float]]) -> None:
+        self.vectors = {
+            text: np.asarray(vector, dtype=np.float32) for text, vector in vectors.items()
+        }
+        self.dimension = len(next(iter(self.vectors.values())))
+
+    @property
+    def info(self):
+        """The interface facts of this scripted embedder."""
+        from cluster_rag.embed.base import EmbedderInfo
+
+        return EmbedderInfo(
+            model_id="scripted-embedder",
+            backend="fake",
+            dimension=self.dimension,
+            revision_or_digest="scripted",
+        )
+
+    def encode(self, texts, kind) -> np.ndarray:
+        """The prescribed vectors, in input order."""
+        return np.vstack([self.vectors[text] for text in texts]).astype(np.float32)
 
 
 def test_full_text_chunker_keeps_the_whole_text() -> None:
@@ -175,11 +212,85 @@ def test_chunkers_registry_holds_the_track_methods() -> None:
     """The registry maps config-facing names to the chunker classes."""
     assert CHUNKERS["full_text"] is FullTextChunker
     assert CHUNKERS["atoms"] is AtomChunker
+    assert CHUNKERS["word_windows"] is WordWindowsChunker
+    assert CHUNKERS["sentence_windows"] is SentenceWindowsChunker
+    assert CHUNKERS["semantic"] is SemanticChunker
     for name, chunker_class in CHUNKERS.items():
-        chunker = chunker_class()
+        if getattr(chunker_class, "requires_embedder", False):
+            chunker = chunker_class(SemanticChunkerConfig(), FakeEmbedder(dimension=4))
+        else:
+            chunker = chunker_class()
         assert isinstance(chunker, Chunker)
         assert chunker.version
         assert name in chunker.version
+
+
+def test_word_windows_split_into_fixed_overlapping_windows() -> None:
+    """The fixed windows: the plan's N with a stride of about N/2."""
+    chunker = WordWindowsChunker(WordWindowsConfig(n_words=4, stride=2))
+    windows = chunker.segment(["a b c d e f g h i"])[0]
+    # 9 words, 4 per window, stride 2: starts 0, 2, 4 and the tail window at 5
+    assert windows == ["a b c d", "c d e f", "e f g h", "f g h i"]
+    # a text shorter than the window is one chunk
+    assert chunker.segment(["a b"])[0] == ["a b"]
+    # a blank text has no chunk
+    assert chunker.segment([""])[0] == []
+    # the parameters are part of the cache-facing version
+    assert chunker.version != WordWindowsChunker(WordWindowsConfig(n_words=4, stride=4)).version
+    assert chunker.slug == "words4"
+
+
+def test_word_windows_cover_the_tail_without_a_fragment() -> None:
+    """The last window ends at the last word (no one-word fragment)."""
+    chunker = WordWindowsChunker(WordWindowsConfig(n_words=5, stride=3))
+    windows = chunker.segment(["w1 w2 w3 w4 w5 w6 w7 w8"])[0]
+    assert windows[-1].endswith("w8")
+    assert all(len(window.split()) == 5 for window in windows)
+
+
+def test_sentence_windows_group_sentences_with_a_step() -> None:
+    """The overlapping sentence windows (exp02: two sentences, step one)."""
+    chunker = SentenceWindowsChunker(SentenceWindowsConfig(n_sentences=2, step=1))
+    windows = chunker.segment(["One. Two. Three. Four."])[0]
+    assert windows == ["One. Two.", "Two. Three.", "Three. Four."]
+    # a single sentence is one chunk
+    assert chunker.segment(["Only one."])[0] == ["Only one."]
+    assert chunker.slug == "sent2s1"
+    assert (
+        chunker.version
+        != SentenceWindowsChunker(SentenceWindowsConfig(n_sentences=3, step=1)).version
+    )
+
+
+def test_semantic_chunker_cuts_where_the_adjacent_similarity_drops() -> None:
+    """The boundary is cut between two atoms whose similarity is too low."""
+    embedder = ScriptedEmbedder(
+        {
+            "First.": [1.0, 0.0],
+            "Second.": [0.9, 0.1],
+            "Third.": [0.0, 1.0],
+        }
+    )
+    chunker = SemanticChunker(SemanticChunkerConfig(threshold=0.5), embedder)
+    chunks = chunker.segment(["First. Second. Third."])[0]
+    # cos(First, Second) = 0.9 (no cut), cos(Second, Third) = 0.1 (a cut)
+    assert chunks == ["First. Second.", "Third."]
+    # a lower threshold cuts nothing
+    low = SemanticChunker(SemanticChunkerConfig(threshold=0.05), embedder)
+    assert low.segment(["First. Second. Third."])[0] == ["First. Second. Third."]
+    # the threshold is part of the cache-facing version
+    assert chunker.version != low.version
+
+
+def test_semantic_chunker_needs_the_embedder_port() -> None:
+    """The chunker that needs embeddings refuses to be built without them."""
+    with pytest.raises(ValueError, match="needs an Embedder port"):
+        build_chunker("semantic", {"threshold": 0.5})
+    chunker = build_chunker("semantic", {"threshold": 0.5}, embedder=FakeEmbedder(dimension=4))
+    assert isinstance(chunker, SemanticChunker)
+    # a chunker that does not need the port refuses one
+    with pytest.raises(ValueError, match="does not take an embedder"):
+        build_chunker("atoms", {}, embedder=FakeEmbedder(dimension=4))
 
 
 def test_build_chunker_takes_its_parameters() -> None:
@@ -229,6 +340,80 @@ def test_aggregation_parsing() -> None:
         parse_aggregation("top_k_mean:0")
     with pytest.raises(ValueError, match="takes no parameter"):
         parse_aggregation("max:2")
+
+
+def test_stage2_aggregation_parsing() -> None:
+    """The Stage-2 rules: their spellings and their parameter ranges."""
+    decayed = parse_aggregation("decayed_top_k:3:0.5:0.25")
+    assert decayed.name == "decayed_top_k"
+    assert (decayed.k, decayed.decay, decayed.spread) == (3, 0.5, 0.25)
+    assert decayed.spec == "decayed_top_k:3:0.5:0.25"
+    blend = parse_aggregation("local_global:0.5:max")
+    assert blend.name == "local_global" and blend.alpha == 0.5
+    assert blend.local == parse_aggregation("max")
+    assert blend.spec == "local_global:0.5:max"
+    # the local rule may carry its own parameters
+    nested = parse_aggregation("local_global:0.75:top_k_mean:3")
+    assert nested.local == parse_aggregation("top_k_mean:3")
+    assert nested.spec == "local_global:0.75:top_k_mean:3"
+    peak = parse_aggregation("peak:3:0.05")
+    assert (peak.k, peak.margin) == (3, 0.05)
+    assert peak.spec == "peak:3:0.05"
+    with pytest.raises(ValueError, match="needs k, decay and spread"):
+        parse_aggregation("decayed_top_k:3:0.5")
+    with pytest.raises(ValueError, match="decay of"):
+        parse_aggregation("decayed_top_k:3:1.5:0.25")
+    with pytest.raises(ValueError, match="spread penalty"):
+        parse_aggregation("decayed_top_k:3:0.5:-1")
+    with pytest.raises(ValueError, match="alpha of"):
+        parse_aggregation("local_global:1.5:max")
+    with pytest.raises(ValueError, match="needs alpha and a local rule"):
+        parse_aggregation("local_global:0.5")
+    with pytest.raises(ValueError, match="margin"):
+        parse_aggregation("peak:3:-0.1")
+
+
+def test_stage2_aggregations_fold_the_chunk_matrix_by_hand() -> None:
+    """The Stage-2 folds: the decayed average, the blend and the peak."""
+    matrix = np.array(
+        [
+            [0.2, 0.9],
+            [0.8, 0.4],
+            [0.5, 0.5],
+        ]
+    )
+    groups = [[0, 1], [2]]
+    # exp07: the decayed average of the two best, minus the spread penalty.
+    # column 0: the two best are 0.8 and 0.2 -> decayed (0.8 + 0.5*0.2)/1.5,
+    # the spread of the two is 0.3 -> the penalty is 0.25 * 0.3.
+    decayed = aggregate_chunk_similarities(
+        matrix, groups, parse_aggregation("decayed_top_k:2:0.5:0.25")
+    )
+    expected = (0.8 + 0.5 * 0.2) / 1.5 - 0.25 * 0.3
+    assert decayed[0, 0] == pytest.approx(expected)
+    # column 1: the two best are 0.9 and 0.4
+    expected_one = (0.9 + 0.5 * 0.4) / 1.5 - 0.25 * 0.25
+    assert decayed[0, 1] == pytest.approx(expected_one)
+    # exp06: alpha * local + (1 - alpha) * full text
+    global_matrix = np.array([[0.1, 0.1], [0.2, 0.2]])
+    blend = aggregate_chunk_similarities(
+        matrix,
+        groups,
+        parse_aggregation("local_global:0.5:max"),
+        global_similarities=global_matrix,
+    )
+    assert blend[0].tolist() == pytest.approx([0.45, 0.5])
+    assert blend[1].tolist() == pytest.approx([0.35, 0.35])
+    # the blend needs the full-text matrix
+    with pytest.raises(ValueError, match="needs the full-text score matrix"):
+        aggregate_chunk_similarities(matrix, groups, parse_aggregation("local_global:0.5:max"))
+    # exp08: the peak shortcut. The broad evidence of group 0, column 0, is
+    # (0.8 + 0.2)/2 = 0.5 and the peak is 0.8 -> with a margin of 0.2 the peak
+    # wins (0.8 - 0.5 = 0.3 >= 0.2); with a margin of 0.5 it does not.
+    peak = aggregate_chunk_similarities(matrix, groups, parse_aggregation("peak:2:0.2"))
+    assert peak[0, 0] == pytest.approx(0.8)
+    strict = aggregate_chunk_similarities(matrix, groups, parse_aggregation("peak:2:0.5"))
+    assert strict[0, 0] == pytest.approx(0.5)
 
 
 def test_aggregation_folds_the_chunk_matrix_by_hand() -> None:

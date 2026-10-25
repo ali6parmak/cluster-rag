@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from cluster_rag.eval.metrics import (
+    grouped_auc_decomposition,
     paired_auc_bootstrap,
+    paired_within_group_auc_bootstrap,
     pairwise_retrieval_metrics,
     roc_auc,
     subset_pair_metrics,
@@ -106,6 +108,92 @@ def test_paired_auc_bootstrap_requires_both_classes() -> None:
         paired_auc_bootstrap([1, 1], [0.1, 0.2], [0.3, 0.4], n_resamples=10)
     with pytest.raises(ValueError, match="same length"):
         paired_auc_bootstrap([1, 0], [0.1, 0.2], [0.3], n_resamples=10)
+
+
+def test_grouped_auc_decomposition_hand_computed() -> None:
+    """The pooled AUC split into its within-group and its cross-group part."""
+    # group A: one positive (0.9) and one negative (0.1); group B: the same.
+    decomposition = grouped_auc_decomposition(
+        [1, 0, 1, 0],
+        [0.9, 0.1, 0.9, 0.1],
+        ["A", "A", "B", "B"],
+    )
+    # within-group pairs: 2 (A: 0.9 > 0.1; B: 0.9 > 0.1) -> AUC 1.0
+    assert decomposition["within_group_auc"] == 1.0
+    assert decomposition["n_within_group_pairs"] == 2
+    # cross-group pairs: 2 (A's positive > B's negative and the reverse) -> 1.0
+    assert decomposition["cross_group_auc"] == 1.0
+    assert decomposition["n_cross_group_pairs"] == 2
+    assert decomposition["within_group_pair_share"] == 0.5
+    assert decomposition["cross_group_pair_share"] == 0.5
+    assert decomposition["n_groups"] == 2
+    # the weighted average of the two parts is the pooled AUC
+    pooled = roc_auc([1, 0, 1, 0], [0.9, 0.1, 0.9, 0.1])
+    assert pooled == pytest.approx(
+        decomposition["within_group_auc"] * decomposition["within_group_pair_share"]
+        + decomposition["cross_group_auc"] * decomposition["cross_group_pair_share"]
+    )
+
+
+def test_grouped_auc_decomposition_separates_a_level_shift() -> None:
+    """A level shift across groups moves the pooled AUC, not the within-group AUC."""
+    # group A's whole distribution moves down: the ranking inside each group is
+    # unchanged, the ranking across the groups is not.
+    labels = [1, 0, 1, 0]
+    groups = ["A", "A", "B", "B"]
+    baseline = grouped_auc_decomposition(labels, [0.9, 0.1, 0.9, 0.1], groups)
+    shifted = grouped_auc_decomposition(labels, [0.1, 0.05, 0.9, 0.8], groups)
+    assert shifted["within_group_auc"] == baseline["within_group_auc"] == 1.0
+    assert baseline["cross_group_auc"] == 1.0
+    assert shifted["cross_group_auc"] == 0.5
+    # the pooled AUC follows the cross-group part
+    assert roc_auc(labels, [0.9, 0.1, 0.9, 0.1]) == 1.0
+    assert roc_auc(labels, [0.1, 0.05, 0.9, 0.8]) == pytest.approx(0.75)
+    with pytest.raises(ValueError, match="both label classes"):
+        grouped_auc_decomposition([1, 1], [0.1, 0.2], ["A", "B"])
+
+
+def test_paired_within_group_auc_bootstrap_hand_computed() -> None:
+    """The within-group delta: the point estimate and a reproducible interval."""
+    labels = [1, 0, 1, 0]
+    groups = ["A", "A", "B", "B"]
+    # the reference ranks each group's negative above its positive
+    result = paired_within_group_auc_bootstrap(
+        labels,
+        [0.4, 0.5, 0.4, 0.5],
+        [0.9, 0.1, 0.9, 0.1],
+        groups,
+        n_resamples=50,
+        seed=1,
+    )
+    assert result["auc_reference"] == 0.0
+    assert result["auc_arm"] == 1.0
+    assert result["delta_auc"] == 1.0
+    assert result["ci_low"] > 0.0
+    assert result["n_resamples"] == 50 and result["seed"] == 1
+    # a level shift across the groups does not move the within-group AUC
+    shifted = paired_within_group_auc_bootstrap(
+        labels,
+        [0.9, 0.1, 0.9, 0.1],
+        [0.1, 0.05, 0.9, 0.8],
+        groups,
+        n_resamples=20,
+        seed=1,
+    )
+    assert shifted["delta_auc"] == 0.0
+    assert shifted["ci_low"] <= 0.0 <= shifted["ci_high"]
+    # the same rows give the same interval
+    again = paired_within_group_auc_bootstrap(
+        labels,
+        [0.4, 0.5, 0.4, 0.5],
+        [0.9, 0.1, 0.9, 0.1],
+        groups,
+        n_resamples=50,
+        seed=1,
+    )
+    assert again["ci_low"] == result["ci_low"]
+    with pytest.raises(ValueError, match="both label classes"):
+        paired_within_group_auc_bootstrap([1, 1], [0.1, 0.2], [0.3, 0.4], ["A", "B"])
 
 
 def test_pairwise_retrieval_metrics_hand_computed() -> None:

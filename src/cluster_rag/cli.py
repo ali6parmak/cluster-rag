@@ -43,7 +43,7 @@ import numpy as np
 import yaml
 
 from cluster_rag import __version__
-from cluster_rag.config import AppConfig, load_config
+from cluster_rag.config import AppConfig, ChunkerSpec, load_config
 from cluster_rag.data import (
     SPLIT_NAMES,
     LoadReport,
@@ -87,6 +87,7 @@ from cluster_rag.experiment_table import (
 from cluster_rag.omct_analysis import (
     BASELINE_ARM,
     BASELINE_CHUNKER,
+    ChunkedSide,
     build_analysis_report,
     build_dataset_view,
     score_model_arms,
@@ -96,7 +97,7 @@ from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
-from cluster_rag.preprocess import build_preprocess_spec
+from cluster_rag.preprocess import PreprocessSpec, build_preprocess_spec
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import parse_aggregations
@@ -1010,6 +1011,16 @@ def _cmd_probe_omct(config: AppConfig) -> int:
     return 0
 
 
+def _within_ci(comparison: dict[str, Any] | None) -> str | None:
+    """The CI of the within-document AUC difference (the transferable part)."""
+    if not comparison:
+        return None
+    paired = comparison.get("auc_decomposition", {}).get("within_group_paired")
+    if not paired:
+        return None
+    return f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]"
+
+
 def _analyze_omct_row(
     model: dict[str, Any],
     *,
@@ -1027,6 +1038,9 @@ def _analyze_omct_row(
     distributions = arm["score_distributions"]
     enrichment = arm["negative_enrichment"]["rank_percentile"]
     paired = comparison["paired_auc"] if comparison else None
+    paragraph_side = arm["sides"]["paragraph"]
+    n_texts = paragraph_side.get("n_texts") or 0
+    n_chunks = paragraph_side.get("n_chunks") or 0
     row: dict[str, Any] = {
         "run_id": run_id,
         "date": date.today().isoformat(),
@@ -1036,13 +1050,21 @@ def _analyze_omct_row(
         "dim": info["dimension"],
         "ctx": info["context_tokens"],
         "arm": arm_name,
-        "chunker": arm["sides"]["paragraph"].get("chunker_name"),
+        "chunker": paragraph_side.get("chunker_slug") or paragraph_side.get("chunker_name"),
         "aggregation": (arm.get("aggregation") or {}).get("spec"),
         "transform": arm["sides"]["question"].get("transform"),
         "pair_auc": _fmt(arm["pair_auc"]["overall"], 4),
+        "macro_auc": _fmt(arm["pair_auc"].get("macro"), 4),
+        "within_auc": _fmt((arm.get("pair_auc_decomposition") or {}).get("within_group_auc"), 4),
+        "cross_auc": _fmt((arm.get("pair_auc_decomposition") or {}).get("cross_group_auc"), 4),
+        "within_d_auc": _fmt(
+            (comparison or {}).get("auc_decomposition", {}).get("within_group_delta"), 4
+        ),
+        "within_d_auc_ci": _within_ci(comparison),
         "d_auc": _fmt(paired["delta_auc"], 4) if paired else None,
         "d_auc_ci": (f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None),
         "deshift_auc": (_fmt(comparison["deshifted_auc"]["overall"], 4) if comparison else None),
+        "floor_gap_delta": (_fmt(comparison["floor_gap"]["delta"], 4) if comparison else None),
         "ctrl_mean": _fmt(distributions["control"].get("mean"), 4),
         "ctrl_mean_delta": (
             _fmt(comparison["control_shift"]["mean_delta"], 4) if comparison else None
@@ -1051,12 +1073,124 @@ def _analyze_omct_row(
         "ctrl_rank_p50": _fmt(enrichment["control"].get("quantiles", {}).get("0.5"), 4),
         "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
         "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
+        "chunks_per_text": (round(n_chunks / n_texts, 2) if n_texts else None),
         "n_pairs": n_pairs,
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
     }
     return row
+
+
+def _cached_embedder(embedder: Any, config: AppConfig, version: str) -> Any:
+    """The embedder of one side, cached under that side's version slot."""
+    if not config.cache.enabled:
+        return embedder
+    return CachedEmbedder(embedder, config.paths.cache, preprocessing_version=version)
+
+
+def _chunker_with_embedder(
+    config: AppConfig,
+    embedder: Any,
+    chunker_spec: ChunkerSpec,
+    spec: PreprocessSpec,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    *,
+    threshold: float | None = None,
+) -> tuple[Any, Any]:
+    """Build a chunker and the embedder of its chunks.
+
+    The semantic chunker finds its boundaries from the **atom** embeddings, so
+    it takes the ``Embedder`` port: the CLI wires the cached backend in here
+    (the package itself never imports a model client). The atoms go through
+    the atoms chunker's cache version, the chunks through the chunker's own
+    version — which carries the swept threshold, so two thresholds never
+    share cached chunks.
+    """
+    params = dict(chunker_spec.params)
+    if threshold is not None:
+        params["threshold"] = threshold
+    if chunker_spec.name == "semantic":
+        atom_params = {"split_clauses": bool(params.get("atom_split_clauses", False))}
+        atom_chunker = build_chunker("atoms", atom_params)
+        atom_version, _ = side_cache_versions(
+            atom_chunker, spec, question_transform, question_block_markers
+        )
+        chunker = build_chunker(
+            "semantic",
+            params,
+            embedder=_cached_embedder(embedder, config, atom_version),
+        )
+    else:
+        chunker = build_chunker(chunker_spec.name, params)
+    paragraph_version, _ = side_cache_versions(
+        chunker, spec, question_transform, question_block_markers
+    )
+    return chunker, _cached_embedder(embedder, config, paragraph_version)
+
+
+def _chunked_side(
+    config: AppConfig,
+    embedder: Any,
+    chunker_spec: ChunkerSpec,
+    question_chunker_spec: ChunkerSpec | None,
+    spec: PreprocessSpec,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+) -> ChunkedSide:
+    """The chunked paragraph side and, for the symmetric variants, the question side."""
+    chunker, paragraph_embedder = _chunker_with_embedder(
+        config, embedder, chunker_spec, spec, question_transform, question_block_markers
+    )
+    question_chunker = None
+    question_embedder = None
+    if question_chunker_spec is not None:
+        question_chunker, question_embedder = _chunker_with_embedder(
+            config,
+            embedder,
+            question_chunker_spec,
+            spec,
+            question_transform,
+            question_block_markers,
+        )
+    return ChunkedSide(
+        chunker=chunker,
+        paragraph_embedder=paragraph_embedder,
+        question_chunker=question_chunker,
+        question_embedder=question_embedder,
+    )
+
+
+def _swept_sides(
+    config: AppConfig,
+    embedder: Any,
+    chunker_spec: ChunkerSpec,
+    spec: PreprocessSpec,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    thresholds: Sequence[float],
+) -> list[ChunkedSide]:
+    """One chunked side per point of the swept grid (the semantic threshold)."""
+    sides: list[ChunkedSide] = []
+    for threshold in thresholds:
+        chunker, paragraph_embedder = _chunker_with_embedder(
+            config,
+            embedder,
+            chunker_spec,
+            spec,
+            question_transform,
+            question_block_markers,
+            threshold=threshold,
+        )
+        sides.append(
+            ChunkedSide(
+                chunker=chunker,
+                paragraph_embedder=paragraph_embedder,
+                threshold=threshold,
+            )
+        )
+    return sides
 
 
 def _cmd_analyze_omct(config: AppConfig) -> int:
@@ -1095,9 +1229,6 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
 
     baseline_chunker = build_chunker(BASELINE_CHUNKER)
     aggregations = parse_aggregations(analysis.aggregations)
-    structural_chunker = (
-        build_chunker(analysis.chunker.name, analysis.chunker.params) if aggregations else None
-    )
     question_transforms = (analysis.question_transform, *analysis.question_transforms)
     bootstrap_seed = analysis.bootstrap.seed if analysis.bootstrap.seed is not None else config.seed
 
@@ -1114,35 +1245,39 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         paragraph_version, _ = side_cache_versions(
             baseline_chunker, spec, analysis.question_transform, analysis.question_block_markers
         )
-        paragraph_embedder = embedder
-        if config.cache.enabled:
-            paragraph_embedder = CachedEmbedder(
-                embedder, config.paths.cache, preprocessing_version=paragraph_version
-            )
-        structural_embedder = None
-        if structural_chunker is not None:
-            structural_version, _ = side_cache_versions(
-                structural_chunker,
-                spec,
-                analysis.question_transform,
-                analysis.question_block_markers,
-            )
-            structural_embedder = embedder
-            if config.cache.enabled:
-                structural_embedder = CachedEmbedder(
-                    embedder, config.paths.cache, preprocessing_version=structural_version
-                )
+        paragraph_embedder = _cached_embedder(embedder, config, paragraph_version)
         question_embedders: dict[str, Any] = {}
         for transform in question_transforms:
             _, question_version = side_cache_versions(
                 baseline_chunker, spec, transform, analysis.question_block_markers
             )
-            question_embedder = embedder
-            if config.cache.enabled:
-                question_embedder = CachedEmbedder(
-                    embedder, config.paths.cache, preprocessing_version=question_version
+            question_embedders[transform] = _cached_embedder(embedder, config, question_version)
+
+        # The chunked arms: one fixed chunker, or one side per point of the
+        # swept grid (the semantic threshold of Stage 2.3).
+        chunked_side = None
+        swept_sides: list[ChunkedSide] = []
+        if aggregations:
+            if analysis.semantic_thresholds:
+                swept_sides = _swept_sides(
+                    config,
+                    embedder,
+                    analysis.chunker,
+                    spec,
+                    analysis.question_transform,
+                    analysis.question_block_markers,
+                    analysis.semantic_thresholds,
                 )
-            question_embedders[transform] = question_embedder
+            else:
+                chunked_side = _chunked_side(
+                    config,
+                    embedder,
+                    analysis.chunker,
+                    analysis.question_chunker,
+                    spec,
+                    analysis.question_transform,
+                    analysis.question_block_markers,
+                )
         models.append(
             score_model_arms(
                 view,
@@ -1153,9 +1288,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 question_transform=analysis.question_transform,
                 question_block_markers=analysis.question_block_markers,
                 preprocess_spec=spec,
-                structural_embedder=structural_embedder,
-                structural_chunker=structural_chunker,
+                chunked_side=chunked_side,
+                swept_sides=swept_sides,
                 aggregations=aggregations,
+                semantic_selection=analysis.semantic_selection,
                 bootstrap_resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
             )
@@ -1174,6 +1310,14 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         question_transform=analysis.question_transform,
         chunker_name=analysis.chunker.name,
         chunker_params=analysis.chunker.params,
+        question_chunker_name=(
+            None if analysis.question_chunker is None else analysis.question_chunker.name
+        ),
+        question_chunker_params=(
+            {} if analysis.question_chunker is None else analysis.question_chunker.params
+        ),
+        semantic_thresholds=analysis.semantic_thresholds,
+        semantic_selection=analysis.semantic_selection,
         aggregations=[rule.spec for rule in aggregations],
         question_transforms=list(analysis.question_transforms),
         bootstrap={

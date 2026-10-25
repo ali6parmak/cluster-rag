@@ -387,7 +387,9 @@ sweeps are the orders.
   artifacts field by field (same control cell ids, same per-cell scores, same
   AUCs and control means). **Verdict: the falsification test does not
   fire** — the floor gap (the verified positives' mean minus the control's
-  mean) narrows in 8 of the 9 atom arms, none of the nine has a 95% interval
+  mean) narrows in 11 of the 12 atom arms (count corrected 2026-10-26, CS-4:
+  four aggregation rules × three models = twelve arms, not nine; see the track
+  log's correction entry), none of the twelve has a 95% interval
   that excludes zero on the positive side, and the five that do exclude zero
   are all negative. The paragraph side's internal structure is **not** the
   lever that lowers the floor: the atoms mostly re-scale the scores. The
@@ -405,27 +407,42 @@ sweeps are the orders.
   feature-pack material (a combiner's inputs), not a scoring method, and
   Stage 3's leakage rules (no corpus-level question statistics) are where
   they belong.
-- [ ] **1.2 Report on both negative subsets** (verified hard negatives and the
+- [x] **1.2 Report on both negative subsets** (verified hard negatives and the
   unjudged-proxy control), pooled **and** per-document (the pooled number is
   dominated by the NU document: 845/1520 pairs, 25% positive; the AI document
   is 99 pairs at 80% positive — a per-document macro average is reported next
   to every pooled number).
   *(the CS-3 artifact already reports both subsets, pooled and per-document,
   with the per-document macro beside the pooled number — ticked at the
-  reviewer's word, one checkbox per change set)*
+  reviewer's word, one checkbox per change set; the CS-4 runs keep the same
+  reporting and add the within-document / cross-document split of the pooled
+  AUC)*
 - Exit: measured contribution of structure alone (no learned model yet), with
   the per-document breakdown and both negative subsets.
 
 ### Stage 2 — Segmentation ladder (the headline comparison)
 
-- [ ] **2.1 Fixed windows** (`word_windows`: N in {15, 25, 40}, stride ~N/2) vs
-  [ ] **2.2 sentence windows** (2 sentences, step 1) vs [ ] **2.3 semantic
+- [x] **2.1 Fixed windows** (`word_windows`: N in {15, 25, 40}, stride ~N/2) vs
+  [x] **2.2 sentence windows** (2 sentences, step 1) vs [x] **2.3 semantic
   boundaries** (`semantic.py`: cut where adjacent-atom similarity drops below
   threshold; threshold swept on fit-side documents only) — each aggregated by
   max / top-K-with-decay (exp07) / local+global α (exp06, α swept); reported
   on all pairs (descriptive) with per-document breakdowns. Both
   reference-lineage methods and our own variants are in scope here.
-- [ ] **2.4 Model axis: `embeddinggemma` (Ollama, 768d, template prefixes) and
+  *(done 2026-10-26, CS-4: the whole ladder ran — 7 variants × 3 models = 21
+  runs `omct-analyze-<model>-<variant>` (the reviewer chose the whole ladder
+  over a reduced grid). New pure chunkers `word_windows.py` (exp03),
+  `sentence_windows.py` (exp02) and `semantic.py` (exp18(ii), the Embedder
+  port injected; the CLI wires the cached backend in); new aggregation rules
+  `decayed_top_k:k:decay:spread` (exp07), `local_global:alpha:<local rule>`
+  (exp06, needs the full-text score as a second input) and `peak:k:margin`
+  (exp08, a margin instead of the lineage's absolute bars — the track forbids
+  absolute cuts). The semantic threshold is swept on the **fit side only**
+  through the document-level cross-fit: every document's threshold comes
+  from the rotation that holds it out. The numbers are in the track log's
+  Stage-2 sections; the guard holds (all 21 runs reproduce the Stage-0
+  baseline arm field by field).)*
+- [x] **2.4 Model axis: `embeddinggemma` (Ollama, 768d, template prefixes) and
   `voyage-4-nano` (HF, 2048d, revision `433ece5e…`, retrieval prompts)** —
   the whole ladder runs on both, not just the winner. Both are UPR
   semifinalists and both sit mid-pack on OMCT pair-AUC (0.537 / 0.500 vs the
@@ -434,7 +451,13 @@ sweeps are the orders.
   Chunk side/kind assignment: a paragraph chunk is encoded with the
   `document` prefix, a question chunk with the `query` prefix (embeddinggemma's
   are `{content}` templates — the existing `apply_prefix` handles them).
-- [ ] **2.5 Paired statistics.** Every ladder comparison is paired (same
+  *(done 2026-10-26, CS-4: the ladder ran on **all three** Stage-0 models
+  (`embeddinggemma`, `voyage-4-nano`, `arctic2` — the reviewer's call, so the
+  n = 3 argument of Stage 0/1 keeps holding and the new arms sit next to the
+  Stage-0 and Stage-1 artifacts). The symmetric variants chunk the question
+  side too: the question's chunks are encoded with the `query` prefix, the
+  paragraph's with `document`.)*
+- [x] **2.5 Paired statistics.** Every ladder comparison is paired (same
   pairs, same model, different segmentation), so report the **paired bootstrap
   CI of the AUC difference** (or DeLong) — never two independent AUCs. The
   measured effect size (~±0.03 AUC) sits at the unpaired resolution limit
@@ -442,9 +465,29 @@ sweeps are the orders.
   report the max-over-k inflation: a chunked method takes a max over more
   candidates, so its score scale is not comparable to full text's — the
   control set makes that visible.
+  *(done 2026-10-26, CS-4: paired throughout (every comparison is inside one
+  run, against the full-text baseline arm on the same cells; the paired
+  bootstrap, 2,000 resamples, seed 42). **The pooled AUC turned out to be the
+  wrong headline**, so the harness now also carries the **within-document /
+  cross-document split** of the pooled AUC (`grouped_auc_decomposition`:
+  58.7% of the positive-negative pairs are cross-document, so a method that
+  changes a document's score level moves the pooled number without changing
+  the ranking inside a document) and a **paired bootstrap of the
+  within-document AUC difference** (stratified by document and class). The
+  max-over-k inflation is reported as the control's mean shift beside the
+  chunks-per-text: it grows with the chunk count (+0.054 at 9.4 chunks per
+  paragraph against +0.008 at 1.8).)*
 - Exit: a ranked, artifact-backed statement of which segmentation+aggregation
   wins where — with paired CIs, per-document breakdown, and both negative
   subsets — or "no chunking beats full text" (an honest result too).
+  *(met 2026-10-26, CS-4: the ranked statement is in the track log's
+  "Stage 2 — the verdict" section. It is **not** "no chunking beats full
+  text": chunking the *paragraph* side with a peak-like aggregation improves
+  the **within-document** AUC by +0.02–0.04 on two of the three models
+  (24/42 and 28/42 arms with a significant positive interval), while chunking
+  the *question* side hurts on all three; the effect does not transfer across
+  embedders (voyage-4-nano gains nothing), and the largest **pooled** gain in
+  the ladder is a cross-document level effect, not a ranking gain.)*
 
 ### Stage 3 — Learned pair scorer (the "get crazy" slot)
 
@@ -552,20 +595,48 @@ sweeps are the orders.
   `analyze-omct` (e.g. the share of the similarity direction shared by all
   paragraphs of one document) — a separate change set, with the reviewer's
   approval, before the mechanism is called more than a hypothesis.
-- **The aggregation axis has a harness number for the paragraph-side atoms
-  (CS-3, 2026-10-25) — but only for them.** The Stage-0 command scored full
-  text against full text only, and §0.1's ad-hoc chunking table was never
-  re-derived, so the plan's chunking sensitivity (~±0.03 AUC) stayed
-  indicative. Stage 1.1a now measures the axis for the *sentence/clause
-  atoms* on the three Stage-0 models, paired, with the control side: the
-  paragraph side's structure is recorded as **not** helping on this data (the
-  floor gap narrows in 8 of the 9 atom arms; no arm's 95% interval excludes
-  zero on the positive side; the five that do exclude zero are all
-  negative). Still open: the word/sentence windows, the semantic boundaries
-  and the question-side chunker (Stage 2's ladder), and §0.1's ad-hoc table
-  is still **not** re-derived — it measured a different thing (word windows
-  and a chunked question side, unpaired, with no control), so the two are
-  not comparable and the ad-hoc numbers stay indicative.
+- **The aggregation axis now has harness numbers for the whole ladder
+  (CS-4, 2026-10-26).** Stage 2 ran the complete ladder (7 variants × 3
+  models, 126 chunked arms, paired throughout): the fixed word windows, the
+  sentence windows, the semantic boundaries and the two symmetric variants,
+  under `max`, `top_k_mean`, exp07's decayed average, exp06's local+global
+  blend and exp08's peak shortcut. The paragraph-side **windows** with a
+  peak-like aggregation improve the **within-document** AUC by +0.02–0.04 on
+  two of the three models; the question side's chunking hurts on all three;
+  the semantic boundaries do not transfer (the fit-side threshold choice does
+  not predict the holdout's). §0.1's ad-hoc table is still **not**
+  re-derived — it measured a different thing (unpaired, no control, and it
+  pooled the documents' levels), so the ad-hoc numbers stay indicative.
+- **The pooled AUC on the reviewed set is structurally sensitive to the
+  documents' score levels (CS-4, 2026-10-26).** 58.7% of the positive-negative
+  pairs of the pooled AUC are **cross-document** (41.3% are within a
+  document), so a method that changes a document's score *level* moves the
+  pooled number without changing the ranking inside a document. The
+  measurement is now in the artifacts (`pair_auc_decomposition`) and the
+  ladder's verdict rests on the within-document statistic. **Open:** should
+  the track's headline statistic be the within-document AUC from now on (the
+  reviewer's call)? The same decomposition is available for the Stage-0
+  artifacts, so the earlier entries could be re-read on that footing — but
+  only if the reviewer wants the log's earlier numbers re-stated.
+- **The paragraph-side window gain does not transfer across embedders
+  (CS-4, 2026-10-26).** Two of the three models gain +0.02–0.04
+  within-document AUC; voyage-4-nano gains nothing (3 of 42 arms positive
+  and significant against 12 negative). **Open:** is the gain a property of
+  the *chunking* or of the *embedding geometry* of those two models? The
+  Stage-0 "same-report direction" mechanism (still a hypothesis) would
+  explain it: a model whose document direction dominates has less to gain
+  from separating the paragraph's parts. Settling it needs the embedding-
+  space measurement the plan already lists as an open change set.
+- **The swept semantic threshold is not identifiable on three documents
+  (CS-4, 2026-10-26).** The document-level cross-fit chose a different
+  threshold per document *and* per rule, and the fit side's AUC did not
+  predict the holdout's (arctic2's `top_k_mean_2` with NU held out: fit AUC
+  0.5886 at threshold 0.4, holdout AUC 0.4565 — below the full-text
+  baseline's 0.4773 for the same document, while the grid's best holdout
+  value was 0.5663 at another threshold). **Open:** would a finer holdout
+  (paragraph-level inside one document) make the threshold identifiable, or
+  is a threshold that must be fitted on a *corpus* statistic (which the
+  track's leakage rules forbid) the only kind that works?
 - **The question-side transform's effect is model-dependent (CS-3,
   2026-10-25).** The Phase-2 probe found that stripping the "Answer
   choices:" block raises the pair AUC for 6 of 6 embedders. On the Stage-1.1a
@@ -589,7 +660,9 @@ sweeps are the orders.
 ## 6. Milestones
 
 - T1: stages 0-1 (diagnosis + structure) → what matters on OMCT decided.
-- T2: stage 2 (segmentation ladder) → the chunking verdict.
+- T2: stage 2 (segmentation ladder) → the chunking verdict. *(reached
+  2026-10-26, CS-4: chunk the paragraph, keep the peak, never chunk the
+  question — and the pooled AUC is the wrong headline on this benchmark.)*
 - T3: stage 3 (learned scorer) → the reranker-slot evidence for PLAN Phase 6.
 - T4: stage 4-5 as reviewer-approved extensions.
 
@@ -660,13 +733,38 @@ set):
   arm reproduces the Stage-0 artifacts field by field (the same control cell
   ids, the same per-cell scores, the same AUCs and control means);
   **verdict: the falsification test does not fire** — the floor gap narrows
-  in 8 of the 9 atom arms, no arm's 95% interval excludes zero on the
+  in 11 of the 12 atom arms (count corrected 2026-10-26, CS-4 — four
+  aggregation rules × three models, not nine arms), no arm's 95% interval
+  excludes zero on the
   positive side, and the five that do exclude zero are all negative, so the
   paragraph side's structure mostly re-scales the scores instead of lowering
   the floor. The question-side transform is model-dependent. Plan checkbox
   1.1a ticked; 1.1b moved to Stage 3; two new open questions in §5; the
   numbers are in the track log's Stage-1.1a section.)*
-- Then Stage 2.
+- [x] **CS-4 — Stage 2: the segmentation ladder.** The whole ladder (the
+  reviewer's call), on all three Stage-0 models: the new pure chunkers
+  (`word_windows.py` exp03, `sentence_windows.py` exp02, `semantic.py`
+  exp18(ii) with the injected `Embedder` port), the new aggregation rules
+  (`decayed_top_k` exp07, `local_global` exp06, `peak` exp08), the swept
+  semantic threshold with the **document-level cross-fit** (the threshold of a
+  document is chosen on the other two documents — the plan's fit/holdout
+  discipline), the symmetric variants (both sides chunked), the
+  within-document / cross-document split of the pooled AUC with a paired
+  bootstrap of the within-document difference, the `analysis:` config
+  additions (`question_chunker`, `semantic_thresholds`, `semantic_selection`),
+  the arms table shape's growth, the track's Stage-2 sweep
+  (`experiments_text_processing/stage2_ladder_sweep.py`) and the repo tool
+  `tools/verify_analysis_baseline.py` (the guard).
+  *(done 2026-10-26: 21 runs `omct-analyze-<model>-<variant>` (7 variants × 3
+  models, 126 chunked arms); the guard holds — all 27 runs (Stage 0, Stage 1,
+  Stage 2) reproduce the Stage-0 baseline arm field by field, and the Stage-1
+  arms are unchanged under the refactored driver. **Verdict:** chunking the
+  *paragraph* side with a peak-like aggregation improves the within-document
+  AUC by +0.02–0.04 on two of the three models; chunking the *question* side
+  hurts on all three; the effect does not transfer across embedders; and the
+  largest *pooled* gain in the ladder is a cross-document level effect, not a
+  ranking gain. The Stage-2 checkboxes and 1.2 are ticked; the Stage-1
+  atom-arm count is corrected in the plan and in an appended log entry.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 

@@ -42,6 +42,7 @@ client itself: the CLI wires the backends.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -50,7 +51,12 @@ from typing import Any
 import numpy as np
 
 from cluster_rag.embed.base import Embedder
-from cluster_rag.eval.metrics import paired_auc_bootstrap, roc_auc
+from cluster_rag.eval.metrics import (
+    grouped_auc_decomposition,
+    paired_auc_bootstrap,
+    paired_within_group_auc_bootstrap,
+    roc_auc,
+)
 from cluster_rag.pairs import PairRecord
 from cluster_rag.preprocess import (
     PreprocessSpec,
@@ -92,6 +98,12 @@ BASELINE_CHUNKER = "full_text"
 
 # The description of the baseline arm's scoring, recorded in the artifact.
 FULL_TEXT_AGGREGATION = "one chunk per text (the plain full-text cosine)"
+
+# The fit-side criteria of a swept parameter (the semantic threshold of
+# Stage 2.3): the reviewed set's AUC or its floor gap.
+SEMANTIC_CRITERION_AUC = "auc"
+SEMANTIC_CRITERION_FLOOR_GAP = "floor_gap"
+SEMANTIC_CRITERIA: tuple[str, ...] = (SEMANTIC_CRITERION_AUC, SEMANTIC_CRITERION_FLOOR_GAP)
 
 # The pairwise file's own id convention: "<code>-<paragraph number>-Q<question
 # number>" (e.g. "NU-10-Q2"). The code is the document's short handle.
@@ -471,51 +483,103 @@ def encode_side(
         chunks.extend(chunk_list)
     vectors = embedder.encode(chunks, kind)  # type: ignore[arg-type]
     hits, misses, _ = _cache_counters(embedder)
+    resolved_meta = dict(meta or {})
+    # The semantic chunker finds its boundaries from the atom embeddings, so
+    # its atom cache counters are part of the run's provenance (read after the
+    # chunking, which is what encodes the atoms).
+    atom_embedder = getattr(chunker, "atom_embedder", None)
+    if atom_embedder is not None:
+        atom_hits, atom_misses, atom_stored = _cache_counters(atom_embedder)
+        resolved_meta["atom_cache"] = {
+            "hits": atom_hits,
+            "misses": atom_misses,
+            "stored": atom_stored,
+        }
     return SideEncoding(
         texts=tuple(texts),
         chunk_lists=tuple(tuple(chunk_list) for chunk_list in chunk_lists),
         vectors=np.asarray(vectors),
-        meta=dict(meta or {}),
+        meta=resolved_meta,
         cache_hits=hits,
         cache_misses=misses,
     )
+
+
+def fold_question_chunks(
+    matrix: np.ndarray, question_groups: Sequence[Sequence[int]]
+) -> np.ndarray:
+    """Fold a chunked question side: every question keeps its best chunk.
+
+    The symmetric variants of Stage 2 (exp05/exp10) chunk **both** sides. The
+    question side is folded with the maximum — the best matching chunk of a
+    question is the question's evidence — and the paragraph side is then
+    folded with the arm's own rule.
+
+    Args:
+        matrix: The ``(n_paragraph_chunks, n_question_chunks)`` similarity matrix.
+        question_groups: The chunk rows of every question (in text order).
+
+    Returns:
+        The ``(n_paragraph_chunks, n_questions)`` matrix of folded scores.
+
+    Raises:
+        ValueError: If a question has no chunk.
+    """
+    starts: list[int] = []
+    for position, group in enumerate(question_groups):
+        indices = list(group)
+        if not indices:
+            raise ValueError(f"question {position} has no chunk")
+        starts.append(indices[0])
+    folded = np.maximum.reduceat(matrix, np.asarray(starts, dtype=np.int64), axis=1)
+    return folded
 
 
 def side_similarities(
     paragraph_side: SideEncoding,
     question_side: SideEncoding,
     rule: Aggregation | None,
+    *,
+    global_similarities: np.ndarray | None = None,
 ) -> np.ndarray:
     """The (paragraphs x questions) score matrix of one arm.
 
-    The question side must be unchunked (one chunk per question): the
-    question-side *chunker* is not part of this stage, so a chunked question
-    side is refused loudly rather than silently mis-scored.
+    The question side may be chunked (the Stage-2 symmetric variants): its
+    chunks are folded with the maximum first, and the paragraph side is then
+    folded with the arm's rule. The baseline arm (``rule=None``) is the
+    full-text scoring and needs one chunk per text on both sides.
 
     Args:
         paragraph_side: The encoded paragraph side (possibly chunked).
-        question_side: The encoded question side (one chunk per question).
+        question_side: The encoded question side (possibly chunked).
         rule: The aggregation rule that folds the paragraph chunks (None = the
             full-text baseline, which needs one chunk per paragraph).
+        global_similarities: The full-text score matrix (one row per
+            paragraph) — the second input of the local+global blend
+            (``exp06``).
 
     Returns:
         The ``(n_paragraphs, n_questions)`` score matrix.
 
     Raises:
-        ValueError: If the question side is chunked, or the arm has no
-            aggregation rule but its paragraph side is chunked.
+        ValueError: If the baseline arm's sides are chunked, or the rule needs
+            the full-text score and none was given.
     """
-    if not question_side.one_chunk_per_text:
-        raise ValueError(
-            "the question side must have one chunk per question in this stage "
-            "(the question-side chunker is out of scope)"
-        )
     matrix = paragraph_side.vectors @ question_side.vectors.T
     if rule is None:
+        if not question_side.one_chunk_per_text:
+            raise ValueError("the baseline arm needs one chunk per question")
         if not paragraph_side.one_chunk_per_text:
             raise ValueError("an arm without an aggregation rule needs one chunk per paragraph")
         return matrix
-    return aggregate_chunk_similarities(matrix, paragraph_side.group_rows(), rule)
+    if not question_side.one_chunk_per_text:
+        matrix = fold_question_chunks(matrix, question_side.group_rows())
+    return aggregate_chunk_similarities(
+        matrix,
+        paragraph_side.group_rows(),
+        rule,
+        global_similarities=global_similarities,
+    )
 
 
 @dataclass(frozen=True)
@@ -701,6 +765,9 @@ def score_arm(
     return {
         "arm": arm_name,
         "aggregation": None if aggregation is None else dict(describe_aggregation(aggregation)),
+        "pair_auc_decomposition": _auc_decomposition(
+            labels, measured.pair_scores, measured.documents
+        ),
         "sides": {
             "paragraph": {
                 **paragraph_meta,
@@ -747,6 +814,7 @@ def _paragraph_meta(preprocess_spec: PreprocessSpec, chunker: Chunker) -> dict[s
         "preprocess_version": preprocess_spec.version,
         "chunker": chunker.version,
         "chunker_name": _chunker_name(chunker),
+        "chunker_slug": _chunker_slug(chunker),
         "cache_version": chunker.cache_version(preprocess_spec.version),
         "aggregation": FULL_TEXT_AGGREGATION,
     }
@@ -873,6 +941,21 @@ def compare_arms(
     reference_macro = _macro(reference_auc_by_document)
     arm_macro = _macro(arm_auc_by_document)
 
+    reference_decomposition = _auc_decomposition(labels, reference.pair_scores, reference.documents)
+    arm_decomposition = _auc_decomposition(labels, arm.pair_scores, arm.documents)
+    within_reference = reference_decomposition.get("within_group_auc")
+    within_arm = arm_decomposition.get("within_group_auc")
+    cross_reference = reference_decomposition.get("cross_group_auc")
+    cross_arm = arm_decomposition.get("cross_group_auc")
+    within_paired = paired_within_group_auc_bootstrap(
+        labels.tolist(),
+        reference.pair_scores.tolist(),
+        arm.pair_scores.tolist(),
+        arm.documents.tolist(),
+        n_resamples=resamples,
+        seed=seed,
+    )
+
     return {
         "arm": arm_name,
         "reference_arm": BASELINE_ARM,
@@ -898,6 +981,27 @@ def compare_arms(
                 }
                 for document in per_document
             },
+        },
+        "auc_decomposition": {
+            "reference": reference_decomposition,
+            "arm": arm_decomposition,
+            "within_group_delta": (
+                within_arm - within_reference
+                if within_arm is not None and within_reference is not None
+                else None
+            ),
+            "cross_group_delta": (
+                cross_arm - cross_reference
+                if cross_arm is not None and cross_reference is not None
+                else None
+            ),
+            "within_group_paired": within_paired,
+            "note": (
+                "the pooled AUC mixes the ranking inside a document with the "
+                "ranking across documents (58.7% of the positive-negative "
+                "pairs are cross-document): the within-document delta is the "
+                "part that transfers to a corpus without document structure"
+            ),
         },
         "control_shift": {
             "mean_delta": float(arm_control_all.mean() - reference_control_all.mean()),
@@ -972,6 +1076,23 @@ def _safe_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
         return None
 
 
+def _auc_decomposition(
+    labels: np.ndarray, scores: np.ndarray, documents: np.ndarray
+) -> dict[str, Any]:
+    """The within-document / cross-document split of a pooled AUC.
+
+    The pooled AUC of the reviewed set compares every positive with every
+    negative, and 58.7% of those pairs are cross-document. A method that
+    changes a document's score *level* therefore moves the pooled number
+    without changing the ranking inside a document — so the two parts are
+    reported separately (the track's per-document discipline).
+    """
+    try:
+        return grouped_auc_decomposition(labels.tolist(), scores.tolist(), documents.tolist())
+    except ValueError as exc:
+        return {"note": str(exc)}
+
+
 def _macro(values: Mapping[str, float | None]) -> float | None:
     """The macro average of the per-document values (None when none exists)."""
     present = [value for value in values.values() if value is not None]
@@ -1001,6 +1122,359 @@ def _top_fifth_share_delta(
     return _top_quintile_share(arm_percentiles) - _top_quintile_share(reference_percentiles)
 
 
+@dataclass(frozen=True)
+class ChunkedSide:
+    """One chunked side of a run: the chunker, its embedder and its question side.
+
+    The driver never builds a chunker itself: the CLI wires the (cached)
+    embedders in and hands the driver a ready-made side. That keeps the model
+    clients at the edge (AGENTS.md dependency direction) and lets the same
+    side describe a fixed chunker and one point of a swept grid.
+
+    Attributes:
+        chunker: The paragraph side's chunker.
+        paragraph_embedder: The embedder of the paragraph chunks.
+        question_chunker: The question side's chunker (``None`` = the question
+            side stays whole: the one-sided variant).
+        question_embedder: The embedder of the question chunks.
+        threshold: The swept parameter this side was built with (the semantic
+            threshold; ``None`` for a fixed chunker).
+    """
+
+    chunker: Chunker
+    paragraph_embedder: Embedder
+    question_chunker: Chunker | None = None
+    question_embedder: Embedder | None = None
+    threshold: float | None = None
+
+
+def _chunker_slug(chunker: Chunker) -> str:
+    """The chunker's short handle (its arm-name prefix)."""
+    slug = getattr(chunker, "slug", None)
+    return slug if isinstance(slug, str) and slug else _chunker_name(chunker)
+
+
+def _variant_question_side(
+    side: ChunkedSide,
+    baseline_question_side: SideEncoding,
+    question_texts: Sequence[str],
+    question_transform: str,
+    question_block_markers: Sequence[str],
+) -> SideEncoding:
+    """The question side of a chunked variant (the whole one, or the chunked)."""
+    if side.question_chunker is None:
+        return baseline_question_side
+    if side.question_embedder is None:
+        raise ValueError("a chunked question side needs its own embedder")
+    return encode_side(
+        side.question_embedder,
+        side.question_chunker,
+        list(question_texts),
+        "query",
+        meta=_question_meta(question_transform, question_block_markers, side.question_chunker),
+    )
+
+
+def _fixed_variant_arms(
+    view: DatasetView,
+    *,
+    side: ChunkedSide,
+    aggregations: Sequence[Aggregation],
+    paragraph_texts: Sequence[str],
+    question_texts: Sequence[str],
+    baseline_question_side: SideEncoding,
+    baseline_similarities: np.ndarray,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    preprocess_spec: PreprocessSpec,
+    hit_ks: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    """The arms of one fixed chunker variant (one arm per aggregation rule)."""
+    paragraph_side = encode_side(
+        side.paragraph_embedder,
+        side.chunker,
+        list(paragraph_texts),
+        "document",
+        meta=_paragraph_meta(preprocess_spec, side.chunker),
+    )
+    question_side = _variant_question_side(
+        side, baseline_question_side, question_texts, question_transform, question_block_markers
+    )
+    arms: dict[str, Any] = {}
+    similarities_by_arm: dict[str, np.ndarray] = {}
+    for rule in aggregations:
+        arm_name = f"{_chunker_slug(side.chunker)}_{rule.slug}"
+        similarities = side_similarities(
+            paragraph_side,
+            question_side,
+            rule,
+            global_similarities=baseline_similarities,
+        )
+        arms[arm_name] = score_arm(
+            view,
+            arm_name=arm_name,
+            similarities=similarities,
+            paragraph_side=paragraph_side,
+            question_side=question_side,
+            aggregation=rule,
+            hit_ks=hit_ks,
+        )
+        similarities_by_arm[arm_name] = similarities
+    return arms, similarities_by_arm
+
+
+def _pair_indices(view: DatasetView) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The row, column and label of every judged pair."""
+    rows = np.asarray(
+        [view.paragraph_row[record.paragraph_text] for record in view.pairs], dtype=np.int64
+    )
+    columns = np.asarray(
+        [view.question_col[record.question_text] for record in view.pairs], dtype=np.int64
+    )
+    labels = np.asarray([record.label for record in view.pairs], dtype=np.int64)
+    return rows, columns, labels
+
+
+def _control_indices(view: DatasetView) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The row, column and document of every control cell."""
+    rows = np.asarray([row for _, row, _ in view.control.cells], dtype=np.int64)
+    columns = np.asarray([column for _, _, column in view.control.cells], dtype=np.int64)
+    documents = np.asarray([document for document, _, _ in view.control.cells])
+    return rows, columns, documents
+
+
+def _row_documents(view: DatasetView) -> tuple[str, ...]:
+    """The document of every paragraph row (a row belongs to one document)."""
+    return tuple(min(documents) for documents in view.paragraph_documents)
+
+
+def _side_numbers(
+    labels: np.ndarray,
+    pair_scores: np.ndarray,
+    pair_mask: np.ndarray,
+    control_scores: np.ndarray,
+    control_mask: np.ndarray,
+) -> dict[str, Any]:
+    """The numbers of one side of a document (the reviewed set + the control)."""
+    positives = pair_mask & (labels == 1)
+    control = control_scores[control_mask]
+    return {
+        "n_pairs": int(pair_mask.sum()),
+        "n_positive": int(positives.sum()),
+        "auc": _safe_auc(labels[pair_mask], pair_scores[pair_mask]),
+        "positives_mean": float(pair_scores[positives].mean()) if positives.any() else None,
+        "control_mean": float(control.mean()) if control.size else None,
+        "floor_gap": _floor_gap(pair_scores[positives], control),
+    }
+
+
+def _argmax_threshold(values: Mapping[float, float | None], thresholds: Sequence[float]) -> float:
+    """The threshold with the largest criterion value (the first one on a tie).
+
+    Raises:
+        ValueError: If no threshold has a usable criterion value.
+    """
+    best: float | None = None
+    best_value = -math.inf
+    for threshold in thresholds:
+        value = values.get(threshold)
+        if value is None:
+            continue
+        if value > best_value:
+            best_value = value
+            best = threshold
+    if best is None:
+        raise ValueError(
+            "the swept parameter could not be selected: the fit side has no usable criterion value"
+        )
+    return best
+
+
+def _cross_fit(
+    view: DatasetView,
+    matrices: Mapping[float, Mapping[str, np.ndarray]],
+    thresholds: Sequence[float],
+    aggregations: Sequence[Aggregation],
+    criterion: str,
+) -> tuple[dict[str, dict[str, float]], list[dict[str, Any]]]:
+    """Choose the swept parameter of every document on the **fit side** only.
+
+    The document-level holdout of the plan's Stage 3, applied to a swept
+    parameter: for every document the threshold is chosen on the other two
+    documents (the fit side), never on the document it is applied to. The
+    criterion is the fit side's pair AUC (``"auc"``) or its floor gap
+    (``"floor_gap"``).
+
+    Returns:
+        The chosen threshold per rule and document, and the rotation report.
+    """
+    documents = [stratum["document"] for stratum in view.strata]
+    rows, columns, labels = _pair_indices(view)
+    control_rows, control_columns, control_documents = _control_indices(view)
+    pair_documents = np.asarray([record.document for record in view.pairs])
+    chosen: dict[str, dict[str, float]] = {rule.slug: {} for rule in aggregations}
+    rotations: list[dict[str, Any]] = []
+    for holdout in documents:
+        fit_pairs = pair_documents != holdout
+        holdout_pairs = pair_documents == holdout
+        fit_control = control_documents != holdout
+        holdout_control = control_documents == holdout
+        grid: dict[str, dict[str, Any]] = {}
+        for threshold in thresholds:
+            per_rule: dict[str, Any] = {}
+            for rule in aggregations:
+                scores = matrices[threshold][rule.slug]
+                pair_scores = scores[rows, columns]
+                control_scores = scores[control_rows, control_columns]
+                per_rule[rule.slug] = {
+                    "fit": _side_numbers(
+                        labels, pair_scores, fit_pairs, control_scores, fit_control
+                    ),
+                    "holdout": _side_numbers(
+                        labels, pair_scores, holdout_pairs, control_scores, holdout_control
+                    ),
+                }
+            grid[str(threshold)] = per_rule
+        rotation: dict[str, Any] = {
+            "holdout": holdout,
+            "fit_documents": [document for document in documents if document != holdout],
+            "n_fit_pairs": int(fit_pairs.sum()),
+            "n_holdout_pairs": int(holdout_pairs.sum()),
+            "grid": grid,
+            "chosen": {},
+        }
+        for rule in aggregations:
+            values = {
+                threshold: grid[str(threshold)][rule.slug]["fit"].get(criterion)
+                for threshold in thresholds
+            }
+            best = _argmax_threshold(values, thresholds)
+            chosen[rule.slug][holdout] = best
+            rotation["chosen"][rule.slug] = {
+                "threshold": best,
+                "criterion": criterion,
+                "fit": grid[str(best)][rule.slug]["fit"],
+                "holdout": grid[str(best)][rule.slug]["holdout"],
+            }
+        rotations.append(rotation)
+    return chosen, rotations
+
+
+def _swept_variant_arms(
+    view: DatasetView,
+    *,
+    sides: Sequence[ChunkedSide],
+    aggregations: Sequence[Aggregation],
+    paragraph_texts: Sequence[str],
+    question_texts: Sequence[str],
+    baseline_question_side: SideEncoding,
+    baseline_similarities: np.ndarray,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    preprocess_spec: PreprocessSpec,
+    hit_ks: Sequence[int],
+    criterion: str,
+) -> tuple[dict[str, Any], dict[str, np.ndarray], dict[str, Any]]:
+    """The arms of a swept-parameter variant (the semantic threshold).
+
+    Every threshold of the grid is scored on **every** document, and the
+    threshold of a document is chosen on the fit side (the other two
+    documents) — the document-level cross-fit. The arm's score matrix is
+    therefore assembled row by row: every document's rows come from the
+    threshold that was chosen without seeing that document.
+    """
+    thresholds: list[float] = []
+    for side in sides:
+        if side.threshold is None:
+            raise ValueError("a swept side needs a threshold")
+        thresholds.append(side.threshold)
+    matrices: dict[float, dict[str, np.ndarray]] = {}
+    sides_by_threshold: dict[float, tuple[SideEncoding, SideEncoding]] = {}
+    for side in sides:
+        assert side.threshold is not None
+        paragraph_side = encode_side(
+            side.paragraph_embedder,
+            side.chunker,
+            list(paragraph_texts),
+            "document",
+            meta=_paragraph_meta(preprocess_spec, side.chunker),
+        )
+        question_side = _variant_question_side(
+            side,
+            baseline_question_side,
+            question_texts,
+            question_transform,
+            question_block_markers,
+        )
+        matrices[side.threshold] = {
+            rule.slug: side_similarities(
+                paragraph_side,
+                question_side,
+                rule,
+                global_similarities=baseline_similarities,
+            )
+            for rule in aggregations
+        }
+        sides_by_threshold[side.threshold] = (paragraph_side, question_side)
+
+    chosen, rotations = _cross_fit(view, matrices, thresholds, aggregations, criterion)
+    row_documents = _row_documents(view)
+    chunk_counts = {str(t): sides_by_threshold[t][0].n_chunks for t in thresholds}
+    question_chunk_counts = {str(t): sides_by_threshold[t][1].n_chunks for t in thresholds}
+    arms: dict[str, Any] = {}
+    similarities_by_arm: dict[str, np.ndarray] = {}
+    for rule in aggregations:
+        matrix = np.zeros((len(view.paragraphs), len(view.questions)), dtype=np.float64)
+        for row, document in enumerate(row_documents):
+            threshold = chosen[rule.slug][document]
+            matrix[row] = matrices[threshold][rule.slug][row]
+        arm_name = f"{_chunker_slug(sides[0].chunker)}_{rule.slug}"
+        paragraph_side, question_side = sides_by_threshold[thresholds[0]]
+        arm = score_arm(
+            view,
+            arm_name=arm_name,
+            similarities=matrix,
+            paragraph_side=paragraph_side,
+            question_side=question_side,
+            aggregation=rule,
+            hit_ks=hit_ks,
+        )
+        arm["sides"]["paragraph"].update(
+            {
+                "n_chunks": int(round(float(np.mean(list(chunk_counts.values()))))),
+                "n_chunks_by_threshold": chunk_counts,
+                "swept_parameter": {
+                    "name": "threshold",
+                    "values": list(thresholds),
+                    "selection": (
+                        "the document-level cross-fit: the threshold of a document "
+                        "is chosen on the fit side (the other two documents)"
+                    ),
+                },
+            }
+        )
+        arm["sides"]["question"].update(
+            {
+                "n_chunks": int(round(float(np.mean(list(question_chunk_counts.values()))))),
+                "n_chunks_by_threshold": question_chunk_counts,
+            }
+        )
+        arms[arm_name] = arm
+        similarities_by_arm[arm_name] = matrix
+    selection = {
+        "criterion": criterion,
+        "grid": list(thresholds),
+        "chosen_by_document": chosen,
+        "rotations": rotations,
+        "note": (
+            "the swept parameter is chosen on the fit side only: for every "
+            "document the threshold comes from the rotation that holds that "
+            "document out, so no document ever sees its own fitted value"
+        ),
+    }
+    return arms, similarities_by_arm, selection
+
+
 def score_model_arms(
     view: DatasetView,
     *,
@@ -1011,9 +1485,10 @@ def score_model_arms(
     question_transform: str,
     question_block_markers: Sequence[str],
     preprocess_spec: PreprocessSpec,
-    structural_embedder: Embedder | None = None,
-    structural_chunker: Chunker | None = None,
+    chunked_side: ChunkedSide | None = None,
+    swept_sides: Sequence[ChunkedSide] = (),
     aggregations: Sequence[Aggregation] = (),
+    semantic_selection: str = SEMANTIC_CRITERION_AUC,
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 42,
     hit_ks: Sequence[int] = HIT_KS,
@@ -1037,10 +1512,13 @@ def score_model_arms(
         question_transform: The baseline question transform.
         question_block_markers: The markers of the question transform.
         preprocess_spec: The paragraph side's preprocess spec.
-        structural_embedder: The embedder of the chunked paragraph side (None
-            when the run has no structural arm).
-        structural_chunker: The chunker of the structural arms.
-        aggregations: The aggregation rules of the structural arms.
+        chunked_side: The chunked paragraph side (and, for the symmetric
+            variants, the chunked question side).
+        swept_sides: One chunked side per point of a swept grid (the semantic
+            threshold); the arms are then cross-fitted per document.
+        aggregations: The aggregation rules the chunked arms fold with.
+        semantic_selection: The fit-side criterion of the swept parameter
+            (``"auc"`` or ``"floor_gap"``).
         bootstrap_resamples: The number of bootstrap resamples of the paired
             statistics.
         bootstrap_seed: The seed of the bootstrap.
@@ -1060,10 +1538,12 @@ def score_model_arms(
         meta=_paragraph_meta(preprocess_spec, baseline_chunker),
     )
     question_sides: dict[str, SideEncoding] = {}
+    question_texts_by_transform: dict[str, list[str]] = {}
     for transform, embedder in question_embedders.items():
         question_texts = apply_question_transform(
             list(view.questions), transform, question_block_markers
         )
+        question_texts_by_transform[transform] = question_texts
         question_sides[transform] = encode_side(
             embedder,
             baseline_chunker,
@@ -1088,6 +1568,7 @@ def score_model_arms(
     arms: dict[str, Any] = {}
     comparisons: dict[str, Any] = {}
     arm_similarities: dict[str, np.ndarray] = {}
+    selection: dict[str, Any] | None = None
 
     # The question-side arms: the full-text paragraph side against another
     # question transform (the free keep-vs-strip_block comparison).
@@ -1106,31 +1587,45 @@ def score_model_arms(
         )
         arm_similarities[arm_name] = similarities
 
-    # The structural arms: the chunked paragraph side folded by an
-    # aggregation rule, against the baseline's question side.
-    if aggregations:
-        if structural_embedder is None or structural_chunker is None:
-            raise ValueError("the structural arms need a chunked paragraph side")
-        structural_side = encode_side(
-            structural_embedder,
-            structural_chunker,
-            paragraph_texts,
-            "document",
-            meta=_paragraph_meta(preprocess_spec, structural_chunker),
+    # The chunked arms: the chunked paragraph side folded by an aggregation
+    # rule, against the baseline's question side.
+    if swept_sides:
+        if not aggregations:
+            raise ValueError("the swept arms need aggregation rules")
+        swept_arms, swept_similarities, selection = _swept_variant_arms(
+            view,
+            sides=swept_sides,
+            aggregations=aggregations,
+            paragraph_texts=paragraph_texts,
+            question_texts=question_texts_by_transform[question_transform],
+            baseline_question_side=baseline_question_side,
+            baseline_similarities=baseline_similarities,
+            question_transform=question_transform,
+            question_block_markers=question_block_markers,
+            preprocess_spec=preprocess_spec,
+            hit_ks=hit_ks,
+            criterion=semantic_selection,
         )
-        for rule in aggregations:
-            arm_name = f"{structural_chunker.name}_{rule.slug}"
-            similarities = side_similarities(structural_side, baseline_question_side, rule)
-            arms[arm_name] = score_arm(
-                view,
-                arm_name=arm_name,
-                similarities=similarities,
-                paragraph_side=structural_side,
-                question_side=baseline_question_side,
-                aggregation=rule,
-                hit_ks=hit_ks,
-            )
-            arm_similarities[arm_name] = similarities
+        arms.update(swept_arms)
+        arm_similarities.update(swept_similarities)
+    elif chunked_side is not None:
+        if not aggregations:
+            raise ValueError("the chunked arms need aggregation rules")
+        chunked_arms, chunked_similarities = _fixed_variant_arms(
+            view,
+            side=chunked_side,
+            aggregations=aggregations,
+            paragraph_texts=paragraph_texts,
+            question_texts=question_texts_by_transform[question_transform],
+            baseline_question_side=baseline_question_side,
+            baseline_similarities=baseline_similarities,
+            question_transform=question_transform,
+            question_block_markers=question_block_markers,
+            preprocess_spec=preprocess_spec,
+            hit_ks=hit_ks,
+        )
+        arms.update(chunked_arms)
+        arm_similarities.update(chunked_similarities)
 
     for arm_name, similarities in arm_similarities.items():
         comparisons[arm_name] = compare_arms(
@@ -1157,6 +1652,7 @@ def score_model_arms(
         **baseline_block,
         "arms": arms,
         "comparisons": comparisons,
+        "threshold_selection": selection,
     }
 
 
@@ -1239,6 +1735,10 @@ def build_analysis_report(
     question_transform: str,
     chunker_name: str,
     chunker_params: Mapping[str, Any] | None = None,
+    question_chunker_name: str | None = None,
+    question_chunker_params: Mapping[str, Any] | None = None,
+    semantic_thresholds: Sequence[float] = (),
+    semantic_selection: str = SEMANTIC_CRITERION_AUC,
     aggregations: Sequence[str] = (),
     question_transforms: Sequence[str] = (),
     bootstrap: Mapping[str, Any] | None = None,
@@ -1292,6 +1792,10 @@ def build_analysis_report(
             "question_transforms": list(question_transforms),
             "chunker": chunker_name,
             "chunker_params": dict(chunker_params or {}),
+            "question_chunker": question_chunker_name,
+            "question_chunker_params": dict(question_chunker_params or {}),
+            "semantic_thresholds": list(semantic_thresholds),
+            "semantic_selection": semantic_selection,
             "baseline_chunker": baseline_chunker_name,
             "aggregations": list(aggregations),
             "bootstrap": dict(bootstrap or {}),
@@ -1308,6 +1812,10 @@ def build_analysis_report(
                 "The model's top-level fields are the baseline arm (full text against "
                 "full text). The other arms are under 'arms' and their comparisons "
                 "against the baseline under 'comparisons' (one per arm).",
+                "A swept parameter (the semantic threshold) is chosen on the fit "
+                "side only: the model's 'threshold_selection' block records the "
+                "grid, the per-rotation fit-side numbers and the chosen value, so "
+                "no document ever sees its own fitted parameter.",
             ],
         },
         "models": list(models),

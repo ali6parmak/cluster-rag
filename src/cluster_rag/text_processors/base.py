@@ -106,6 +106,17 @@ class BaseChunker:
         return {}
 
     @property
+    def slug(self) -> str:
+        """A short, parameter-aware handle of this chunker (e.g. ``"words15"``).
+
+        The slug names the chunker inside an arm name and inside a table row.
+        It defaults to the chunker's registry name, so a chunker without
+        parameters keeps its plain name; a chunker whose parameters change the
+        output (the word and sentence windows) overrides it.
+        """
+        return self.name
+
+    @property
     def version(self) -> str:
         """Cache-facing version string (a hash of the parameters)."""
         return config_version(self.name, self.version_payload())

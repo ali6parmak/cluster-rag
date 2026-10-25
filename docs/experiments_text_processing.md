@@ -774,3 +774,498 @@ recorded as **not** helping on this data. The representation mechanism
 (§5's open question) is the measurement that would still change the picture,
 and it needs the reviewer's approval as a separate change set.
 
+
+## Stage 2 — the segmentation ladder (CS-4, 2026-10-26)
+
+**What.** The plan's Stage 2 in full: the **whole ladder**, not a reduced
+grid, on the three Stage-0 models. Seven ladder variants × three models =
+**21 runs** (`omct-analyze-<model>-<variant>`), each run holding the full-text
+**baseline arm** (the Stage-0 scoring, the reference every other arm is
+compared with) plus **six chunked arms** (one per aggregation rule). The
+variants: `words15` / `words25` / `words40` (fixed word windows, exp03),
+`sent2` (overlapping sentence windows, exp02), `semantic` (the semantic
+boundaries, exp18(ii)) and `symwords25` / `symsent2` (both sides chunked,
+exp10 / exp05). The arms: `max`, `top_k_mean:2`, `decayed_top_k:3:0.5:0.25`
+(exp07), `local_global:0.5:max` and `local_global:0.75:max` (exp06) and
+`peak:3:0.05` (exp08).
+
+Every run uses the same seed (42) and therefore **the same 4,000 control
+cells** as the Stage-0 and Stage-1 runs, and every arm is compared with the
+baseline arm **inside the same run** — the pairing is by construction.
+
+**Cost.** Each chunker needs its own vectors; the chunking version went into
+the *existing* cache-version slot, so the warm cache stayed valid and the
+full-text arm encoded **nothing** (225 + 294 cache hits per run). The new
+vectors per model: `words15` 2,120 paragraph chunks (9.42 per paragraph),
+`words25` 1,186 (5.27), `words40` 691 (3.07), `sent2` 409 (1.82), `semantic`
+257–590 chunks per threshold over the six thresholds of the grid (plus the
+598 atom vectors, shared by all thresholds), `symwords25` 1,186 paragraph +
+657 question chunks, `symsent2` 409 + 338. Every run took 7–11 s.
+
+**The guard.** The full-text arm inside every new run reproduces the Stage-0
+artifact field by field: the same 4,000 control cell ids in the same order,
+the same per-pair and per-cell scores and rank percentiles, the same AUCs
+(0.4680 / 0.5004 / 0.5371) and control means (0.2436 / 0.2351 / 0.2194).
+Checked with `tools/verify_analysis_baseline.py` (a new repo tool, the
+CS-3 verification script generalised): **27 of 27 runs OK** (the three
+Stage-0 runs, the three Stage-1 runs and the 21 new ones). The Stage-1 runs
+were re-executed under the refactored driver and their arms and paired
+statistics are **identical** to the CS-3 artifacts.
+
+**The statistic that decides the comparison (new in this change set).** The
+pooled AUC of the reviewed set compares **every** positive with **every**
+negative, and on this data **58.7% of those pairs are cross-document** (41.3%
+are within a document). A method that changes a document's score *level* —
+and segmentation changes levels by construction — therefore moves the pooled
+number without changing the ranking inside a document. The artifacts now
+carry the split (`pair_auc_decomposition`: the within-document AUC and the
+cross-document AUC) and a **paired bootstrap of the within-document AUC
+difference** (`paired_within_group_auc_bootstrap`, stratified by document and
+class, 2,000 resamples, seed 42). Both statistics are in the table
+(`within_auc`, `cross_auc`, `within_d_auc`, `within_d_auc_ci`). The
+within-document number is the one that transfers to a corpus without document
+structure, so it is the number the verdict below is built on; the pooled
+number is reported next to it, never alone.
+
+**The swept parameter.** The semantic chunker's threshold is not a fixed
+value: the plan's Stage 2.3 sweeps it **on fit-side documents only**. The
+driver chooses it per document by the **document-level cross-fit** — for
+every document, the threshold comes from the rotation that holds *that*
+document out, chosen on the fit side (the other two documents) by the fit
+side's pair AUC — so no document ever sees its own fitted value. The artifact
+records the grid, the per-rotation fit-side and holdout numbers and the
+chosen value (`threshold_selection`).
+
+### The seven ladder variants (the 21 runs)
+
+**words15** — fixed word windows, N=15, stride 7 (exp03)
+
+- `omct-analyze-arctic2-words15` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words15_max` | 0.4818 (0.5663) | +0.0238 [-0.0012, +0.0483] | +0.0139 [-0.0058, +0.0333] | 0.2972 (+0.0537) | +0.0011 | 9.42 |
+  | `words15_top_k_mean_2` | 0.4628 (0.5446) | +0.0098 [-0.0143, +0.0341] | -0.0051 [-0.0245, +0.0140] | 0.2842 (+0.0407) | -0.0044 | 9.42 |
+  | `words15_decayed_top_k_3_0.5_0.25` | 0.4557 (0.5348) | +0.0042 [-0.0199, +0.0282] | -0.0122 [-0.0317, +0.0061] | 0.2775 (+0.0340) | -0.0073 | 9.42 |
+  | `words15_local_global_0.5_max` | 0.4728 (0.5574) | +0.0128 [+0.0013, +0.0241] | +0.0049 [-0.0045, +0.0142] | 0.2704 (+0.0268) | +0.0006 | 9.42 |
+  | `words15_local_global_0.75_max` | 0.4766 (0.5639) | +0.0193 [+0.0010, +0.0371] | +0.0087 [-0.0056, +0.0231] | 0.2838 (+0.0403) | +0.0008 | 9.42 |
+  | `words15_peak_3_0.05` | 0.4859 (0.5601) | +0.0275 [+0.0026, +0.0520] | +0.0180 [-0.0026, +0.0374] | 0.2788 (+0.0352) | +0.0015 | 9.42 |
+
+- `omct-analyze-voyage-4-nano-words15` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words15_max` | 0.4840 (0.5234) | -0.0184 [-0.0422, +0.0050] | -0.0164 [-0.0375, +0.0037] | 0.2980 (+0.0629) | -0.0046 | 9.42 |
+  | `words15_top_k_mean_2` | 0.4730 (0.5121) | -0.0277 [-0.0508, -0.0048] | -0.0274 [-0.0477, -0.0077] | 0.2849 (+0.0498) | -0.0080 | 9.42 |
+  | `words15_decayed_top_k_3_0.5_0.25` | 0.4641 (0.4993) | -0.0350 [-0.0578, -0.0120] | -0.0363 [-0.0567, -0.0167] | 0.2784 (+0.0433) | -0.0110 | 9.42 |
+  | `words15_local_global_0.5_max` | 0.4912 (0.5396) | -0.0102 [-0.0228, +0.0022] | -0.0092 [-0.0199, +0.0011] | 0.2666 (+0.0315) | -0.0023 | 9.42 |
+  | `words15_local_global_0.75_max` | 0.4875 (0.5304) | -0.0146 [-0.0333, +0.0037] | -0.0129 [-0.0292, +0.0026] | 0.2823 (+0.0472) | -0.0035 | 9.42 |
+  | `words15_peak_3_0.05` | 0.4834 (0.5169) | -0.0203 [-0.0443, +0.0035] | -0.0170 [-0.0381, +0.0031] | 0.2801 (+0.0450) | -0.0049 | 9.42 |
+
+- `omct-analyze-embeddinggemma-words15` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words15_max` | 0.5611 (0.6648) | +0.0389 [+0.0134, +0.0643] | +0.0239 [+0.0022, +0.0461] | 0.2514 (+0.0319) | +0.0092 | 9.42 |
+  | `words15_top_k_mean_2` | 0.5486 (0.6540) | +0.0308 [+0.0054, +0.0557] | +0.0115 [-0.0089, +0.0329] | 0.2374 (+0.0180) | +0.0035 | 9.42 |
+  | `words15_decayed_top_k_3_0.5_0.25` | 0.5402 (0.6485) | +0.0256 [+0.0005, +0.0503] | +0.0031 [-0.0166, +0.0234] | 0.2306 (+0.0112) | +0.0000 | 9.42 |
+  | `words15_local_global_0.5_max` | 0.5514 (0.6563) | +0.0270 [+0.0136, +0.0407] | +0.0142 [+0.0030, +0.0258] | 0.2354 (+0.0160) | +0.0046 | 9.42 |
+  | `words15_local_global_0.75_max` | 0.5569 (0.6627) | +0.0360 [+0.0160, +0.0562] | +0.0197 [+0.0030, +0.0373] | 0.2434 (+0.0239) | +0.0069 | 9.42 |
+  | `words15_peak_3_0.05` | 0.5624 (0.6659) | +0.0421 [+0.0164, +0.0682] | +0.0253 [+0.0029, +0.0477] | 0.2323 (+0.0129) | +0.0101 | 9.42 |
+
+**words25** — fixed word windows, N=25, stride 12 (exp03)
+
+- `omct-analyze-arctic2-words25` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.4791 (0.5574) | +0.0292 [+0.0069, +0.0514] | +0.0111 [-0.0065, +0.0287] | 0.2829 (+0.0393) | +0.0062 | 5.27 |
+  | `words25_top_k_mean_2` | 0.4721 (0.5471) | +0.0239 [+0.0016, +0.0457] | +0.0041 [-0.0139, +0.0216] | 0.2697 (+0.0261) | +0.0009 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.4730 (0.5504) | +0.0267 [+0.0054, +0.0472] | +0.0050 [-0.0121, +0.0213] | 0.2637 (+0.0201) | -0.0015 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.4728 (0.5549) | +0.0148 [+0.0040, +0.0257] | +0.0048 [-0.0036, +0.0133] | 0.2632 (+0.0197) | +0.0031 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.4759 (0.5570) | +0.0228 [+0.0064, +0.0393] | +0.0080 [-0.0053, +0.0212] | 0.2731 (+0.0295) | +0.0047 | 5.27 |
+  | `words25_peak_3_0.05` | 0.4781 (0.5584) | +0.0240 [+0.0022, +0.0467] | +0.0102 [-0.0075, +0.0272] | 0.2662 (+0.0226) | +0.0046 | 5.27 |
+
+- `omct-analyze-voyage-4-nano-words25` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.4856 (0.5329) | -0.0154 [-0.0355, +0.0041] | -0.0148 [-0.0326, +0.0025] | 0.2764 (+0.0413) | +0.0023 | 5.27 |
+  | `words25_top_k_mean_2` | 0.4809 (0.5188) | -0.0188 [-0.0385, +0.0012] | -0.0195 [-0.0376, -0.0022] | 0.2637 (+0.0286) | -0.0008 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.4768 (0.5132) | -0.0212 [-0.0402, -0.0020] | -0.0236 [-0.0407, -0.0074] | 0.2583 (+0.0232) | -0.0039 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.4925 (0.5474) | -0.0080 [-0.0184, +0.0023] | -0.0079 [-0.0173, +0.0008] | 0.2557 (+0.0206) | +0.0011 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.4885 (0.5400) | -0.0122 [-0.0279, +0.0030] | -0.0119 [-0.0256, +0.0014] | 0.2660 (+0.0309) | +0.0017 | 5.27 |
+  | `words25_peak_3_0.05` | 0.4867 (0.5327) | -0.0127 [-0.0330, +0.0076] | -0.0137 [-0.0312, +0.0033] | 0.2604 (+0.0253) | +0.0011 | 5.27 |
+
+- `omct-analyze-embeddinggemma-words25` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.5602 (0.6733) | +0.0417 [+0.0179, +0.0649] | +0.0230 [+0.0056, +0.0420] | 0.2398 (+0.0203) | +0.0114 | 5.27 |
+  | `words25_top_k_mean_2` | 0.5520 (0.6662) | +0.0365 [+0.0135, +0.0595] | +0.0149 [-0.0022, +0.0338] | 0.2271 (+0.0076) | +0.0056 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.5491 (0.6636) | +0.0361 [+0.0137, +0.0575] | +0.0120 [-0.0045, +0.0296] | 0.2213 (+0.0019) | +0.0016 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.5509 (0.6584) | +0.0263 [+0.0141, +0.0391] | +0.0138 [+0.0045, +0.0236] | 0.2296 (+0.0102) | +0.0057 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.5570 (0.6660) | +0.0366 [+0.0182, +0.0553] | +0.0199 [+0.0061, +0.0350] | 0.2347 (+0.0153) | +0.0086 | 5.27 |
+  | `words25_peak_3_0.05` | 0.5611 (0.6754) | +0.0382 [+0.0157, +0.0619] | +0.0240 [+0.0056, +0.0430] | 0.2233 (+0.0039) | +0.0104 | 5.27 |
+
+**words40** — fixed word windows, N=40, stride 20 (exp03)
+
+- `omct-analyze-arctic2-words40` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words40_max` | 0.4766 (0.5754) | +0.0250 [+0.0047, +0.0465] | +0.0086 [-0.0066, +0.0242] | 0.2655 (+0.0219) | +0.0105 | 3.07 |
+  | `words40_top_k_mean_2` | 0.4763 (0.5768) | +0.0265 [+0.0080, +0.0458] | +0.0083 [-0.0064, +0.0232] | 0.2551 (+0.0116) | +0.0054 | 3.07 |
+  | `words40_decayed_top_k_3_0.5_0.25` | 0.4740 (0.5766) | +0.0236 [+0.0061, +0.0424] | +0.0060 [-0.0080, +0.0200] | 0.2508 (+0.0073) | +0.0012 | 3.07 |
+  | `words40_local_global_0.5_max` | 0.4717 (0.5614) | +0.0120 [+0.0023, +0.0223] | +0.0038 [-0.0035, +0.0113] | 0.2545 (+0.0110) | +0.0053 | 3.07 |
+  | `words40_local_global_0.75_max` | 0.4742 (0.5690) | +0.0188 [+0.0036, +0.0349] | +0.0062 [-0.0053, +0.0179] | 0.2600 (+0.0164) | +0.0079 | 3.07 |
+  | `words40_peak_3_0.05` | 0.4779 (0.5824) | +0.0224 [+0.0025, +0.0448] | +0.0100 [-0.0055, +0.0256] | 0.2523 (+0.0088) | +0.0068 | 3.07 |
+
+- `omct-analyze-voyage-4-nano-words40` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words40_max` | 0.4900 (0.5381) | -0.0104 [-0.0268, +0.0059] | -0.0103 [-0.0248, +0.0035] | 0.2570 (+0.0218) | +0.0101 | 3.07 |
+  | `words40_top_k_mean_2` | 0.4891 (0.5362) | -0.0088 [-0.0242, +0.0069] | -0.0113 [-0.0254, +0.0022] | 0.2473 (+0.0122) | +0.0058 | 3.07 |
+  | `words40_decayed_top_k_3_0.5_0.25` | 0.4865 (0.5362) | -0.0122 [-0.0269, +0.0021] | -0.0139 [-0.0272, -0.0015] | 0.2435 (+0.0084) | +0.0017 | 3.07 |
+  | `words40_local_global_0.5_max` | 0.4954 (0.5491) | -0.0048 [-0.0131, +0.0034] | -0.0050 [-0.0123, +0.0019] | 0.2460 (+0.0109) | +0.0050 | 3.07 |
+  | `words40_local_global_0.75_max` | 0.4927 (0.5436) | -0.0078 [-0.0201, +0.0046] | -0.0077 [-0.0184, +0.0028] | 0.2515 (+0.0164) | +0.0075 | 3.07 |
+  | `words40_peak_3_0.05` | 0.4967 (0.5415) | -0.0056 [-0.0224, +0.0110] | -0.0037 [-0.0179, +0.0105] | 0.2443 (+0.0092) | +0.0076 | 3.07 |
+
+- `omct-analyze-embeddinggemma-words40` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words40_max` | 0.5474 (0.6603) | +0.0272 [+0.0065, +0.0475] | +0.0103 [-0.0050, +0.0263] | 0.2322 (+0.0127) | +0.0112 | 3.07 |
+  | `words40_top_k_mean_2` | 0.5483 (0.6641) | +0.0314 [+0.0123, +0.0510] | +0.0112 [-0.0039, +0.0265] | 0.2218 (+0.0023) | +0.0054 | 3.07 |
+  | `words40_decayed_top_k_3_0.5_0.25` | 0.5461 (0.6644) | +0.0304 [+0.0118, +0.0486] | +0.0089 [-0.0054, +0.0233] | 0.2177 (-0.0018) | +0.0017 | 3.07 |
+  | `words40_local_global_0.5_max` | 0.5442 (0.6521) | +0.0184 [+0.0078, +0.0298] | +0.0071 [-0.0010, +0.0154] | 0.2258 (+0.0064) | +0.0056 | 3.07 |
+  | `words40_local_global_0.75_max` | 0.5464 (0.6575) | +0.0241 [+0.0081, +0.0402] | +0.0093 [-0.0026, +0.0216] | 0.2290 (+0.0095) | +0.0084 | 3.07 |
+  | `words40_peak_3_0.05` | 0.5490 (0.6635) | +0.0278 [+0.0077, +0.0484] | +0.0119 [-0.0032, +0.0279] | 0.2194 (+0.0000) | +0.0082 | 3.07 |
+
+**sent2** — overlapping sentence windows, 2 sentences, step 1 (exp02)
+
+- `omct-analyze-arctic2-sent2` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.4797 (0.5570) | +0.0185 [+0.0042, +0.0335] | +0.0117 [+0.0004, +0.0235] | 0.2519 (+0.0083) | +0.0109 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.4758 (0.5665) | +0.0181 [+0.0056, +0.0313] | +0.0078 [-0.0021, +0.0175] | 0.2448 (+0.0012) | +0.0045 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.4741 (0.5658) | +0.0119 [+0.0000, +0.0238] | +0.0061 [-0.0032, +0.0148] | 0.2430 (-0.0005) | -0.0008 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.4738 (0.5531) | +0.0104 [+0.0033, +0.0180] | +0.0059 [+0.0001, +0.0118] | 0.2477 (+0.0042) | +0.0054 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.4772 (0.5556) | +0.0151 [+0.0043, +0.0267] | +0.0092 [+0.0005, +0.0183] | 0.2498 (+0.0062) | +0.0082 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.4829 (0.5700) | +0.0171 [+0.0023, +0.0330] | +0.0149 [+0.0031, +0.0276] | 0.2446 (+0.0011) | +0.0061 | 1.82 |
+
+- `omct-analyze-voyage-4-nano-sent2` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.5059 (0.5516) | +0.0092 [-0.0029, +0.0208] | +0.0055 [-0.0051, +0.0156] | 0.2421 (+0.0070) | +0.0093 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.4976 (0.5464) | +0.0014 [-0.0086, +0.0112] | -0.0028 [-0.0113, +0.0056] | 0.2355 (+0.0004) | +0.0023 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.4936 (0.5433) | -0.0068 [-0.0165, +0.0024] | -0.0068 [-0.0151, +0.0009] | 0.2341 (-0.0010) | -0.0026 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.5030 (0.5547) | +0.0047 [-0.0012, +0.0105] | +0.0026 [-0.0027, +0.0077] | 0.2386 (+0.0035) | +0.0047 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.5044 (0.5505) | +0.0069 [-0.0019, +0.0157] | +0.0040 [-0.0040, +0.0116] | 0.2404 (+0.0053) | +0.0070 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.5090 (0.5571) | +0.0069 [-0.0067, +0.0198] | +0.0086 [-0.0024, +0.0195] | 0.2353 (+0.0002) | +0.0045 | 1.82 |
+
+- `omct-analyze-embeddinggemma-sent2` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.5425 (0.6492) | +0.0205 [+0.0060, +0.0356] | +0.0053 [-0.0060, +0.0168] | 0.2235 (+0.0040) | +0.0098 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.5392 (0.6586) | +0.0209 [+0.0077, +0.0348] | +0.0020 [-0.0084, +0.0131] | 0.2165 (-0.0029) | +0.0032 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.5384 (0.6529) | +0.0158 [+0.0038, +0.0282] | +0.0013 [-0.0085, +0.0106] | 0.2151 (-0.0044) | -0.0020 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.5408 (0.6444) | +0.0130 [+0.0052, +0.0208] | +0.0037 [-0.0021, +0.0097] | 0.2214 (+0.0020) | +0.0049 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.5420 (0.6466) | +0.0175 [+0.0062, +0.0291] | +0.0048 [-0.0038, +0.0136] | 0.2224 (+0.0030) | +0.0074 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.5484 (0.6566) | +0.0189 [+0.0042, +0.0340] | +0.0113 [-0.0007, +0.0231] | 0.2162 (-0.0032) | +0.0054 | 1.82 |
+
+**semantic** — semantic boundaries: cut where the adjacent atoms' cosine drops (exp18(ii))
+
+- `omct-analyze-arctic2-semantic` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `semantic_max` | 0.4853 (0.5600) | +0.0195 [+0.0005, +0.0380] | +0.0174 [+0.0022, +0.0323] | 0.2617 (+0.0181) | +0.0056 | 1.94 |
+  | `semantic_top_k_mean_2` | 0.5042 (0.5747) | -0.0029 [-0.0259, +0.0202] | +0.0363 [+0.0166, +0.0548] | 0.2244 (-0.0192) | -0.0138 | 1.94 |
+  | `semantic_decayed_top_k_3_0.5_0.25` | 0.4902 (0.5346) | -0.0246 [-0.0480, -0.0018] | +0.0222 [+0.0014, +0.0409] | 0.2229 (-0.0207) | -0.0220 | 1.94 |
+  | `semantic_local_global_0.5_max` | 0.4767 (0.5545) | +0.0115 [+0.0020, +0.0210] | +0.0087 [+0.0012, +0.0164] | 0.2526 (+0.0091) | +0.0028 | 1.94 |
+  | `semantic_local_global_0.75_max` | 0.4812 (0.5583) | +0.0160 [+0.0020, +0.0298] | +0.0132 [+0.0020, +0.0246] | 0.2571 (+0.0136) | +0.0042 | 1.94 |
+  | `semantic_peak_3_0.05` | 0.4789 (0.5541) | +0.0048 [-0.0106, +0.0196] | +0.0110 [-0.0030, +0.0251] | 0.2475 (+0.0039) | +0.0030 | 1.94 |
+
+- `omct-analyze-voyage-4-nano-semantic` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `semantic_max` | 0.5108 (0.5543) | +0.0062 [+0.0023, +0.0112] | +0.0104 [+0.0054, +0.0157] | 0.2348 (-0.0003) | +0.0006 | 1.65 |
+  | `semantic_top_k_mean_2` | 0.5082 (0.5355) | -0.0569 [-0.0787, -0.0346] | +0.0078 [-0.0138, +0.0290] | 0.2209 (-0.0142) | -0.0336 | 1.65 |
+  | `semantic_decayed_top_k_3_0.5_0.25` | 0.5011 (0.5283) | -0.0676 [-0.0900, -0.0441] | +0.0007 [-0.0220, +0.0225] | 0.2190 (-0.0161) | -0.0397 | 1.65 |
+  | `semantic_local_global_0.5_max` | 0.5056 (0.5564) | +0.0029 [+0.0012, +0.0048] | +0.0052 [+0.0026, +0.0079] | 0.2350 (-0.0001) | +0.0003 | 1.65 |
+  | `semantic_local_global_0.75_max` | 0.5080 (0.5536) | +0.0043 [+0.0016, +0.0078] | +0.0076 [+0.0038, +0.0116] | 0.2349 (-0.0002) | +0.0004 | 1.65 |
+  | `semantic_peak_3_0.05` | 0.5138 (0.5624) | +0.0048 [-0.0048, +0.0147] | +0.0134 [+0.0027, +0.0245] | 0.2338 (-0.0013) | +0.0028 | 1.65 |
+
+- `omct-analyze-embeddinggemma-semantic` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `semantic_max` | 0.5549 (0.6610) | +0.0264 [+0.0073, +0.0443] | +0.0177 [+0.0025, +0.0336] | 0.2223 (+0.0028) | +0.0063 | 2.01 |
+  | `semantic_top_k_mean_2` | 0.6131 (0.6405) | -0.0003 [-0.0237, +0.0241] | +0.0760 [+0.0508, +0.1004] | 0.1951 (-0.0244) | -0.0272 | 2.01 |
+  | `semantic_decayed_top_k_3_0.5_0.25` | 0.5816 (0.6269) | -0.0253 [-0.0499, -0.0013] | +0.0445 [+0.0225, +0.0670] | 0.1950 (-0.0244) | -0.0180 | 2.01 |
+  | `semantic_local_global_0.5_max` | 0.5467 (0.6523) | +0.0157 [+0.0059, +0.0253] | +0.0096 [+0.0018, +0.0177] | 0.2208 (+0.0014) | +0.0032 | 2.01 |
+  | `semantic_local_global_0.75_max` | 0.5500 (0.6571) | +0.0205 [+0.0062, +0.0340] | +0.0129 [+0.0014, +0.0248] | 0.2215 (+0.0020) | +0.0048 | 2.01 |
+  | `semantic_peak_3_0.05` | 0.5527 (0.6633) | +0.0238 [+0.0039, +0.0432] | +0.0155 [-0.0010, +0.0322] | 0.2097 (-0.0097) | +0.0084 | 2.01 |
+
+**symwords25** — both sides word-chunked, N=25, stride 12 (exp10)
+
+- `omct-analyze-arctic2-symwords25` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.4357 (0.5112) | -0.0169 [-0.0402, +0.0084] | -0.0323 [-0.0522, -0.0134] | 0.2940 (+0.0504) | +0.0013 | 5.27 |
+  | `words25_top_k_mean_2` | 0.4293 (0.4979) | -0.0236 [-0.0469, +0.0017] | -0.0386 [-0.0582, -0.0200] | 0.2808 (+0.0372) | -0.0036 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.4303 (0.4996) | -0.0211 [-0.0440, +0.0031] | -0.0376 [-0.0562, -0.0195] | 0.2748 (+0.0312) | -0.0062 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.4507 (0.5251) | -0.0077 [-0.0197, +0.0046] | -0.0172 [-0.0270, -0.0081] | 0.2688 (+0.0252) | +0.0006 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.4426 (0.5218) | -0.0123 [-0.0304, +0.0067] | -0.0254 [-0.0400, -0.0109] | 0.2814 (+0.0378) | +0.0010 | 5.27 |
+  | `words25_peak_3_0.05` | 0.4369 (0.5097) | -0.0185 [-0.0420, +0.0070] | -0.0311 [-0.0512, -0.0121] | 0.2774 (+0.0338) | -0.0004 | 5.27 |
+
+- `omct-analyze-voyage-4-nano-symwords25` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.4489 (0.5145) | -0.0512 [-0.0731, -0.0295] | -0.0515 [-0.0703, -0.0332] | 0.2973 (+0.0622) | -0.0034 | 5.27 |
+  | `words25_top_k_mean_2` | 0.4450 (0.5031) | -0.0542 [-0.0756, -0.0329] | -0.0554 [-0.0741, -0.0372] | 0.2846 (+0.0495) | -0.0064 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.4417 (0.4988) | -0.0563 [-0.0773, -0.0369] | -0.0587 [-0.0767, -0.0410] | 0.2791 (+0.0440) | -0.0097 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.4719 (0.5365) | -0.0287 [-0.0404, -0.0170] | -0.0285 [-0.0388, -0.0188] | 0.2662 (+0.0311) | -0.0017 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.4595 (0.5256) | -0.0415 [-0.0586, -0.0247] | -0.0409 [-0.0558, -0.0267] | 0.2817 (+0.0466) | -0.0026 | 5.27 |
+  | `words25_peak_3_0.05` | 0.4498 (0.5126) | -0.0498 [-0.0717, -0.0281] | -0.0505 [-0.0695, -0.0322] | 0.2814 (+0.0463) | -0.0049 | 5.27 |
+
+- `omct-analyze-embeddinggemma-symwords25` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `words25_max` | 0.4960 (0.6119) | -0.0234 [-0.0482, +0.0024] | -0.0411 [-0.0611, -0.0207] | 0.2550 (+0.0355) | +0.0064 | 5.27 |
+  | `words25_top_k_mean_2` | 0.4897 (0.6064) | -0.0265 [-0.0504, -0.0016] | -0.0474 [-0.0670, -0.0270] | 0.2422 (+0.0227) | +0.0004 | 5.27 |
+  | `words25_decayed_top_k_3_0.5_0.25` | 0.4852 (0.5959) | -0.0289 [-0.0518, -0.0053] | -0.0520 [-0.0714, -0.0321] | 0.2364 (+0.0170) | -0.0036 | 5.27 |
+  | `words25_local_global_0.5_max` | 0.5179 (0.6320) | -0.0074 [-0.0206, +0.0063] | -0.0192 [-0.0293, -0.0086] | 0.2372 (+0.0178) | +0.0032 | 5.27 |
+  | `words25_local_global_0.75_max` | 0.5075 (0.6247) | -0.0134 [-0.0333, +0.0072] | -0.0297 [-0.0452, -0.0137] | 0.2461 (+0.0266) | +0.0048 | 5.27 |
+  | `words25_peak_3_0.05` | 0.4965 (0.6181) | -0.0280 [-0.0525, -0.0018] | -0.0406 [-0.0605, -0.0200] | 0.2385 (+0.0191) | +0.0056 | 5.27 |
+
+**symsent2** — both sides sentence-windowed, 2 sentences, step 1 (exp05)
+
+- `omct-analyze-arctic2-symsent2` — baseline (full text): pooled AUC 0.4680, macro AUC 0.5463, within-document 0.5020, cross-document 0.4441, control mean 0.2436
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.4690 (0.5434) | +0.0076 [-0.0074, +0.0231] | +0.0011 [-0.0112, +0.0135] | 0.2532 (+0.0096) | +0.0100 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.4645 (0.5510) | +0.0059 [-0.0075, +0.0198] | -0.0035 [-0.0141, +0.0069] | 0.2461 (+0.0025) | +0.0035 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.4620 (0.5499) | -0.0009 [-0.0134, +0.0119] | -0.0059 [-0.0158, +0.0037] | 0.2444 (+0.0008) | -0.0018 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.4687 (0.5464) | +0.0050 [-0.0025, +0.0129] | +0.0008 [-0.0054, +0.0072] | 0.2484 (+0.0048) | +0.0050 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.4693 (0.5453) | +0.0071 [-0.0041, +0.0190] | +0.0014 [-0.0079, +0.0109] | 0.2508 (+0.0072) | +0.0075 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.4733 (0.5579) | +0.0070 [-0.0087, +0.0232] | +0.0054 [-0.0070, +0.0187] | 0.2460 (+0.0024) | +0.0051 | 1.82 |
+
+- `omct-analyze-voyage-4-nano-symsent2` — baseline (full text): pooled AUC 0.5004, macro AUC 0.5588, within-document 0.5238, cross-document 0.4839, control mean 0.2351
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.4994 (0.5487) | +0.0015 [-0.0113, +0.0144] | -0.0010 [-0.0125, +0.0099] | 0.2418 (+0.0067) | +0.0091 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.4917 (0.5461) | -0.0055 [-0.0163, +0.0056] | -0.0087 [-0.0183, +0.0006] | 0.2352 (+0.0001) | +0.0022 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.4878 (0.5429) | -0.0135 [-0.0239, -0.0030] | -0.0126 [-0.0220, -0.0039] | 0.2338 (-0.0013) | -0.0027 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.4993 (0.5548) | +0.0001 [-0.0063, +0.0063] | -0.0011 [-0.0070, +0.0042] | 0.2384 (+0.0033) | +0.0046 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.4990 (0.5534) | +0.0005 [-0.0089, +0.0103] | -0.0014 [-0.0100, +0.0067] | 0.2401 (+0.0050) | +0.0069 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.5034 (0.5575) | -0.0000 [-0.0140, +0.0138] | +0.0030 [-0.0087, +0.0143] | 0.2350 (-0.0001) | +0.0046 | 1.82 |
+
+- `omct-analyze-embeddinggemma-symsent2` — baseline (full text): pooled AUC 0.5371, macro AUC 0.6376, within-document 0.5632, cross-document 0.5188, control mean 0.2194
+
+  | arm | pooled AUC (macro) | within-document ΔAUC (95% CI) | pooled ΔAUC (95% CI) | control mean (Δ) | floor-gap Δ | chunks/text |
+  |---|---|---|---|---|---|---|
+  | `sent2s1_max` | 0.5186 (0.6233) | -0.0037 [-0.0184, +0.0117] | -0.0186 [-0.0305, -0.0061] | 0.2258 (+0.0064) | +0.0083 | 1.82 |
+  | `sent2s1_top_k_mean_2` | 0.5149 (0.6275) | -0.0039 [-0.0180, +0.0102] | -0.0222 [-0.0334, -0.0107] | 0.2189 (-0.0005) | +0.0018 | 1.82 |
+  | `sent2s1_decayed_top_k_3_0.5_0.25` | 0.5131 (0.6218) | -0.0101 [-0.0229, +0.0032] | -0.0240 [-0.0344, -0.0135] | 0.2175 (-0.0020) | -0.0035 | 1.82 |
+  | `sent2s1_local_global_0.5_max` | 0.5294 (0.6339) | +0.0013 [-0.0064, +0.0092] | -0.0077 [-0.0138, -0.0013] | 0.2226 (+0.0032) | +0.0042 | 1.82 |
+  | `sent2s1_local_global_0.75_max` | 0.5242 (0.6286) | -0.0008 [-0.0122, +0.0111] | -0.0130 [-0.0222, -0.0034] | 0.2242 (+0.0048) | +0.0062 | 1.82 |
+  | `sent2s1_peak_3_0.05` | 0.5230 (0.6311) | -0.0078 [-0.0229, +0.0079] | -0.0141 [-0.0267, -0.0013] | 0.2186 (-0.0009) | +0.0038 | 1.82 |
+
+
+## Stage 2 — the verdict (CS-4, 2026-10-26)
+
+**The question.** The plan's Stage 2 exit: *which segmentation + aggregation
+wins where — or the honest "no chunking beats full text"?* The answer is
+neither of the two simple answers: **chunking the paragraph side helps on two
+of the three models, chunking the question side hurts on all three, and the
+pooled AUC on the reviewed set is the wrong headline.**
+
+**1. The one-sided ladder (paragraph chunked, question whole) improves the
+within-document ranking on 2 of the 3 models.** Counted over the 42 arms of
+each model (7 variants × 6 rules), the within-document ΔAUC's 95% interval
+excludes zero:
+
+| model | arms with a **positive** within-document interval | arms with a **negative** one | the best arm (within-document ΔAUC, 95% CI) |
+|---|---|---|---|
+| arctic2 | **24** | 1 | `words25_max` +0.0292 [+0.0069, +0.0514] |
+| embeddinggemma | **28** | 4 | `words15_peak_3_0.05` +0.0421 [+0.0164, +0.0682] |
+| voyage-4-nano | 3 | 12 | `sent2s1_max` +0.0092 [−0.0029, +0.0208] (not significant); the only significant ones are the semantic chunker's `max` (+0.0062 [+0.0023, +0.0112]) and its two local+global blends (+0.0029, +0.0043) |
+
+The effect size is **+0.01 to +0.04 within-document AUC** — the same order as
+the plan's expected ±0.03, but now measured *paired* and *per document*. It
+is **not** a property of the model alone: voyage-4-nano's ladder is flat to
+negative, so a segmentation recipe does not transfer across embedders without
+being re-measured.
+
+**2. The pooled AUC on the reviewed set is a misleading headline, and the
+decomposition shows why.** The largest pooled gain in the whole ladder is
+embeddinggemma's `semantic_top_k_mean_2`: **+0.0760 [+0.0508, +0.1004]**. Its
+within-document ΔAUC is **−0.0003 [−0.0237, +0.0241]** and its cross-document
+ΔAUC is **+0.1296**: the entire gain is the ranking *across* the three
+documents, i.e. the documents' score levels moved, not the topical ranking
+inside them. The same arm for arctic2: pooled +0.0363, within-document
+−0.0029. The `decayed_top_k` arm is worse still: embeddinggemma's pooled
++0.0445 comes with a within-document **−0.0253 [−0.0499, −0.0013]** (significantly
+*negative*), and voyage-4-nano's `semantic_decayed_top_k` has a within-document
+**−0.0676 [−0.0900, −0.0441]** against a pooled +0.0007. A headline built on
+the pooled AUC would have adopted the two arms that hurt the ranking inside a
+document.
+
+**3. The control side shows what the pooled number hides: the max-over-k
+inflation.** The chunked arms lift the control's score *level* — and the lift
+grows with the number of chunks per text (the plan's Stage 2.5 point):
+
+| variant | chunks per paragraph | the control's mean shift (arctic2 / voyage-4-nano / embeddinggemma) |
+|---|---|---|
+| `words15` | 9.42 | +0.0537 / +0.0629 / +0.0319 |
+| `words25` | 5.27 | +0.0393 / +0.0413 / +0.0203 |
+| `words40` | 3.07 | +0.0219 / +0.0218 / +0.0127 |
+| `sent2` | 1.82 | +0.0083 / +0.0070 / +0.0040 |
+| `semantic` | 1.65–2.01 | +0.0181 / −0.0003 / +0.0028 (the `max` arm) |
+
+The control's *rank* position barely moves (its rank p50 stays within ±0.01
+of the baseline's in every arm), so the inflation is a level effect, not a
+re-ranking of the ordinary pairs.
+
+**4. The floor gap — the track's falsification statistic — fires in the
+peak-like arms and fails in the diluted ones.** The floor gap (the verified
+positives' mean minus the control's mean) *widens* in the arms that keep the
+peak: `sent2s1_max` +0.0109 (arctic2) and +0.0098 (embeddinggemma),
+`words40_max` +0.0105 / +0.0112, `words25_max` +0.0062 / +0.0114,
+`words15_peak_3_0.05` +0.0015 / +0.0101. It *narrows* in the arms that
+dilute the evidence over many chunks (`top_k_mean`, `decayed_top_k`) and in
+the semantic variant's diluted arms (−0.0138 to −0.0397). So: the
+paragraph's internal structure lowers the ordinary pairs' floor relative to
+the true matches **only** when the aggregation keeps the peak instead of
+averaging it away.
+
+**5. The symmetric variants (both sides chunked) hurt — on all three
+models.** `symwords25` is the worst arm family in the ladder: the
+within-document ΔAUC is negative in every arm of every model
+(arctic2 −0.0077 to −0.0236, voyage-4-nano −0.0287 to −0.0563,
+embeddinggemma −0.0074 to −0.0289) and the pooled ΔAUC is significantly
+negative in all 18 arms. `symsent2` is flat (the questions are short, so the
+sentence windows give 2.6 chunks per question). The reading: the question
+side's furniture (the "Answer choices:" block is already removed by the
+`strip_block` transform) is not improved by chunking, and the max over a
+question's chunks is noise. **Chunk the paragraph, never the question.**
+
+**6. The swept semantic threshold does not transfer.** The fit side's choice
+is unstable — the chosen threshold differs per document *and* per rule (e.g.
+embeddinggemma's `max` arm chose 0.7 / 0.7 / 0.7, its `top_k_mean_2` chose
+0.2 / 0.2 / 0.2, arctic2's `top_k_mean_2` chose 0.4 / 0.5 / 0.5) — and the
+fit-side AUC does not predict the holdout's. The clearest case: arctic2's
+`top_k_mean_2` with the NU document held out chose 0.4 on the fit side (fit
+AUC 0.5886) and scored **0.4565** on the holdout, *below* the full-text
+baseline's NU AUC of 0.4773, while the grid's best holdout value was 0.5663
+at another threshold. With three documents, one rotation's fit side carries
+two documents' worth of pairs, and the "best threshold" is largely noise.
+**The semantic chunker is therefore not a reliable recipe**; where it helps
+(as in arctic2's and embeddinggemma's `max` arms, +0.0195 and +0.0264
+within-document with intervals excluding zero), it is the *peak* behaviour
+that helps, not the boundary detection.
+
+**The ranked statement (the plan's Stage-2 exit).** On the OMCT pairwise
+data, with three models, 21 runs and 126 chunked arms, paired throughout:
+
+1. **Chunk the paragraph, keep the question whole.** The paragraph-side
+   windows are the only ladder step that helps *without a fitted parameter*
+   (the semantic chunker's gain depends on a threshold that does not
+   transfer). The best arms are `words25_max` on arctic2 (+0.0292
+   [+0.0069, +0.0514]) and `words15_peak_3_0.05` on embeddinggemma (+0.0421
+   [+0.0164, +0.0682]); `sent2` and `words40` are close behind and cost
+   fewer chunks.
+2. **The aggregation decides how much of the window gain survives.** With the
+   window chunkers, the peak-like rules (`max`, `peak:3_0.05`) *and* the mean
+   of the two best (`top_k_mean:2`) all carry a within-document gain (+0.018
+   to +0.042 across arctic2's and embeddinggemma's window variants, with
+   intervals excluding zero; the one exception is arctic2's
+   `words15_top_k_mean_2`, +0.0098 [−0.0143, +0.0341]), while
+   `decayed_top_k` (exp07's decay *and* its spread penalty) is the weakest of
+   them: it is the only window rule that does not clear zero on arctic2's
+   15-word variant (+0.0042 [−0.0199, +0.0282]) and it is negative on
+   voyage-4-nano's window variants (−0.0350 to −0.0068). With the
+   **semantic** chunker the order flips: the peak-like rules are the only
+   ones that gain (+0.0195 / +0.0264) and the diluted ones lose (−0.0029
+   to −0.0676) — a semantic chunk is a *topic-coherent* unit, so averaging
+   two of them dilutes a match that sits in one of them.
+3. **The local+global blend (exp06) is the cheapest way to take the window's
+   gain.** It keeps a good part of the within-document gain while lifting the
+   control's level far less than the plain `max` arm (arctic2's `words25`:
+   control shift +0.0197 against `max`'s +0.0393, within-document +0.0148
+   against +0.0292; embeddinggemma's `words25`: +0.0019 against +0.0203,
+   +0.0263 against +0.0417).
+4. **The more chunks, the bigger the inflation, for the same gain.** N=15
+   (9.4 chunks per paragraph) and N=25 (5.3) are statistically
+   indistinguishable from each other (their intervals overlap heavily) while
+   N=15 inflates the control 1.4–1.6× as much as N=25 and 2.5–2.9× as much
+   as N=40 (3.1 chunks). N=40 is the cheapest and nearly as good.
+5. **The symmetric variants lose.** Chunking the question side is
+   significantly harmful on all three models (point 5 above).
+6. **The effect does not transfer across models.** Two of three models gain
+   ~+0.02–0.04 within-document AUC; voyage-4-nano gains nothing. A
+   segmentation recipe must be re-measured per embedder, and the winner
+   (N=25 vs N=15 vs N=40) is model-dependent too.
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule still
+  ships as the **margin half only** — no spot-check sheet.
+- **Nothing about the embedding space.** The "same-report direction"
+  mechanism stays a hypothesis; this run measures scores and rank positions,
+  not directions.
+- **Nothing about the plan's §0.1 ad-hoc chunking table** (0.4680 / 0.4708 /
+  0.4507 / 0.4354). It is not re-derived here and it is not comparable: it
+  measured word windows and a chunked question side with an *unpaired* AUC
+  and no control, and it pooled the documents' levels — the very effect this
+  run measures. The ad-hoc table stays indicative.
+- **Nothing about the length↔shift correlation** the plan's caveat asks for
+  (the paragraph lengths live in the raw pair file, which this track's log
+  rule does not read). The per-document shifts are reported instead.
+- **Nothing about the question-type features** (Stage 1.1b, moved to
+  Stage 3) or about a learned combiner (Stage 3): every arm here is a
+  fixed rule.
+
+**The next step.** The ladder's verdict is "chunk the paragraph, keep the
+peak, don't chunk the question" — a *method* choice, not a representation
+finding: the within-document gain is +0.02–0.04 AUC on a benchmark whose
+models sit within ~2.4 unpaired SE of chance, and the representation
+mechanism (plan §5's open question) is still unmeasured. Stage 3's feature
+pack can now use the ladder's structure as a *feature* (the best chunk match,
+the peak margin, the chunk count) rather than as a scoring rule, which is
+where the remaining headroom is: the windows change the score, not the
+embedding.
+
+## Correction — the Stage-1 atom-arm count (CS-4, 2026-10-26)
+
+An earlier entry in this log and three notes in `TEXT_PROCESSING_PLAN.md`
+say that in the Stage-1.1a run "the floor gap narrows in **8 of the 9** atom
+arms" (and "the **nine** atom arms"). The artifacts say **11 of the 12**: the
+Stage-1 runs have **four** aggregation rules (`max`, `top_k_mean:2`,
+`top_k_mean:3`, `mean`) on **three** models, so there are twelve atom arms,
+and the floor gap narrows in eleven of them (the exception is
+embeddinggemma's `atoms_max`, +0.0030, whose ΔAUC interval includes zero).
+
+*Verified from the artifacts* (`results/omct-analyze-*-atoms/analysis.json`,
+the `comparisons.<arm>.floor_gap.delta` field, re-read in the CS-4 runs' own
+guard check). The **conclusion does not change**: the Stage-1 falsification
+test did not fire, the four positive ΔAUCs are the same four, and none of
+the twelve has a 95% interval that excludes zero on the positive side. Only
+the count was wrong; the plan's notes are corrected in place (they are a
+working document, not an append-only log) and this entry records the
+correction.

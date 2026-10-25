@@ -284,6 +284,12 @@ ANALYZE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model")
 # discrimination number is quoted without the control side next to it, and
 # the comparison is paired.
 #
+# The Stage-2 ladder adds three columns: the per-document **macro AUC**
+# (the macro beside every pooled number), the **floor-gap delta** (the
+# track's falsification statistic: the verified positives' mean minus the
+# control's mean, against the baseline) and the **chunks per text** (the k of
+# the max-over-k inflation the control side measures).
+#
 # The Stage-0 shape (ANALYZE_OMCT_COLUMNS) stays as it is, so a run without
 # arms keeps its own section's columns; a run *with* arms uses this shape.
 ANALYZE_OMCT_ARMS_COLUMNS: tuple[str, ...] = (
@@ -299,9 +305,15 @@ ANALYZE_OMCT_ARMS_COLUMNS: tuple[str, ...] = (
     "aggregation",
     "transform",
     "pair_auc",
+    "macro_auc",
+    "within_auc",
+    "cross_auc",
+    "within_d_auc",
+    "within_d_auc_ci",
     "d_auc",
     "d_auc_ci",
     "deshift_auc",
+    "floor_gap_delta",
     "ctrl_mean",
     "ctrl_mean_delta",
     "ctrl_p50",
@@ -309,6 +321,7 @@ ANALYZE_OMCT_ARMS_COLUMNS: tuple[str, ...] = (
     "pos_rank_p50",
     "neg_rank_p50",
     "ctrl_rank_p50",
+    "chunks_per_text",
     "n_pairs",
     "n_control",
     "n_docs",
@@ -366,6 +379,24 @@ def _row_indexes_of_table(lines: list[str], heading_index: int) -> list[int]:
     return data_rows
 
 
+def _sync_section_header(lines: list[str], heading_index: int, columns: Sequence[str]) -> None:
+    """Rewrite a section's header when the command's column set changed.
+
+    The rows of a section are upserted by run key, so a re-run rewrites them
+    in the command's *current* shape; the header has to follow, or the table
+    would show rows with a different number of cells than the header.
+    """
+    cursor = heading_index + 1
+    while cursor < len(lines) and not lines[cursor].strip():
+        cursor += 1
+    if cursor >= len(lines) or not lines[cursor].lstrip().startswith("|"):
+        return
+    if _cells_of(lines[cursor]) != list(columns):
+        lines[cursor] = _render_row(columns)
+        if cursor + 1 < len(lines) and _cells_of(lines[cursor + 1])[:1] == ["---"]:
+            lines[cursor + 1] = _separator(len(columns))
+
+
 def append_table_rows(
     path: Path | str,
     *,
@@ -400,6 +431,8 @@ def append_table_rows(
     if heading_index is None:
         lines += ["", f"## {heading}", "", _render_row(columns), _separator(len(columns))]
         heading_index = len(lines) - 2
+    else:
+        _sync_section_header(lines, heading_index, columns)
     data_rows = _row_indexes_of_table(lines, heading_index)
 
     for row in rows:

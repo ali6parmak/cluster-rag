@@ -39,6 +39,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── notebooks/               # exploration only, no logic that others import
     ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
     ├── experiments_text_processing/  # the text-processing track's sweep files
+    ├── tools/                   # repo tools: verification scripts over the run artifacts
     ├── src/cluster_rag/
     │   ├── config.py
     │   ├── data.py              # Record model, loading, validation, splits

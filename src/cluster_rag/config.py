@@ -567,6 +567,9 @@ class AnalysisConfig(BaseModel):
       paragraph side of the **structural arms** (Stage 1.1a) — a name plus its
       parameters. The default (``full_text``) is the Stage-0 baseline: one
       chunk per text, so the embedding cache stays warm.
+    - ``question_chunker``: the chunker of the **question** side (Stage 2's
+      symmetric variants, exp05/exp10). ``None`` (the default) keeps the
+      question whole.
     - ``aggregations``: the aggregation rules the structural arms fold the
       chunk-level scores with (e.g. ``max``, ``top_k_mean:2``). Empty means
       "no structural arm" — the Stage-0 behaviour.
@@ -575,6 +578,14 @@ class AnalysisConfig(BaseModel):
       Stage 1.1a). The baseline transform is always computed as well.
     - ``bootstrap``: the paired-bootstrap settings of the arm-vs-baseline
       comparisons (resamples and seed; the seed defaults to the run's seed).
+    - ``semantic_thresholds``: the swept grid of the **semantic** chunker's
+      threshold (Stage 2.3). Empty = a fixed threshold (the chunker's own
+      parameter); non-empty = the grid is swept and the threshold of every
+      document is chosen on the **fit side** (the other two documents), so no
+      document ever sees its own fitted value.
+    - ``semantic_selection``: the fit-side criterion of that choice —
+      ``auc`` (the reviewed set's AUC on the fit side) or ``floor_gap`` (the
+      verified positives' mean minus the control's mean, on the fit side).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -585,8 +596,11 @@ class AnalysisConfig(BaseModel):
     question_transform: Literal["keep", "strip_block"] = "strip_block"
     question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
     chunker: ChunkerSpec = Field(default_factory=ChunkerSpec)
+    question_chunker: ChunkerSpec | None = None
     aggregations: tuple[str, ...] = ()
     question_transforms: tuple[str, ...] = ()
+    semantic_thresholds: tuple[float, ...] = ()
+    semantic_selection: Literal["auc", "floor_gap"] = "auc"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
 
     @field_validator("aggregations")
@@ -597,6 +611,19 @@ class AnalysisConfig(BaseModel):
 
         for spec in value:
             parse_aggregation(spec)
+        return value
+
+    @field_validator("semantic_thresholds")
+    @classmethod
+    def _thresholds_are_usable(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        """Reject a threshold outside the cosine range or a repeated grid point."""
+        for threshold in value:
+            if not -1.0 <= threshold <= 1.0:
+                raise ValueError(
+                    f"analysis.semantic_thresholds must be in [-1, 1], got {threshold}"
+                )
+        if len(set(value)) != len(value):
+            raise ValueError(f"analysis.semantic_thresholds must not repeat a value: {value}")
         return value
 
     @field_validator("question_transforms")
@@ -628,6 +655,16 @@ class AnalysisConfig(BaseModel):
                 "analysis.aggregations need a chunker that splits a text; "
                 "'full_text' has one chunk per text (its arms would be the "
                 "baseline arm)"
+            )
+        if self.question_chunker is not None and not self.aggregations:
+            raise ValueError(
+                "analysis.question_chunker needs aggregation rules: a chunked "
+                "question side is only scored through the arms' rules"
+            )
+        if self.semantic_thresholds and self.chunker.name != "semantic":
+            raise ValueError(
+                "analysis.semantic_thresholds only applies to the 'semantic' "
+                f"chunker, but the chunker is {self.chunker.name!r}"
             )
         return self
 
