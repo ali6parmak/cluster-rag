@@ -329,6 +329,54 @@ ANALYZE_OMCT_ARMS_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_ARMS_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "arm")
 
+# The text-processing track's Stage-3 table: one row per (run, model) of a run
+# that carries the **learned** pair scorer (the feature pack + the combiner
+# behind the document-level holdout).
+#
+# The headline is the **within-document** AUC (the pooled number sits beside
+# it, never alone: 58.7% of the reviewed set's positive-negative pairs are
+# cross-document, so the pooled number moves with the documents' score
+# levels). Beside it: the paired difference against the full-text baseline
+# arm (the bootstrap CI of the difference), the label-permutation floor (the
+# shuffled labels must land at chance), the control-side counterpart (the
+# control's rank position, which is scale-free — the learned arm's level is
+# a probability and the baseline's a cosine) and the standardized floor gap.
+#
+# The Stage-0 shape (ANALYZE_OMCT_COLUMNS) and the Stage-2 arms shape
+# (ANALYZE_OMCT_ARMS_COLUMNS) stay as they are: a run without a learned
+# scorer keeps its own section's shape.
+ANALYZE_OMCT_STAGE3_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "backend",
+    "model",
+    "model_version",
+    "dim",
+    "ctx",
+    "features",
+    "combiner",
+    "within_auc",
+    "within_d_auc",
+    "within_d_auc_ci",
+    "pooled_auc",
+    "pooled_d_auc",
+    "pooled_d_auc_ci",
+    "macro_auc",
+    "perm_auc",
+    "ctrl_role_auc",
+    "ctrl_mean",
+    "ctrl_rank_p50",
+    "ctrl_rank_p50_delta",
+    "pos_rank_p50",
+    "neg_rank_p50",
+    "floor_gap",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_STAGE3_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model")
+
 
 def _cell(value: Any) -> str:
     """Render one table cell; ``None``/missing/empty becomes "n/a"."""

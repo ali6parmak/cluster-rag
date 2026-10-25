@@ -1269,3 +1269,206 @@ the twelve has a 95% interval that excludes zero on the positive side. Only
 the count was wrong; the plan's notes are corrected in place (they are a
 working document, not an append-only log) and this entry records the
 correction.
+
+## Stage 3.1 — the feature pack + the logistic combiner (CS-5, 2026-10-26)
+
+**The question.** The plan's Stage 3.1: can a **table of numbers per pair**
+(a feature row) plus a **learned scorer** (a logistic regression) rank the
+OMCT pairs better than the hand-written scoring rules — and does the win
+survive the plan's own floors (a document-level holdout, a label-permutation
+chance floor)?
+
+**The runs.** Three runs, one per Stage-0 model
+(`experiments_text_processing/stage3_features_sweep.py`, the sweep
+`stage3_features`):
+
+- `omct-analyze-embeddinggemma-stage3`
+- `omct-analyze-voyage-4-nano-stage3`
+- `omct-analyze-arctic2-stage3`
+
+Each run holds **all three rotations** (the out-of-fold protocol needs them
+in one run: every judged pair and every control cell must be scored by the
+model that never saw its document). The guard holds: all 30 runs (the 27
+earlier ones and these three) reproduce the Stage-0 baseline arm field by
+field (`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**The protocol (as the reviewer settled it).**
+
+- **The training data.** The fit side's **judged pairs** (the 524 verified
+  positives and the 996 reviewer-verified hard negatives of the two fit
+  documents) plus the fit side's **unjudged control cells** (subset B) as
+  extra presumed negatives, down-weighted (**weight 0.3** — the control's
+  true positive rate is unmeasured, so it must not dominate the fit). The
+  control is never presented as ground truth.
+- **The feature pack (v0).** 15 features: the full-text cosine; the best
+  chunk cosine, the mean of the 2 and of the K=3 best chunk cosines, their
+  spread and the peak margin; the soft lexical overlap in both directions
+  and the char-3-gram cosine; the answer options' soft coverage; and the
+  question-type one-hots (options present, a "no data" option, a yes/no
+  question, a frequency question, the option count). **No length feature** —
+  length is a document proxy on this data, so the lengths are *recorded* in
+  the artifact and never fed to the model.
+- **The combiner.** scikit-learn's logistic regression (C = 1, 1,000
+  iterations, the features standardized — the scaler is fitted inside
+  `fit()`, so the holdout never contributes to it).
+- **The floors.** A **chance floor** (the fit side's whole label vector is
+  permuted: the class counts and the weights stay, only the assignment
+  changes — the model then has no label information at all) and a
+  **control-role floor** (only the judged pairs' labels are permuted; the
+  control cells keep their presumed-negative role). Five permutations per
+  rotation, seed 42.
+
+**1. The headline: the within-document AUC, on every held-out document.**
+The within-document AUC is the headline (the plan's Stage-2 verdict: the
+pooled AUC on this benchmark is structurally sensitive to the documents'
+score levels). Paired against the full-text cosine (the Stage-0 baseline
+arm) on the same held-out document, with the paired bootstrap's 95%
+interval (2,000 resamples, seed 42):
+
+| model | arm | baseline | Δ within-document AUC | 95% CI | pooled AUC (baseline) | Δ pooled | 95% CI | macro AUC (baseline) |
+|---|---|---|---|---|---|---|---|---|
+| embeddinggemma | **0.6655** | 0.5632 | **+0.1023** | [+0.0740, +0.1313] | 0.5831 (0.5371) | +0.0460 | [+0.0213, +0.0708] | 0.7156 (0.6376) |
+| voyage-4-nano | **0.6723** | 0.5238 | **+0.1485** | [+0.1176, +0.1820] | 0.5805 (0.5004) | +0.0801 | [+0.0515, +0.1098] | 0.7052 (0.5588) |
+| arctic2 | **0.6472** | 0.5020 | **+0.1452** | [+0.1143, +0.1797] | 0.5419 (0.4680) | +0.0740 | [+0.0443, +0.1033] | 0.6705 (0.5463) |
+
+All three intervals exclude zero on the positive side. The per-document
+numbers (the arm vs the baseline on the same held-out document) are in
+every rotation of every model — 9 of 9 the arm is ahead:
+
+| model | NU held out (arm / baseline) | AI held out | CIDH held out |
+|---|---|---|---|
+| embeddinggemma | 0.6189 / 0.5231 | 0.7867 / 0.7633 | 0.7411 / 0.6263 |
+| voyage-4-nano | 0.6386 / 0.5027 | 0.7500 / 0.6165 | 0.7271 / 0.5573 |
+| arctic2 | 0.6140 / 0.4773 | 0.6956 / 0.6209 | 0.7018 / 0.5408 |
+
+**2. The chance floor lands at chance — a second floor does not, and it is
+above the plain cosine.** Both floors are measured on the same statistic as
+the headline (the within-document AUC: the pair-count-weighted mean of the
+documents' own AUCs, so the comparison is like for like).
+
+| model | chance floor | control-role floor | the full-text cosine | the arm |
+|---|---|---|---|---|
+| embeddinggemma | 0.5054 | 0.5788 | 0.5632 | **0.6655** |
+| voyage-4-nano | 0.4936 | 0.5765 | 0.5238 | **0.6723** |
+| arctic2 | 0.4968 | 0.5569 | 0.5020 | **0.6472** |
+
+The **chance floor** (the fit side's whole label vector permuted: the class
+counts and the weights stay, only the assignment changes — the model then has
+no label information at all) sits at chance, as the plan requires. The
+**control-role floor** (the same fit, but only the judged pairs' labels are
+permuted and the control cells keep their presumed-negative role) sits at
+**0.557–0.579** — *above* the plain cosine on all three models.
+
+That is the finding of this run. A model that knows **nothing** about the
+labels, but is told "the ordinary unjudged same-document cells are
+negative", ranks the reviewed set better than the full-text cosine does. The
+mechanism is the reviewed set's own construction: the reviewed pairs are the
+ones a model put on top (so they are less "control-like" than the unjudged
+cells), and the true matches sit at the top of that ranking while the hard
+negatives sit lower.
+
+So the arm's win decomposes into two parts (embeddinggemma; the other two
+models are the same picture):
+
+- **0.5632 → 0.5788 (+0.0156)**: what the control's presumed-negative role
+  adds over the plain cosine — the training design's own, label-free signal.
+- **0.5788 → 0.6655 (+0.0867)**: what the **label relation** adds on top —
+  85% of the arm's total gain over the baseline (+0.1023).
+
+The arm is ahead of the control-role floor in 9 of 9 rotations as well
+(e.g. embeddinggemma: 0.6189 vs 0.5742 on NU, 0.7867 vs 0.5962 on AI,
+0.7411 vs 0.5861 on CIDH).
+
+**3. The control side: no inflation.** The arm's scores are probabilities and
+the baseline's are cosines, so their *levels* are not comparable; the
+**rank** numbers are. The control's rank percentile (0 = the top of the
+paragraph's own candidate list) barely moves, and its top-fifth share moves
+by less than half a point:
+
+| model | control rank p50 (arm / baseline) | Δ | top-fifth share (arm / baseline) | Δ |
+|---|---|---|---|---|
+| embeddinggemma | 0.5023 / 0.5042 | −0.0019 | 0.1953 / 0.1930 | +0.0023 |
+| voyage-4-nano | 0.4938 / 0.5023 | −0.0085 | 0.1963 / 0.2003 | −0.0040 |
+| arctic2 | 0.4977 / 0.5021 | −0.0044 | 0.1965 / 0.1923 | +0.0043 |
+
+The falsification statistic fires in the arm's favour: the standardized floor
+gap (the verified positives' mean minus the control's mean, divided by the
+control's spread) is **1.798 vs 1.730** (embeddinggemma), **1.913 vs 1.439**
+(voyage-4-nano) and **1.668 vs 1.452** (arctic2). The de-shifted AUC (each
+document's control level removed) keeps the gain: 0.6094 vs 0.5731, 0.5993
+vs 0.5252, 0.5699 vs 0.5056.
+
+**4. The caveat: the arm is better at ranking, worse at retrieving.** The
+hit@k block is the one place the learned arm *loses*. The positives' hit@1
+(the true match is the paragraph's own best candidate) falls from 0.1355 to
+**0.0897** (embeddinggemma), from 0.1050 to **0.0821** (voyage-4-nano) and
+from 0.1050 to **0.0859** (arctic2); the hit@10 follows on two of the three
+models. The hard negatives' hit@1 falls too (0.0201 → 0.0090, 0.0211 →
+0.0110, 0.0171 → 0.0100), so the arm is not simply "safer". Reading: a
+bag-of-words overlap ranks a *pair* better than an embedding cosine does,
+but it is a worse *retriever* — the cosine's best guess for a paragraph is
+still a better candidate than the learned scorer's.
+
+The fitted weights say what the arm leans on (the features are
+standardized, so the coefficients are comparable). The largest ones are the
+**pair-level** features — the full-text cosine, the lexical coverage in both
+directions and the chunk cosines — and the question-type one-hots are
+smaller (0.32–0.41 where they appear at all): the gain is **not** a
+question-level prior. The weights are also unstable across the three fit
+sides (the same feature flips sign between rotations), which is what a
+logistic regression fitted on 675–1,421 judged pairs plus a few thousand
+down-weighted presumed negatives does.
+
+**5. The length capability landed (the plan's open question).** The command
+now records the paragraph lengths (per document and per paragraph) and the
+**length ↔ score correlation** of the control cells. For the baseline arm
+(embeddinggemma) the Pearson correlation between a control cell's paragraph
+length and its score is **+0.309 in NU, +0.259 in AI and +0.061 in CIDH**
+(the Spearman values: +0.368 / +0.268 / +0.058) — the ordinary cells' score
+already travels with the paragraph's length in two of the three documents,
+and hardly at all in the third. So the plan's caveat ("the inflation is not
+uniform") is now measurable: a chunked method's max-over-k inflation would
+ride on that gradient, and it is document-dependent. The *shift* (the change
+between a method and the baseline, cell by cell) still needs a second arm
+and is a later change set.
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule
+  still ships as the **margin half only** — no spot-check sheet.
+- **Nothing about the pooled AUC as a headline.** The out-of-fold matrix
+  mixes **three models** (one per rotation), so its pooled number compares
+  scores from different models; the within-document statistic and the
+  per-document macro are the meaningful ones. The pooled numbers are
+  reported beside them, never alone.
+- **Nothing about which feature carries the win.** The pack's 15 features
+  are fitted together; a group ablation (the lexical block, the chunk
+  block, the question-type block) is not in this change set.
+
+**The next step (CS-6).** The gradient-boosted combiner (the plan's 3.2),
+the chunk-profile features (3.3), the random-vector floor, the feature-group
+ablations and the calibration curves. The open question the Stage-3.1 run
+adds: **how much of the +0.10 to +0.15 within-document gain survives if the
+question-type features are removed** — the hit@k loss suggests the learned
+ranking is not a retrieval ranking, and the ablation says whether that is
+the type features or the lexical ones. A second question the run adds, for
+the durable deliverable: the control-role floor shows that "the ordinary
+unjudged cells are negative" is **by itself a better pair ranker than the
+embedding cosine** on this benchmark — so a safe-negative rule built on such
+a model is partly self-fulfilling, and the rule's margin has to be measured
+against that floor, not against the cosine.
+
+## Correction — the plan's paragraph-length figures (CS-5, 2026-10-26)
+
+`TEXT_PROCESSING_PLAN.md` section 5 states the length ↔ shift question with
+the figures "AI median 364 chars vs NU 863". The Stage-3.1 artifact's
+`analysis.paragraph_lengths` (the same 225 paragraphs, measured by the
+command) says **AI median 331 chars, NU median 375, CIDH median 514** (the
+means: AI 342, NU 478, CIDH 524). The *claim* the figures supported — the
+paragraph length tracks the document, so a length feature can memorize the
+document instead of the topic — still holds (NU's paragraphs are longer than
+AI's), but the stated margin was wrong. The plan's note is corrected in
+place; this entry records the correction.

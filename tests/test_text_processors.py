@@ -12,7 +12,9 @@ Contracts under test:
 
 from __future__ import annotations
 
+import ast
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -484,3 +486,31 @@ def test_package_imports_no_model_clients() -> None:
         source = module_path.read_text(encoding="utf-8")
         for line in source.splitlines():
             assert not pattern.match(line), f"{module_path.name} imports a model client: {line}"
+
+
+def test_the_only_heavy_import_is_the_combiner_scikit_learn() -> None:
+    """The package's one exception (TEXT_PROCESSING_PLAN.md section 2).
+
+    The combiner may import scikit-learn (a core dependency of the main
+    pipeline: no model download, no network, no I/O). Nothing else in the
+    package may import a third-party library beyond numpy.
+    """
+    allowed = {"numpy", "sklearn"}
+    stdlib = set(sys.stdlib_module_names)
+    for module_path in sorted(PACKAGE_ROOT.rglob("*.py")):
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                imported.add(node.module.split(".")[0])
+        for module in sorted(imported):
+            if module in stdlib or module in allowed or module.startswith("cluster_rag"):
+                continue
+            raise AssertionError(
+                f"{module_path.name} imports {module}: the track's package may only "
+                "import numpy, scikit-learn (the combiner) and cluster_rag"
+            )
+    # the exception is used where it is documented
+    assert "sklearn" in (PACKAGE_ROOT / "combining" / "logistic.py").read_text(encoding="utf-8")

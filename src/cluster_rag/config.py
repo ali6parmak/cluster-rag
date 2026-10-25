@@ -542,6 +542,97 @@ class AnalysisEmbedderConfig(BaseModel):
     embed: EmbedderConfig
 
 
+class CombinerSpec(BaseModel):
+    """A combiner of the text-processing track's registry: a name and its parameters.
+
+    ``name`` is the registry key (``logistic``); ``params`` are the
+    combiner's own parameters (e.g. ``{"C": 1.0}``). The parameters are
+    validated against the combiner's config class at config time, so a typo
+    fails before a run starts.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = "logistic"
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_known(cls, value: str) -> str:
+        """Reject unknown combiner names at config time (fail before any run)."""
+        from cluster_rag.text_processors.combining import combiner_config_class
+
+        combiner_config_class(value)  # raises for an unknown name
+        return value
+
+    @model_validator(mode="after")
+    def _params_match_the_combiner(self) -> CombinerSpec:
+        """Check the parameters against the combiner's config class."""
+        from cluster_rag.text_processors.combining import combiner_config_class
+
+        config_class = combiner_config_class(self.name)
+        if config_class is None:
+            if self.params:
+                raise ValueError(
+                    f"The combiner {self.name!r} takes no parameters: {sorted(self.params)}"
+                )
+            return self
+        known = {field.name for field in config_class.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        unknown = sorted(set(self.params) - known)
+        if unknown:
+            raise ValueError(
+                f"Unknown parameter(s) {unknown} for the combiner {self.name!r}; "
+                f"expected a subset of {sorted(known)}"
+            )
+        return self
+
+
+class FeaturePackConfig(BaseModel):
+    """The options of the track's feature pack (Stage 3.1, feature pack v0).
+
+    - ``paragraph_chunker``: the chunker whose chunks the chunk-level
+      features are measured on. The default is the Stage-2 verdict's
+      paragraph-side window (25 words, stride 12); the question side stays
+      whole.
+    - ``question_chunker``: the chunker of the question side. ``None`` (the
+      default) keeps the question whole — the Stage-2 verdict ("chunk the
+      paragraph, never the question").
+    - ``top_k``: the K of the top-K chunk similarities (the spread and the
+      peak margin are measured over the same K best chunk cosines).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    paragraph_chunker: ChunkerSpec = Field(
+        default_factory=lambda: ChunkerSpec(
+            name="word_windows", params={"n_words": 25, "stride": 12}
+        )
+    )
+    question_chunker: ChunkerSpec | None = None
+    top_k: int = Field(default=3, ge=1)
+
+
+class Stage3Config(BaseModel):
+    """The settings of the track's learned pair scorer (Stage 3.1).
+
+    - ``features``: the feature pack's options (the v0 pack).
+    - ``combiner``: the learned scorer (the logistic-regression baseline).
+    - ``control_weight``: the training weight of the fit side's **unjudged
+      control cells**. They are presumed negatives (their true positive rate
+      is unmeasured), so they are down-weighted: they must not dominate the
+      fit next to the reviewer-verified labels.
+    - ``permutation_resamples``: the number of label permutations of the
+      floor check (the shuffled labels must land the AUC at chance).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    features: FeaturePackConfig = Field(default_factory=FeaturePackConfig)
+    combiner: CombinerSpec = Field(default_factory=CombinerSpec)
+    control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    permutation_resamples: int = Field(default=5, ge=0)
+
+
 class AnalysisConfig(BaseModel):
     """The text-processing track's Stage-0 analysis settings.
 
@@ -586,6 +677,10 @@ class AnalysisConfig(BaseModel):
     - ``semantic_selection``: the fit-side criterion of that choice —
       ``auc`` (the reviewed set's AUC on the fit side) or ``floor_gap`` (the
       verified positives' mean minus the control's mean, on the fit side).
+    - ``stage3``: the settings of the **learned** pair scorer (Stage 3.1):
+      the feature pack's options, the combiner and the control's training
+      weight. ``None`` (the default) means the run scores the Stage-0/1/2
+      arms only, so the earlier runs are unaffected.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -602,6 +697,7 @@ class AnalysisConfig(BaseModel):
     semantic_thresholds: tuple[float, ...] = ()
     semantic_selection: Literal["auc", "floor_gap"] = "auc"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
+    stage3: Stage3Config | None = None
 
     @field_validator("aggregations")
     @classmethod

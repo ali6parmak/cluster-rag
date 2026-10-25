@@ -170,21 +170,29 @@ Relaxed for this track only:
     (question stem vs. answer-option decomposition, exp12),
     `full_text.py` (the no-op baseline chunker that keeps everything
     comparable).
-  - `features/pair_features.py` — feature pack v0 (pure numpy: global/best
-    chunk cosines, top-K chunk sims + spread, soft lexical overlap + char
-    n-grams, question-part coverage, question-type one-hots, length;
-    label-free by construction; **no document-identity feature** — see
-    Stage 3's leakage rules).
+  - `features/pair_features.py` — feature pack v0 (the global and best chunk
+    cosines, the top-K chunk sims + spread, the soft lexical overlap + char
+    n-grams, the question-part coverage, the question-type one-hots; **no
+    length feature** — length is a document proxy, see Stage 3's leakage
+    rules; label-free by construction; **no document-identity feature**). It
+    is a pure core (numpy + the standard library), but the chunk-level
+    features need the chunk embeddings, so it takes the **`Embedder` port**
+    (as the semantic chunker does) and embeds the pair's own chunks — the
+    package still imports no model client, the CLI wires the cached backend
+    in.
   - `combining/` — `logistic.py` (sklearn LR baseline), `histgb.py`
     (sklearn `HistGradientBoostingClassifier`), both behind the Combiner
     port. **`lightgbm` is deferred**: scikit-learn is already a core dep and
     covers this problem; a new dependency needs evidence that it beats
-    HistGB (AGENTS §3 explain-first).
+    HistGB (AGENTS §3 explain-first). The combiner is the one place the
+    track's package imports a library beyond numpy and the standard library
+    (scikit-learn: no model download, no network, no I/O); the guard test
+    still forbids torch / sentence-transformers / httpx / sqlite3.
   - Model clients (embedder, Ollama LLM) stay at the edges — wired in CLI
     code, never inside pure cores. `text_processors` may import
     `cluster_rag.embed.base` (a `typing.Protocol` + numpy only) and nothing
     heavier; no `torch`/`sentence-transformers`/`httpx` import anywhere in
-    this package.
+    this package (scikit-learn in `combining/` excepted, as above).
 - **Embedding cache: no change to the cache key layout.** The chunking version
   goes into the *existing* version slot —
   `CachedEmbedder(backend, root, preprocessing_version="<chunking-version>")`
@@ -407,6 +415,14 @@ sweeps are the orders.
   feature-pack material (a combiner's inputs), not a scoring method, and
   Stage 3's leakage rules (no corpus-level question statistics) are where
   they belong.
+  *(done 2026-10-26, CS-5: the question-type features are part of the v0
+  feature pack — the options present, a "no data" option, a yes/no question,
+  a frequency question and the option count — together with the question's
+  decomposition into its topical **stem** and its typed **options**: the
+  stem carries the lexical-overlap features, the options carry the coverage
+  and the type one-hots. The pack sees the question's own text only, so no
+  question-level *statistic* enters the features; the combiner's weight on a
+  type feature is a fit-side statistic and is recorded in the artifact.)*
 - [x] **1.2 Report on both negative subsets** (verified hard negatives and the
   unjudged-proxy control), pooled **and** per-document (the pooled number is
   dominated by the NU document: 845/1520 pairs, 25% positive; the AI document
@@ -491,11 +507,28 @@ sweeps are the orders.
 
 ### Stage 3 — Learned pair scorer (the "get crazy" slot)
 
-- [ ] **3.1 Feature pack v0 + LR baseline**, [ ] **3.2 gradient-boosted
+- [x] **3.1 Feature pack v0 + LR baseline**, [ ] **3.2 gradient-boosted
   combiner** (sklearn `HistGradientBoostingClassifier`; `lightgbm` only if it
   beats HistGB and the dependency is approved), [ ] **3.3 chunk-profile
   features** (best chunk matches, spread/peak features — exp17/15/16 lineage)
   folded in.
+  *(3.1 done 2026-10-26, CS-5: the v0 feature pack (15 features — the
+  global and best chunk cosines, the top-K chunk similarities and their
+  spread, the soft lexical overlap and the char n-grams, the question-part
+  coverage and the question-type one-hots; **no length feature**), the
+  sklearn logistic-regression combiner behind the ``Combiner`` port, and the
+  **document-level holdout** harness (three rotations, one out-of-fold score
+  matrix, the label-permutation floors). Three runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3`. **Verdict:**
+  the learned arm beats the full-text cosine on the within-document AUC on
+  every model and every held-out document (+0.1023 / +0.1485 / +0.1452, all
+  95% intervals excluding zero); the chance floor lands at chance, but a
+  **control-role floor** (no label information, the control cells still
+  treated as negatives) reaches 0.557–0.579 — *above* the plain cosine —
+  so ~85% of the arm's gain is label-driven and the rest is the training
+  design's own signal. Caveat: the arm's **hit@1 is worse** than the
+  cosine's (the learned pair ranker is not a better retriever). The numbers
+  are in the track log's Stage-3.1 section.)*
 - **Discipline.**
   - *Split*: document-level holdout — fit on two of the three source
     documents, evaluate on the held-out third (all three rotations when
@@ -648,14 +681,39 @@ sweeps are the orders.
   6/6 an artefact of the unpaired comparison? It changes what Stage 2 and
   Stage 3 assume about the question side, so it must not be settled by one
   more model.
-- **The length↔shift correlation the Stage-0 caveat asks for is still
-  unmeasured (CS-3, 2026-10-25).** The per-document control shifts are
-  reported (the inflation is not uniform, and it does not follow the
-  paragraph length: NU has the longest paragraphs and the smallest shift),
-  but the paragraph lengths live in the raw pair file, which this track's
-  log rule does not read. Measuring the correlation needs the lengths in the
-  artifact (a new command capability) or a derivation rule the reviewer
-  approves.
+- **The length↔shift correlation the Stage-0 caveat asks for is now
+  measurable (CS-5, 2026-10-26).** The command records the paragraph lengths
+  (per document and per paragraph) and the **length ↔ score correlation** of
+  the control cells, so the caveat's question can be answered: for the
+  baseline arm the Pearson correlation between a control cell's paragraph
+  length and its score is +0.309 (NU), +0.259 (AI) and +0.061 (CIDH) on
+  embeddinggemma — the ordinary cells' score already travels with the
+  length in two documents and hardly at all in the third, so the inflation
+  is document-dependent. The *shift* (a method's per-cell change against the
+  baseline) still needs a second arm and is a later change set. Note: the
+  figures this question was written with ("AI median 364 chars vs NU 863")
+  were wrong — the artifact says AI 331 / NU 375 / CIDH 514 (see the track
+  log's correction entry).
+- **The training design's own signal is stronger than the cosine
+  (CS-5, 2026-10-26).** A model that knows **nothing** about the labels but
+  is told "the ordinary unjudged same-document cells are negative" reaches a
+  within-document AUC of 0.557–0.579 on the reviewed set — *above* the
+  full-text cosine's 0.502–0.563. The reviewed set is rank-selected, so
+  "control-like" is itself a predictor of the label. **Open:** what does
+  this mean for the durable deliverable? A "which unjudged pairs are safe
+  negatives" rule built on such a model is partly self-fulfilling (the
+  model learns the construction of the reviewed set, not the topic), so the
+  rule's margin has to be measured against the **control-role floor**, not
+  against the cosine. The margin half of the rule is unchanged; the
+  measurement around it is not.
+- **The learned pair ranker is not a better retriever (CS-5, 2026-10-26).**
+  The Stage-3.1 arm beats the cosine on the within-document AUC but loses on
+  the hit@k (the positives' hit@1 0.090 vs 0.136 on embeddinggemma). A
+  bag-of-words overlap ranks a *pair* better than an embedding cosine does,
+  but it is a worse first guess for a paragraph. **Open:** is the loss the
+  question-type features (a question-level prior that reorders a
+  paragraph's candidates without looking at the paragraph) or the lexical
+  ones? The feature-group ablation is the first job of CS-6.
 
 ## 6. Milestones
 
@@ -765,6 +823,27 @@ set):
   largest *pooled* gain in the ladder is a cross-document level effect, not a
   ranking gain. The Stage-2 checkboxes and 1.2 are ticked; the Stage-1
   atom-arm count is corrected in the plan and in an appended log entry.)*
+- [x] **CS-5 — Stage 3.1: the feature pack + the holdout harness + the LR
+  baseline.** The v0 feature pack (`text_processors/features/pair_features.py`,
+  15 features, the ``Embedder`` **port** for the chunk-level ones — the same
+  precedent the semantic chunker set), the sklearn logistic combiner
+  (`text_processors/combining/logistic.py`, behind the ``Combiner`` port,
+  which gained an optional ``sample_weight``), the document-level holdout
+  harness in the driver (three rotations, one out-of-fold score matrix, the
+  label-permutation floors), the `analysis.stage3` config section, the
+  Stage-3 table shape, the paragraph-length capability, and the track's
+  Stage-3 sweep (`experiments_text_processing/stage3_features_sweep.py`).
+  *(done 2026-10-26: three runs `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3`;
+  the guard holds (all 30 runs reproduce the Stage-0 baseline arm field by
+  field). **Verdict:** the learned arm beats the full-text cosine on the
+  within-document AUC on every model and every held-out document
+  (+0.1023 / +0.1485 / +0.1452, the 95% intervals excluding zero); the
+  chance floor lands at chance (0.494–0.505) as the plan requires, but the
+  **control-role floor** (no label information, the control cells still
+  treated as negatives) reaches 0.557–0.579 — above the plain cosine — so
+  ~85% of the gain is label-driven and the rest is the training design's own
+  signal. Caveat: the arm's hit@1 is *worse* than the cosine's. The numbers
+  are in the track log's Stage-3.1 section; 367 unit tests green.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 

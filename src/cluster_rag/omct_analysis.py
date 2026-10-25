@@ -44,7 +44,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,7 +68,7 @@ from cluster_rag.text_processors.aggregation import (
     aggregate_chunk_similarities,
     describe_aggregation,
 )
-from cluster_rag.text_processors.base import Chunker
+from cluster_rag.text_processors.base import Chunker, Combiner, FeatureExtractor, TextPair
 from cluster_rag.text_processors.control import (
     SAMPLING_RULE_DESCRIPTIONS,
     SAMPLING_RULE_PROPORTIONAL,
@@ -162,6 +162,123 @@ def _quantile(values: np.ndarray, probability: float) -> float | None:
     return float(np.quantile(values, probability))
 
 
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """The average ranks of the values (1-based; ties share the mean rank)."""
+    if values.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    order = np.argsort(values, kind="stable")
+    ordered = values[order]
+    ranks = np.empty(values.size, dtype=np.float64)
+    start = 0
+    for index in range(1, values.size + 1):
+        if index == values.size or ordered[index] != ordered[start]:
+            ranks[order[start:index]] = (start + index - 1) / 2.0 + 1.0
+            start = index
+    return ranks
+
+
+def _pearson(left: np.ndarray, right: np.ndarray) -> float | None:
+    """The Pearson correlation of two vectors (``None`` when undefined)."""
+    if left.size < 2 or left.size != right.size:
+        return None
+    left_centered = left - left.mean()
+    right_centered = right - right.mean()
+    denominator = float(np.sqrt(float((left_centered**2).sum()) * float((right_centered**2).sum())))
+    if denominator <= 0.0:
+        return None
+    return float(float((left_centered * right_centered).sum()) / denominator)
+
+
+def length_correlation(
+    lengths: np.ndarray, scores: np.ndarray, groups: np.ndarray | None = None
+) -> dict[str, Any]:
+    """The correlation between a paragraph's length and a cell's score.
+
+    The Stage-0 caveat asks for it: a chunked method takes a maximum over
+    more candidates, so its scale shift is partly a **length** effect and
+    partly a **document** effect — and a single global shift is only an
+    approximation. The correlation says how much of a cell's score travels
+    with its paragraph's length (the Pearson on the raw values and the
+    Spearman on the ranks), overall and per group (the document).
+
+    Args:
+        lengths: The paragraph lengths (in characters) of the cells.
+        scores: The cells' scores.
+        groups: The cells' groups (the document); ``None`` skips the
+            per-group breakdown.
+
+    Returns:
+        A JSON-serializable dict with the correlations and the counts.
+    """
+    report: dict[str, Any] = {
+        "overall": {
+            "n": int(lengths.size),
+            "pearson": _pearson(lengths, scores),
+            "spearman": _pearson(_average_ranks(lengths), _average_ranks(scores)),
+        },
+        "note": (
+            "the correlation between a cell's paragraph length and the cell's "
+            "score: it is how much of a method's scale shift travels with the "
+            "paragraph's length (the Stage-0 caveat's length effect)"
+        ),
+    }
+    if groups is not None:
+        by_group: dict[str, Any] = {}
+        for group in sorted(set(groups.tolist())):
+            mask = groups == group
+            by_group[group] = {
+                "n": int(mask.sum()),
+                "pearson": _pearson(lengths[mask], scores[mask]),
+                "spearman": _pearson(_average_ranks(lengths[mask]), _average_ranks(scores[mask])),
+            }
+        report["by_group"] = by_group
+    return report
+
+
+def paragraph_length_report(view: DatasetView) -> dict[str, Any]:
+    """The paragraph lengths: the per-document summary and the per-paragraph records.
+
+    The lengths are the raw material of the plan's long-standing "length ↔
+    control shift" question. They are **recorded**, never fed to the model:
+    length is a document proxy on this data (NU's paragraphs are long, AI's
+    are short), so a length feature could memorize the document instead of
+    the topic.
+    """
+    by_document: dict[str, Any] = {}
+    for grid in view.grids:
+        lengths = np.asarray(
+            [view.paragraph_char_lengths[row] for row in grid.paragraph_rows], dtype=np.float64
+        )
+        words = np.asarray(
+            [view.paragraph_word_counts[row] for row in grid.paragraph_rows], dtype=np.float64
+        )
+        by_document[grid.document] = {
+            "n_paragraphs": int(lengths.size),
+            "mean_chars": float(lengths.mean()) if lengths.size else None,
+            "median_chars": float(np.median(lengths)) if lengths.size else None,
+            "p90_chars": float(np.quantile(lengths, 0.9)) if lengths.size else None,
+            "mean_words": float(words.mean()) if words.size else None,
+            "median_words": float(np.median(words)) if words.size else None,
+        }
+    records = [
+        {
+            "paragraph_number": view.paragraph_numbers[row],
+            "document": sorted(view.paragraph_documents[row])[0],
+            "n_chars": view.paragraph_char_lengths[row],
+            "n_words": view.paragraph_word_counts[row],
+        }
+        for row in range(len(view.paragraphs))
+    ]
+    return {
+        "by_document": by_document,
+        "per_paragraph": records,
+        "note": (
+            "the paragraph lengths, recorded for the length-vs-shift question; "
+            "they are never a feature (length is a document proxy on this data)"
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class DatasetView:
     """The model-independent view of the pairwise dataset.
@@ -170,6 +287,12 @@ class DatasetView:
     of the score matrix), the per-document grids, the drawn control sample
     and the per-document strata. The model-independent part of the artifact
     is built from this object.
+
+    The paragraph **lengths** are part of the view: the Stage-0 caveat asks
+    for the correlation between a paragraph's length and a method's per-cell
+    score shift, and the lengths live in the raw pair file — so the command
+    records them (the lengths are *recorded*, never fed to the model: length
+    is a document proxy on this data).
     """
 
     pairs: tuple[PairRecord, ...]
@@ -181,6 +304,8 @@ class DatasetView:
     question_numbers: tuple[int, ...]
     paragraph_documents: tuple[frozenset[str], ...]
     question_documents: tuple[frozenset[str], ...]
+    paragraph_char_lengths: tuple[int, ...]
+    paragraph_word_counts: tuple[int, ...]
     grids: tuple[DocumentGrid, ...]
     control: ControlSample
     strata: tuple[dict[str, Any], ...]
@@ -229,6 +354,8 @@ def build_dataset_view(
     questions = tuple(dict.fromkeys(record.question_text for record in pairs))
     paragraph_row = {text: index for index, text in enumerate(paragraphs)}
     question_col = {text: index for index, text in enumerate(questions)}
+    paragraph_char_lengths = tuple(len(text) for text in paragraphs)
+    paragraph_word_counts = tuple(len(text.split()) for text in paragraphs)
 
     paragraph_numbers: list[str] = [""] * len(paragraphs)
     question_numbers: list[int] = [0] * len(questions)
@@ -376,6 +503,8 @@ def build_dataset_view(
         question_numbers=tuple(question_numbers),
         paragraph_documents=tuple(frozenset(docs) for docs in paragraph_documents),
         question_documents=tuple(frozenset(docs) for docs in question_documents),
+        paragraph_char_lengths=paragraph_char_lengths,
+        paragraph_word_counts=paragraph_word_counts,
         grids=tuple(grids),
         control=control,
         strata=tuple(strata),
@@ -800,6 +929,14 @@ def score_arm(
             },
         },
         "hit_at_k": hit_at_k,
+        "length_correlation": length_correlation(
+            np.asarray(
+                [view.paragraph_char_lengths[row] for _, row, _ in view.control.cells],
+                dtype=np.float64,
+            ),
+            measured.control_scores,
+            measured.control_documents,
+        ),
         "top1_candidate_provenance": top1,
         "judged_pairs": judged_pairs,
         "control_cells": control_cells,
@@ -1076,6 +1213,39 @@ def _safe_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
         return None
 
 
+def _mean_of(values: Sequence[float | None]) -> float | None:
+    """The mean of the usable values (None when there is none)."""
+    present = [value for value in values if value is not None]
+    return float(np.mean(present)) if present else None
+
+
+def _difference(left: float | None, right: float | None) -> float | None:
+    """The difference of two optional numbers (None when either is missing)."""
+    if left is None or right is None:
+        return None
+    return float(left - right)
+
+
+def _weighted_mean(
+    values: Sequence[tuple[str, float | None]], weights: Mapping[str, int]
+) -> float | None:
+    """The weighted mean of per-group values (None when no group has a value).
+
+    The weight of a group is its number of positive-negative pairs, so the
+    result is the same statistic as the within-group AUC (which averages the
+    groups' AUCs with that weight).
+    """
+    weighted = 0.0
+    total = 0
+    for group, value in values:
+        if value is None:
+            continue
+        weight = weights.get(group, 0)
+        weighted += value * weight
+        total += weight
+    return float(weighted / total) if total else None
+
+
 def _auc_decomposition(
     labels: np.ndarray, scores: np.ndarray, documents: np.ndarray
 ) -> dict[str, Any]:
@@ -1152,6 +1322,11 @@ def _chunker_slug(chunker: Chunker) -> str:
     """The chunker's short handle (its arm-name prefix)."""
     slug = getattr(chunker, "slug", None)
     return slug if isinstance(slug, str) and slug else _chunker_name(chunker)
+
+
+def _chunker_name(chunker: Chunker) -> str:
+    """The chunker's config-facing name (its registry key)."""
+    return getattr(chunker, "name", chunker.version)
 
 
 def _variant_question_side(
@@ -1475,6 +1650,18 @@ def _swept_variant_arms(
     return arms, similarities_by_arm, selection
 
 
+@dataclass
+class BaselineArm:
+    """The baseline arm's internals (its full-text cosine matrix).
+
+    The Stage-3 arm compares itself with the full-text cosine, so the driver
+    hands the matrix out of :func:`score_model_arms` through this holder
+    instead of encoding the texts twice.
+    """
+
+    similarities: np.ndarray | None = None
+
+
 def score_model_arms(
     view: DatasetView,
     *,
@@ -1492,6 +1679,7 @@ def score_model_arms(
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 42,
     hit_ks: Sequence[int] = HIT_KS,
+    baseline: BaselineArm | None = None,
 ) -> dict[str, Any]:
     """Score the baseline arm and every structural / question arm of one model.
 
@@ -1523,6 +1711,8 @@ def score_model_arms(
             statistics.
         bootstrap_seed: The seed of the bootstrap.
         hit_ks: The hit@k grid of the rank report.
+        baseline: An optional holder that receives the baseline arm's
+            full-text cosine matrix (the Stage-3 arm's reference).
 
     Returns:
         The model's artifact block: the baseline arm's fields at the top
@@ -1556,6 +1746,8 @@ def score_model_arms(
 
     baseline_question_side = question_sides[question_transform]
     baseline_similarities = side_similarities(paragraph_side, baseline_question_side, None)
+    if baseline is not None:
+        baseline.similarities = baseline_similarities
     baseline_block = score_arm(
         view,
         arm_name=BASELINE_ARM,
@@ -1661,9 +1853,765 @@ def _cell_id(code: str, paragraph_number: str, question_number: int) -> str:
     return f"{code}-{paragraph_number}-Q{question_number}"
 
 
-def _chunker_name(chunker: Chunker) -> str:
-    """The chunker's config-facing name (its registry key)."""
-    return getattr(chunker, "name", chunker.version)
+# ---------------------------------------------------------------------------
+# Stage 3: the learned pair scorer (the document-level holdout)
+# ---------------------------------------------------------------------------
+
+# The name of the Stage-3 arm (the learned scorer beside the full-text
+# baseline arm).
+STAGE3_ARM = "stage3"
+
+
+@dataclass(frozen=True)
+class Stage3Grid:
+    """The same-document grid the learned scorer scores.
+
+    The Stage-3 arm is a **per-pair** model, so it scores the whole grid: the
+    rank of a pair inside its paragraph's candidate list needs every
+    candidate's score, and the candidate list is the paragraph's document's
+    questions — the same scope the Stage-2 arms use. The cells are ordered
+    (document, row, column), so the artifact's numbers are reproducible.
+    """
+
+    rows: np.ndarray
+    columns: np.ndarray
+    documents: np.ndarray
+    pairs: tuple[TextPair, ...]
+    index: dict[tuple[int, int], int]
+
+    @property
+    def n_cells(self) -> int:
+        """The number of grid cells."""
+        return int(self.rows.size)
+
+
+def build_stage3_grid(view: DatasetView) -> Stage3Grid:
+    """The grid's cells (documents in the strata's order, rows and columns ascending)."""
+    rows: list[int] = []
+    columns: list[int] = []
+    documents: list[str] = []
+    pairs: list[TextPair] = []
+    index: dict[tuple[int, int], int] = {}
+    for grid in view.grids:
+        for row in grid.paragraph_rows:
+            for column in grid.question_cols:
+                index[(row, column)] = len(pairs)
+                rows.append(row)
+                columns.append(column)
+                documents.append(grid.document)
+                pairs.append(
+                    TextPair(
+                        paragraph_text=view.paragraphs[row],
+                        question_text=view.questions[column],
+                    )
+                )
+    return Stage3Grid(
+        rows=np.asarray(rows, dtype=np.int64),
+        columns=np.asarray(columns, dtype=np.int64),
+        documents=np.asarray(documents),
+        pairs=tuple(pairs),
+        index=index,
+    )
+
+
+def _stage3_control_block(
+    control_scores: np.ndarray,
+    control_percentiles: np.ndarray,
+    control_documents: np.ndarray,
+) -> dict[str, Any]:
+    """The control-side counterpart of one arm (its level and its rank position)."""
+    by_document: dict[str, Any] = {}
+    for document in sorted(set(control_documents.tolist())):
+        mask = control_documents == document
+        scores = control_scores[mask]
+        percentiles = control_percentiles[mask]
+        by_document[document] = {
+            "n": int(mask.sum()),
+            "mean": float(scores.mean()) if scores.size else None,
+            "p50": _quantile(scores, 0.5),
+            "rank_p50": _quantile(percentiles, 0.5),
+            "top_fifth_share": _top_quintile_share(percentiles),
+        }
+    return {
+        "n": int(control_scores.size),
+        "mean": float(control_scores.mean()) if control_scores.size else None,
+        "p50": _quantile(control_scores, 0.5),
+        "rank_p50": _quantile(control_percentiles, 0.5),
+        "top_fifth_share": _top_quintile_share(control_percentiles),
+        "by_document": by_document,
+    }
+
+
+def _deshifted_auc(
+    view: DatasetView,
+    labels: np.ndarray,
+    pair_scores: np.ndarray,
+    pair_documents: np.ndarray,
+    control_scores: np.ndarray,
+    control_documents: np.ndarray,
+) -> dict[str, Any]:
+    """The AUC after each document's control level is removed.
+
+    The de-shift is computed **inside one arm's own scale**: the control's
+    per-document mean minus the control's pooled mean is subtracted from that
+    document's reviewed-set scores. A uniform additive shift cannot change an
+    AUC, so this removes the *document-level* part of the score level and
+    leaves the ranking inside a document (the track's transferable statistic).
+    """
+    pooled = float(control_scores.mean()) if control_scores.size else 0.0
+    shifts: dict[str, float] = {}
+    deshifted = np.empty_like(pair_scores, dtype=np.float64)
+    for stratum in view.strata:
+        document = stratum["document"]
+        control_mask = control_documents == document
+        shift = float(control_scores[control_mask].mean()) - pooled if control_mask.any() else 0.0
+        shifts[document] = shift
+        pair_mask = pair_documents == document
+        deshifted[pair_mask] = pair_scores[pair_mask] - shift
+    return {
+        "overall": _safe_auc(labels, deshifted),
+        "macro": _macro(
+            {
+                stratum["document"]: _safe_auc(
+                    labels[pair_documents == stratum["document"]],
+                    deshifted[pair_documents == stratum["document"]],
+                )
+                for stratum in view.strata
+            }
+        ),
+        "by_document": {
+            stratum["document"]: _safe_auc(
+                labels[pair_documents == stratum["document"]],
+                deshifted[pair_documents == stratum["document"]],
+            )
+            for stratum in view.strata
+        },
+        "per_document_shift": shifts,
+    }
+
+
+def _floor_gap_block(
+    positive_scores: np.ndarray, control_scores: np.ndarray
+) -> dict[str, float | None]:
+    """The floor gap (the positives' mean minus the control's mean) and its standardized form."""
+    gap = _floor_gap(positive_scores, control_scores)
+    spread = float(control_scores.std()) if control_scores.size else 0.0
+    return {
+        "gap": gap,
+        "standardized": (gap / spread if gap is not None and spread > 0 else None),
+    }
+
+
+def compare_stage3_arm(
+    view: DatasetView,
+    *,
+    arm_name: str,
+    reference_similarities: np.ndarray,
+    arm_similarities: np.ndarray,
+    resamples: int,
+    seed: int,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """Compare the learned arm with the full-text baseline arm (the same blocks).
+
+    The blocks are the Stage-2 ones (the pair AUC pooled / per document /
+    macro, the within/cross decomposition, the control-side counterpart, the
+    de-shifted AUC, the floor gap and the hit@k), with one difference forced
+    by the arms' scales: the learned arm's scores are **probabilities** and
+    the baseline's are **cosines**, so the level numbers (the control's mean,
+    the floor gap) are reported in each arm's own units and are *not*
+    comparable. The scale-free numbers (the AUCs, the rank positions, the
+    standardized floor gap) are comparable, and they carry the verdict.
+    """
+    reference = measure_arm(view, reference_similarities)
+    arm = measure_arm(view, arm_similarities)
+    labels = arm.labels
+
+    paired = paired_auc_bootstrap(
+        labels.tolist(),
+        reference.pair_scores.tolist(),
+        arm.pair_scores.tolist(),
+        n_resamples=resamples,
+        seed=seed,
+    )
+    reference_decomposition = _auc_decomposition(labels, reference.pair_scores, reference.documents)
+    arm_decomposition = _auc_decomposition(labels, arm.pair_scores, arm.documents)
+    within_reference = reference_decomposition.get("within_group_auc")
+    within_arm = arm_decomposition.get("within_group_auc")
+    cross_reference = reference_decomposition.get("cross_group_auc")
+    cross_arm = arm_decomposition.get("cross_group_auc")
+    within_paired = paired_within_group_auc_bootstrap(
+        labels.tolist(),
+        reference.pair_scores.tolist(),
+        arm.pair_scores.tolist(),
+        arm.documents.tolist(),
+        n_resamples=resamples,
+        seed=seed,
+    )
+
+    reference_auc_by_document = {
+        stratum["document"]: _safe_auc(
+            labels[reference.documents == stratum["document"]],
+            reference.pair_scores[reference.documents == stratum["document"]],
+        )
+        for stratum in view.strata
+    }
+    arm_auc_by_document = {
+        stratum["document"]: _safe_auc(
+            labels[arm.documents == stratum["document"]],
+            arm.pair_scores[arm.documents == stratum["document"]],
+        )
+        for stratum in view.strata
+    }
+
+    control_reference = _stage3_control_block(
+        reference.control_scores, reference.control_percentiles, reference.control_documents
+    )
+    control_arm = _stage3_control_block(
+        arm.control_scores, arm.control_percentiles, arm.control_documents
+    )
+    floor_reference = _floor_gap_block(reference.pair_scores[labels == 1], reference.control_scores)
+    floor_arm = _floor_gap_block(arm.pair_scores[labels == 1], arm.control_scores)
+
+    return {
+        "arm": arm_name,
+        "reference_arm": BASELINE_ARM,
+        "paired_auc": paired,
+        "pair_auc": {
+            "reference": paired["auc_reference"],
+            "arm": paired["auc_arm"],
+            "delta": paired["delta_auc"],
+            "macro": {
+                "reference": _macro(reference_auc_by_document),
+                "arm": _macro(arm_auc_by_document),
+                "delta": (
+                    _macro(arm_auc_by_document) - _macro(reference_auc_by_document)
+                    if _macro(arm_auc_by_document) is not None
+                    and _macro(reference_auc_by_document) is not None
+                    else None
+                ),
+            },
+            "by_document": {
+                document: {
+                    "reference": reference_auc_by_document[document],
+                    "arm": arm_auc_by_document[document],
+                    "delta": (
+                        arm_auc_by_document[document] - reference_auc_by_document[document]
+                        if arm_auc_by_document[document] is not None
+                        and reference_auc_by_document[document] is not None
+                        else None
+                    ),
+                }
+                for document in reference_auc_by_document
+            },
+        },
+        "auc_decomposition": {
+            "reference": reference_decomposition,
+            "arm": arm_decomposition,
+            "within_group_delta": (
+                within_arm - within_reference
+                if within_arm is not None and within_reference is not None
+                else None
+            ),
+            "cross_group_delta": (
+                cross_arm - cross_reference
+                if cross_arm is not None and cross_reference is not None
+                else None
+            ),
+            "within_group_paired": within_paired,
+            "note": (
+                "the pooled AUC mixes the ranking inside a document with the "
+                "ranking across documents; the within-document delta is the "
+                "part that transfers to a corpus without document structure"
+            ),
+        },
+        "control_side": {
+            "reference": control_reference,
+            "arm": control_arm,
+            "rank_p50_delta": (
+                control_arm["rank_p50"] - control_reference["rank_p50"]
+                if control_arm["rank_p50"] is not None and control_reference["rank_p50"] is not None
+                else None
+            ),
+            "top_fifth_share_delta": (
+                control_arm["top_fifth_share"] - control_reference["top_fifth_share"]
+                if control_arm["top_fifth_share"] is not None
+                and control_reference["top_fifth_share"] is not None
+                else None
+            ),
+            "note": (
+                "the control-side counterpart of the discrimination numbers. The "
+                "level numbers (mean, p50) are in each arm's own units — the "
+                "learned arm scores probabilities, the baseline scores cosines — "
+                "so they are not comparable; the rank numbers (rank_p50, the top-"
+                "fifth share) are scale-free and are."
+            ),
+        },
+        "negative_enrichment": {
+            "rank_percentile": {
+                "label1": _distribution(arm.pair_percentiles[labels == 1]),
+                "label0": _distribution(arm.pair_percentiles[labels == 0]),
+                "control": _distribution(arm.control_percentiles),
+            },
+            "top_fifth_share": {
+                "label1": _top_quintile_share(arm.pair_percentiles[labels == 1]),
+                "label0": _top_quintile_share(arm.pair_percentiles[labels == 0]),
+                "control": _top_quintile_share(arm.control_percentiles),
+            },
+        },
+        "floor_gap": {
+            "reference": floor_reference,
+            "arm": floor_arm,
+            "standardized_delta": (
+                floor_arm["standardized"] - floor_reference["standardized"]
+                if floor_arm["standardized"] is not None
+                and floor_reference["standardized"] is not None
+                else None
+            ),
+            "note": (
+                "the gap between the verified positives' mean score and the "
+                "control's mean score, in each arm's own units; the standardized "
+                "form divides it by the control's spread and is comparable"
+            ),
+        },
+        "deshifted_auc": {
+            "reference": _deshifted_auc(
+                view,
+                labels,
+                reference.pair_scores,
+                reference.documents,
+                reference.control_scores,
+                reference.control_documents,
+            ),
+            "arm": _deshifted_auc(
+                view,
+                labels,
+                arm.pair_scores,
+                arm.documents,
+                arm.control_scores,
+                arm.control_documents,
+            ),
+            "note": (
+                "each arm's own per-document control level removed (the control's "
+                "per-document mean minus its pooled mean): the ranking inside a "
+                "document survives the document's score level"
+            ),
+        },
+        "hit_at_k": {
+            "reference": {
+                "label1": _hit_at_k(reference.pair_ranks[labels == 1], hit_ks),
+                "label0": _hit_at_k(reference.pair_ranks[labels == 0], hit_ks),
+                "control": _hit_at_k(reference.control_ranks, hit_ks),
+            },
+            "arm": {
+                "label1": _hit_at_k(arm.pair_ranks[labels == 1], hit_ks),
+                "label0": _hit_at_k(arm.pair_ranks[labels == 0], hit_ks),
+                "control": _hit_at_k(arm.control_ranks, hit_ks),
+            },
+        },
+    }
+
+
+def _stage3_rotation(
+    view: DatasetView,
+    *,
+    holdout: str,
+    documents: Sequence[str],
+    features: np.ndarray,
+    grid: Stage3Grid,
+    pair_cells: np.ndarray,
+    control_cells: np.ndarray,
+    labels: np.ndarray,
+    pair_documents: np.ndarray,
+    control_documents: np.ndarray,
+    combiner_factory: Callable[[], Combiner],
+    control_weight: float,
+    permutation_resamples: int,
+    rng: np.random.Generator,
+    reference_similarities: np.ndarray,
+    feature_names: Sequence[str] = (),
+) -> dict[str, Any]:
+    """One document-level holdout: fit on two documents, predict the third.
+
+    The fit side's rows are its **judged** pairs (the verified positives and
+    the reviewer-verified hard negatives) plus its **unjudged control cells**
+    as presumed negatives, down-weighted by ``control_weight`` (the control's
+    true positive rate is unmeasured, so it must not dominate the fit). The
+    holdout's rows are never seen by the fit.
+    """
+    fit_pairs = pair_documents != holdout
+    holdout_pairs = pair_documents == holdout
+    fit_control = control_documents != holdout
+    holdout_control = control_documents == holdout
+    holdout_grid = grid.documents == holdout
+
+    fit_features = np.concatenate(
+        [features[pair_cells[fit_pairs]], features[control_cells[fit_control]]], axis=0
+    )
+    fit_labels = np.concatenate(
+        [labels[fit_pairs], np.zeros(int(fit_control.sum()), dtype=np.int64)], axis=0
+    )
+    fit_weights = np.concatenate(
+        [
+            np.ones(int(fit_pairs.sum()), dtype=np.float64),
+            np.full(int(fit_control.sum()), float(control_weight), dtype=np.float64),
+        ],
+        axis=0,
+    )
+
+    combiner = combiner_factory().fit(fit_features, fit_labels, fit_weights)
+    holdout_scores = combiner.score(features[holdout_grid])
+
+    # The label-permutation floors: the same fit with the labels destroyed.
+    #
+    # - **chance floor** (the plan's): the fit side's **whole label vector**
+    #   is permuted (the judged pairs' labels and the control cells' labels
+    #   together, so the class counts and the weights stay exactly as they
+    #   are and only the assignment changes). The model then has no label
+    #   information at all, so the AUC must land at chance (0.5).
+    # - **control-role floor** (the diagnostic): only the judged pairs'
+    #   labels are permuted and the control cells keep their presumed-negative
+    #   role. The gap to the chance floor is what the *training design* alone
+    #   (the "the ordinary unjudged cells are negative" prior) buys on the
+    #   reviewed set — a label-free signal the arm inherits.
+    chance_auc: list[float | None] = []
+    control_role_auc: list[float | None] = []
+    control_labels = np.zeros(int(fit_control.sum()), dtype=np.int64)
+    for _ in range(permutation_resamples):
+        shuffled = labels[fit_pairs].copy()
+        rng.shuffle(shuffled)
+        permuted_labels = np.concatenate([shuffled, control_labels], axis=0)
+        # the control-role floor: the control cells keep their presumed-negative role
+        permuted = combiner_factory().fit(fit_features, permuted_labels, fit_weights)
+        permuted_scores = permuted.score(features[pair_cells[holdout_pairs]])
+        control_role_auc.append(_safe_auc(labels[holdout_pairs], permuted_scores))
+        # the chance floor: the whole label vector is permuted
+        permuted_pool = permuted_labels.copy()
+        rng.shuffle(permuted_pool)
+        chance = combiner_factory().fit(fit_features, permuted_pool, fit_weights)
+        chance_scores = chance.score(features[pair_cells[holdout_pairs]])
+        chance_auc.append(_safe_auc(labels[holdout_pairs], chance_scores))
+
+    reference = measure_arm(view, reference_similarities)
+    holdout_reference_scores = reference.pair_scores[holdout_pairs]
+    holdout_pair_auc = _safe_auc(
+        labels[holdout_pairs], combiner.score(features[pair_cells[holdout_pairs]])
+    )
+    holdout_reference_auc = _safe_auc(labels[holdout_pairs], holdout_reference_scores)
+    return {
+        "holdout": holdout,
+        "fit_documents": [document for document in documents if document != holdout],
+        "n_fit_pairs": int(fit_pairs.sum()),
+        "n_fit_positive": int((labels[fit_pairs] == 1).sum()),
+        "n_fit_negative": int((labels[fit_pairs] == 0).sum()),
+        "n_fit_control": int(fit_control.sum()),
+        "control_weight": float(control_weight),
+        "fit_weight_mass": {
+            "judged": float(fit_weights[: int(fit_pairs.sum())].sum()),
+            "control": float(fit_weights[int(fit_pairs.sum()) :].sum()),
+        },
+        "n_holdout_pairs": int(holdout_pairs.sum()),
+        "n_holdout_positive": int((labels[holdout_pairs] == 1).sum()),
+        "n_holdout_negative": int((labels[holdout_pairs] == 0).sum()),
+        "n_holdout_control": int(holdout_control.sum()),
+        "n_holdout_grid_cells": int(holdout_grid.sum()),
+        "holdout_pair_auc": holdout_pair_auc,
+        "holdout_reference_pair_auc": holdout_reference_auc,
+        "holdout_pair_auc_delta": (
+            holdout_pair_auc - holdout_reference_auc
+            if holdout_pair_auc is not None and holdout_reference_auc is not None
+            else None
+        ),
+        "holdout_grid_positions": holdout_grid,
+        "holdout_scores": holdout_scores,
+        "permutation_floor": {
+            "n_resamples": int(permutation_resamples),
+            "chance_auc": chance_auc,
+            "control_role_auc": control_role_auc,
+            "note": (
+                "the label-permutation floors. The chance floor permutes the fit "
+                "side's whole label vector (the class counts and the weights stay "
+                "as they are, only the assignment changes), so the model has no "
+                "label information and the AUC must land at chance (0.5). The "
+                "control-role floor permutes only the judged pairs' labels and "
+                "keeps the control cells' presumed-negative role: the gap to the "
+                "chance floor is what the training design alone buys on the "
+                "reviewed set."
+            ),
+        },
+        "coefficients": _named_coefficients(combiner, feature_names),
+        "combiner": combiner.describe(),
+    }
+
+
+def _named_coefficients(combiner: Combiner, feature_names: Sequence[str]) -> dict[str, Any]:
+    """The fitted coefficients, keyed by the feature name.
+
+    The combiner standardizes its features, so the coefficients are
+    comparable with each other: their magnitudes say which features the fit
+    side leaned on. A coefficient on a **question-type** feature is a
+    question-level prior by construction (the feature does not depend on the
+    paragraph), so it is worth seeing.
+    """
+    getter = getattr(combiner, "coefficients", None)
+    if getter is None:
+        return {}
+    values = getter()
+    named: dict[str, float] = {}
+    for index, value in values.items():
+        position = int(index)
+        name = feature_names[position] if position < len(feature_names) else f"feature_{position}"
+        named[name] = float(value)
+    return {
+        "values": named,
+        "note": (
+            "the fit side's standardized coefficients: they say which features "
+            "the fit leaned on. A question-type feature does not depend on the "
+            "paragraph, so its coefficient is a question-level prior."
+        ),
+    }
+
+
+def score_stage3_model(
+    view: DatasetView,
+    *,
+    model_name: str,
+    extractor: FeatureExtractor,
+    combiner_factory: Callable[[], Combiner],
+    reference_similarities: np.ndarray,
+    control_weight: float = 0.3,
+    permutation_resamples: int = 5,
+    seed: int = 42,
+    bootstrap_resamples: int = 2000,
+    bootstrap_seed: int = 42,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """Score the learned pair scorer of one model (the Stage-3 arm).
+
+    The protocol is the plan's Stage-3 discipline: **document-level holdout**.
+    For every document the combiner is fitted on the other two documents'
+    judged pairs (plus their unjudged control cells as down-weighted presumed
+    negatives) and predicts the held-out document. The out-of-fold scores of
+    every judged pair and of every control cell then form **one** score
+    matrix, on which the same comparison blocks the Stage-2 runs use are
+    computed (the pair AUC pooled / per document / macro, the within/cross
+    decomposition and its paired bootstrap, the control-side counterpart, the
+    de-shifted AUC, the floor gap and the hit@k). The reference is the
+    full-text cosine (the Stage-0 baseline arm) on the same held-out
+    documents.
+
+    Args:
+        view: The model-independent dataset view.
+        model_name: The short handle of the model (the artifact's row key).
+        extractor: The feature pack (it embeds the pair's own chunks through
+            the ``Embedder`` port).
+        combiner_factory: A callable that builds a fresh combiner (one per
+            fit: the rotations and the permutations must not share a model).
+        reference_similarities: The full-text cosine matrix (the baseline).
+        control_weight: The training weight of the fit side's control cells.
+        permutation_resamples: The number of label permutations of the floor.
+        seed: The seed of the permutations.
+        bootstrap_resamples: The number of bootstrap resamples of the paired
+            statistics.
+        bootstrap_seed: The seed of the bootstrap.
+        hit_ks: The hit@k grid of the rank report.
+
+    Returns:
+        The model's Stage-3 block (the rotations, the out-of-fold summary, the
+        comparison and the permutation floor).
+    """
+    grid = build_stage3_grid(view)
+    features = extractor.extract(grid.pairs)
+    if features.shape[0] != grid.n_cells:
+        raise ValueError(
+            f"the feature pack returned {features.shape[0]} rows for {grid.n_cells} cells"
+        )
+
+    pair_rows, pair_columns, labels = _pair_indices(view)
+    control_rows, control_columns, control_documents = _control_indices(view)
+    pair_documents = np.asarray([record.document for record in view.pairs])
+    pair_cells = np.asarray(
+        [
+            grid.index[(int(row), int(column))]
+            for row, column in zip(pair_rows, pair_columns, strict=True)
+        ],
+        dtype=np.int64,
+    )
+    control_cells = np.asarray(
+        [
+            grid.index[(int(row), int(column))]
+            for row, column in zip(control_rows, control_columns, strict=True)
+        ],
+        dtype=np.int64,
+    )
+
+    documents = [stratum["document"] for stratum in view.strata]
+    rng = np.random.default_rng(seed)
+    rotations: list[dict[str, Any]] = []
+    out_of_fold = np.full((len(view.paragraphs), len(view.questions)), np.nan, dtype=np.float64)
+    for holdout in documents:
+        rotation = _stage3_rotation(
+            view,
+            holdout=holdout,
+            documents=documents,
+            features=features,
+            grid=grid,
+            pair_cells=pair_cells,
+            control_cells=control_cells,
+            labels=labels,
+            pair_documents=pair_documents,
+            control_documents=control_documents,
+            combiner_factory=combiner_factory,
+            control_weight=control_weight,
+            permutation_resamples=permutation_resamples,
+            rng=rng,
+            reference_similarities=reference_similarities,
+            feature_names=extractor.feature_names,
+        )
+        rotations.append(rotation)
+        # The holdout's grid cells take the scores of the model that never
+        # saw that document.
+        holdout_grid = rotation.pop("holdout_grid_positions")
+        holdout_scores = rotation.pop("holdout_scores")
+        out_of_fold[grid.rows[holdout_grid], grid.columns[holdout_grid]] = holdout_scores
+
+    comparison = compare_stage3_arm(
+        view,
+        arm_name=STAGE3_ARM,
+        reference_similarities=reference_similarities,
+        arm_similarities=out_of_fold,
+        resamples=bootstrap_resamples,
+        seed=bootstrap_seed,
+        hit_ks=hit_ks,
+    )
+    chance_values = [
+        value
+        for rotation in rotations
+        for value in rotation["permutation_floor"]["chance_auc"]
+        if value is not None
+    ]
+    control_role_values = [
+        value
+        for rotation in rotations
+        for value in rotation["permutation_floor"]["control_role_auc"]
+        if value is not None
+    ]
+    # The headline is the **within-document** AUC: the pair-count-weighted mean
+    # of the documents' own AUCs (the same weighting the metric uses). The
+    # floors are measured one document at a time, so they get the same
+    # weighting here — otherwise a per-document mean would be compared with a
+    # pair-count-weighted one.
+    pair_counts = {
+        stratum["document"]: stratum["n_positive"] * stratum["n_negative"]
+        for stratum in view.strata
+    }
+    chance_within = _weighted_mean(
+        [
+            (rotation["holdout"], _mean_of(rotation["permutation_floor"]["chance_auc"]))
+            for rotation in rotations
+        ],
+        pair_counts,
+    )
+    control_role_within = _weighted_mean(
+        [
+            (rotation["holdout"], _mean_of(rotation["permutation_floor"]["control_role_auc"]))
+            for rotation in rotations
+        ],
+        pair_counts,
+    )
+    return {
+        "model": model_name,
+        "feature_pack": extractor.describe(),
+        "combiner": rotations[0]["combiner"] if rotations else None,
+        "training": {
+            "control_weight": float(control_weight),
+            "fit_side": (
+                "the fit side's judged pairs (the verified positives and the "
+                "reviewer-verified hard negatives) plus its unjudged control "
+                "cells as down-weighted presumed negatives"
+            ),
+            "leakage_rules": [
+                "the fit side never contains the holdout document",
+                "no corpus-level question statistic is used (the features are pair-local)",
+                "no document-identity feature and no length feature",
+                "the scaler of the combiner is fitted on the fit side's rows only",
+            ],
+        },
+        "grid": {
+            "n_cells": grid.n_cells,
+            "n_matrix_positions": int(out_of_fold.size),
+            "n_scored_cells": int(np.count_nonzero(~np.isnan(out_of_fold))),
+            "n_unscored_positions": int(np.count_nonzero(np.isnan(out_of_fold))),
+            "note": (
+                "the out-of-fold matrix holds the same-document grid only: the "
+                "cross-document positions are not scored (no rotation holds out "
+                "two documents at once), and every statistic the comparison uses "
+                "lives inside a document"
+            ),
+        },
+        "rotations": rotations,
+        "out_of_fold": {
+            "pair_auc": comparison["pair_auc"],
+            "auc_decomposition": comparison["auc_decomposition"],
+            "control_side": comparison["control_side"],
+            "floor_gap": comparison["floor_gap"],
+            "deshifted_auc": comparison["deshifted_auc"],
+            "hit_at_k": comparison["hit_at_k"],
+        },
+        "comparison": comparison,
+        "permutation_floor": {
+            "n_resamples": int(permutation_resamples),
+            "n_measured": len(chance_values),
+            "chance": {
+                "mean": float(np.mean(chance_values)) if chance_values else None,
+                "min": float(np.min(chance_values)) if chance_values else None,
+                "max": float(np.max(chance_values)) if chance_values else None,
+            },
+            "control_role": {
+                "mean": float(np.mean(control_role_values)) if control_role_values else None,
+                "min": float(np.min(control_role_values)) if control_role_values else None,
+                "max": float(np.max(control_role_values)) if control_role_values else None,
+            },
+            "within_document": {
+                "chance": chance_within,
+                "control_role": control_role_within,
+                "note": (
+                    "the pair-count-weighted mean of the documents' own AUCs — "
+                    "the same weighting the within-document AUC uses, so these "
+                    "two numbers are comparable with the arm's within-document "
+                    "AUC and the baseline's"
+                ),
+            },
+            "note": (
+                "the label-permutation floors, each a per-document AUC (one per "
+                "rotation), so their mean is comparable with the arm's per-"
+                "document macro AUC and not with its pooled AUC (the out-of-fold "
+                "matrix mixes three models' score levels). A holdout with a "
+                "single class has no AUC and is left out (n_measured)."
+            ),
+        },
+        "rotations_summary": [
+            {
+                "holdout": rotation["holdout"],
+                "arm_pair_auc": rotation["holdout_pair_auc"],
+                "reference_pair_auc": rotation["holdout_reference_pair_auc"],
+                "arm_minus_reference": rotation["holdout_pair_auc_delta"],
+                "chance_floor_mean": _mean_of(rotation["permutation_floor"]["chance_auc"]),
+                "control_role_floor_mean": _mean_of(
+                    rotation["permutation_floor"]["control_role_auc"]
+                ),
+                "arm_minus_chance_floor": _difference(
+                    rotation["holdout_pair_auc"],
+                    _mean_of(rotation["permutation_floor"]["chance_auc"]),
+                ),
+                "arm_minus_control_role_floor": _difference(
+                    rotation["holdout_pair_auc"],
+                    _mean_of(rotation["permutation_floor"]["control_role_auc"]),
+                ),
+            }
+            for rotation in rotations
+        ],
+    }
 
 
 def _top_quintile_share(percentiles: np.ndarray) -> float | None:
@@ -1742,6 +2690,7 @@ def build_analysis_report(
     aggregations: Sequence[str] = (),
     question_transforms: Sequence[str] = (),
     bootstrap: Mapping[str, Any] | None = None,
+    stage3: Mapping[str, Any] | None = None,
     baseline_chunker_name: str = BASELINE_ARM,
     n_valid_pairs: int,
     n_malformed_pairs: int,
@@ -1799,6 +2748,8 @@ def build_analysis_report(
             "baseline_chunker": baseline_chunker_name,
             "aggregations": list(aggregations),
             "bootstrap": dict(bootstrap or {}),
+            "stage3": None if stage3 is None else dict(stage3),
+            "paragraph_lengths": paragraph_length_report(view),
             "notes": [
                 "OMCT is auxiliary data (PLAN.md section 2): these numbers annotate "
                 "method choice, they are never a UPR metric.",
@@ -1816,6 +2767,13 @@ def build_analysis_report(
                 "side only: the model's 'threshold_selection' block records the "
                 "grid, the per-rotation fit-side numbers and the chosen value, so "
                 "no document ever sees its own fitted parameter.",
+                "The paragraph lengths are recorded in 'paragraph_lengths' (the "
+                "length-vs-shift question); they are never a feature, because "
+                "length is a document proxy on this data.",
+                "A learned arm (the Stage-3 block) scores probabilities and the "
+                "baseline arm scores cosines: the level numbers of the two arms "
+                "are in their own units and are not comparable, while the rank "
+                "numbers (the rank percentiles) are.",
             ],
         },
         "models": list(models),

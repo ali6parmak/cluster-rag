@@ -43,7 +43,7 @@ import numpy as np
 import yaml
 
 from cluster_rag import __version__
-from cluster_rag.config import AppConfig, ChunkerSpec, load_config
+from cluster_rag.config import AnalysisConfig, AppConfig, ChunkerSpec, load_config
 from cluster_rag.data import (
     SPLIT_NAMES,
     LoadReport,
@@ -70,6 +70,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_ARMS_KEY_COLUMNS,
     ANALYZE_OMCT_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
+    ANALYZE_OMCT_STAGE3_COLUMNS,
+    ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
@@ -87,21 +89,30 @@ from cluster_rag.experiment_table import (
 from cluster_rag.omct_analysis import (
     BASELINE_ARM,
     BASELINE_CHUNKER,
+    BaselineArm,
     ChunkedSide,
     build_analysis_report,
     build_dataset_view,
     score_model_arms,
+    score_stage3_model,
     side_cache_versions,
 )
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
-from cluster_rag.preprocess import PreprocessSpec, build_preprocess_spec
+from cluster_rag.preprocess import (
+    PreprocessSpec,
+    apply_question_transform,
+    build_preprocess_spec,
+    question_transform_version,
+)
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
+from cluster_rag.text_processors.combining import build_combiner
+from cluster_rag.text_processors.features import FeatureEmbedders, PairFeatureExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -1098,6 +1109,7 @@ def _chunker_with_embedder(
     question_block_markers: Sequence[str],
     *,
     threshold: float | None = None,
+    base_version: str | None = None,
 ) -> tuple[Any, Any]:
     """Build a chunker and the embedder of its chunks.
 
@@ -1107,6 +1119,10 @@ def _chunker_with_embedder(
     the atoms chunker's cache version, the chunks through the chunker's own
     version — which carries the swept threshold, so two thresholds never
     share cached chunks.
+
+    ``base_version`` overrides the version slot the chunks are cached under
+    (the paragraph side's preprocessing version by default; the question side
+    uses the question transform's version).
     """
     params = dict(chunker_spec.params)
     if threshold is not None:
@@ -1124,9 +1140,12 @@ def _chunker_with_embedder(
         )
     else:
         chunker = build_chunker(chunker_spec.name, params)
-    paragraph_version, _ = side_cache_versions(
-        chunker, spec, question_transform, question_block_markers
-    )
+    if base_version is None:
+        paragraph_version, _ = side_cache_versions(
+            chunker, spec, question_transform, question_block_markers
+        )
+    else:
+        paragraph_version = chunker.cache_version(base_version)
     return chunker, _cached_embedder(embedder, config, paragraph_version)
 
 
@@ -1191,6 +1210,128 @@ def _swept_sides(
             )
         )
     return sides
+
+
+def _stage3_extractor(
+    config: AppConfig,
+    embedder: Any,
+    analysis: AnalysisConfig,
+    spec: PreprocessSpec,
+    view: Any,
+    *,
+    paragraph_embedder: Any,
+    question_embedder: Any,
+) -> PairFeatureExtractor:
+    """The Stage-3 feature pack, with the cached backends wired in.
+
+    The pack takes the ``Embedder`` **port** (the same precedent as the
+    semantic chunker): the package never imports a model client, the CLI
+    wires the cached backends in here. The three sides have three different
+    cache-version slots, so they are three ports: the whole paragraph (the
+    baseline arm's paragraph slot), the whole question (the baseline arm's
+    question slot) and the chunks (the chunker's slot).
+    """
+    features = analysis.stage3.features
+    paragraph_chunker, chunk_embedder = _chunker_with_embedder(
+        config,
+        embedder,
+        features.paragraph_chunker,
+        spec,
+        analysis.question_transform,
+        analysis.question_block_markers,
+    )
+    question_chunks_embedder = None
+    if features.question_chunker is not None:
+        question_version = question_transform_version(
+            analysis.question_transform, analysis.question_block_markers
+        )
+        _, question_chunks_embedder = _chunker_with_embedder(
+            config,
+            embedder,
+            features.question_chunker,
+            spec,
+            analysis.question_transform,
+            analysis.question_block_markers,
+            base_version=question_version,
+        )
+    question_embedding_texts = dict(
+        zip(
+            view.questions,
+            apply_question_transform(
+                list(view.questions),
+                analysis.question_transform,
+                analysis.question_block_markers,
+            ),
+            strict=True,
+        )
+    )
+    return PairFeatureExtractor(
+        FeatureEmbedders(
+            paragraph=paragraph_embedder,
+            question=question_embedder,
+            chunks=chunk_embedder,
+            question_chunks=question_chunks_embedder,
+        ),
+        paragraph_chunker=paragraph_chunker,
+        top_k=features.top_k,
+        question_embedding_texts=question_embedding_texts,
+    )
+
+
+def _stage3_table_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    stage3: dict[str, Any],
+    n_pairs: int,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the Stage-3 arm: the model, the arm and its numbers."""
+    info = model["embedder"]
+    comparison = stage3["comparison"]
+    decomposition = comparison["auc_decomposition"]
+    paired = comparison["paired_auc"]
+    within_paired = decomposition.get("within_group_paired") or {}
+    control = comparison["control_side"]["arm"]
+    enrichment = comparison["negative_enrichment"]["rank_percentile"]
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "backend": info["backend"],
+        "model": info["model_id"],
+        "model_version": (info["revision_or_digest"] or "")[:12],
+        "dim": info["dimension"],
+        "ctx": info["context_tokens"],
+        "features": stage3["feature_pack"].get("n_features"),
+        "combiner": (stage3.get("combiner") or {}).get("name"),
+        "within_auc": _fmt(decomposition["arm"].get("within_group_auc"), 4),
+        "within_d_auc": _fmt(decomposition.get("within_group_delta"), 4),
+        "within_d_auc_ci": (
+            f"[{within_paired['ci_low']:+.4f}, {within_paired['ci_high']:+.4f}]"
+            if within_paired
+            else None
+        ),
+        "pooled_auc": _fmt(comparison["pair_auc"].get("arm"), 4),
+        "pooled_d_auc": _fmt(paired.get("delta_auc"), 4),
+        "pooled_d_auc_ci": (
+            f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None
+        ),
+        "macro_auc": _fmt(comparison["pair_auc"].get("macro", {}).get("arm"), 4),
+        "perm_auc": _fmt(stage3["permutation_floor"]["chance"].get("mean"), 4),
+        "ctrl_role_auc": _fmt(stage3["permutation_floor"]["control_role"].get("mean"), 4),
+        "ctrl_mean": _fmt(control.get("mean"), 4),
+        "ctrl_rank_p50": _fmt(control.get("rank_p50"), 4),
+        "ctrl_rank_p50_delta": _fmt(comparison["control_side"].get("rank_p50_delta"), 4),
+        "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
+        "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
+        "floor_gap": _fmt(comparison["floor_gap"]["arm"].get("standardized"), 4),
+        "n_pairs": n_pairs,
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
 
 
 def _cmd_analyze_omct(config: AppConfig) -> int:
@@ -1278,24 +1419,52 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     analysis.question_transform,
                     analysis.question_block_markers,
                 )
-        models.append(
-            score_model_arms(
+        baseline = BaselineArm()
+        model_block = score_model_arms(
+            view,
+            model_name=entry.name,
+            paragraph_embedder=paragraph_embedder,
+            question_embedders=question_embedders,
+            baseline_chunker=baseline_chunker,
+            question_transform=analysis.question_transform,
+            question_block_markers=analysis.question_block_markers,
+            preprocess_spec=spec,
+            chunked_side=chunked_side,
+            swept_sides=swept_sides,
+            aggregations=aggregations,
+            semantic_selection=analysis.semantic_selection,
+            bootstrap_resamples=analysis.bootstrap.resamples,
+            bootstrap_seed=bootstrap_seed,
+            baseline=baseline,
+        )
+        # The learned arm (Stage 3.1): the feature pack + the combiner behind
+        # the document-level holdout. The reference is the baseline arm's
+        # full-text cosine on the same held-out documents.
+        if analysis.stage3 is not None:
+            extractor = _stage3_extractor(
+                config,
+                embedder,
+                analysis,
+                spec,
+                view,
+                paragraph_embedder=paragraph_embedder,
+                question_embedder=question_embedders[analysis.question_transform],
+            )
+            model_block["stage3"] = score_stage3_model(
                 view,
                 model_name=entry.name,
-                paragraph_embedder=paragraph_embedder,
-                question_embedders=question_embedders,
-                baseline_chunker=baseline_chunker,
-                question_transform=analysis.question_transform,
-                question_block_markers=analysis.question_block_markers,
-                preprocess_spec=spec,
-                chunked_side=chunked_side,
-                swept_sides=swept_sides,
-                aggregations=aggregations,
-                semantic_selection=analysis.semantic_selection,
+                extractor=extractor,
+                combiner_factory=lambda: build_combiner(
+                    analysis.stage3.combiner.name, analysis.stage3.combiner.params
+                ),
+                reference_similarities=baseline.similarities,
+                control_weight=analysis.stage3.control_weight,
+                permutation_resamples=analysis.stage3.permutation_resamples,
+                seed=config.seed,
                 bootstrap_resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
             )
-        )
+        models.append(model_block)
 
     omct_run_id = _omct_run_id(run_id)
     payload = build_analysis_report(
@@ -1325,6 +1494,26 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             "seed": bootstrap_seed,
             "confidence": 0.95,
         },
+        stage3=(
+            None
+            if analysis.stage3 is None
+            else {
+                "features": {
+                    "paragraph_chunker": analysis.stage3.features.paragraph_chunker.model_dump(
+                        mode="python"
+                    ),
+                    "question_chunker": (
+                        None
+                        if analysis.stage3.features.question_chunker is None
+                        else analysis.stage3.features.question_chunker.model_dump(mode="python")
+                    ),
+                    "top_k": analysis.stage3.features.top_k,
+                },
+                "combiner": analysis.stage3.combiner.model_dump(mode="python"),
+                "control_weight": analysis.stage3.control_weight,
+                "permutation_resamples": analysis.stage3.permutation_resamples,
+            }
+        ),
         baseline_chunker_name=baseline_chunker.name,
         n_valid_pairs=pair_report.n_valid,
         n_malformed_pairs=pair_report.n_invalid,
@@ -1338,7 +1527,23 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     )
 
     table_rows: list[dict[str, Any]] = []
+    has_stage3 = False
     for model in models:
+        stage3 = model.get("stage3")
+        if stage3 is not None:
+            has_stage3 = True
+            table_rows.append(
+                _stage3_table_row(
+                    model,
+                    run_id=omct_run_id,
+                    stage3=stage3,
+                    n_pairs=view.pooled["n_pairs"],
+                    n_control=view.control.n_cells,
+                    n_docs=view.pooled["n_documents"],
+                    seconds=payload["total_seconds"],
+                )
+            )
+            continue
         arms = model.get("arms", {})
         comparisons = model.get("comparisons", {})
         if not arms:
@@ -1384,11 +1589,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 )
             )
     has_arms = any(model.get("arms") for model in models)
+    if has_stage3:
+        columns = ANALYZE_OMCT_STAGE3_COLUMNS
+        key_columns = ANALYZE_OMCT_STAGE3_KEY_COLUMNS
+    elif has_arms:
+        columns = ANALYZE_OMCT_ARMS_COLUMNS
+        key_columns = ANALYZE_OMCT_ARMS_KEY_COLUMNS
+    else:
+        columns = ANALYZE_OMCT_COLUMNS
+        key_columns = ANALYZE_OMCT_KEY_COLUMNS
     _append_command_rows(
         config,
         "analyze-omct",
-        columns=ANALYZE_OMCT_ARMS_COLUMNS if has_arms else ANALYZE_OMCT_COLUMNS,
-        key_columns=ANALYZE_OMCT_ARMS_KEY_COLUMNS if has_arms else ANALYZE_OMCT_KEY_COLUMNS,
+        columns=columns,
+        key_columns=key_columns,
         rows=table_rows,
     )
 
@@ -1441,6 +1655,32 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"{shift['mean_delta']:+.4f}; floor gap {gap['delta']:+.4f}; "
                 f"de-shifted AUC {comparison['deshifted_auc']['overall']:.4f}"
             )
+        stage3 = model.get("stage3")
+        if stage3 is not None:
+            comparison = stage3["comparison"]
+            decomposition = comparison["auc_decomposition"]
+            within_paired = decomposition.get("within_group_paired") or {}
+            floor = stage3["permutation_floor"]
+            print(
+                f"      [stage3] out-of-fold: within-document AUC "
+                f"{_fmt(decomposition['arm'].get('within_group_auc'), 4)} "
+                f"(baseline {_fmt(decomposition['reference'].get('within_group_auc'), 4)}, "
+                f"delta {_fmt(decomposition.get('within_group_delta'), 4)}, "
+                f"95% CI [{_fmt(within_paired.get('ci_low'), 4)}, "
+                f"{_fmt(within_paired.get('ci_high'), 4)}]); pooled AUC "
+                f"{_fmt(comparison['pair_auc']['arm'], 4)} "
+                f"(delta {_fmt(comparison['paired_auc']['delta_auc'], 4)}); "
+                f"chance floor {_fmt(floor['chance']['mean'], 4)}, "
+                f"control-role floor {_fmt(floor['control_role']['mean'], 4)}"
+            )
+            for rotation in stage3["rotations_summary"]:
+                print(
+                    f"        holdout {rotation['holdout'][:40]}: arm "
+                    f"{_fmt(rotation['arm_pair_auc'], 4)} (baseline "
+                    f"{_fmt(rotation['reference_pair_auc'], 4)}, chance floor "
+                    f"{_fmt(rotation['chance_floor_mean'], 4)}, control-role floor "
+                    f"{_fmt(rotation['control_role_floor_mean'], 4)})"
+                )
     print(f"Report written to {results_dir / 'analysis.json'}")
     return 0
 

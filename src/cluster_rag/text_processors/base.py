@@ -143,9 +143,15 @@ class BaseChunker:
 
 @runtime_checkable
 class FeatureExtractor(Protocol):
-    """Turns (paragraph, question) pairs into numeric feature rows (pure).
+    """Turns (paragraph, question) pairs into numeric feature rows.
 
-    The extractor sees one pair at a time and keeps no corpus-level state.
+    The extractor sees one pair at a time and keeps no corpus-level state, so
+    no feature can silently encode a corpus statistic (the track's leakage
+    rules: no question-level priors, no document identity). It may need
+    embeddings: the v0 pack takes the ``Embedder`` **port**
+    (:class:`cluster_rag.embed.base.Embedder`) and embeds the pair's own
+    chunks — the package still imports no model client, the CLI wires the
+    cached backend in.
     """
 
     @property
@@ -163,9 +169,20 @@ class Combiner(Protocol):
     The split handling stays with the caller: a combiner is handed the fit
     side's rows and labels and never learns which document a row came from
     (TEXT_PROCESSING_PLAN.md Stage 3 leakage rules).
+
+    ``fit`` takes an optional ``sample_weight``: the track's Stage-3 training
+    data mixes the fit side's **judged** pairs (ground truth) with its
+    **unjudged control cells** (presumed negatives, whose true positive rate
+    is unmeasured), and the control's rows are down-weighted so they cannot
+    dominate the fit.
     """
 
-    def fit(self, features: np.ndarray, labels: Sequence[int]) -> Combiner:
+    def fit(
+        self,
+        features: np.ndarray,
+        labels: Sequence[int],
+        sample_weight: Sequence[float] | None = None,
+    ) -> Combiner:
         """Fit the scorer on the fit side's rows (returns the fitted combiner)."""
 
     def score(self, features: np.ndarray) -> np.ndarray:

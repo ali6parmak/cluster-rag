@@ -327,3 +327,57 @@ def test_label_texts_variants() -> None:
         LabelTextsConfig.model_validate({"variant": "template", "template": "About things."})
     with pytest.raises(ValueError, match="must not set template"):
         LabelTextsConfig.model_validate({"variant": "name", "template": "oops"})
+
+
+def test_analysis_stage3_defaults_and_validation() -> None:
+    """The Stage-3 section: the settled defaults and the config-time checks."""
+    from cluster_rag.config import (
+        AnalysisConfig,
+        CombinerSpec,
+        FeaturePackConfig,
+        Stage3Config,
+    )
+
+    stage3 = Stage3Config()
+    assert stage3.control_weight == 0.3
+    assert stage3.permutation_resamples == 5
+    assert stage3.combiner.name == "logistic"
+    # the feature pack's default chunker is the Stage-2 verdict's window
+    assert stage3.features.paragraph_chunker.name == "word_windows"
+    assert stage3.features.paragraph_chunker.params == {"n_words": 25, "stride": 12}
+    assert stage3.features.question_chunker is None
+    assert stage3.features.top_k == 3
+
+    # the section is optional: without it the Stage-0/1/2 behaviour is untouched
+    assert AnalysisConfig().stage3 is None
+
+    # the control weight is a weight in [0, 1]
+    with pytest.raises(ValueError, match="control_weight"):
+        Stage3Config.model_validate({"control_weight": 1.5})
+    with pytest.raises(ValueError, match="control_weight"):
+        Stage3Config.model_validate({"control_weight": -0.1})
+    with pytest.raises(ValueError, match="permutation_resamples"):
+        Stage3Config.model_validate({"permutation_resamples": -1})
+    with pytest.raises(ValueError, match="top_k"):
+        FeaturePackConfig.model_validate({"top_k": 0})
+
+    # the combiner is validated against the registry
+    with pytest.raises(ValueError, match="Unknown combiner"):
+        CombinerSpec.model_validate({"name": "does-not-exist"})
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        CombinerSpec.model_validate({"name": "logistic", "params": {"nope": 1}})
+    assert CombinerSpec.model_validate({"name": "logistic", "params": {"C": 0.5}}).params == {
+        "C": 0.5
+    }
+
+
+def test_analysis_stage3_chunker_params_are_validated() -> None:
+    """The feature pack's chunker spec is checked like every other chunker spec."""
+    from cluster_rag.config import FeaturePackConfig
+
+    with pytest.raises(ValueError, match="Unknown chunker"):
+        FeaturePackConfig.model_validate({"paragraph_chunker": {"name": "does-not-exist"}})
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        FeaturePackConfig.model_validate(
+            {"paragraph_chunker": {"name": "word_windows", "params": {"nope": 1}}}
+        )

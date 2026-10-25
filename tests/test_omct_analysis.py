@@ -32,18 +32,21 @@ from cluster_rag.config import (
     PreprocessConfig,
 )
 from cluster_rag.omct_analysis import (
+    BaselineArm,
     ChunkedSide,
     SideEncoding,
     build_dataset_view,
     compare_arms,
     document_code,
     score_model_arms,
+    score_stage3_model,
     side_similarities,
 )
-from cluster_rag.pairs import load_pairs
+from cluster_rag.pairs import PairRecord, load_pairs
 from cluster_rag.preprocess import build_preprocess_spec
 from cluster_rag.text_processors.aggregation import parse_aggregation
 from cluster_rag.text_processors.chunkers import FullTextChunker, build_chunker
+from cluster_rag.text_processors.combining import build_combiner
 from cluster_rag.text_processors.control import (
     SAMPLING_RULE_PROPORTIONAL,
     DocumentGrid,
@@ -51,6 +54,7 @@ from cluster_rag.text_processors.control import (
     rank_percentiles,
     sample_control,
 )
+from cluster_rag.text_processors.features import FeatureEmbedders, PairFeatureExtractor
 from fake_embedder import FakeEmbedder
 
 ANALYSIS_CONFIG_EXTRA = """
@@ -149,6 +153,40 @@ analysis:
   bootstrap:
     resamples: 20
     seed: 3
+"""
+
+ANALYSIS_STAGE3_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 3
+  stage3:
+    features:
+      paragraph_chunker:
+        name: word_windows
+        params:
+          n_words: 3
+          stride: 2
+      top_k: 2
+    combiner:
+      name: logistic
+      params:
+        C: 1.0
+    control_weight: 0.3
+    permutation_resamples: 3
 """
 
 
@@ -808,6 +846,218 @@ def test_analyze_omct_arms_end_to_end(
     out = capsys.readouterr().out
     assert "OMCT analysis (Stage 0): omct-analyze-arms" in out
     assert "dAUC" in out
+
+
+def test_analyze_omct_stage3_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """A Stage-3 run: the learned arm, the rotations and the label-permutation floors."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-stage3"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    model = payload["models"][0]
+    stage3 = model["stage3"]
+    # the config is recorded, so the run is reproducible from the artifact
+    assert payload["analysis"]["stage3"]["control_weight"] == 0.3
+    assert payload["analysis"]["stage3"]["combiner"]["name"] == "logistic"
+    assert payload["analysis"]["stage3"]["features"]["top_k"] == 2
+    # the feature pack's provenance
+    assert stage3["feature_pack"]["n_features"] == 15
+    assert stage3["feature_pack"]["top_k"] == 2
+    assert stage3["combiner"]["name"] == "logistic"
+    # one rotation per document, and the fit side never holds the holdout out
+    assert len(stage3["rotations"]) == 3
+    for rotation in stage3["rotations"]:
+        assert rotation["holdout"] not in rotation["fit_documents"]
+        assert rotation["n_fit_pairs"] + rotation["n_holdout_pairs"] == 6
+        assert rotation["control_weight"] == 0.3
+        assert rotation["fit_weight_mass"]["control"] == pytest.approx(
+            rotation["n_fit_control"] * 0.3
+        )
+    # the out-of-fold matrix scores the same-document cells only
+    assert stage3["grid"]["n_cells"] == 9
+    assert stage3["grid"]["n_scored_cells"] == 9
+    assert stage3["grid"]["n_matrix_positions"] == 24
+    assert stage3["grid"]["n_unscored_positions"] == 15
+    # the two label-permutation floors
+    floor = stage3["permutation_floor"]
+    assert floor["n_resamples"] == 3
+    assert floor["chance"]["mean"] is not None
+    assert floor["control_role"]["mean"] is not None
+    for rotation in stage3["rotations"]:
+        assert len(rotation["permutation_floor"]["chance_auc"]) == 3
+        assert len(rotation["permutation_floor"]["control_role_auc"]) == 3
+    # the comparison blocks of the Stage-2 runs are computed on the arm
+    comparison = stage3["comparison"]
+    assert comparison["reference_arm"] == "full_text"
+    assert set(comparison) >= {
+        "paired_auc",
+        "pair_auc",
+        "auc_decomposition",
+        "control_side",
+        "floor_gap",
+        "deshifted_auc",
+        "hit_at_k",
+    }
+    assert comparison["auc_decomposition"]["within_group_paired"]["n_resamples"] == 20
+    # the paragraph lengths are recorded (the length-vs-shift question)
+    lengths = payload["analysis"]["paragraph_lengths"]
+    assert len(lengths["per_paragraph"]) == 6
+    assert set(lengths["by_document"]) == {"Doc A", "Doc B", "Doc C"}
+    assert model["length_correlation"]["overall"]["n"] == 3
+
+    out = capsys.readouterr().out
+    assert "OMCT analysis (Stage 0): omct-analyze-stage3" in out
+    assert "chance floor" in out
+
+
+def test_stage3_rotations_hold_out_one_document_at_a_time(view) -> None:
+    """The document-level holdout: the fit side never contains the holdout."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    baseline = BaselineArm()
+    score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+        baseline=baseline,
+    )
+    assert baseline.similarities is not None
+    stage3 = score_stage3_model(
+        view,
+        model_name="fake-model",
+        extractor=PairFeatureExtractor(
+            FeatureEmbedders(
+                paragraph=embedder,
+                question=embedder,
+                chunks=embedder,
+            ),
+            paragraph_chunker=FullTextChunker(),
+            top_k=2,
+        ),
+        combiner_factory=lambda: build_combiner("logistic", {"C": 1.0}),
+        reference_similarities=baseline.similarities,
+        control_weight=0.3,
+        permutation_resamples=2,
+        seed=42,
+        bootstrap_resamples=20,
+        bootstrap_seed=1,
+    )
+    assert {rotation["holdout"] for rotation in stage3["rotations"]} == {
+        "Doc A",
+        "Doc B",
+        "Doc C",
+    }
+    for rotation in stage3["rotations"]:
+        assert set(rotation["fit_documents"]) == {"Doc A", "Doc B", "Doc C"} - {rotation["holdout"]}
+    # the out-of-fold matrix holds every same-document cell
+    assert stage3["grid"]["n_cells"] == 9
+    assert stage3["grid"]["n_scored_cells"] == 9
+    # the per-rotation summary pairs the arm with the baseline and the floors
+    summary = stage3["rotations_summary"]
+    assert len(summary) == 3
+    for entry in summary:
+        assert "chance_floor_mean" in entry
+        assert "control_role_floor_mean" in entry
+    # "Doc C" holds a single positive pair, so its AUC is undefined
+    by_holdout = {entry["holdout"]: entry for entry in summary}
+    assert by_holdout["Doc C"]["arm_pair_auc"] is None
+    assert by_holdout["Doc C"]["reference_pair_auc"] is None
+    assert by_holdout["Doc C"]["chance_floor_mean"] is None
+    assert by_holdout["Doc A"]["arm_pair_auc"] is not None
+    assert by_holdout["Doc A"]["reference_pair_auc"] is not None
+    assert by_holdout["Doc A"]["chance_floor_mean"] is not None
+
+
+def test_stage3_learns_a_lexical_signal_the_cosine_cannot_see() -> None:
+    """A controlled signal: the learned arm finds it, the chance floor does not.
+
+    The signal is lexical (the question's topic word), so the hash-based
+    fake cosine carries none of it: the arm's gain over the baseline is the
+    feature pack's doing, and the label-permutation floor stays at chance.
+    """
+    records = []
+    counter = 0
+    for document in ("Doc A", "Doc B", "Doc C"):
+        for index in range(4):
+            counter += 1
+            paragraph = f"The committee discussed matter {counter} in its report."
+            # the first question is the positive one, the second the negative
+            for question_index, question_text in enumerate(
+                (
+                    "Question: Does the report discuss zorblax?",
+                    "Question: Does the report discuss quillmarr?",
+                )
+            ):
+                if question_index == 1 and index >= 2:
+                    continue  # the unjudged cells (the control's pool)
+                records.append(
+                    PairRecord(
+                        pair_id=f"{document}-{index}-{question_index}",
+                        source_csv="src.csv",
+                        document=document,
+                        paragraph_number=str(index),
+                        paragraph_text=paragraph,
+                        question_number=question_index,
+                        question_text=question_text,
+                        label=1 if question_index == 0 else 0,
+                        label_origin="merged",
+                    )
+                )
+    view = build_dataset_view(records, control_size=4, seed=42)
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    baseline = BaselineArm()
+    score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+        baseline=baseline,
+    )
+    stage3 = score_stage3_model(
+        view,
+        model_name="fake-model",
+        extractor=PairFeatureExtractor(
+            FeatureEmbedders(paragraph=embedder, question=embedder, chunks=embedder),
+            paragraph_chunker=FullTextChunker(),
+            top_k=2,
+        ),
+        combiner_factory=lambda: build_combiner("logistic", {"C": 1.0}),
+        reference_similarities=baseline.similarities,
+        control_weight=0.3,
+        permutation_resamples=5,
+        seed=42,
+        bootstrap_resamples=50,
+        bootstrap_seed=1,
+    )
+    # the lexical signal is learnable: the arm is well above chance
+    assert stage3["permutation_floor"]["chance"]["mean"] == pytest.approx(0.5, abs=0.2)
+    arm_macro = stage3["comparison"]["pair_auc"]["macro"]["arm"]
+    assert arm_macro > 0.8
+    # the baseline (a hash-based cosine) carries no signal to learn from
+    assert arm_macro > stage3["comparison"]["pair_auc"]["macro"]["reference"]
 
 
 def test_analyze_omct_arms_table_rows_use_the_arms_columns(
