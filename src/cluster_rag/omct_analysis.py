@@ -2298,6 +2298,15 @@ def _stage3_rotation(
         labels[holdout_pairs], combiner.score(features[pair_cells[holdout_pairs]])
     )
     holdout_reference_auc = _safe_auc(labels[holdout_pairs], holdout_reference_scores)
+    # The question overlap between the two sides: the plan's leakage rule (i).
+    # 186/294 question numbers are judged in more than one document, so a
+    # *question-level* feature (the question-type block) can carry the fit
+    # side's label for a question the holdout also carries. The overlap is
+    # measured here, so the question-type arm's number can be read against it.
+    fit_questions = set(grid.columns[pair_cells[fit_pairs]].tolist())
+    holdout_columns = grid.columns[pair_cells[holdout_pairs]]
+    holdout_questions = set(holdout_columns.tolist())
+    shared_questions = fit_questions & holdout_questions
     return {
         "holdout": holdout,
         "fit_documents": [document for document in documents if document != holdout],
@@ -2315,6 +2324,20 @@ def _stage3_rotation(
         "n_holdout_negative": int((labels[holdout_pairs] == 0).sum()),
         "n_holdout_control": int(holdout_control.sum()),
         "n_holdout_grid_cells": int(holdout_grid.sum()),
+        "question_overlap": {
+            "n_holdout_questions": len(holdout_questions),
+            "n_holdout_questions_also_judged_in_fit": len(shared_questions),
+            "n_holdout_pairs_with_a_shared_question": int(
+                np.isin(holdout_columns, list(shared_questions)).sum()
+            ),
+            "note": (
+                "how many of the holdout's questions the fit side also judged. "
+                "The features are pair-local (no question-level statistic "
+                "enters them), but a question-type weight fitted on the fit "
+                "side reaches the holdout's copy of the same question, so a "
+                "question-type-only arm must be read against this overlap."
+            ),
+        },
         "holdout_pair_auc": holdout_pair_auc,
         "holdout_reference_pair_auc": holdout_reference_auc,
         "holdout_pair_auc_delta": (
@@ -2608,6 +2631,10 @@ def score_stage3_model(
                     rotation["holdout_pair_auc"],
                     _mean_of(rotation["permutation_floor"]["control_role_auc"]),
                 ),
+                "n_holdout_questions": rotation["question_overlap"]["n_holdout_questions"],
+                "n_holdout_questions_also_judged_in_fit": rotation["question_overlap"][
+                    "n_holdout_questions_also_judged_in_fit"
+                ],
             }
             for rotation in rotations
         ],

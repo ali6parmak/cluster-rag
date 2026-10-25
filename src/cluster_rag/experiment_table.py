@@ -342,6 +342,15 @@ ANALYZE_OMCT_ARMS_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "arm")
 # control's rank position, which is scale-free — the learned arm's level is
 # a probability and the baseline's a cosine) and the standardized floor gap.
 #
+# Two changes came with Stage 3.1b (the feature-group ablation): the
+# **feature groups** the pack kept (the ablation's arm) and the **hit@1**
+# numbers (the positives' hit@1 for the arm and for the cosine — the arm
+# ranks pairs better than the cosine but retrieves worse). The two floor
+# columns carry the **within-document** weighted floors (the pair-count-
+# weighted mean of the documents' own AUCs), because that is the statistic
+# the headline is measured against; the unweighted per-rotation means are in
+# the artifact.
+#
 # The Stage-0 shape (ANALYZE_OMCT_COLUMNS) and the Stage-2 arms shape
 # (ANALYZE_OMCT_ARMS_COLUMNS) stay as they are: a run without a learned
 # scorer keeps its own section's shape.
@@ -353,6 +362,7 @@ ANALYZE_OMCT_STAGE3_COLUMNS: tuple[str, ...] = (
     "model_version",
     "dim",
     "ctx",
+    "groups",
     "features",
     "combiner",
     "within_auc",
@@ -362,14 +372,16 @@ ANALYZE_OMCT_STAGE3_COLUMNS: tuple[str, ...] = (
     "pooled_d_auc",
     "pooled_d_auc_ci",
     "macro_auc",
-    "perm_auc",
-    "ctrl_role_auc",
+    "perm_auc_within",
+    "ctrl_role_auc_within",
     "ctrl_mean",
     "ctrl_rank_p50",
     "ctrl_rank_p50_delta",
     "pos_rank_p50",
     "neg_rank_p50",
     "floor_gap",
+    "hit1_pos",
+    "hit1_pos_ref",
     "n_pairs",
     "n_control",
     "n_docs",

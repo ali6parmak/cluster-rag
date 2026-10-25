@@ -347,6 +347,13 @@ def test_analysis_stage3_defaults_and_validation() -> None:
     assert stage3.features.paragraph_chunker.params == {"n_words": 25, "stride": 12}
     assert stage3.features.question_chunker is None
     assert stage3.features.top_k == 3
+    # the feature-group selection defaults to the whole v0 pack
+    assert stage3.features.groups == (
+        "embedding",
+        "lexical",
+        "question_part",
+        "question_type",
+    )
 
     # the section is optional: without it the Stage-0/1/2 behaviour is untouched
     assert AnalysisConfig().stage3 is None
@@ -369,6 +376,24 @@ def test_analysis_stage3_defaults_and_validation() -> None:
     assert CombinerSpec.model_validate({"name": "logistic", "params": {"C": 0.5}}).params == {
         "C": 0.5
     }
+
+
+def test_analysis_stage3_feature_groups_are_validated() -> None:
+    """The feature-group knob fails at config time, before any run."""
+    from cluster_rag.config import FeaturePackConfig
+
+    # a shorter selection is the ablation's arm
+    selected = FeaturePackConfig.model_validate({"groups": ["embedding", "lexical"]})
+    assert selected.groups == ("embedding", "lexical")
+    # an unknown group name is a configuration error
+    with pytest.raises(ValueError, match="Unknown feature group"):
+        FeaturePackConfig.model_validate({"groups": ["embedding", "not_a_group"]})
+    # an empty selection has no features to fit on
+    with pytest.raises(ValueError, match="at least one feature group"):
+        FeaturePackConfig.model_validate({"groups": []})
+    # a repeated group is a configuration error
+    with pytest.raises(ValueError, match="must not repeat"):
+        FeaturePackConfig.model_validate({"groups": ["lexical", "lexical"]})
 
 
 def test_analysis_stage3_chunker_params_are_validated() -> None:

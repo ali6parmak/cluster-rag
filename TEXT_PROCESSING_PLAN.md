@@ -404,7 +404,7 @@ sweeps are the orders.
   question-side transform is model-dependent (the Phase-2 probe's "strip
   6/6" does not reproduce on the paired footing for voyage-4-nano). The
   numbers are in the track log's Stage-1.1a section.)*
-- [ ] **1.1b The question-type features → Stage 3's feature pack.** The
+- [x] **1.1b The question-type features → Stage 3's feature pack.** The
   answer options are scales ("Very often", "Yes", "Generally, yes"), so the
   decomposition is: (a) **stem-only vs. full question** (does the option
   block help or hurt the topical signal?) — *measured at Stage 1.1a: the
@@ -507,11 +507,14 @@ sweeps are the orders.
 
 ### Stage 3 — Learned pair scorer (the "get crazy" slot)
 
-- [x] **3.1 Feature pack v0 + LR baseline**, [ ] **3.2 gradient-boosted
-  combiner** (sklearn `HistGradientBoostingClassifier`; `lightgbm` only if it
-  beats HistGB and the dependency is approved), [ ] **3.3 chunk-profile
-  features** (best chunk matches, spread/peak features — exp17/15/16 lineage)
-  folded in.
+- [x] **3.1 Feature pack v0 + LR baseline**, [x] **3.1b the feature-group
+  ablation** (the v0 pack's four blocks — the embedding, the lexical, the
+  question-part and the question-type block — measured one at a time: which
+  block carries the gain, and which block costs the hit@1), [ ] **3.2
+  gradient-boosted combiner** (sklearn `HistGradientBoostingClassifier`;
+  `lightgbm` only if it beats HistGB and the dependency is approved), [ ]
+  **3.3 chunk-profile features** (best chunk matches, spread/peak features —
+  exp17/15/16 lineage) folded in.
   *(3.1 done 2026-10-26, CS-5: the v0 feature pack (15 features — the
   global and best chunk cosines, the top-K chunk similarities and their
   spread, the soft lexical overlap and the char n-grams, the question-part
@@ -529,6 +532,26 @@ sweeps are the orders.
   design's own signal. Caveat: the arm's **hit@1 is worse** than the
   cosine's (the learned pair ranker is not a better retriever). The numbers
   are in the track log's Stage-3.1 section.)*
+  *(3.1b done 2026-10-26, CS-6a: the **feature groups** are a config knob
+  (`analysis.stage3.features.groups`) and the pack keeps only the selected
+  groups' columns; 24 runs (8 group sets × 3 models,
+  `omct-analyze-<model>-stage3-<groupset>`), the same harness, the same three
+  rotations, the same two floors. **Verdict: the gain is the lexical block's,
+  not the embedding geometry's and not the question-type prior's.** Removing
+  the question-type block costs 0.001–0.005 of the within-document AUC
+  (0.6655 → 0.6632, 0.6723 → 0.6670, 0.6472 → 0.6462); removing the lexical
+  block costs 0.047–0.113; removing the embedding block costs *nothing*
+  (0.6589 on all three models — and the three arms that use no embedding at
+  all give identical numbers on all three models, which is itself the check
+  that the runs share the data and the seeds). The **hit@1 loss is the lexical
+  block's**: dropping it restores the cosine's hit@1 (0.1279 vs the cosine's
+  0.1355 on embeddinggemma; 0.1050 = the cosine's 0.1050 on voyage-4-nano),
+  while dropping the question-type block moves it by ≤0.006. The
+  question-type-only arm is a question-level prior (its features never look
+  at the paragraph): it reaches only 0.5713 and it is the worst retriever of
+  all (hit@1 0.0076 against the cosine's 0.1355) — the hypothesis is right
+  about the *mechanism* and wrong about the *size*. The numbers are in the
+  track log's Stage-3.1b section.)*
 - **Discipline.**
   - *Split*: document-level holdout — fit on two of the three source
     documents, evaluate on the held-out third (all three rotations when
@@ -706,14 +729,31 @@ sweeps are the orders.
   rule's margin has to be measured against the **control-role floor**, not
   against the cosine. The margin half of the rule is unchanged; the
   measurement around it is not.
-- **The learned pair ranker is not a better retriever (CS-5, 2026-10-26).**
-  The Stage-3.1 arm beats the cosine on the within-document AUC but loses on
-  the hit@k (the positives' hit@1 0.090 vs 0.136 on embeddinggemma). A
-  bag-of-words overlap ranks a *pair* better than an embedding cosine does,
-  but it is a worse first guess for a paragraph. **Open:** is the loss the
-  question-type features (a question-level prior that reorders a
-  paragraph's candidates without looking at the paragraph) or the lexical
-  ones? The feature-group ablation is the first job of CS-6.
+  *(CS-6a adds the decomposition: the label-driven part of the arm's gain is
+  the **lexical** block's — the embedding-only arm is *at* its own
+  control-role floor (0.6006 against 0.5940 on embeddinggemma; 0.5126
+  against 0.5259 on arctic2, i.e. below it), while the lexical-only arm is
+  well above its (0.6461 against 0.5632). So the embedding geometry adds
+  no label-driven signal beyond the training design's own prior, and the
+  floor is the right yardstick for the deliverable.)*
+- **The learned pair ranker is not a better retriever — and the loss is the
+  lexical block's (CS-5 asked; CS-6a answered, 2026-10-26).** The Stage-3.1
+  arm beats the cosine on the within-document AUC but loses on the hit@k (the
+  positives' hit@1 0.090 vs 0.136 on embeddinggemma). A bag-of-words
+  overlap ranks a *pair* better than an embedding cosine does, but it is a
+  worse first guess for a paragraph. The feature-group ablation settles
+  *which* block pays for it: dropping the **lexical** block restores the
+  cosine's hit@1 (0.1279 against the cosine's 0.1355 on embeddinggemma;
+  0.1050 = the cosine's 0.1050 on voyage-4-nano), while dropping the
+  **question-type** block moves it by ≤0.006. The question-type-only arm
+  confirms the *mechanism* (a question-level prior reorders a paragraph's
+  candidates without looking at the paragraph: its hit@1 is 0.0076, the
+  worst of all the arms) but not the *size* (the question-type block is worth
+  0.001–0.005 of the within-document AUC). **Open:** the lexical signal is a
+  bag-of-words overlap over a 294-question corpus — does it transfer to a
+  corpus with a different vocabulary, and is a *retrieval* score (the
+  cosine's geometry, with the learned features only re-ranking a shortlist)
+  the better shape for the deliverable?
 
 ## 6. Milestones
 
@@ -844,6 +884,49 @@ set):
   ~85% of the gain is label-driven and the rest is the training design's own
   signal. Caveat: the arm's hit@1 is *worse* than the cosine's. The numbers
   are in the track log's Stage-3.1 section; 367 unit tests green.)*
+- [x] **CS-6a — Stage 3.1b: the feature-group ablation.** The **feature
+  groups** as the ablation's unit (the v0 pack's four blocks: the embedding,
+  the lexical, the question-part and the question-type block), the
+  `analysis.stage3.features.groups` config knob (validated at config time:
+  an unknown, an empty or a repeated group fails before any run), the pack's
+  group selection (the pack computes every feature; the combiner sees only
+  the selected groups' columns), the question-overlap diagnostic of the
+  rotation (how many of the holdout's questions the fit side also judged),
+  the Stage-3 table shape's growth (the groups, the hit@1, the
+  within-document floors) and the track's ablation sweep
+  (`experiments_text_processing/stage3_ablation_sweep.py`).
+  *(done 2026-10-26: 24 runs `omct-analyze-<model>-stage3-<groupset>` (8
+  group sets × 3 models); the `all` set reproduces the Stage-3.1 artifacts
+  field by field; the guard holds (all 54 runs reproduce the Stage-0 baseline
+  arm field by field). **Verdict: the gain is the lexical block's.** Removing
+  the question-type block costs 0.001–0.005 of the within-document AUC;
+  removing the lexical block costs 0.047–0.113; removing the embedding block
+  costs nothing (0.6589 on all three models — the three embedding-free arms
+  give identical numbers on all three models, which is the check that the
+  runs share the data, the control cells and the seeds). The **hit@1 loss is
+  the lexical block's**, not the question-type block's: dropping the lexical
+  block restores the cosine's hit@1 (0.1279 vs 0.1355 on embeddinggemma,
+  0.1050 = the cosine's on voyage-4-nano) while dropping the question-type
+  block moves it by ≤0.006. The question-type-only arm (a question-level
+  prior that never looks at the paragraph) reaches only 0.5713 and is the
+  worst retriever of all (hit@1 0.0076 vs the cosine's 0.1355). The numbers
+  are in the track log's Stage-3.1b section; 376 unit tests green.)*
+- [ ] **CS-6b — Stage 3.2: the gradient-boosted combiner.** sklearn's
+  `HistGradientBoostingClassifier` behind the same `Combiner` port (the
+  `combining/` registry's second entry); `lightgbm` stays deferred until
+  HistGB is beaten (a new dependency needs the AGENTS.md §3 approval).
+- [ ] **CS-6c — Stage 3.3: the chunk-profile features.** exp15/16's
+  remainder (the df and the alignment-kind one-hots) and exp17's ranked
+  cross-chunk match profiles, folded into the pack.
+- [ ] **CS-6d — the Stage-3 random-vector floor.** The second sanity floor
+  of the plan's Stage 3 (the label-permutation one is done): the arm is
+  fitted on random vectors instead of the model's embeddings, so a "win"
+  can be checked against what the *training design* alone buys.
+- [ ] **CS-6e — the Stage-3 reporting.** The calibration curves and the
+  thresholds per document, and the safe-negative margin measured against the
+  **control-role floor** (the reviewer's decision 2026-10-26: the track's
+  durable deliverable is measured against that floor, not against the plain
+  cosine; the rule still ships as the margin half only).
 
 ## 8. The durable deliverable (named, so it is not lost)
 

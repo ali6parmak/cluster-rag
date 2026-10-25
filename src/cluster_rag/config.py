@@ -599,6 +599,15 @@ class FeaturePackConfig(BaseModel):
       paragraph, never the question").
     - ``top_k``: the K of the top-K chunk similarities (the spread and the
       peak margin are measured over the same K best chunk cosines).
+    - ``groups``: the **feature groups** to keep (Stage 3.1b's ablation
+      unit). The pack's 15 features fall into four groups — ``embedding``
+      (the full-text cosine and the five chunk features), ``lexical`` (the
+      soft overlap in both ways and the char n-grams), ``question_part``
+      (the answer options' coverage) and ``question_type`` (the five
+      question-type one-hots) — and the four partition the pack exactly.
+      The default keeps every group, i.e. the whole v0 pack; a shorter list
+      is the ablation's arm. An unknown group name fails at config time,
+      before any run.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -610,6 +619,27 @@ class FeaturePackConfig(BaseModel):
     )
     question_chunker: ChunkerSpec | None = None
     top_k: int = Field(default=3, ge=1)
+    groups: tuple[str, ...] = ("embedding", "lexical", "question_part", "question_type")
+
+    @field_validator("groups")
+    @classmethod
+    def _groups_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown, an empty or a repeated feature group at config time."""
+        from cluster_rag.text_processors.features import FEATURE_GROUPS
+
+        if not value:
+            raise ValueError("analysis.stage3.features.groups must name at least one feature group")
+        unknown = [group for group in value if group not in FEATURE_GROUPS]
+        if unknown:
+            raise ValueError(
+                f"Unknown feature group(s) {unknown} in analysis.stage3.features.groups; "
+                f"expected values in {list(FEATURE_GROUPS)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(
+                f"analysis.stage3.features.groups must not repeat a group: {list(value)}"
+            )
+        return value
 
 
 class Stage3Config(BaseModel):

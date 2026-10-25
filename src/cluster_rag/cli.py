@@ -1275,6 +1275,7 @@ def _stage3_extractor(
         paragraph_chunker=paragraph_chunker,
         top_k=features.top_k,
         question_embedding_texts=question_embedding_texts,
+        groups=features.groups,
     )
 
 
@@ -1296,6 +1297,9 @@ def _stage3_table_row(
     within_paired = decomposition.get("within_group_paired") or {}
     control = comparison["control_side"]["arm"]
     enrichment = comparison["negative_enrichment"]["rank_percentile"]
+    feature_pack = stage3["feature_pack"]
+    floors = stage3["permutation_floor"]
+    hit_at_k = comparison["hit_at_k"]
     return {
         "run_id": run_id,
         "date": date.today().isoformat(),
@@ -1304,7 +1308,8 @@ def _stage3_table_row(
         "model_version": (info["revision_or_digest"] or "")[:12],
         "dim": info["dimension"],
         "ctx": info["context_tokens"],
-        "features": stage3["feature_pack"].get("n_features"),
+        "groups": "+".join(feature_pack.get("groups") or []) or None,
+        "features": feature_pack.get("n_features"),
         "combiner": (stage3.get("combiner") or {}).get("name"),
         "within_auc": _fmt(decomposition["arm"].get("within_group_auc"), 4),
         "within_d_auc": _fmt(decomposition.get("within_group_delta"), 4),
@@ -1319,14 +1324,16 @@ def _stage3_table_row(
             f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None
         ),
         "macro_auc": _fmt(comparison["pair_auc"].get("macro", {}).get("arm"), 4),
-        "perm_auc": _fmt(stage3["permutation_floor"]["chance"].get("mean"), 4),
-        "ctrl_role_auc": _fmt(stage3["permutation_floor"]["control_role"].get("mean"), 4),
+        "perm_auc_within": _fmt(floors.get("within_document", {}).get("chance"), 4),
+        "ctrl_role_auc_within": _fmt(floors.get("within_document", {}).get("control_role"), 4),
         "ctrl_mean": _fmt(control.get("mean"), 4),
         "ctrl_rank_p50": _fmt(control.get("rank_p50"), 4),
         "ctrl_rank_p50_delta": _fmt(comparison["control_side"].get("rank_p50_delta"), 4),
         "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
         "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
         "floor_gap": _fmt(comparison["floor_gap"]["arm"].get("standardized"), 4),
+        "hit1_pos": _fmt(hit_at_k["arm"]["label1"].get("hit@1"), 4),
+        "hit1_pos_ref": _fmt(hit_at_k["reference"]["label1"].get("hit@1"), 4),
         "n_pairs": n_pairs,
         "n_control": n_control,
         "n_docs": n_docs,
@@ -1508,6 +1515,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                         else analysis.stage3.features.question_chunker.model_dump(mode="python")
                     ),
                     "top_k": analysis.stage3.features.top_k,
+                    "groups": list(analysis.stage3.features.groups),
                 },
                 "combiner": analysis.stage3.combiner.model_dump(mode="python"),
                 "control_weight": analysis.stage3.control_weight,
@@ -1670,9 +1678,15 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"{_fmt(within_paired.get('ci_high'), 4)}]); pooled AUC "
                 f"{_fmt(comparison['pair_auc']['arm'], 4)} "
                 f"(delta {_fmt(comparison['paired_auc']['delta_auc'], 4)}); "
-                f"chance floor {_fmt(floor['chance']['mean'], 4)}, "
-                f"control-role floor {_fmt(floor['control_role']['mean'], 4)}"
+                f"chance floor {_fmt(floor['within_document']['chance'], 4)}, "
+                f"control-role floor {_fmt(floor['within_document']['control_role'], 4)}"
             )
+            groups = stage3["feature_pack"].get("groups") or []
+            if groups:
+                print(
+                    f"        feature groups: {'+'.join(groups)} "
+                    f"({stage3['feature_pack'].get('n_features')} features)"
+                )
             for rotation in stage3["rotations_summary"]:
                 print(
                     f"        holdout {rotation['holdout'][:40]}: arm "

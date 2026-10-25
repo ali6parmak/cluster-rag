@@ -1472,3 +1472,233 @@ paragraph length tracks the document, so a length feature can memorize the
 document instead of the topic — still holds (NU's paragraphs are longer than
 AI's), but the stated margin was wrong. The plan's note is corrected in
 place; this entry records the correction.
+
+## Stage 3.1b — the feature-group ablation (CS-6a, 2026-10-26)
+
+**The question.** The Stage-3.1 run left two questions open: (a) **which
+block of the feature pack carries the gain** — the +0.10 to +0.15
+within-document AUC the learned arm won over the full-text cosine — and (b)
+**why the arm is a worse retriever** (its positives' hit@1 is 0.090 against
+the cosine's 0.136 on embeddinggemma). The plan's open question named the
+two candidates for (b): the question-type features (a question-level prior
+that reorders a paragraph's candidates without looking at the paragraph) or
+the lexical ones. The Stage-3.1 log could only *read* the fitted
+coefficients; this change set *measures* it.
+
+**The unit of the ablation is the feature group.** The v0 pack's 15 features
+fall into four blocks of the same kind of signal:
+
+| group | features | what it holds |
+|---|---|---|
+| `embedding` | 6 | the full-text cosine + the five chunk features |
+| `lexical` | 3 | the soft lexical overlap (both ways) + the char-3-gram cosine |
+| `question_part` | 1 | the answer options' soft coverage |
+| `question_type` | 5 | the question-type one-hots |
+
+The group is a **config knob** (`analysis.stage3.features.groups`, validated
+at config time: an unknown, an empty or a repeated group fails before any
+run), and the pack keeps only the selected groups' columns — the pack itself
+computes every feature, the combiner sees the selection. Nothing else
+changes: the same document-level holdout (three rotations, one out-of-fold
+score matrix), the same training data (the fit side's judged pairs plus its
+unjudged control cells as down-weighted presumed negatives), the same two
+floors (the label-permutation chance floor and the control-role floor) and
+the same paired statistics against the full-text cosine.
+
+**The grid.** Eight group sets per model: `all` (the whole pack — the
+reference), the leave-one-out set `no-qtype` / `no-qpart` / `no-lex` /
+`no-embed`, and the single-block arms `embed-only` / `lex-only` /
+`qtype-only`. Three Stage-0 models, so **24 runs**
+(`omct-analyze-<model>-stage3-<groupset>`, the sweep
+`experiments_text_processing/stage3_ablation_sweep.py`). Each run holds all
+three rotations, because the out-of-fold protocol needs them together.
+
+**The checks.** The `all` set reproduces the Stage-3.1 artifacts **field by
+field** (every number identical; only the new metadata fields differ), and
+the Stage-3.1 sweep was re-run for the table's new shape with the same
+result. The guard holds: all **54 runs** reproduce the Stage-0 baseline arm
+field by field (`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**1. The headline: the within-document AUC per group set** (the Stage-3.1
+arm is the `all` row; the paired CI against the full-text cosine is in the
+second table).
+
+| group set | features | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|---|
+| `all` | 15 | 0.6655 | 0.6723 | 0.6472 |
+| `no-qtype` | 10 | 0.6632 | 0.6670 | 0.6462 |
+| `no-qpart` | 14 | 0.6569 | 0.6653 | 0.6356 |
+| `no-lex` | 12 | 0.6188 | 0.5650 | 0.5345 |
+| `no-embed` | 9 | 0.6589 | 0.6589 | 0.6589 |
+| `embed-only` | 6 | 0.6006 | 0.5436 | 0.5126 |
+| `lex-only` | 3 | 0.6461 | 0.6461 | 0.6461 |
+| `qtype-only` | 5 | 0.5713 | 0.5713 | 0.5713 |
+
+The paired difference against the full-text cosine (the same held-out
+documents, the paired bootstrap's 95% interval, 2,000 resamples, seed 42):
+
+| group set | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| `all` | +0.1023 [+0.0740, +0.1313] | +0.1485 [+0.1176, +0.1820] | +0.1452 [+0.1143, +0.1797] |
+| `no-qtype` | +0.1000 [+0.0736, +0.1270] | +0.1432 [+0.1127, +0.1744] | +0.1443 [+0.1135, +0.1771] |
+| `no-qpart` | +0.0937 [+0.0661, +0.1232] | +0.1415 [+0.1097, +0.1753] | +0.1336 [+0.1031, +0.1678] |
+| `no-lex` | +0.0555 [+0.0286, +0.0824] | +0.0412 [+0.0157, +0.0650] | +0.0325 [+0.0061, +0.0578] |
+| `no-embed` | +0.0956 [+0.0555, +0.1365] | +0.1351 [+0.0883, +0.1831] | +0.1569 [+0.1127, +0.2022] |
+| `embed-only` | +0.0374 [+0.0133, +0.0610] | +0.0198 [+0.0034, +0.0349] | +0.0107 [−0.0096, +0.0299] |
+| `lex-only` | +0.0829 [+0.0452, +0.1230] | +0.1223 [+0.0752, +0.1694] | +0.1441 [+0.1020, +0.1885] |
+| `qtype-only` | +0.0081 [−0.0387, +0.0548] | +0.0475 [−0.0042, +0.0985] | +0.0694 [+0.0215, +0.1152] |
+
+**2. The verdict on (a): the gain is the lexical block's, and the embedding
+geometry adds nothing to it.**
+
+- **Removing the question-type block costs almost nothing**: 0.0023
+  (embeddinggemma), 0.0053 (voyage-4-nano), 0.0010 (arctic2) of the
+  within-document AUC. The Stage-3.1 reading of the fitted weights ("the
+  gain is not a question-level prior") was right, and now it is measured.
+- **Removing the lexical block costs the most**: 0.0468, 0.1073, 0.1127.
+  The `lex-only` arm — **three features** — reaches 0.6461 on all three
+  models: 97% / 96% / 100% of the full pack's within-document AUC, and
+  81% / 82% / 99% of its gain over the cosine.
+- **Removing the embedding block costs nothing**: the `no-embed` arm reaches
+  0.6589 on all three models, *above* the full pack on arctic2 (0.6472). So
+  the six embedding features (the full-text cosine and the five chunk
+  cosines) add no within-document ranking on top of the lexical block; on
+  the two models where the full pack is ahead, the difference is 0.007 and
+  0.013.
+- The `embed-only` arm adds only +0.0374 / +0.0198 / +0.0107 over the
+  cosine, and on arctic2 its interval includes zero.
+
+The three arms that use **no embedding at all** (`no-embed`, `lex-only`,
+`qtype-only`) give *identical* numbers on all three models. That is the
+built-in check of the whole harness: the runs share the data, the control
+cells, the rotations and the seeds, and only the embedding-dependent arms
+move with the model.
+
+**3. The same picture against the control-role floor** (the yardstick the
+track's deliverable is measured against: the floor of an arm that knows
+nothing about the labels but is told "the ordinary unjudged cells are
+negative"). The table gives each arm's own control-role floor and the arm's
+excess over it — the arm's *label-driven* part:
+
+| group set | control-role floor (eg / voy / arc) | the arm's excess (eg / voy / arc) |
+|---|---|---|
+| `all` | 0.5788 / 0.5765 / 0.5569 | +0.0868 / +0.0958 / +0.0903 |
+| `no-qtype` | 0.5686 / 0.5643 / 0.5490 | +0.0946 / +0.1027 / +0.0972 |
+| `no-qpart` | 0.5993 / 0.6014 / 0.5770 | +0.0577 / +0.0639 / +0.0585 |
+| `no-lex` | 0.5964 / 0.5362 / 0.5345 | +0.0223 / +0.0288 / −0.0000 |
+| `no-embed` | 0.5392 / 0.5392 / 0.5392 | +0.1197 / +0.1197 / +0.1197 |
+| `embed-only` | 0.5940 / 0.5173 / 0.5259 | +0.0066 / +0.0263 / −0.0133 |
+| `lex-only` | 0.5632 / 0.5632 / 0.5632 | +0.0829 / +0.0829 / +0.0829 |
+| `qtype-only` | 0.5358 / 0.5358 / 0.5358 | +0.0356 / +0.0356 / +0.0356 |
+
+The `embed-only` arm is **at** its own control-role floor (0.6006 against
+0.5940 on embeddinggemma) and **below** it on arctic2 (0.5126 against
+0.5259). So the embedding geometry's own arm-level win over the cosine
+(+0.0374 / +0.0198 / +0.0107) is *the training design's own label-free
+signal*, not label information. The lexical block is the opposite: +0.0829
+above its floor on every model.
+
+**4. The verdict on (b): the hit@1 loss is the lexical block's, not the
+question-type block's.** The positives' hit@1 (the true match is the
+paragraph's own best candidate):
+
+| group set | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| `all` | 0.0897 (cosine 0.1355) | 0.0821 (cosine 0.1050) | 0.0859 (cosine 0.1050) |
+| `no-qtype` | 0.0916 (cosine 0.1355) | 0.0821 (cosine 0.1050) | 0.0802 (cosine 0.1050) |
+| `no-qpart` | 0.0897 (cosine 0.1355) | 0.0954 (cosine 0.1050) | 0.0706 (cosine 0.1050) |
+| `no-lex` | 0.1279 (cosine 0.1355) | 0.1050 (cosine 0.1050) | 0.0935 (cosine 0.1050) |
+| `no-embed` | 0.0344 (cosine 0.1355) | 0.0344 (cosine 0.1050) | 0.0344 (cosine 0.1050) |
+| `embed-only` | 0.1317 (cosine 0.1355) | 0.1145 (cosine 0.1050) | 0.0916 (cosine 0.1050) |
+| `lex-only` | 0.0324 (cosine 0.1355) | 0.0324 (cosine 0.1050) | 0.0324 (cosine 0.1050) |
+| `qtype-only` | 0.0076 (cosine 0.1355) | 0.0076 (cosine 0.1050) | 0.0076 (cosine 0.1050) |
+
+- **Dropping the lexical block restores the cosine's hit@1**: 0.1279 against
+  the cosine's 0.1355 on embeddinggemma, and on voyage-4-nano it is exactly
+  the cosine's 0.1050. Dropping the **question-type** block moves it by
+  ≤0.006 (0.0897 → 0.0916, 0.0821 → 0.0821, 0.0859 → 0.0802).
+- So the Stage-3.1 caveat ("a learned pair ranker is not a better
+  retriever") is a statement about the **lexical** block: a bag-of-words
+  overlap ranks a *pair* better than an embedding cosine does, and is a
+  worse first guess for a paragraph.
+- The `qtype-only` arm confirms the plan's *mechanism* and refutes its
+  *size*: a question-level prior reorders a paragraph's candidates without
+  looking at the paragraph, so its hit@1 collapses to 0.0076 — the worst of
+  all the arms — but the question-type block is worth 0.001–0.005 of the
+  within-document AUC, so it is not what costs the hit@1.
+
+**5. The question-type arm, read as a question-level prior.** The
+`qtype-only` arm reaches 0.5713 (the CI against the cosine excludes zero on
+arctic2 only: +0.0694 [+0.0215, +0.1152]; on embeddinggemma and
+voyage-4-nano it includes zero). Its **macro** AUC is 0.5324 — *below* the
+cosine's on all three models (0.6376 / 0.5588 / 0.5463) — and it collapses
+on the AI stratum (0.4358 against the cosine's 0.7633 / 0.6165 / 0.6209).
+The leakage route is measured too: of the holdout's questions, 176 of 243
+(NU), 45 of 51 (AI) and 182 of 217 (CIDH) are also judged by the fit side.
+The features are pair-local (no corpus statistic enters them) and the
+combiner's weight is fitted on the fit side only, but a question-type
+weight reaches the holdout's copy of the same question — so this arm's
+number is an upper bound on what a question-level prior can buy, not a
+transferable gain.
+
+**6. The per-rotation numbers** (the arm / the cosine's, on the same
+held-out document). The AI stratum is the thin one (99 pairs, 51 questions),
+and it is where every arm loses a rotation:
+
+| group set | model | NU | AI | CIDH |
+|---|---|---|---|---|
+| `all` | embeddinggemma | 0.6189 / 0.5231 | 0.7867 / 0.7633 | 0.7411 / 0.6263 |
+| `no-qtype` | embeddinggemma | 0.6115 / 0.5231 | 0.7911 / 0.7633 | 0.7471 / 0.6263 |
+| `no-qpart` | embeddinggemma | 0.6149 / 0.5231 | 0.7677 / 0.7633 | 0.7251 / 0.6263 |
+| `no-lex` | embeddinggemma | 0.5754 / 0.5231 | 0.7823 / 0.7633 | 0.6880 / 0.6263 |
+| `no-embed` | embeddinggemma | 0.6366 / 0.5231 | 0.5734 / 0.7633 | 0.6978 / 0.6263 |
+| `embed-only` | embeddinggemma | 0.5582 / 0.5231 | 0.7987 / 0.7633 | 0.6676 / 0.6263 |
+| `lex-only` | embeddinggemma | 0.6291 / 0.5231 | 0.5646 / 0.7633 | 0.6761 / 0.6263 |
+| `qtype-only` | embeddinggemma | 0.5473 / 0.5231 | 0.4358 / 0.7633 | 0.6141 / 0.6263 |
+
+The arm is ahead of the cosine in 9 of 9 rotations for `all`, `no-qtype` and
+`no-qpart`, in 8 of 9 for `no-lex` and `embed-only`, and in 6 of 9 for
+`no-embed` and `lex-only` (the AI stratum) and 5 of 9 for `qtype-only`. The
+other two models' per-rotation numbers are in the artifacts.
+
+**7. The control side: no inflation.** The control's rank percentile (0 =
+the top of the paragraph's own candidate list) barely moves for every arm:
+the `all` arm by −0.0019 / −0.0085 / −0.0044, the single-block arms by
+≤0.008, except the `lex-only` arm, which pushes the ordinary cells *down*
+the candidate lists (+0.0119 / +0.0138 / +0.0141). So the lexical arm's
+gain on the reviewed set is not an inflation of the control.
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule
+  still ships as the **margin half only**.
+- **Nothing about a corpus with a different vocabulary.** The lexical block
+  is a bag-of-words overlap over 294 questions; whether it transfers to a
+  new corpus is open (the plan's §5).
+- **Nothing new about the pooled AUC.** The `no-lex` arm's *pooled* AUC
+  falls below the cosine's on all three models (0.5320 / 0.4934 / 0.4385
+  against 0.5371 / 0.5004 / 0.4680) while its within-document gain
+  survives — one more reason the within-document statistic is the headline
+  on this benchmark.
+
+**The next step (CS-6b).** The gradient-boosted combiner (the plan's 3.2)
+behind the same `Combiner` port, with the group selection as a knob: the
+ablation says the learner now has to earn something over a bag-of-words
+overlap, so the comparison to watch is HistGB on the *lexical* block against
+HistGB on the whole pack. Then 3.3 (the chunk-profile features), the
+random-vector floor (the second sanity floor of the plan's Stage 3) and the
+Stage-3 reporting (the calibration curves, the thresholds per document, and
+the safe-negative margin measured against the control-role floor).
+
+**A note on the comparison table.** The Stage-3 table shape grew with this
+change set: a `groups` column, the two `hit@1` columns, and the two floor
+columns renamed `perm_auc_within` / `ctrl_role_auc_within` because they now
+carry the **within-document** weighted floors — the statistic the headline
+is measured against, and the one the Stage-3.1 log entry already quoted (the
+old columns carried the unweighted per-rotation means, which are not
+like-for-like with the headline). The Stage-3.1 sweep was re-run for the new
+shape; its artifacts reproduce the stored ones field by field, so the
+Stage-3.1 numbers in the table did not move.

@@ -18,24 +18,35 @@ never sees a label, a document name or a length feature (the plan's Stage-3
 leakage rules: no corpus-level question statistics, no document-identity
 feature — and length is a document proxy, so it is recorded in the artifact
 but never fed to the model).
+
+The pack's features fall into four **groups** (``embedding``, ``lexical``,
+``question_part``, ``question_type``) — the unit of the plan's Stage-3.1b
+feature-group ablation. The extractor keeps the groups it is given, so the
+ablation changes the combiner's columns and nothing else.
 """
 
 from __future__ import annotations
 
 from cluster_rag.text_processors.features.pair_features import (
     DEFAULT_STOPWORDS,
+    FEATURE_GROUP_PREFIXES,
+    FEATURE_GROUPS,
     FEATURE_NAMES,
     FeatureEmbedders,
     PairFeatureExtractor,
     QuestionParts,
+    feature_group,
     split_question_parts,
 )
 
 __all__ = [
     "DEFAULT_STOPWORDS",
+    "FEATURE_GROUPS",
+    "FEATURE_GROUP_PREFIXES",
     "FEATURE_NAMES",
     "FeatureEmbedders",
     "PairFeatureExtractor",
     "QuestionParts",
+    "feature_group",
     "split_question_parts",
 ]

@@ -40,6 +40,25 @@ pack therefore splits the question into its **stem** (the topical part) and its
 **options** (the type part), uses the stem for the lexical overlap, and turns
 the options into the type one-hots.
 
+**The feature groups (the CS-6a ablation's unit).** The pack's features fall
+into four **groups**, each one a block of the same kind of signal:
+
+=====================  =====================================================
+group                  what it holds
+=====================  =====================================================
+``embedding``          the full-text cosine + the five chunk features
+``lexical``            the soft lexical overlap (both ways) + the char n-grams
+``question_part``      the answer options' soft coverage
+``question_type``      the five question-type one-hots
+=====================  =====================================================
+
+The group of a feature is decided by its **name prefix**, so the
+K-dependent name needs no special case, and the four groups partition the
+pack exactly (a test enforces it). The extractor keeps only the groups it is
+given (``groups``), which is how the plan's feature-group ablation (Stage
+3.1b) measures which block carries the gain: the pack itself never changes,
+only the columns the combiner sees.
+
 **Where the embeddings come from.** The pack takes the ``Embedder`` **port**
 (``cluster_rag.embed.base``) through :class:`FeatureEmbedders` — the same
 precedent as the semantic chunker: the package never imports a model client,
@@ -86,6 +105,36 @@ FEATURE_NAMES: tuple[str, ...] = (
     "qtype_frequency",
     "qtype_option_count",
 )
+
+# The feature groups of the v0 pack (the Stage-3.1b ablation's unit). The
+# group of a feature is decided by its **name prefix**, so the K-dependent
+# name needs no special case; the four groups partition the pack exactly (a
+# test enforces it).
+FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
+    "embedding": ("cosine_full", "chunk_"),
+    "lexical": ("lex_",),
+    "question_part": ("qpart_",),
+    "question_type": ("qtype_",),
+}
+
+# The group names, in the canonical order.
+FEATURE_GROUPS: tuple[str, ...] = tuple(FEATURE_GROUP_PREFIXES)
+
+
+def feature_group(name: str) -> str | None:
+    """The group a feature belongs to (``None`` when it belongs to none).
+
+    Args:
+        name: The feature's name (e.g. ``"chunk_cosine_best"``).
+
+    Returns:
+        The group's name, or ``None`` when no group claims the feature.
+    """
+    for group, prefixes in FEATURE_GROUP_PREFIXES.items():
+        if any(name == prefix or name.startswith(prefix) for prefix in prefixes):
+            return group
+    return None
+
 
 # The stopwords of the lexical coverage: the coverage of a *stopword* would
 # be trivially high (every English text contains "the"), so the coverage
@@ -485,10 +534,15 @@ class PairFeatureExtractor:
             stripped), so the pack's embedding features match the baseline
             arm's cosine exactly while the lexical and type features still
             see the question's parts.
+        groups: The **feature groups** to keep (the Stage-3.1b ablation's
+            unit). ``None`` keeps every group, i.e. the whole v0 pack. The
+            selected features keep the pack's canonical order, so a group's
+            columns are the same whatever else is selected.
         stopwords: The stopwords of the lexical coverage.
 
     Raises:
-        ValueError: If ``top_k`` is not positive.
+        ValueError: If ``top_k`` is not positive, if a group name is unknown,
+            if a group is repeated, or if the selection is empty.
     """
 
     def __init__(
@@ -498,6 +552,7 @@ class PairFeatureExtractor:
         paragraph_chunker: Chunker,
         top_k: int = 3,
         question_embedding_texts: Mapping[str, str] | None = None,
+        groups: Sequence[str] | None = None,
         stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     ) -> None:
         if top_k < 1:
@@ -507,10 +562,37 @@ class PairFeatureExtractor:
         self.top_k = top_k
         self.question_embedding_texts = dict(question_embedding_texts or {})
         self.stopwords = frozenset(stopwords)
+        self.groups = self._checked_groups(groups)
+        self._canonical_names = self._canonical_feature_names()
+        self._selected = tuple(
+            index
+            for index, name in enumerate(self._canonical_names)
+            if feature_group(name) in self.groups
+        )
+        if not self._selected:
+            raise ValueError(
+                f"the feature groups {list(self.groups)} select no feature of the v0 pack"
+            )
 
-    @property
-    def feature_names(self) -> tuple[str, ...]:
-        """The feature names, in column order (the K-dependent ones included)."""
+    @staticmethod
+    def _checked_groups(groups: Sequence[str] | None) -> tuple[str, ...]:
+        """The group selection, checked (known names, no repeats, not empty)."""
+        if groups is None:
+            return FEATURE_GROUPS
+        selected = tuple(groups)
+        if not selected:
+            raise ValueError("the feature groups must name at least one group")
+        unknown = [group for group in selected if group not in FEATURE_GROUPS]
+        if unknown:
+            raise ValueError(
+                f"Unknown feature group(s) {unknown}; expected values in {list(FEATURE_GROUPS)}"
+            )
+        if len(set(selected)) != len(selected):
+            raise ValueError(f"the feature groups must not repeat a group: {list(selected)}")
+        return selected
+
+    def _canonical_feature_names(self) -> tuple[str, ...]:
+        """The pack's feature names, in column order (the K-dependent ones included)."""
         return (
             "cosine_full",
             "chunk_cosine_best",
@@ -529,12 +611,26 @@ class PairFeatureExtractor:
             "qtype_option_count",
         )
 
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        """The selected feature names, in column order (the K-dependent ones included)."""
+        return tuple(self._canonical_names[index] for index in self._selected)
+
+    @property
+    def dropped_feature_names(self) -> tuple[str, ...]:
+        """The canonical features the current group selection leaves out."""
+        return tuple(
+            name for index, name in enumerate(self._canonical_names) if index not in self._selected
+        )
+
     def describe(self) -> dict[str, Any]:
         """A JSON-friendly description of the pack (recorded in the artifact)."""
         return {
             "name": "v0",
             "n_features": len(self.feature_names),
             "feature_names": list(self.feature_names),
+            "groups": list(self.groups),
+            "dropped_features": list(self.dropped_feature_names),
             "paragraph_chunker": self.paragraph_chunker.version,
             "top_k": self.top_k,
             "stopwords": sorted(self.stopwords),
@@ -555,7 +651,9 @@ class PairFeatureExtractor:
                 "the pack is label-free and pair-local: no corpus-level question "
                 "statistic, no document-identity feature, and no length feature "
                 "(length is a document proxy on this data; the lengths are "
-                "recorded in the artifact instead)"
+                "recorded in the artifact instead). 'groups' is the feature-group "
+                "selection of the Stage-3.1b ablation: the pack computes every "
+                "feature and the combiner sees only the selected groups' columns."
             ),
         }
 
@@ -640,12 +738,15 @@ class PairFeatureExtractor:
         ]
 
         top_k = self.top_k
+        selected = list(self._selected)
         for position, pair in enumerate(items):
             row = paragraph_index[pair.paragraph_text]
             column = question_index[pair.question_text]
             paragraph_vector = paragraph_vectors[row]
             question_vector = question_vectors[column]
-            values = matrix[position]
+            # the canonical row: every feature is computed, and the combiner
+            # sees only the selected groups' columns
+            values = np.zeros(len(self._canonical_names), dtype=np.float32)
 
             # 1. the global (full-text) cosine
             values[0] = float(paragraph_vector @ question_vector)
@@ -687,6 +788,8 @@ class PairFeatureExtractor:
             values[12] = 1.0 if _is_yes_no(parts) else 0.0
             values[13] = 1.0 if _is_frequency(parts) else 0.0
             values[14] = float(len(parts.options))
+            # the combiner sees the selected groups' columns only
+            matrix[position] = values[selected]
         return matrix
 
 
@@ -696,6 +799,7 @@ def build_feature_extractor(
     paragraph_chunker: Chunker,
     top_k: int = 3,
     question_embedding_texts: Mapping[str, str] | None = None,
+    groups: Sequence[str] | None = None,
 ) -> PairFeatureExtractor:
     """Build the v0 feature pack (the config-facing entry point)."""
     return PairFeatureExtractor(
@@ -703,4 +807,5 @@ def build_feature_extractor(
         paragraph_chunker=paragraph_chunker,
         top_k=top_k,
         question_embedding_texts=question_embedding_texts,
+        groups=groups,
     )

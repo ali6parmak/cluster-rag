@@ -190,6 +190,42 @@ analysis:
 """
 
 
+ANALYSIS_STAGE3_GROUPS_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 3
+  stage3:
+    features:
+      paragraph_chunker:
+        name: word_windows
+        params:
+          n_words: 3
+          stride: 2
+      top_k: 2
+      groups: [embedding, lexical]
+    combiner:
+      name: logistic
+      params:
+        C: 1.0
+    control_weight: 0.3
+    permutation_resamples: 3
+"""
+
+
 @pytest.fixture()
 def view(sample_pairs: Path):
     """The model-independent view of the pairwise fixture."""
@@ -923,6 +959,48 @@ def test_analyze_omct_stage3_end_to_end(
     assert "chance floor" in out
 
 
+def test_analyze_omct_stage3_group_selection_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """A Stage-3.1b run: the pack keeps only the selected feature groups."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-groups",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_GROUPS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-stage3-groups"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    stage3 = payload["models"][0]["stage3"]
+    # the config is recorded, so the run is reproducible from the artifact
+    assert payload["analysis"]["stage3"]["features"]["groups"] == ["embedding", "lexical"]
+    # the pack computes every feature but the combiner sees the groups only
+    assert stage3["feature_pack"]["groups"] == ["embedding", "lexical"]
+    assert stage3["feature_pack"]["n_features"] == 9
+    assert "cosine_full" in stage3["feature_pack"]["feature_names"]
+    assert "lex_char_ngram_cosine" in stage3["feature_pack"]["feature_names"]
+    assert "qtype_option_count" not in stage3["feature_pack"]["feature_names"]
+    assert "qtype_option_count" in stage3["feature_pack"]["dropped_features"]
+    # the coefficients are named after the selected features
+    coefficients = stage3["rotations"][0]["coefficients"]["values"]
+    assert set(coefficients) == set(stage3["feature_pack"]["feature_names"])
+    # the question overlap of the two sides is measured (the leakage rule (i))
+    for rotation in stage3["rotations"]:
+        overlap = rotation["question_overlap"]
+        assert overlap["n_holdout_questions"] > 0
+        assert (
+            0 <= overlap["n_holdout_questions_also_judged_in_fit"] <= overlap["n_holdout_questions"]
+        )
+        assert overlap["n_holdout_pairs_with_a_shared_question"] <= rotation["n_holdout_pairs"]
+
+
 def test_stage3_rotations_hold_out_one_document_at_a_time(view) -> None:
     """The document-level holdout: the fit side never contains the holdout."""
     embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
@@ -1087,3 +1165,40 @@ def test_analyze_omct_arms_table_rows_use_the_arms_columns(
     # the baseline row carries no comparison (it is the reference)
     baseline_row = next(row for row in data_rows if "| full_text |" in row)
     assert "| n/a |" in baseline_row
+
+
+def test_analyze_omct_stage3_table_row_carries_the_groups_and_the_hit1(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """A Stage-3 run writes the learned-arm columns (the groups, the hit@1)."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-table",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=ANALYSIS_STAGE3_GROUPS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    text = table.read_text("utf-8")
+    data_rows = [
+        line for line in text.splitlines() if line.startswith("| omct-analyze-stage3-table")
+    ]
+    assert len(data_rows) == 1
+    row = data_rows[0]
+    # the feature groups and the pack's size
+    assert "| embedding+lexical |" in row
+    assert "| 9 |" in row
+    # the hit@1 of the arm and of the cosine
+    hit_cells = row.split("|")
+    assert hit_cells[-4].strip() != "n/a"  # hit1_pos
+    assert hit_cells[-3].strip() != "n/a"  # hit1_pos_ref
+    # the two floor columns carry the within-document weighted floors
+    header = [line for line in text.splitlines() if line.startswith("| run_id")][0]
+    assert "perm_auc_within" in header
+    assert "ctrl_role_auc_within" in header

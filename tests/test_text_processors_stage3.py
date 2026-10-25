@@ -26,9 +26,11 @@ from cluster_rag.text_processors.combining import (
 )
 from cluster_rag.text_processors.features import (
     DEFAULT_STOPWORDS,
+    FEATURE_GROUPS,
     FEATURE_NAMES,
     FeatureEmbedders,
     PairFeatureExtractor,
+    feature_group,
     split_question_parts,
 )
 from fake_embedder import FakeEmbedder
@@ -49,6 +51,7 @@ def _extractor(
     top_k: int = 3,
     question_embedding_texts: dict[str, str] | None = None,
     chunker=None,
+    groups: tuple[str, ...] | None = None,
 ) -> PairFeatureExtractor:
     """A feature pack over the fake embedder (no network, no model download)."""
     embedder = FakeEmbedder(model_id="fake-embedder", dimension=dimension)
@@ -57,6 +60,7 @@ def _extractor(
         paragraph_chunker=chunker or FullTextChunker(),
         top_k=top_k,
         question_embedding_texts=question_embedding_texts,
+        groups=groups,
     )
 
 
@@ -178,6 +182,84 @@ def test_feature_pack_describes_itself() -> None:
     assert described["top_k"] == 3
     assert described["stopwords"] == sorted(DEFAULT_STOPWORDS)
     assert "pair-local" in described["note"]
+
+
+# -- the feature groups (the Stage-3.1b ablation's unit) ------------------------
+
+
+def test_feature_groups_partition_the_pack() -> None:
+    """Every v0 feature belongs to exactly one group, and the four cover the pack."""
+    assert set(FEATURE_GROUPS) == {
+        "embedding",
+        "lexical",
+        "question_part",
+        "question_type",
+    }
+    grouped: dict[str, list[str]] = {group: [] for group in FEATURE_GROUPS}
+    for name in FEATURE_NAMES:
+        group = feature_group(name)
+        assert group is not None, name
+        grouped[group].append(name)
+    # the four groups partition the pack: every feature is in exactly one of
+    # them and none is left over
+    assert sorted(name for names in grouped.values() for name in names) == sorted(FEATURE_NAMES)
+    assert len(grouped["embedding"]) == 6
+    assert len(grouped["lexical"]) == 3
+    assert len(grouped["question_part"]) == 1
+    assert len(grouped["question_type"]) == 5
+    # the groups hold the features the plan's list names
+    assert feature_group("cosine_full") == "embedding"
+    assert feature_group("chunk_cosine_spread") == "embedding"
+    assert feature_group("lex_char_ngram_cosine") == "lexical"
+    assert feature_group("qpart_options_coverage") == "question_part"
+    assert feature_group("qtype_option_count") == "question_type"
+
+
+def test_feature_pack_keeps_only_the_requested_groups() -> None:
+    """The selection keeps the canonical order and drops the other groups' features."""
+    extractor = _extractor(groups=("lexical",))
+    assert extractor.feature_names == (
+        "lex_question_coverage",
+        "lex_paragraph_coverage",
+        "lex_char_ngram_cosine",
+    )
+    assert len(extractor.dropped_feature_names) == 12
+    assert "cosine_full" in extractor.dropped_feature_names
+    assert "qtype_option_count" in extractor.dropped_feature_names
+    # the default keeps the whole pack
+    assert _extractor().feature_names == FEATURE_NAMES
+    assert _extractor().dropped_feature_names == ()
+
+
+def test_feature_pack_selection_only_changes_the_columns() -> None:
+    """The selected columns are the full pack's columns, value for value."""
+    pair = TextPair(paragraph_text=PARAGRAPH, question_text=QUESTION)
+    full = _extractor().extract([pair])[0]
+    for groups in (("embedding",), ("lexical",), ("question_type",), ("embedding", "lexical")):
+        extractor = _extractor(groups=groups)
+        selected = extractor.extract([pair])[0]
+        assert selected.shape == (len(extractor.feature_names),)
+        for position, name in enumerate(extractor.feature_names):
+            assert selected[position] == pytest.approx(full[FEATURE_NAMES.index(name)])
+
+
+def test_feature_pack_rejects_a_bad_group_selection() -> None:
+    """An unknown, an empty or a repeated group is a configuration error."""
+    with pytest.raises(ValueError, match="Unknown feature group"):
+        _extractor(groups=("embedding", "not_a_group"))
+    with pytest.raises(ValueError, match="at least one group"):
+        _extractor(groups=())
+    with pytest.raises(ValueError, match="must not repeat"):
+        _extractor(groups=("lexical", "lexical"))
+
+
+def test_feature_pack_describes_the_group_selection() -> None:
+    """The description records the groups and the dropped features."""
+    described = _extractor(groups=("embedding", "question_type")).describe()
+    assert described["groups"] == ["embedding", "question_type"]
+    assert described["n_features"] == 11
+    assert "lex_question_coverage" in described["dropped_features"]
+    assert "cosine_full" not in described["dropped_features"]
 
 
 def test_logistic_combiner_fits_and_scores() -> None:
