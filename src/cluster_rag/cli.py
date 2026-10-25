@@ -66,6 +66,8 @@ from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
 from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
 from cluster_rag.experiment_table import (
+    ANALYZE_OMCT_ARMS_COLUMNS,
+    ANALYZE_OMCT_ARMS_KEY_COLUMNS,
     ANALYZE_OMCT_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     EMBED_COLUMNS,
@@ -83,9 +85,11 @@ from cluster_rag.experiment_table import (
     table_target,
 )
 from cluster_rag.omct_analysis import (
+    BASELINE_ARM,
+    BASELINE_CHUNKER,
     build_analysis_report,
     build_dataset_view,
-    score_model,
+    score_model_arms,
     side_cache_versions,
 )
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
@@ -95,6 +99,7 @@ from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
+from cluster_rag.text_processors.aggregation import parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
 
 logger = logging.getLogger(__name__)
@@ -1005,6 +1010,55 @@ def _cmd_probe_omct(config: AppConfig) -> int:
     return 0
 
 
+def _analyze_omct_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    arm_name: str,
+    arm: dict[str, Any],
+    comparison: dict[str, Any] | None,
+    n_pairs: int,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the analysis: the model, the arm and its numbers."""
+    info = model["embedder"]
+    distributions = arm["score_distributions"]
+    enrichment = arm["negative_enrichment"]["rank_percentile"]
+    paired = comparison["paired_auc"] if comparison else None
+    row: dict[str, Any] = {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "backend": info["backend"],
+        "model": info["model_id"],
+        "model_version": (info["revision_or_digest"] or "")[:12],
+        "dim": info["dimension"],
+        "ctx": info["context_tokens"],
+        "arm": arm_name,
+        "chunker": arm["sides"]["paragraph"].get("chunker_name"),
+        "aggregation": (arm.get("aggregation") or {}).get("spec"),
+        "transform": arm["sides"]["question"].get("transform"),
+        "pair_auc": _fmt(arm["pair_auc"]["overall"], 4),
+        "d_auc": _fmt(paired["delta_auc"], 4) if paired else None,
+        "d_auc_ci": (f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None),
+        "deshift_auc": (_fmt(comparison["deshifted_auc"]["overall"], 4) if comparison else None),
+        "ctrl_mean": _fmt(distributions["control"].get("mean"), 4),
+        "ctrl_mean_delta": (
+            _fmt(comparison["control_shift"]["mean_delta"], 4) if comparison else None
+        ),
+        "ctrl_p50": _fmt(distributions["control"].get("quantiles", {}).get("0.5"), 4),
+        "ctrl_rank_p50": _fmt(enrichment["control"].get("quantiles", {}).get("0.5"), 4),
+        "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
+        "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
+        "n_pairs": n_pairs,
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+    return row
+
+
 def _cmd_analyze_omct(config: AppConfig) -> int:
     """Run analyze-omct: the text-processing track's Stage-0 artifact.
 
@@ -1016,6 +1070,12 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     adds the ``omct-`` dataset prefix itself (AGENTS.md run-id grammar), and
     the row lands in the track's own table file (the command-derived
     (dataset, track) mapping).
+
+    When the config asks for structural arms (a chunker with parameters plus
+    aggregation rules) or for extra question transforms, the same run also
+    scores those arms and compares every one of them with the full-text
+    baseline arm — paired (the same pairs) and with the control-side
+    counterpart next to the discrimination number.
     """
     started = time.perf_counter()
     run_id = _require_run_id(config)
@@ -1032,7 +1092,14 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     analysis = config.analysis
     pair_report = load_pairs(config.paths.data_external)
     spec = build_preprocess_spec(config.preprocess)
-    chunker = build_chunker(analysis.chunker)
+
+    baseline_chunker = build_chunker(BASELINE_CHUNKER)
+    aggregations = parse_aggregations(analysis.aggregations)
+    structural_chunker = (
+        build_chunker(analysis.chunker.name, analysis.chunker.params) if aggregations else None
+    )
+    question_transforms = (analysis.question_transform, *analysis.question_transforms)
+    bootstrap_seed = analysis.bootstrap.seed if analysis.bootstrap.seed is not None else config.seed
 
     view = build_dataset_view(
         pair_report.records,
@@ -1040,32 +1107,57 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         seed=config.seed,
         sampling_rule=analysis.sampling_rule,
     )
-    paragraph_version, question_version = side_cache_versions(
-        chunker, spec, analysis.question_transform, analysis.question_block_markers
-    )
 
     models: list[dict[str, Any]] = []
     for entry in analysis.embedders:
         embedder = build_embedder(entry.embed)
+        paragraph_version, _ = side_cache_versions(
+            baseline_chunker, spec, analysis.question_transform, analysis.question_block_markers
+        )
         paragraph_embedder = embedder
-        question_embedder = embedder
         if config.cache.enabled:
             paragraph_embedder = CachedEmbedder(
                 embedder, config.paths.cache, preprocessing_version=paragraph_version
             )
-            question_embedder = CachedEmbedder(
-                embedder, config.paths.cache, preprocessing_version=question_version
+        structural_embedder = None
+        if structural_chunker is not None:
+            structural_version, _ = side_cache_versions(
+                structural_chunker,
+                spec,
+                analysis.question_transform,
+                analysis.question_block_markers,
             )
+            structural_embedder = embedder
+            if config.cache.enabled:
+                structural_embedder = CachedEmbedder(
+                    embedder, config.paths.cache, preprocessing_version=structural_version
+                )
+        question_embedders: dict[str, Any] = {}
+        for transform in question_transforms:
+            _, question_version = side_cache_versions(
+                baseline_chunker, spec, transform, analysis.question_block_markers
+            )
+            question_embedder = embedder
+            if config.cache.enabled:
+                question_embedder = CachedEmbedder(
+                    embedder, config.paths.cache, preprocessing_version=question_version
+                )
+            question_embedders[transform] = question_embedder
         models.append(
-            score_model(
+            score_model_arms(
                 view,
                 model_name=entry.name,
                 paragraph_embedder=paragraph_embedder,
-                question_embedder=question_embedder,
-                chunker=chunker,
-                preprocess_spec=spec,
+                question_embedders=question_embedders,
+                baseline_chunker=baseline_chunker,
                 question_transform=analysis.question_transform,
                 question_block_markers=analysis.question_block_markers,
+                preprocess_spec=spec,
+                structural_embedder=structural_embedder,
+                structural_chunker=structural_chunker,
+                aggregations=aggregations,
+                bootstrap_resamples=analysis.bootstrap.resamples,
+                bootstrap_seed=bootstrap_seed,
             )
         )
 
@@ -1080,7 +1172,16 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         control_size=analysis.control_size,
         sampling_rule=analysis.sampling_rule,
         question_transform=analysis.question_transform,
-        chunker_name=analysis.chunker,
+        chunker_name=analysis.chunker.name,
+        chunker_params=analysis.chunker.params,
+        aggregations=[rule.spec for rule in aggregations],
+        question_transforms=list(analysis.question_transforms),
+        bootstrap={
+            "resamples": analysis.bootstrap.resamples,
+            "seed": bootstrap_seed,
+            "confidence": 0.95,
+        },
+        baseline_chunker_name=baseline_chunker.name,
         n_valid_pairs=pair_report.n_valid,
         n_malformed_pairs=pair_report.n_invalid,
         total_seconds=time.perf_counter() - started,
@@ -1094,37 +1195,56 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
 
     table_rows: list[dict[str, Any]] = []
     for model in models:
-        info = model["embedder"]
-        distributions = model["score_distributions"]
-        enrichment = model["negative_enrichment"]["rank_percentile"]
+        arms = model.get("arms", {})
+        comparisons = model.get("comparisons", {})
+        if not arms:
+            table_rows.append(
+                _analyze_omct_row(
+                    model,
+                    run_id=omct_run_id,
+                    arm_name=BASELINE_ARM,
+                    arm=model,
+                    comparison=None,
+                    n_pairs=view.pooled["n_pairs"],
+                    n_control=view.control.n_cells,
+                    n_docs=view.pooled["n_documents"],
+                    seconds=payload["total_seconds"],
+                )
+            )
+            continue
         table_rows.append(
-            {
-                "run_id": omct_run_id,
-                "date": date.today().isoformat(),
-                "backend": info["backend"],
-                "model": info["model_id"],
-                "model_version": (info["revision_or_digest"] or "")[:12],
-                "dim": info["dimension"],
-                "ctx": info["context_tokens"],
-                "transform": analysis.question_transform,
-                "chunker": analysis.chunker,
-                "pair_auc": _fmt(model["pair_auc"]["overall"], 4),
-                "ctrl_mean": _fmt(distributions["control"].get("mean"), 4),
-                "ctrl_p50": _fmt(distributions["control"].get("quantiles", {}).get("0.5"), 4),
-                "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
-                "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
-                "ctrl_rank_p50": _fmt(enrichment["control"].get("quantiles", {}).get("0.5"), 4),
-                "n_pairs": view.pooled["n_pairs"],
-                "n_control": view.control.n_cells,
-                "n_docs": view.pooled["n_documents"],
-                "seconds": payload["total_seconds"],
-            }
+            _analyze_omct_row(
+                model,
+                run_id=omct_run_id,
+                arm_name=BASELINE_ARM,
+                arm=model,
+                comparison=None,
+                n_pairs=view.pooled["n_pairs"],
+                n_control=view.control.n_cells,
+                n_docs=view.pooled["n_documents"],
+                seconds=payload["total_seconds"],
+            )
         )
+        for arm_name, arm in arms.items():
+            table_rows.append(
+                _analyze_omct_row(
+                    model,
+                    run_id=omct_run_id,
+                    arm_name=arm_name,
+                    arm=arm,
+                    comparison=comparisons.get(arm_name),
+                    n_pairs=view.pooled["n_pairs"],
+                    n_control=view.control.n_cells,
+                    n_docs=view.pooled["n_documents"],
+                    seconds=payload["total_seconds"],
+                )
+            )
+    has_arms = any(model.get("arms") for model in models)
     _append_command_rows(
         config,
         "analyze-omct",
-        columns=ANALYZE_OMCT_COLUMNS,
-        key_columns=ANALYZE_OMCT_KEY_COLUMNS,
+        columns=ANALYZE_OMCT_ARMS_COLUMNS if has_arms else ANALYZE_OMCT_COLUMNS,
+        key_columns=ANALYZE_OMCT_ARMS_KEY_COLUMNS if has_arms else ANALYZE_OMCT_KEY_COLUMNS,
         rows=table_rows,
     )
 
@@ -1166,6 +1286,17 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             f"{top1['given_positive']}, negative {top1['given_negative']}, unjudged "
             f"{top1['unjudged']} of {top1['n_paragraphs']}"
         )
+        for arm_name, comparison in model.get("comparisons", {}).items():
+            paired = comparison["paired_auc"]
+            shift = comparison["control_shift"]
+            gap = comparison["floor_gap"]
+            print(
+                f"      [{arm_name}] dAUC {paired['delta_auc']:+.4f} "
+                f"(95% CI [{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}], "
+                f"P(d>0) {paired['p_delta_positive']:.3f}); control mean "
+                f"{shift['mean_delta']:+.4f}; floor gap {gap['delta']:+.4f}; "
+                f"de-shifted AUC {comparison['deshifted_auc']['overall']:.4f}"
+            )
     print(f"Report written to {results_dir / 'analysis.json'}")
     return 0
 

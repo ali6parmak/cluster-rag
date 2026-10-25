@@ -274,6 +274,48 @@ ANALYZE_OMCT_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model")
 
+# The text-processing track's Stage-1 arms table: one row per (run, model,
+# arm). The discrimination number (the reviewed set's pair AUC) sits next to
+# its **paired** difference against the full-text baseline arm (the bootstrap
+# CI of the AUC difference), next to the **control-side counterpart** (the
+# control's score level and the shift against the baseline) and next to the
+# **de-shifted AUC** (the control's per-document mean shift subtracted from
+# the arm's reviewed-set scores) — the track's reporting rule: no
+# discrimination number is quoted without the control side next to it, and
+# the comparison is paired.
+#
+# The Stage-0 shape (ANALYZE_OMCT_COLUMNS) stays as it is, so a run without
+# arms keeps its own section's columns; a run *with* arms uses this shape.
+ANALYZE_OMCT_ARMS_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "backend",
+    "model",
+    "model_version",
+    "dim",
+    "ctx",
+    "arm",
+    "chunker",
+    "aggregation",
+    "transform",
+    "pair_auc",
+    "d_auc",
+    "d_auc_ci",
+    "deshift_auc",
+    "ctrl_mean",
+    "ctrl_mean_delta",
+    "ctrl_p50",
+    "ctrl_rank_p50",
+    "pos_rank_p50",
+    "neg_rank_p50",
+    "ctrl_rank_p50",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_ARMS_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "arm")
+
 
 def _cell(value: Any) -> str:
     """Render one table cell; ``None``/missing/empty becomes "n/a"."""

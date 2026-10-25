@@ -456,6 +456,77 @@ class ProbeConfig(BaseModel):
         return value
 
 
+class ChunkerSpec(BaseModel):
+    """A chunker of the text-processing track's registry: a name and its parameters.
+
+    ``name`` is the registry key (e.g. ``"atoms"``); ``params`` are the
+    chunker's own parameters (e.g. ``{"split_clauses": false}``). The
+    parameters are part of the chunker's cache-facing version, so two
+    differently configured chunkers never share cached chunks.
+
+    A bare string is accepted for ``name`` (``chunker: atoms``), so the
+    Stage-0 style config keeps loading.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = "full_text"
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bare_name_is_accepted(cls, value: Any) -> Any:
+        """``"atoms"`` is read as ``{"name": "atoms"}``."""
+        if isinstance(value, str):
+            return {"name": value}
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_known(cls, value: str) -> str:
+        """Reject unknown chunker names at config time (fail before any run)."""
+        from cluster_rag.text_processors.chunkers import chunker_config_class
+
+        chunker_config_class(value)  # raises for an unknown name
+        return value
+
+    @model_validator(mode="after")
+    def _params_match_the_chunker(self) -> ChunkerSpec:
+        """Check the parameters against the chunker's config class."""
+        from cluster_rag.text_processors.chunkers import chunker_config_class
+
+        config_class = chunker_config_class(self.name)
+        if config_class is None:
+            if self.params:
+                raise ValueError(
+                    f"The chunker {self.name!r} takes no parameters: {sorted(self.params)}"
+                )
+            return self
+        known = {field.name for field in config_class.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+        unknown = sorted(set(self.params) - known)
+        if unknown:
+            raise ValueError(
+                f"Unknown parameter(s) {unknown} for the chunker {self.name!r}; "
+                f"expected a subset of {sorted(known)}"
+            )
+        return self
+
+
+class PairedBootstrapConfig(BaseModel):
+    """The paired-bootstrap settings of a comparison (Stage 2.5's statistic).
+
+    ``resamples`` is the number of bootstrap resamples; ``seed`` seeds the
+    generator (``None`` = the run's own seed, so the statistic is reproducible
+    from the run's config alone). The effective seed is recorded in the
+    artifact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    resamples: int = Field(default=2000, ge=1)
+    seed: int | None = None
+
+
 class AnalysisEmbedderConfig(BaseModel):
     """One embedder the Stage-0 analysis scores with.
 
@@ -492,9 +563,18 @@ class AnalysisConfig(BaseModel):
       choices:"/"Notes:" furniture is mostly noise, PLAN.md section 7). The
       markers mirror ``probe.question_block_markers``; the transform version
       hashes them, so a difference can never pass unnoticed.
-    - ``chunker``: the chunker of the track's registry used for both sides
-      (``full_text`` is the Stage-0 baseline: one chunk per text, so the
-      embedding cache stays warm).
+    - ``chunker``: the chunker of the track's registry used for the
+      paragraph side of the **structural arms** (Stage 1.1a) — a name plus its
+      parameters. The default (``full_text``) is the Stage-0 baseline: one
+      chunk per text, so the embedding cache stays warm.
+    - ``aggregations``: the aggregation rules the structural arms fold the
+      chunk-level scores with (e.g. ``max``, ``top_k_mean:2``). Empty means
+      "no structural arm" — the Stage-0 behaviour.
+    - ``question_transforms``: extra question-side transforms, each one an
+      arm of its own (the free ``keep`` vs ``strip_block`` comparison of
+      Stage 1.1a). The baseline transform is always computed as well.
+    - ``bootstrap``: the paired-bootstrap settings of the arm-vs-baseline
+      comparisons (resamples and seed; the seed defaults to the run's seed).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -504,20 +584,52 @@ class AnalysisConfig(BaseModel):
     sampling_rule: Literal["proportional"] = "proportional"
     question_transform: Literal["keep", "strip_block"] = "strip_block"
     question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
-    chunker: str = "full_text"
+    chunker: ChunkerSpec = Field(default_factory=ChunkerSpec)
+    aggregations: tuple[str, ...] = ()
+    question_transforms: tuple[str, ...] = ()
+    bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
 
-    @field_validator("chunker")
+    @field_validator("aggregations")
     @classmethod
-    def _chunker_is_known(cls, value: str) -> str:
-        """Reject unknown chunker names at config time (fail before any run)."""
-        from cluster_rag.text_processors.chunkers import CHUNKERS
+    def _aggregations_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject unknown aggregation rules at config time (fail before any run)."""
+        from cluster_rag.text_processors.aggregation import parse_aggregation
 
-        if value not in CHUNKERS:
-            raise ValueError(
-                f"Unknown chunker {value!r}; expected one of {sorted(CHUNKERS)} "
-                "(the text-processing track's chunker registry)"
-            )
+        for spec in value:
+            parse_aggregation(spec)
         return value
+
+    @field_validator("question_transforms")
+    @classmethod
+    def _question_transforms_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject unknown question transforms at config time."""
+        known = ("keep", "strip_block")
+        unknown = [transform for transform in value if transform not in known]
+        if unknown:
+            raise ValueError(f"Unknown question transform(s) {unknown}; expected values in {known}")
+        return value
+
+    @model_validator(mode="after")
+    def _arms_are_consistent(self) -> AnalysisConfig:
+        """The arms must be meaningful: no duplicate question transform, and
+        aggregations need a chunker that actually splits a text."""
+        if len(set(self.question_transforms)) != len(self.question_transforms):
+            raise ValueError(
+                f"analysis.question_transforms must not repeat a transform: "
+                f"{list(self.question_transforms)}"
+            )
+        if self.question_transform in self.question_transforms:
+            raise ValueError(
+                f"analysis.question_transforms must not repeat the baseline transform "
+                f"({self.question_transform!r}): it is always computed"
+            )
+        if self.aggregations and self.chunker.name == "full_text":
+            raise ValueError(
+                "analysis.aggregations need a chunker that splits a text; "
+                "'full_text' has one chunk per text (its arms would be the "
+                "baseline arm)"
+            )
+        return self
 
 
 class TableConfig(BaseModel):

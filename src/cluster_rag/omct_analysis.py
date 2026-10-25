@@ -1,4 +1,4 @@
-"""The text-processing track's Stage-0 analysis driver (``analyze-omct``).
+"""The text-processing track's analysis driver (``analyze-omct``).
 
 The Stage-0 artifact of TEXT_PROCESSING_PLAN.md section 3 (Stage 0.1): one
 JSON file per run that characterizes the OMCT pairwise data as a
@@ -16,32 +16,51 @@ JSON file per run that characterizes the OMCT pairwise data as a
   label, and the negative-enrichment measurement (the rank percentile of the
   verified negatives next to the positives and the control).
 
+Stage 1.1a adds the **arms**: one run scores the *baseline arm* (full text
+against full text — the Stage-0 scoring) **and** the structural arms
+(paragraph atoms folded into one pair score by an aggregation rule) **and**
+the question-transform arms (the free ``keep`` vs ``strip_block``
+comparison), so every artifact holds the comparison and the pairing is by
+construction. Each arm is compared with the baseline arm by a **paired**
+statistic (the paired bootstrap of the AUC difference) and by the
+**control-side counterpart** (the control's score level and rank position on
+the same 4,000 cells) — the track's reporting rule: no discrimination number
+is quoted without the control side next to it, and the de-shifted AUC (the
+control's per-document mean shift subtracted from the method's reviewed-set
+scores) says whether a discrimination gain survives the scale shift.
+
 The dataset-level part (the grid, the strata, the control draw) is
 model-independent and computed once per run; the scores are per model.
 
 Like :mod:`cluster_rag.omct_probe` (the Phase-2 probe driver), this module
 orchestrates the embedder (a port, injected by the CLI), the pure metrics and
-the track's pure core (:mod:`cluster_rag.text_processors.control`). It never
-imports a model client itself: the CLI wires the backends.
+the track's pure core (:mod:`cluster_rag.text_processors.control`,
+:mod:`cluster_rag.text_processors.aggregation`). It never imports a model
+client itself: the CLI wires the backends.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from cluster_rag.embed.base import Embedder
-from cluster_rag.eval.metrics import roc_auc
+from cluster_rag.eval.metrics import paired_auc_bootstrap, roc_auc
 from cluster_rag.pairs import PairRecord
 from cluster_rag.preprocess import (
     PreprocessSpec,
     apply_question_transform,
     question_transform_version,
+)
+from cluster_rag.text_processors.aggregation import (
+    Aggregation,
+    aggregate_chunk_similarities,
+    describe_aggregation,
 )
 from cluster_rag.text_processors.base import Chunker
 from cluster_rag.text_processors.control import (
@@ -49,7 +68,8 @@ from cluster_rag.text_processors.control import (
     SAMPLING_RULE_PROPORTIONAL,
     ControlSample,
     DocumentGrid,
-    rank_percentiles,
+    percentiles_from_positions,
+    rank_positions,
     sample_control,
 )
 
@@ -57,6 +77,21 @@ logger = logging.getLogger(__name__)
 
 # The quantile grid of the reported distributions (mirrors the probe's).
 DISTRIBUTION_QUANTILES: tuple[float, ...] = (0.05, 0.25, 0.5, 0.75, 0.95)
+
+# The hit@k grid of the per-pair rank report (the "is the pair's question
+# among the paragraph's top-k candidates" measure). The same grid the probe
+# reports.
+HIT_KS: tuple[int, ...] = (1, 10)
+
+# The name of the baseline arm: the full-text scoring every other arm is
+# compared with.
+BASELINE_ARM = "full_text"
+
+# The chunker of the baseline arm (the track's identity chunker).
+BASELINE_CHUNKER = "full_text"
+
+# The description of the baseline arm's scoring, recorded in the artifact.
+FULL_TEXT_AGGREGATION = "one chunk per text (the plain full-text cosine)"
 
 # The pairwise file's own id convention: "<code>-<paragraph number>-Q<question
 # number>" (e.g. "NU-10-Q2"). The code is the document's short handle.
@@ -359,27 +394,46 @@ def side_cache_versions(
     )
 
 
-def _encode_side(
-    embedder: Embedder,
-    chunker: Chunker,
-    texts: Sequence[str],
-    kind: str,
-) -> tuple[np.ndarray, int]:
-    """Embed one side through the chunker; returns the vectors and the chunk count.
+@dataclass(frozen=True)
+class SideEncoding:
+    """One side's chunked encoding: the chunk lists, the vectors, the metadata.
 
-    The Stage-0 baseline aggregates a text's chunks by taking its first
-    chunk: with the full-text chunker that *is* the whole text, so the score
-    is the plain full-text cosine the plan's indicative numbers used. The
-    chunk count is reported, so a later stage's aggregation is never implied.
+    ``vectors`` holds one row per chunk (the chunks of a text are consecutive
+    rows, in text order), so :meth:`group_rows` gives every text's rows. The
+    cache counters are the ones of the embedder that produced the vectors
+    (the CLI gives every side its own cache wrapper, so they are that side's).
     """
-    chunk_lists = chunker.segment(list(texts))
-    chunks: list[str] = []
-    for text, chunk_list in zip(texts, chunk_lists, strict=True):
-        if not chunk_list:
-            raise ValueError(f"the chunker produced no chunk for a text: {text[:60]!r}")
-        chunks.append(chunk_list[0])
-    vectors = embedder.encode(chunks, kind)  # type: ignore[arg-type]
-    return vectors, len(chunks)
+
+    texts: tuple[str, ...]
+    chunk_lists: tuple[tuple[str, ...], ...]
+    vectors: np.ndarray
+    meta: dict[str, Any] = field(default_factory=dict)
+    cache_hits: int = 0
+    cache_misses: int = 0
+
+    @property
+    def n_texts(self) -> int:
+        """Number of texts on this side."""
+        return len(self.texts)
+
+    @property
+    def n_chunks(self) -> int:
+        """Number of chunks on this side (the vectors' rows)."""
+        return int(self.vectors.shape[0])
+
+    @property
+    def one_chunk_per_text(self) -> bool:
+        """Whether every text contributed exactly one chunk."""
+        return self.n_chunks == self.n_texts
+
+    def group_rows(self) -> tuple[tuple[int, ...], ...]:
+        """The row indices of every text's chunks (in text order)."""
+        groups: list[tuple[int, ...]] = []
+        cursor = 0
+        for chunk_list in self.chunk_lists:
+            groups.append(tuple(range(cursor, cursor + len(chunk_list))))
+            cursor += len(chunk_list)
+        return tuple(groups)
 
 
 def _cache_counters(embedder: object) -> tuple[int, int, int]:
@@ -391,37 +445,101 @@ def _cache_counters(embedder: object) -> tuple[int, int, int]:
     )
 
 
-def score_model(
-    view: DatasetView,
-    *,
-    model_name: str,
-    paragraph_embedder: Embedder,
-    question_embedder: Embedder,
+def encode_side(
+    embedder: Embedder,
     chunker: Chunker,
-    preprocess_spec: PreprocessSpec,
-    question_transform: str,
-    question_block_markers: Sequence[str],
-) -> dict[str, Any]:
-    """Score the judged pairs and the control cells with one model.
+    texts: Sequence[str],
+    kind: str,
+    *,
+    meta: Mapping[str, Any] | None = None,
+) -> SideEncoding:
+    """Embed one side through the chunker (every chunk of every text).
 
-    Paragraphs are embedded under the ``document`` kind, questions under
-    ``query`` (the same assignment the probe uses: the paragraph is the
-    indexed text, the question the query it is matched against). Both sides
-    go through the track's chunker, so the artifact records the chunker and
-    its version next to the scores.
+    The Stage-0 baseline chunker yields one chunk per text, so its encoding
+    is byte-identical to the Stage-0 run's (the warm cache stays valid); a
+    chunking chunker yields many chunks per text, and the arm's aggregation
+    folds their scores (see :func:`side_similarities`).
+
+    Raises:
+        ValueError: If the chunker produced no chunk for a text.
     """
-    paragraph_texts = preprocess_spec.apply(list(view.paragraphs))
-    question_texts = apply_question_transform(
-        list(view.questions), question_transform, question_block_markers
+    chunk_lists = chunker.segment(list(texts))
+    chunks: list[str] = []
+    for text, chunk_list in zip(texts, chunk_lists, strict=True):
+        if not chunk_list:
+            raise ValueError(f"the chunker produced no chunk for a text: {text[:60]!r}")
+        chunks.extend(chunk_list)
+    vectors = embedder.encode(chunks, kind)  # type: ignore[arg-type]
+    hits, misses, _ = _cache_counters(embedder)
+    return SideEncoding(
+        texts=tuple(texts),
+        chunk_lists=tuple(tuple(chunk_list) for chunk_list in chunk_lists),
+        vectors=np.asarray(vectors),
+        meta=dict(meta or {}),
+        cache_hits=hits,
+        cache_misses=misses,
     )
-    paragraph_vectors, n_paragraph_chunks = _encode_side(
-        paragraph_embedder, chunker, paragraph_texts, "document"
-    )
-    question_vectors, n_question_chunks = _encode_side(
-        question_embedder, chunker, question_texts, "query"
-    )
-    similarities = paragraph_vectors @ question_vectors.T
 
+
+def side_similarities(
+    paragraph_side: SideEncoding,
+    question_side: SideEncoding,
+    rule: Aggregation | None,
+) -> np.ndarray:
+    """The (paragraphs x questions) score matrix of one arm.
+
+    The question side must be unchunked (one chunk per question): the
+    question-side *chunker* is not part of this stage, so a chunked question
+    side is refused loudly rather than silently mis-scored.
+
+    Args:
+        paragraph_side: The encoded paragraph side (possibly chunked).
+        question_side: The encoded question side (one chunk per question).
+        rule: The aggregation rule that folds the paragraph chunks (None = the
+            full-text baseline, which needs one chunk per paragraph).
+
+    Returns:
+        The ``(n_paragraphs, n_questions)`` score matrix.
+
+    Raises:
+        ValueError: If the question side is chunked, or the arm has no
+            aggregation rule but its paragraph side is chunked.
+    """
+    if not question_side.one_chunk_per_text:
+        raise ValueError(
+            "the question side must have one chunk per question in this stage "
+            "(the question-side chunker is out of scope)"
+        )
+    matrix = paragraph_side.vectors @ question_side.vectors.T
+    if rule is None:
+        if not paragraph_side.one_chunk_per_text:
+            raise ValueError("an arm without an aggregation rule needs one chunk per paragraph")
+        return matrix
+    return aggregate_chunk_similarities(matrix, paragraph_side.group_rows(), rule)
+
+
+@dataclass(frozen=True)
+class ArmScores:
+    """The measured scores of one arm: the matrix and the per-pair records."""
+
+    similarities: np.ndarray
+    labels: np.ndarray
+    pair_scores: np.ndarray
+    control_scores: np.ndarray
+    pair_ranks: np.ndarray
+    control_ranks: np.ndarray
+    pair_percentiles: np.ndarray
+    control_percentiles: np.ndarray
+    documents: np.ndarray
+    control_documents: np.ndarray
+    rows: np.ndarray
+    columns: np.ndarray
+    control_rows: np.ndarray
+    control_columns: np.ndarray
+
+
+def measure_arm(view: DatasetView, similarities: np.ndarray) -> ArmScores:
+    """Measure one arm's scores: the judged pairs, the control cells, the ranks."""
     candidate_columns = view.candidate_columns()
     rows = np.asarray(
         [view.paragraph_row[record.paragraph_text] for record in view.pairs], dtype=np.int64
@@ -430,15 +548,53 @@ def score_model(
         [view.question_col[record.question_text] for record in view.pairs], dtype=np.int64
     )
     labels = np.asarray([record.label for record in view.pairs], dtype=np.int64)
-    pair_scores = similarities[rows, columns]
-    pair_percentiles = rank_percentiles(similarities, rows, columns, candidate_columns)
-
     control_rows = np.asarray([row for _, row, _ in view.control.cells], dtype=np.int64)
     control_columns = np.asarray([col for _, _, col in view.control.cells], dtype=np.int64)
-    control_scores = similarities[control_rows, control_columns]
-    control_percentiles = rank_percentiles(
-        similarities, control_rows, control_columns, candidate_columns
+
+    pair_ranks = rank_positions(similarities, rows, columns, candidate_columns)
+    control_ranks = rank_positions(similarities, control_rows, control_columns, candidate_columns)
+    return ArmScores(
+        similarities=similarities,
+        labels=labels,
+        pair_scores=similarities[rows, columns],
+        control_scores=similarities[control_rows, control_columns],
+        pair_ranks=pair_ranks,
+        control_ranks=control_ranks,
+        pair_percentiles=percentiles_from_positions(pair_ranks, rows, candidate_columns),
+        control_percentiles=percentiles_from_positions(
+            control_ranks, control_rows, candidate_columns
+        ),
+        documents=np.asarray([record.document for record in view.pairs]),
+        control_documents=np.asarray([document for document, _, _ in view.control.cells]),
+        rows=rows,
+        columns=columns,
+        control_rows=control_rows,
+        control_columns=control_columns,
     )
+
+
+def _hit_at_k(ranks: np.ndarray, hit_ks: Sequence[int]) -> dict[str, float]:
+    """The share of pairs whose question is among the paragraph's top-k candidates."""
+    return {f"hit@{k}": float((ranks < k).mean()) if ranks.size else 0.0 for k in hit_ks}
+
+
+def score_arm(
+    view: DatasetView,
+    *,
+    arm_name: str,
+    similarities: np.ndarray,
+    paragraph_side: SideEncoding,
+    question_side: SideEncoding,
+    aggregation: Aggregation | None = None,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """Score one arm: the pairs, the control cells, the distributions, the ranks.
+
+    The arm's block is the same shape for every arm (the baseline arm and the
+    structural arms), so the comparisons are made on identical fields.
+    """
+    measured = measure_arm(view, similarities)
+    labels = measured.labels
 
     codes = {report["document"]: report["code"] for report in view.documents}
     judged_pairs: list[dict[str, Any]] = []
@@ -446,8 +602,8 @@ def score_model(
         judged_pairs.append(
             {
                 **cell,
-                "score": float(pair_scores[position]),
-                "rank_percentile": float(pair_percentiles[position]),
+                "score": float(measured.pair_scores[position]),
+                "rank_percentile": float(measured.pair_percentiles[position]),
             }
         )
 
@@ -463,75 +619,531 @@ def score_model(
                 "document": document,
                 "paragraph_number": view.paragraph_numbers[row],
                 "question_number": view.question_numbers[column],
-                "score": float(control_scores[position]),
-                "rank_percentile": float(control_percentiles[position]),
+                "score": float(measured.control_scores[position]),
+                "rank_percentile": float(measured.control_percentiles[position]),
             }
         )
 
-    positive_scores = pair_scores[labels == 1]
-    negative_scores = pair_scores[labels == 0]
-    positive_percentiles = pair_percentiles[labels == 1]
-    negative_percentiles = pair_percentiles[labels == 0]
+    positive_scores = measured.pair_scores[labels == 1]
+    negative_scores = measured.pair_scores[labels == 0]
+    positive_percentiles = measured.pair_percentiles[labels == 1]
+    negative_percentiles = measured.pair_percentiles[labels == 0]
 
     score_distributions: dict[str, Any] = {
         "label1": _distribution(positive_scores),
         "label0": _distribution(negative_scores),
-        "control": _distribution(control_scores),
+        "control": _distribution(measured.control_scores),
         "by_document": {},
     }
     enrichment_by_document: dict[str, Any] = {}
     for stratum in view.strata:
         document = stratum["document"]
-        mask = np.asarray([record.document == document for record in view.pairs], dtype=bool)
-        document_cells = [
-            (index, cell) for index, cell in enumerate(view.control.cells) if cell[0] == document
-        ]
-        document_control_scores = np.asarray(
-            [control_scores[index] for index, _ in document_cells], dtype=np.float64
-        )
-        document_control_percentiles = np.asarray(
-            [control_percentiles[index] for index, _ in document_cells], dtype=np.float64
-        )
+        mask = measured.documents == document
+        control_mask = measured.control_documents == document
+        document_control_scores = measured.control_scores[control_mask]
+        document_control_percentiles = measured.control_percentiles[control_mask]
         score_distributions["by_document"][document] = {
-            "label1": _distribution(pair_scores[mask & (labels == 1)]),
-            "label0": _distribution(pair_scores[mask & (labels == 0)]),
+            "label1": _distribution(measured.pair_scores[mask & (labels == 1)]),
+            "label0": _distribution(measured.pair_scores[mask & (labels == 0)]),
             "control": _distribution(document_control_scores),
         }
         enrichment_by_document[document] = {
             "rank_percentile": {
-                "label1": _distribution(pair_percentiles[mask & (labels == 1)]),
-                "label0": _distribution(pair_percentiles[mask & (labels == 0)]),
+                "label1": _distribution(measured.pair_percentiles[mask & (labels == 1)]),
+                "label0": _distribution(measured.pair_percentiles[mask & (labels == 0)]),
                 "control": _distribution(document_control_percentiles),
             },
             "top_quintile_share": {
-                "label1": _top_quintile_share(pair_percentiles[mask & (labels == 1)]),
-                "label0": _top_quintile_share(pair_percentiles[mask & (labels == 0)]),
+                "label1": _top_quintile_share(measured.pair_percentiles[mask & (labels == 1)]),
+                "label0": _top_quintile_share(measured.pair_percentiles[mask & (labels == 0)]),
                 "control": _top_quintile_share(document_control_percentiles),
             },
         }
 
     pair_auc: dict[str, Any] = {"overall": None, "by_document": {}}
     try:
-        pair_auc["overall"] = roc_auc(labels.tolist(), pair_scores.tolist())
+        pair_auc["overall"] = roc_auc(labels.tolist(), measured.pair_scores.tolist())
     except ValueError as exc:  # a document without both classes
         pair_auc["overall_note"] = str(exc)
     for stratum in view.strata:
         document = stratum["document"]
-        mask = np.asarray([record.document == document for record in view.pairs], dtype=bool)
+        mask = measured.documents == document
         try:
             pair_auc["by_document"][document] = roc_auc(
-                labels[mask].tolist(), pair_scores[mask].tolist()
+                labels[mask].tolist(), measured.pair_scores[mask].tolist()
             )
         except ValueError as exc:
             pair_auc["by_document"][document] = None
             pair_auc.setdefault("notes", {})[document] = str(exc)
+    document_aucs = [value for value in pair_auc["by_document"].values() if value is not None]
+    pair_auc["macro"] = float(np.mean(document_aucs)) if document_aucs else None
 
-    top1 = _top1_provenance(view, similarities, candidate_columns)
+    hit_at_k = {
+        "label1": _hit_at_k(measured.pair_ranks[labels == 1], hit_ks),
+        "label0": _hit_at_k(measured.pair_ranks[labels == 0], hit_ks),
+        "control": _hit_at_k(measured.control_ranks, hit_ks),
+        "note": (
+            "the share of the group's pairs whose question is among the top-k "
+            "candidates of its own paragraph (the negatives' hit@1 rising means "
+            "the arm lifts the hard negatives as well)"
+        ),
+    }
 
-    paragraph_hits, paragraph_misses, _ = _cache_counters(paragraph_embedder)
-    question_hits, question_misses, _ = _cache_counters(question_embedder)
+    top1 = _top1_provenance(view, similarities, view.candidate_columns())
+
+    paragraph_meta = {**paragraph_side.meta}
+    if aggregation is not None:
+        paragraph_meta["aggregation"] = (
+            f"the paragraph's {paragraph_side.n_chunks} chunks are folded into one "
+            f"pair score by '{aggregation.spec}'"
+        )
+
+    return {
+        "arm": arm_name,
+        "aggregation": None if aggregation is None else dict(describe_aggregation(aggregation)),
+        "sides": {
+            "paragraph": {
+                **paragraph_meta,
+                "n_texts": paragraph_side.n_texts,
+                "n_chunks": paragraph_side.n_chunks,
+                "cache_hits": paragraph_side.cache_hits,
+                "cache_misses": paragraph_side.cache_misses,
+            },
+            "question": {
+                **question_side.meta,
+                "n_texts": question_side.n_texts,
+                "n_chunks": question_side.n_chunks,
+                "cache_hits": question_side.cache_hits,
+                "cache_misses": question_side.cache_misses,
+            },
+        },
+        "pair_auc": pair_auc,
+        "score_distributions": score_distributions,
+        "negative_enrichment": {
+            "rank_percentile": {
+                "label1": _distribution(positive_percentiles),
+                "label0": _distribution(negative_percentiles),
+                "control": _distribution(measured.control_percentiles),
+            },
+            "by_document": enrichment_by_document,
+            "top_quintile_share": {
+                "label1": _top_quintile_share(positive_percentiles),
+                "label0": _top_quintile_share(negative_percentiles),
+                "control": _top_quintile_share(measured.control_percentiles),
+            },
+        },
+        "hit_at_k": hit_at_k,
+        "top1_candidate_provenance": top1,
+        "judged_pairs": judged_pairs,
+        "control_cells": control_cells,
+    }
+
+
+def _paragraph_meta(preprocess_spec: PreprocessSpec, chunker: Chunker) -> dict[str, Any]:
+    """The artifact's paragraph-side provenance (the chunker and the preprocess)."""
+    return {
+        "kind": "document",
+        "preprocess": preprocess_spec.variant,
+        "preprocess_version": preprocess_spec.version,
+        "chunker": chunker.version,
+        "chunker_name": _chunker_name(chunker),
+        "cache_version": chunker.cache_version(preprocess_spec.version),
+        "aggregation": FULL_TEXT_AGGREGATION,
+    }
+
+
+def _question_meta(
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    chunker: Chunker,
+) -> dict[str, Any]:
+    """The artifact's question-side provenance (the transform and the chunker)."""
+    version = question_transform_version(question_transform, question_block_markers)
+    return {
+        "kind": "query",
+        "transform": question_transform,
+        "transform_version": version,
+        "chunker": chunker.version,
+        "chunker_name": _chunker_name(chunker),
+        "cache_version": chunker.cache_version(version),
+        "aggregation": FULL_TEXT_AGGREGATION,
+    }
+
+
+def compare_arms(
+    view: DatasetView,
+    *,
+    arm_name: str,
+    reference_similarities: np.ndarray,
+    arm_similarities: np.ndarray,
+    resamples: int,
+    seed: int,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """Compare one arm with the baseline arm (the paired statistic + the control side).
+
+    The comparison carries three things the track's reporting rule demands:
+
+    - the **paired** difference of the reviewed set's AUC (the same 1,520
+      pairs, the same labels, a paired bootstrap over them);
+    - the **control-side counterpart**: how much the control's score level and
+      rank position moved (overall and per document) — a method that only
+      re-scales shows up here;
+    - the **de-shifted AUC**: the control's *per-document* mean shift
+      subtracted from the method's reviewed-set scores, so a discrimination
+      gain can be checked against the scale shift (the plan's rule: a method
+      counts as a win only if the discrimination gain survives the scale
+      shift).
+    """
+    reference = measure_arm(view, reference_similarities)
+    arm = measure_arm(view, arm_similarities)
+    labels = arm.labels
+
+    paired = paired_auc_bootstrap(
+        labels.tolist(),
+        reference.pair_scores.tolist(),
+        arm.pair_scores.tolist(),
+        n_resamples=resamples,
+        seed=seed,
+    )
+
+    per_document: dict[str, Any] = {}
+    shifts: dict[str, float] = {}
+    deshifted_pair_scores = np.empty_like(arm.pair_scores)
+    for stratum in view.strata:
+        document = stratum["document"]
+        pair_mask = arm.documents == document
+        control_mask = arm.control_documents == document
+        reference_control = reference.control_scores[control_mask]
+        arm_control = arm.control_scores[control_mask]
+        shift = float(arm_control.mean() - reference_control.mean()) if arm_control.size else 0.0
+        shifts[document] = shift
+        deshifted_pair_scores[pair_mask] = arm.pair_scores[pair_mask] - shift
+
+        reference_auc = _safe_auc(labels[pair_mask], reference.pair_scores[pair_mask])
+        arm_auc = _safe_auc(labels[pair_mask], arm.pair_scores[pair_mask])
+        deshifted_auc = _safe_auc(labels[pair_mask], deshifted_pair_scores[pair_mask])
+        reference_positive = reference.pair_scores[pair_mask & (labels == 1)]
+        arm_positive = arm.pair_scores[pair_mask & (labels == 1)]
+        per_document[document] = {
+            "n_pairs": int(pair_mask.sum()),
+            "control_shift": {
+                "mean_delta": shift,
+                "p50_delta": _quantile_delta(arm_control, reference_control),
+                "rank_p50_delta": _quantile_delta(
+                    arm.control_percentiles[control_mask],
+                    reference.control_percentiles[control_mask],
+                ),
+            },
+            "positives_shift": {
+                "mean_delta": (
+                    float(arm_positive.mean() - reference_positive.mean())
+                    if arm_positive.size
+                    else None
+                ),
+            },
+            "floor_gap": {
+                "reference": _floor_gap(reference_positive, reference_control),
+                "arm": _floor_gap(arm_positive, arm_control),
+            },
+            "pair_auc": {
+                "reference": reference_auc,
+                "arm": arm_auc,
+                "delta": (
+                    arm_auc - reference_auc
+                    if arm_auc is not None and reference_auc is not None
+                    else None
+                ),
+            },
+            "deshifted_auc": deshifted_auc,
+        }
+
+    reference_positive = reference.pair_scores[labels == 1]
+    arm_positive = arm.pair_scores[labels == 1]
+    reference_control_all = reference.control_scores
+    arm_control_all = arm.control_scores
+    deshifted_overall = _safe_auc(labels, deshifted_pair_scores)
+
+    reference_auc_by_document = {
+        document: block["pair_auc"]["reference"] for document, block in per_document.items()
+    }
+    arm_auc_by_document = {
+        document: block["pair_auc"]["arm"] for document, block in per_document.items()
+    }
+    reference_macro = _macro(reference_auc_by_document)
+    arm_macro = _macro(arm_auc_by_document)
+
+    return {
+        "arm": arm_name,
+        "reference_arm": BASELINE_ARM,
+        "paired_auc": paired,
+        "pair_auc": {
+            "reference": paired["auc_reference"],
+            "arm": paired["auc_arm"],
+            "delta": paired["delta_auc"],
+            "macro": {
+                "reference": reference_macro,
+                "arm": arm_macro,
+                "delta": (
+                    arm_macro - reference_macro
+                    if arm_macro is not None and reference_macro is not None
+                    else None
+                ),
+            },
+            "by_document": {
+                document: {
+                    "reference": reference_auc_by_document[document],
+                    "arm": arm_auc_by_document[document],
+                    "delta": per_document[document]["pair_auc"]["delta"],
+                }
+                for document in per_document
+            },
+        },
+        "control_shift": {
+            "mean_delta": float(arm_control_all.mean() - reference_control_all.mean()),
+            "p50_delta": _quantile_delta(arm_control_all, reference_control_all),
+            "rank_p50_delta": _quantile_delta(
+                arm.control_percentiles, reference.control_percentiles
+            ),
+            "top_fifth_share_delta": _top_fifth_share_delta(
+                arm.control_percentiles, reference.control_percentiles
+            ),
+            "by_document": {
+                document: block["control_shift"] for document, block in per_document.items()
+            },
+        },
+        "positives_shift": {
+            "mean_delta": float(arm_positive.mean() - reference_positive.mean()),
+            "rank_p50_delta": _quantile_delta(
+                arm.pair_percentiles[labels == 1], reference.pair_percentiles[labels == 1]
+            ),
+            "by_document": {
+                document: block["positives_shift"] for document, block in per_document.items()
+            },
+        },
+        "floor_gap": {
+            "reference": _floor_gap(reference_positive, reference_control_all),
+            "arm": _floor_gap(arm_positive, arm_control_all),
+            "delta": (
+                _floor_gap(arm_positive, arm_control_all)
+                - _floor_gap(reference_positive, reference_control_all)
+            ),
+            "note": (
+                "the gap between the verified positives' mean score and the "
+                "control's mean score: a positive delta means the ordinary "
+                "same-document pairs fell relative to the true matches"
+            ),
+        },
+        "deshifted_auc": {
+            "overall": deshifted_overall,
+            "macro": _macro(
+                {document: block["deshifted_auc"] for document, block in per_document.items()}
+            ),
+            "by_document": {
+                document: block["deshifted_auc"] for document, block in per_document.items()
+            },
+            "per_document_shift": shifts,
+            "note": (
+                "the control's per-document mean shift subtracted from the "
+                "method's reviewed-set scores (the plan's rule: a discrimination "
+                "gain counts only if it survives the scale shift)"
+            ),
+        },
+        "hit_at_k": {
+            "reference": {
+                "label1": _hit_at_k(reference.pair_ranks[labels == 1], hit_ks),
+                "label0": _hit_at_k(reference.pair_ranks[labels == 0], hit_ks),
+                "control": _hit_at_k(reference.control_ranks, hit_ks),
+            },
+            "arm": {
+                "label1": _hit_at_k(arm.pair_ranks[labels == 1], hit_ks),
+                "label0": _hit_at_k(arm.pair_ranks[labels == 0], hit_ks),
+                "control": _hit_at_k(arm.control_ranks, hit_ks),
+            },
+        },
+    }
+
+
+def _safe_auc(labels: np.ndarray, scores: np.ndarray) -> float | None:
+    """The AUC of a group (None when a class is missing)."""
+    try:
+        return roc_auc(labels.tolist(), scores.tolist())
+    except ValueError:
+        return None
+
+
+def _macro(values: Mapping[str, float | None]) -> float | None:
+    """The macro average of the per-document values (None when none exists)."""
+    present = [value for value in values.values() if value is not None]
+    return float(np.mean(present)) if present else None
+
+
+def _quantile_delta(arm: np.ndarray, reference: np.ndarray) -> float | None:
+    """The difference of the medians of two groups (None for an empty group)."""
+    if not arm.size or not reference.size:
+        return None
+    return float(np.quantile(arm, 0.5) - np.quantile(reference, 0.5))
+
+
+def _floor_gap(positive_scores: np.ndarray, control_scores: np.ndarray) -> float | None:
+    """The gap between the verified positives' mean and the control's mean."""
+    if not positive_scores.size or not control_scores.size:
+        return None
+    return float(positive_scores.mean() - control_scores.mean())
+
+
+def _top_fifth_share_delta(
+    arm_percentiles: np.ndarray, reference_percentiles: np.ndarray
+) -> float | None:
+    """The difference of the top-fifth shares of two rank-percentile groups."""
+    if not arm_percentiles.size or not reference_percentiles.size:
+        return None
+    return _top_quintile_share(arm_percentiles) - _top_quintile_share(reference_percentiles)
+
+
+def score_model_arms(
+    view: DatasetView,
+    *,
+    model_name: str,
+    paragraph_embedder: Embedder,
+    question_embedders: Mapping[str, Embedder],
+    baseline_chunker: Chunker,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    preprocess_spec: PreprocessSpec,
+    structural_embedder: Embedder | None = None,
+    structural_chunker: Chunker | None = None,
+    aggregations: Sequence[Aggregation] = (),
+    bootstrap_resamples: int = 2000,
+    bootstrap_seed: int = 42,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """Score the baseline arm and every structural / question arm of one model.
+
+    The baseline arm (full text against full text) is always computed; it is
+    the reference every other arm is compared with, in the same run and on
+    the same cells, so the comparison is paired by construction. Paragraphs
+    are embedded under the ``document`` kind, questions under ``query`` (the
+    same assignment the probe uses: the paragraph is the indexed text, the
+    question the query it is matched against).
+
+    Args:
+        view: The model-independent dataset view.
+        model_name: The short handle of the model (the artifact's row key).
+        paragraph_embedder: The embedder of the baseline (full-text) paragraph side.
+        question_embedders: The embedder of every question side, keyed by its
+            transform (the baseline transform plus the extra ones).
+        baseline_chunker: The chunker of the baseline arms (the full-text one).
+        question_transform: The baseline question transform.
+        question_block_markers: The markers of the question transform.
+        preprocess_spec: The paragraph side's preprocess spec.
+        structural_embedder: The embedder of the chunked paragraph side (None
+            when the run has no structural arm).
+        structural_chunker: The chunker of the structural arms.
+        aggregations: The aggregation rules of the structural arms.
+        bootstrap_resamples: The number of bootstrap resamples of the paired
+            statistics.
+        bootstrap_seed: The seed of the bootstrap.
+        hit_ks: The hit@k grid of the rank report.
+
+    Returns:
+        The model's artifact block: the baseline arm's fields at the top
+        level, the other arms under ``arms`` and their comparisons against
+        the baseline under ``comparisons``.
+    """
+    paragraph_texts = preprocess_spec.apply(list(view.paragraphs))
+    paragraph_side = encode_side(
+        paragraph_embedder,
+        baseline_chunker,
+        paragraph_texts,
+        "document",
+        meta=_paragraph_meta(preprocess_spec, baseline_chunker),
+    )
+    question_sides: dict[str, SideEncoding] = {}
+    for transform, embedder in question_embedders.items():
+        question_texts = apply_question_transform(
+            list(view.questions), transform, question_block_markers
+        )
+        question_sides[transform] = encode_side(
+            embedder,
+            baseline_chunker,
+            question_texts,
+            "query",
+            meta=_question_meta(transform, question_block_markers, baseline_chunker),
+        )
+    if question_transform not in question_sides:
+        raise ValueError(f"the baseline question transform {question_transform!r} has no embedder")
+
+    baseline_question_side = question_sides[question_transform]
+    baseline_similarities = side_similarities(paragraph_side, baseline_question_side, None)
+    baseline_block = score_arm(
+        view,
+        arm_name=BASELINE_ARM,
+        similarities=baseline_similarities,
+        paragraph_side=paragraph_side,
+        question_side=baseline_question_side,
+        hit_ks=hit_ks,
+    )
+
+    arms: dict[str, Any] = {}
+    comparisons: dict[str, Any] = {}
+    arm_similarities: dict[str, np.ndarray] = {}
+
+    # The question-side arms: the full-text paragraph side against another
+    # question transform (the free keep-vs-strip_block comparison).
+    for transform, question_side in question_sides.items():
+        if transform == question_transform:
+            continue
+        arm_name = f"{BASELINE_ARM}_{transform}"
+        similarities = side_similarities(paragraph_side, question_side, None)
+        arms[arm_name] = score_arm(
+            view,
+            arm_name=arm_name,
+            similarities=similarities,
+            paragraph_side=paragraph_side,
+            question_side=question_side,
+            hit_ks=hit_ks,
+        )
+        arm_similarities[arm_name] = similarities
+
+    # The structural arms: the chunked paragraph side folded by an
+    # aggregation rule, against the baseline's question side.
+    if aggregations:
+        if structural_embedder is None or structural_chunker is None:
+            raise ValueError("the structural arms need a chunked paragraph side")
+        structural_side = encode_side(
+            structural_embedder,
+            structural_chunker,
+            paragraph_texts,
+            "document",
+            meta=_paragraph_meta(preprocess_spec, structural_chunker),
+        )
+        for rule in aggregations:
+            arm_name = f"{structural_chunker.name}_{rule.slug}"
+            similarities = side_similarities(structural_side, baseline_question_side, rule)
+            arms[arm_name] = score_arm(
+                view,
+                arm_name=arm_name,
+                similarities=similarities,
+                paragraph_side=structural_side,
+                question_side=baseline_question_side,
+                aggregation=rule,
+                hit_ks=hit_ks,
+            )
+            arm_similarities[arm_name] = similarities
+
+    for arm_name, similarities in arm_similarities.items():
+        comparisons[arm_name] = compare_arms(
+            view,
+            arm_name=arm_name,
+            reference_similarities=baseline_similarities,
+            arm_similarities=similarities,
+            resamples=bootstrap_resamples,
+            seed=bootstrap_seed,
+            hit_ks=hit_ks,
+        )
+
     info = paragraph_embedder.info
-
     return {
         "name": model_name,
         "embedder": {
@@ -542,56 +1154,9 @@ def score_model(
             "context_tokens": info.context_tokens,
             "prefixes": dict(info.prefixes),
         },
-        "sides": {
-            "paragraph": {
-                "kind": "document",
-                "preprocess": preprocess_spec.variant,
-                "preprocess_version": preprocess_spec.version,
-                "chunker": chunker.version,
-                "chunker_name": _chunker_name(chunker),
-                "cache_version": chunker.cache_version(preprocess_spec.version),
-                "n_texts": len(paragraph_texts),
-                "n_chunks": n_paragraph_chunks,
-                "aggregation": "first chunk per text (the full-text baseline: one chunk per text)",
-                "cache_hits": paragraph_hits,
-                "cache_misses": paragraph_misses,
-            },
-            "question": {
-                "kind": "query",
-                "transform": question_transform,
-                "transform_version": question_transform_version(
-                    question_transform, question_block_markers
-                ),
-                "chunker": chunker.version,
-                "chunker_name": _chunker_name(chunker),
-                "cache_version": chunker.cache_version(
-                    question_transform_version(question_transform, question_block_markers)
-                ),
-                "n_texts": len(question_texts),
-                "n_chunks": n_question_chunks,
-                "aggregation": "first chunk per text (the full-text baseline: one chunk per text)",
-                "cache_hits": question_hits,
-                "cache_misses": question_misses,
-            },
-        },
-        "pair_auc": pair_auc,
-        "score_distributions": score_distributions,
-        "negative_enrichment": {
-            "rank_percentile": {
-                "label1": _distribution(positive_percentiles),
-                "label0": _distribution(negative_percentiles),
-                "control": _distribution(control_percentiles),
-            },
-            "by_document": enrichment_by_document,
-            "top_quintile_share": {
-                "label1": _top_quintile_share(positive_percentiles),
-                "label0": _top_quintile_share(negative_percentiles),
-                "control": _top_quintile_share(control_percentiles),
-            },
-        },
-        "top1_candidate_provenance": top1,
-        "judged_pairs": judged_pairs,
-        "control_cells": control_cells,
+        **baseline_block,
+        "arms": arms,
+        "comparisons": comparisons,
     }
 
 
@@ -673,6 +1238,11 @@ def build_analysis_report(
     sampling_rule: str,
     question_transform: str,
     chunker_name: str,
+    chunker_params: Mapping[str, Any] | None = None,
+    aggregations: Sequence[str] = (),
+    question_transforms: Sequence[str] = (),
+    bootstrap: Mapping[str, Any] | None = None,
+    baseline_chunker_name: str = BASELINE_ARM,
     n_valid_pairs: int,
     n_malformed_pairs: int,
     total_seconds: float,
@@ -719,7 +1289,12 @@ def build_analysis_report(
                 sampling_rule, sampling_rule
             ),
             "question_transform": question_transform,
+            "question_transforms": list(question_transforms),
             "chunker": chunker_name,
+            "chunker_params": dict(chunker_params or {}),
+            "baseline_chunker": baseline_chunker_name,
+            "aggregations": list(aggregations),
+            "bootstrap": dict(bootstrap or {}),
             "notes": [
                 "OMCT is auxiliary data (PLAN.md section 2): these numbers annotate "
                 "method choice, they are never a UPR metric.",
@@ -730,6 +1305,9 @@ def build_analysis_report(
                 "rank_percentile is the position from the top of the paragraph's own "
                 "same-document candidate list (0 = best candidate, 1 = worst; a random "
                 "candidate sits at about 0.5).",
+                "The model's top-level fields are the baseline arm (full text against "
+                "full text). The other arms are under 'arms' and their comparisons "
+                "against the baseline under 'comparisons' (one per arm).",
             ],
         },
         "models": list(models),

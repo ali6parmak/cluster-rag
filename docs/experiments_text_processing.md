@@ -518,3 +518,259 @@ paragraph side, while the question-type features (Stage 1.1b) stay useful as
 measurement in the `analyze-omct` command, which is a separate change set
 for the reviewer to approve.
 
+### 2026-10-25 — `omct-analyze-arctic2-atoms` (Stage 1.1a arms, arctic2)
+
+- **What:** the Stage-1.1a arms (TEXT_PROCESSING_PLAN.md section 3, Stage
+  1.1a) with the third Stage-0 model (Ollama, `snowflake-arctic-embed2:latest`,
+  digest 30685f516da4, 1024d). One run, six arms: the **baseline arm**
+  (full text against full text — the Stage-0 scoring, the reference every
+  other arm is compared with), the four **paragraph-atom arms** (the
+  paragraph split into 1,742 sentence/clause atoms, folded into one pair score
+  by `max` / `top_k_mean:2` / `top_k_mean:3` / `mean`) and the
+  **question-transform arm** (the full text against the unstripped question,
+  the free `keep` vs `strip_block` comparison). The question side is never
+  chunked (out of scope). Cost: the atoms are 1,742 new vectors per model
+  (the artifact's `sides.paragraph.n_chunks`) and the `keep` question side
+  294; the baseline arm encodes **nothing** (225 + 294 cache hits) — the
+  chunking version went into the *existing* cache-version slot, so the warm
+  cache of the full-text arm stayed valid. (The artifact's cache counters
+  are from the final, warm execution: 1,742 + 294 hits, 0 misses.)
+- **Numbers** (OMCT auxiliary data, never a UPR metric; the control is the
+  same 4,000 unjudged cells as the Stage-0 run):
+
+  | arm | pair AUC | macro AUC | ΔAUC (95% CI, 2,000 paired resamples) | P(Δ>0) | de-shifted AUC | control mean (Δ) | floor-gap Δ |
+  |---|---|---|---|---|---|---|---|
+  | full_text (baseline) | 0.4680 | 0.5463 | — | — | — | 0.2436 | — |
+  | full_text_keep | 0.4512 | 0.5467 | −0.0167 [−0.0329, −0.0005] | 0.023 | 0.4522 | 0.2452 (+0.0016) | +0.0031 |
+  | atoms_max | 0.4865 | 0.5735 | +0.0186 [−0.0039, +0.0407] | 0.953 | 0.4698 | 0.2837 (+0.0401) | −0.0009 |
+  | atoms_top_k_mean_2 | 0.4700 | 0.5496 | +0.0020 [−0.0184, +0.0222] | 0.569 | 0.4506 | 0.2592 (+0.0157) | −0.0135 |
+  | atoms_top_k_mean_3 | 0.4628 | 0.5321 | −0.0052 [−0.0254, +0.0158] | 0.314 | 0.4428 | 0.2409 (−0.0027) | −0.0213 |
+  | atoms_mean | 0.4341 | 0.5079 | −0.0338 [−0.0585, −0.0096] | 0.002 | 0.4179 | 0.1845 (−0.0590) | −0.0783 |
+
+  - the **control-side counterpart**: the control's rank p50 barely moves —
+    0.5021 (the baseline) against 0.5021 / 0.5021 / 0.5000 / 0.5021 / 0.4978
+    for the five arms — so the arms move the score *level*, not the ordinary
+    pairs' *rank position*;
+  - the **top-fifth share** (C / A / B): baseline 0.6527 / 0.4930 / 0.1923;
+    `atoms_max` 0.6546 / 0.4809 / 0.1985; `atoms_mean` 0.5840 / 0.4839 /
+    0.1970;
+  - the **hit@1** (the share of the group's pairs whose question is its
+    paragraph's top candidate): positives 0.1050 → 0.1183 (`atoms_max`),
+    0.1050 (`top2`), 0.0992 (`top3`), 0.0878 (`mean`); negatives 0.0171 →
+    0.0171 / 0.0211 / 0.0191 / 0.0181 — the negatives' hit@1 does not fall
+    with the positives', so nothing here separates the two groups;
+  - the **per-document control-mean shift** (the plan's non-uniform caveat:
+    NU / AI / CIDH): `atoms_max` +0.0221 / +0.0471 / +0.0528 — the inflation
+    is not uniform, and it does not follow the paragraph length (NU has the
+    longest paragraphs and the smallest shift);
+  - the **per-document AUCs** (NU / AI / CIDH) beside the pooled number:
+    baseline 0.4773 / 0.6209 / 0.5408 (pooled 0.4680, macro 0.5463) — the
+    pooled figure is dominated by NU's 845 of the 1,520 reviewed pairs;
+    `atoms_max`'s per-document AUCs are 0.5246 / 0.6867 / 0.5092 (macro
+    0.5735, so the macro gain +0.0272 is larger than the pooled gain
+    +0.0186) — two documents improve and one (CIDH) degrades;
+  - a note on the de-shifted AUC: its **per-document** value equals the
+    arm's per-document AUC (a constant shift inside a document cannot change
+    that document's ranking) — the de-shifting is what corrects the
+    *pooled* number, where the cross-document levels are at stake.
+- **Verdict:** no arm improves the discrimination on the reviewed set: the
+  only 95% intervals that exclude zero are negative (`full_text_keep`
+  −0.0167 and `atoms_mean` −0.0338). The floor gap (the verified positives'
+  mean minus the control's mean) *narrows* in four of the five arms
+  (−0.0009 to −0.0783), so the ordinary same-document pairs did not fall
+  relative to the true matches. The Stage-1 falsification test does not fire
+  for this model.
+
+### 2026-10-25 — `omct-analyze-voyage-4-nano-atoms` (Stage 1.1a arms, voyage-4-nano)
+
+- **What:** the same six arms with the second Stage-0 model (HF,
+  `voyageai/voyage-4-nano`, revision 433ece5e27a1, 2048d). Same seed, the
+  same 4,000 control cells.
+- **Numbers:**
+
+  | arm | pair AUC | macro AUC | ΔAUC (95% CI) | P(Δ>0) | de-shifted AUC | control mean (Δ) | floor-gap Δ |
+  |---|---|---|---|---|---|---|---|
+  | full_text (baseline) | 0.5004 | 0.5588 | — | — | — | 0.2351 | — |
+  | full_text_keep | 0.5174 | 0.5961 | +0.0170 [−0.0056, +0.0392] | 0.924 | 0.5286 | 0.3285 (+0.0934) | −0.0152 |
+  | atoms_max | 0.4700 | 0.5144 | −0.0304 [−0.0522, −0.0092] | 0.003 | 0.4576 | 0.2940 (+0.0589) | −0.0147 |
+  | atoms_top_k_mean_2 | 0.4497 | 0.4842 | −0.0507 [−0.0728, −0.0309] | 0.000 | 0.4352 | 0.2720 (+0.0369) | −0.0266 |
+  | atoms_top_k_mean_3 | 0.4401 | 0.4679 | −0.0602 [−0.0827, −0.0394] | 0.000 | 0.4250 | 0.2563 (+0.0212) | −0.0341 |
+  | atoms_mean | 0.4130 | 0.4513 | −0.0874 [−0.1130, −0.0629] | 0.000 | 0.3992 | 0.2119 (−0.0232) | −0.0874 |
+
+  - the control's rank p50 stays at 0.5023 / 0.5023 / 0.4931 / 0.4958 /
+    0.4931 (baseline 0.5023);
+  - the top-fifth share (C / A / B): baseline 0.6679 / 0.4950 / 0.2003;
+    `atoms_max` 0.5267 / 0.4598 / 0.2050; `atoms_mean` 0.3855 / 0.4297 /
+    0.2042 — the atoms push the *positives* down the candidate list
+    (0.6679 → 0.5267), and the negatives with them;
+  - the hit@1: positives 0.1050 → 0.0706 / 0.0706 / 0.0630 / 0.0420; negatives
+    0.0211 → 0.0231 / 0.0221 / 0.0251 / 0.0241 — the positives' hit@1 falls
+    while the negatives' does not: the atoms lose the true matches first;
+  - the per-document control-mean shift (NU / AI / CIDH): `atoms_max` +0.0380
+    / +0.0512 / +0.0747 — again not uniform, and again not ordered by the
+    paragraph length;
+  - the per-document AUCs (NU / AI / CIDH): baseline 0.5027 / 0.6165 / 0.5573
+    (pooled 0.5004, macro 0.5588).
+- **Verdict:** the clearest negative result of the three: **every** atom arm
+  is significantly worse on the reviewed set (the four intervals exclude
+  zero, all negative, the largest −0.0874), and the floor gap narrows in
+  every arm. The one arm with a positive de-shifted AUC above the baseline
+  is the *question-side* one (`full_text_keep`, 0.5286 against 0.5004) — but
+  its interval includes zero ([−0.0056, +0.0392]) and it comes with the
+  largest scale shift in the run (the control mean +0.0934: the unstripped
+  question lifts every score).
+
+### 2026-10-25 — `omct-analyze-embeddinggemma-atoms` (Stage 1.1a arms, embeddinggemma)
+
+- **What:** the same six arms with the first Stage-0 model (Ollama,
+  `embeddinggemma:latest`, digest 82f094e4c0e1, 768d). Same seed, the same
+  4,000 control cells.
+- **Numbers:**
+
+  | arm | pair AUC | macro AUC | ΔAUC (95% CI) | P(Δ>0) | de-shifted AUC | control mean (Δ) | floor-gap Δ |
+  |---|---|---|---|---|---|---|---|
+  | full_text (baseline) | 0.5371 | 0.6376 | — | — | — | 0.2194 | — |
+  | full_text_keep | 0.5238 | 0.6240 | −0.0133 [−0.0296, +0.0018] | 0.046 | 0.5190 | 0.2201 (+0.0007) | +0.0004 |
+  | atoms_max | 0.5526 | 0.6561 | +0.0155 [−0.0083, +0.0390] | 0.901 | 0.5430 | 0.2407 (+0.0212) | +0.0030 |
+  | atoms_top_k_mean_2 | 0.5324 | 0.6358 | −0.0047 [−0.0259, +0.0165] | 0.328 | 0.5209 | 0.2154 (−0.0041) | −0.0101 |
+  | atoms_top_k_mean_3 | 0.5264 | 0.6240 | −0.0107 [−0.0326, +0.0109] | 0.162 | 0.5158 | 0.1966 (−0.0228) | −0.0186 |
+  | atoms_mean | 0.5388 | 0.6387 | +0.0016 [−0.0236, +0.0266] | 0.535 | 0.5318 | 0.1426 (−0.0768) | −0.0846 |
+
+  - the control's rank p50 stays at 0.5069 / 0.5084 / 0.5098 / 0.5062 /
+    0.5023 (baseline 0.5042);
+  - the top-fifth share (C / A / B): baseline 0.6985 / 0.4347 / 0.1930;
+    `atoms_max` 0.7271 / 0.4147 / 0.1888; `atoms_mean` 0.6469 / 0.3484 /
+    0.1900;
+  - the hit@1: positives 0.1355 → 0.1107 / 0.1145 / 0.1145 / 0.0992;
+    negatives 0.0201 → 0.0171 / 0.0201 / 0.0141 / 0.0161;
+  - the per-document control-mean shift (NU / AI / CIDH): `atoms_max` +0.0092
+    / +0.0118 / +0.0307; `atoms_mean` −0.0777 / −0.0657 / −0.0771;
+  - the per-document AUCs (NU / AI / CIDH): baseline 0.5231 / 0.7633 / 0.6263
+    (pooled 0.5371, macro 0.6376).
+- **Verdict:** the only **atom** arm of the whole Stage-1 run whose floor gap
+  *widens* is this model's `atoms_max` (+0.0030), and its ΔAUC interval
+  includes zero ([−0.0083, +0.0390]) — so it is the one candidate the
+  falsification test does not rule out, and it is not significant.
+  `atoms_mean` is the extreme case of the re-scaling story: the control's
+  mean falls by 0.0768 while the discrimination is flat (+0.0016, the
+  interval includes zero).
+
+## Stage 1.1a — the paragraph side's atoms: the verdict (CS-3, 2026-10-25)
+
+**The question.** CS-2's entry point: *does splitting the paragraph into
+atoms lower the ordinary pairs' floor (the control) relative to its shift on
+the true matches (subset C)?* If yes, the floor is representation-borne and
+the variant is worth keeping. If both move equally, the method has merely
+re-scaled the scores and the representation is untouched.
+
+**The measurement.** Three runs (`omct-analyze-{arctic2,voyage-4-nano,
+embeddinggemma}-atoms`), six arms each, all on the same 1,520 reviewed pairs
+and the same 4,000 control cells, with the paired bootstrap of the AUC
+difference (2,000 resamples, seed 42) and the plan's de-shifted AUC (the
+control's **per-document** mean shift subtracted from the arm's reviewed-set
+scores). The floor gap is the verified positives' mean score minus the
+control's mean score; its change is the falsification statistic.
+
+**The guard — the baseline arm reproduces Stage 0.** The full-text arm
+inside each new run was compared with the Stage-0 artifact field by field
+(the same script, both artifacts, never the raw pair file): the control cell
+ids are identical (same cells, same order, 4,000 of them), and the baseline
+arm's 1,520 per-pair scores and rank percentiles, the 4,000 control scores
+and rank percentiles, the pair AUC, the per-document AUCs, the score
+distributions, the negative-enrichment block and the top-1 provenance are
+**identical** for all three models (0.4680 / 0.5004 / 0.5371; control means
+0.2436 / 0.2351 / 0.2194). The only difference is a descriptive string: the
+driver no longer takes "the first chunk" of a text but the arm's own chunks,
+so the sides block now says "one chunk per text (the plain full-text
+cosine)". The comparison is therefore *paired by construction*: same run,
+same cells, same model.
+
+**The answer: no — the falsification test does not fire.**
+
+1. **The floor gap narrows in 8 of the 9 atom arms** (−0.0009 to −0.0874);
+   it widens in exactly one (embeddinggemma's `atoms_max`, +0.0030, whose
+   ΔAUC interval includes zero). The ordinary same-document pairs did not
+   fall relative to the true matches — in most arms they rose relative to
+   them.
+2. **The mechanism is visible in the aggregation, and it is a re-scaling.**
+   `max` takes a maximum over 7.7 atoms per paragraph on average, so it
+   lifts every score (the control's mean +0.0212 / +0.0589 / +0.0401 for
+   embeddinggemma / voyage-4-nano / arctic2) while the *rank* positions
+   barely move (the control's rank p50 stays within 0.010 of the baseline's
+   in every one of the fifteen arms). `mean` does the opposite: the control's
+   mean falls (−0.0768 / −0.0232 / −0.0590) — but the true matches fall
+   further, which is why the floor gap narrows by almost exactly the same
+   amount.
+3. **The discrimination does not follow.** Across the nine atom arms, only
+   four have a positive ΔAUC at all (embeddinggemma's `atoms_max` +0.0155 and
+   `atoms_mean` +0.0016, arctic2's `atoms_max` +0.0186 and
+   `atoms_top_k_mean_2` +0.0020) and **none of the nine has a 95% interval
+   that excludes zero on the positive side**. The five intervals that do
+   exclude zero are all negative: voyage-4-nano's four atom arms (−0.0304,
+   −0.0507, −0.0602, −0.0874) and arctic2's `atoms_mean` (−0.0338).
+4. **The de-shifted AUC agrees** (the plan's rule: a discrimination gain
+   counts only if it survives the scale shift). Against the baseline's
+   pooled AUC, the de-shifted AUC is *below* it in 12 of the 15 arm
+   comparisons; the three exceptions are embeddinggemma's `atoms_max`
+   (0.5430 against 0.5371), arctic2's `atoms_max` (0.4698 against 0.4680) and
+   voyage-4-nano's `full_text_keep` (0.5286 against 0.5004) — and the last
+   one is the *question* side, not the paragraph side.
+
+**What the run therefore says about the representation hypothesis.** The
+paragraph side's internal structure is **not** the lever that lowers the
+floor. The floor the Stage-0 write-up measured (ordinary same-document cells
+scoring 0.2194–0.2436 on average, one ordinary cell in twelve to eighteen
+outscoring the median true match) is not a "the paragraph is too coarse"
+artefact: splitting the paragraph into atoms moves the floor *up* under a
+max and *down* under a mean — but under a mean the true matches move down
+further, so the floor does not fall *relative* to them. The
+"same-report direction" mechanism therefore stays a **hypothesis** — this
+change set measures the floor's behaviour under segmentation, not the
+embedding space — and the measurement that could settle it (the share of
+the similarity direction shared by all the paragraphs of a document) is still
+an open change set in the plan's §5.
+
+**The free question-side comparison (the `keep` vs `strip_block` arm).**
+Model-dependent, and it does not reproduce the Phase-2 probe's "strip_block
+wins on AUC 6/6": embeddinggemma −0.0133 [−0.0296, +0.0018] (P(Δ>0) 0.046),
+voyage-4-nano **+0.0170** [−0.0056, +0.0392] (P(Δ>0) 0.924), arctic2 −0.0167
+[−0.0329, −0.0005] (P(Δ>0) 0.023). So the unstripped question (with its
+"Answer choices:" block) *helps* voyage-4-nano on this footing and hurts the
+other two; the difference is not significant for the model that prefers it.
+The control side shows why the question-side transform is a scale decision
+and not a ranking decision: voyage-4-nano's control mean jumps +0.0934 (the
+largest shift in the run) while its control rank p50 does not move at all
+(0.5023 → 0.5023).
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule
+  still ships as the **margin half only** — no spot-check sheet.
+- **Nothing about the embedding space.** The "same-report direction"
+  mechanism is still a hypothesis; this run measures scores and rank
+  positions, not directions.
+- **Nothing about the plan's §0.1 ad-hoc chunking table** (0.4680 / 0.4708 /
+  0.4507 / 0.4354). It is not re-derived here and it is not comparable: it
+  measured word windows and a chunked question side with an unpaired AUC and
+  no control; this run measures sentence/clause atoms with four aggregations,
+  paired, against the control. The ad-hoc table stays indicative.
+- **Nothing about the length↔shift correlation** the plan's caveat asks for
+  (the paragraph lengths live in the raw pair file, which this track's log
+  rule does not read). The per-document shifts are reported instead, and
+  they show the inflation is not uniform — and not ordered by the paragraph
+  length (NU has the longest paragraphs and the smallest shift).
+- **Nothing about the other chunkers.** The word/sentence windows, the
+  semantic boundaries and the question-side chunker are Stage 2's business;
+  the aggregation axis now has a harness number only for the paragraph-side
+  atoms.
+
+**The next step.** Stage 2's ladder (fixed windows, sentence windows,
+semantic boundaries) now has a *paired* yardstick and a control-side
+counterpart to be measured against, and the paragraph-side atoms are
+recorded as **not** helping on this data. The representation mechanism
+(§5's open question) is the measurement that would still change the picture,
+and it needs the reviewer's approval as a separate change set.
+

@@ -94,7 +94,15 @@ splits:
 #               sampling_rule: proportional,
 #               question_transform: strip_block,   # keep | strip_block
 #               question_block_markers: ["Answer choices:", "Notes:"],
-#               chunker: full_text}        # the track's chunker registry
+#               chunker: {name: full_text, params: {}},  # the track's chunker
+#               # registry + its parameters (a bare name is also accepted)
+#               aggregations: [],          # the structural arms' rules:
+#                                         # max | mean | "top_k_mean:k"
+#               question_transforms: [],   # extra question-side arms
+#                                         # (the free keep vs strip_block)
+#               bootstrap: {resamples: 2000, seed: null}}  # the paired
+#                                         # bootstrap of the AUC difference
+#                                         # (seed: null = the run's seed)
 #
 # strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
 # start with "continue"); longest opener wins, so multi-word forms are listed

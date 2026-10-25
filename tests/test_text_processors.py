@@ -26,11 +26,17 @@ from cluster_rag.text_processors import (
     TextPair,
     config_version,
 )
+from cluster_rag.text_processors.aggregation import (
+    aggregate_chunk_similarities,
+    parse_aggregation,
+    parse_aggregations,
+)
 from cluster_rag.text_processors.chunkers import (
     CHUNKERS,
     AtomChunker,
     AtomChunkerConfig,
     FullTextChunker,
+    build_chunker,
     split_clauses,
     split_sentences,
 )
@@ -174,6 +180,84 @@ def test_chunkers_registry_holds_the_track_methods() -> None:
         assert isinstance(chunker, Chunker)
         assert chunker.version
         assert name in chunker.version
+
+
+def test_build_chunker_takes_its_parameters() -> None:
+    """A chunker is built from its name and its parameters."""
+    chunker = build_chunker("atoms", {"split_clauses": False})
+    assert isinstance(chunker, AtomChunker)
+    assert chunker.config.split_clauses is False
+    # the parameters are part of the cache-facing version
+    assert chunker.version != build_chunker("atoms").version
+    assert chunker.version != build_chunker("atoms", {"split_clauses": True}).version
+    # a chunker without parameters refuses any
+    assert isinstance(build_chunker("full_text"), FullTextChunker)
+    with pytest.raises(ValueError, match="takes no parameters"):
+        build_chunker("full_text", {"split_clauses": True})
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        build_chunker("atoms", {"not_a_parameter": 1})
+    with pytest.raises(ValueError, match="Unknown chunker"):
+        build_chunker("does-not-exist")
+
+
+def test_atom_chunker_config_normalizes_its_sequences() -> None:
+    """A config file carries lists; the version must not depend on the type."""
+    from_list = AtomChunkerConfig(clause_separators=[",", ";"], abbreviations=["mr"])
+    assert from_list.clause_separators == (",", ";")
+    assert from_list.abbreviations == ("mr",)
+
+
+def test_aggregation_parsing() -> None:
+    """The rule spellings: the plain ones and the explicit top_k_mean k."""
+    assert parse_aggregation("max") == parse_aggregation("max")
+    assert parse_aggregation("max").spec == "max"
+    assert parse_aggregation("mean").spec == "mean"
+    top = parse_aggregation("top_k_mean:2")
+    assert top.name == "top_k_mean" and top.k == 2
+    assert top.spec == "top_k_mean:2" and top.slug == "top_k_mean_2"
+    assert parse_aggregations(["max", "mean"]) == (
+        parse_aggregation("max"),
+        parse_aggregation("mean"),
+    )
+    with pytest.raises(ValueError, match="Unknown aggregation"):
+        parse_aggregation("median")
+    with pytest.raises(ValueError, match="explicit k"):
+        parse_aggregation("top_k_mean")
+    with pytest.raises(ValueError, match="integer k"):
+        parse_aggregation("top_k_mean:two")
+    with pytest.raises(ValueError, match="k >= 1"):
+        parse_aggregation("top_k_mean:0")
+    with pytest.raises(ValueError, match="takes no parameter"):
+        parse_aggregation("max:2")
+
+
+def test_aggregation_folds_the_chunk_matrix_by_hand() -> None:
+    """The fold: max, mean and the mean of the k best chunk matches."""
+    # two groups of chunk rows: group 0 = rows 0,1; group 1 = row 2
+    matrix = np.array(
+        [
+            [0.2, 0.9],
+            [0.8, 0.4],
+            [0.5, 0.5],
+        ]
+    )
+    groups = [[0, 1], [2]]
+    maximum = aggregate_chunk_similarities(matrix, groups, parse_aggregation("max"))
+    assert maximum.tolist() == [[0.8, 0.9], [0.5, 0.5]]
+    mean = aggregate_chunk_similarities(matrix, groups, parse_aggregation("mean"))
+    assert mean[0].tolist() == pytest.approx([0.5, 0.65])
+    assert mean[1].tolist() == pytest.approx([0.5, 0.5])
+    top1 = aggregate_chunk_similarities(matrix, groups, parse_aggregation("top_k_mean:1"))
+    assert top1[0].tolist() == pytest.approx([0.8, 0.9])
+    top2 = aggregate_chunk_similarities(matrix, groups, parse_aggregation("top_k_mean:2"))
+    assert top2[0].tolist() == pytest.approx([0.5, 0.65])  # both chunks averaged
+    # a k larger than the group size falls back to the group mean
+    top5 = aggregate_chunk_similarities(matrix, groups, parse_aggregation("top_k_mean:5"))
+    assert top5[0].tolist() == pytest.approx([0.5, 0.65])
+    with pytest.raises(ValueError, match="empty"):
+        aggregate_chunk_similarities(matrix, [[]], parse_aggregation("max"))
+    with pytest.raises(ValueError, match="outside the matrix"):
+        aggregate_chunk_similarities(matrix, [[0, 9]], parse_aggregation("max"))
 
 
 def test_protocols_are_runtime_checkable() -> None:

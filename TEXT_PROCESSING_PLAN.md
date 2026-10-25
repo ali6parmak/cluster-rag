@@ -361,20 +361,58 @@ sweeps are the orders.
 
 ### Stage 1 — Structural decomposition
 
-- [ ] **1.1 Question parts, reframed.** The answer options are scales
-  ("Very often", "Yes", "Generally, yes"), so the decomposition is:
-  (a) **stem-only vs. full question** (does the option block help or hurt the
-  topical signal?), and (b) **question-type features** (frequency? yes/no?
-  "no data" option present? option count?) as label-free features — instead of
-  exp02's "one embedding variant per answer option", which mostly injects
-  scale words. `atoms.py` (sentence/clause splitting) covers the paragraph
-  side. Embed both sides' parts (cheap, cached); aggregate by max / top-K /
-  mean; compare against the `full_text.py` baseline on AUC + recall@k.
+- [x] **1.1a The paragraph side's structure, measured against the control.**
+  The paragraph is split into sentence/clause atoms (`atoms.py`), every atom
+  is embedded, and the atom-level scores are folded into one pair score by an
+  aggregation rule (`max`, `top_k_mean:k`, `mean` — the new pure module
+  `text_processors/aggregation.py`). The question side stays **unchunked**;
+  the free `keep` vs `strip_block` question-transform comparison runs as one
+  more arm. Every arm is compared with the **full-text baseline arm in the
+  same run** (so the pairing is by construction) by the **paired bootstrap of
+  the AUC difference** (2,000 resamples, seed recorded in the artifact) and
+  by the **control-side counterpart** (the control's score level and rank
+  position on the same 4,000 cells), plus the **de-shifted AUC** (the
+  control's per-document mean shift subtracted from the method's reviewed-set
+  scores). All three Stage-0 models, so the arms sit next to the Stage-0
+  artifacts.
+  *(done 2026-10-25, CS-3: the `analyze-omct` command now scores the
+  baseline arm and the structural/question arms in one run (the `analysis:`
+  config section gained the chunker spec, the aggregation list, the
+  question-transform list and the paired-bootstrap params; the new
+  `ANALYZE_OMCT_ARMS_COLUMNS` table shape lands in its own sweep section, so
+  the Stage-0 rows are untouched); three runs
+  `omct-analyze-{arctic2,voyage-4-nano,embeddinggemma}-atoms` (1,742 atom
+  vectors + 294 `keep`-question vectors per model, 0 for the baseline arm —
+  the warm cache stayed valid). The baseline arm reproduces the Stage-0
+  artifacts field by field (same control cell ids, same per-cell scores, same
+  AUCs and control means). **Verdict: the falsification test does not
+  fire** — the floor gap (the verified positives' mean minus the control's
+  mean) narrows in 8 of the 9 atom arms, none of the nine has a 95% interval
+  that excludes zero on the positive side, and the five that do exclude zero
+  are all negative. The paragraph side's internal structure is **not** the
+  lever that lowers the floor: the atoms mostly re-scale the scores. The
+  question-side transform is model-dependent (the Phase-2 probe's "strip
+  6/6" does not reproduce on the paired footing for voyage-4-nano). The
+  numbers are in the track log's Stage-1.1a section.)*
+- [ ] **1.1b The question-type features → Stage 3's feature pack.** The
+  answer options are scales ("Very often", "Yes", "Generally, yes"), so the
+  decomposition is: (a) **stem-only vs. full question** (does the option
+  block help or hurt the topical signal?) — *measured at Stage 1.1a: the
+  effect is model-dependent, see the log* — and (b) **question-type
+  features** (frequency? yes/no? "no data" option present? option count?) as
+  label-free features, instead of exp02's "one embedding variant per answer
+  option", which mostly injects scale words. **Moved to Stage 3**: they are
+  feature-pack material (a combiner's inputs), not a scoring method, and
+  Stage 3's leakage rules (no corpus-level question statistics) are where
+  they belong.
 - [ ] **1.2 Report on both negative subsets** (verified hard negatives and the
   unjudged-proxy control), pooled **and** per-document (the pooled number is
   dominated by the NU document: 845/1520 pairs, 25% positive; the AI document
   is 99 pairs at 80% positive — a per-document macro average is reported next
   to every pooled number).
+  *(the CS-3 artifact already reports both subsets, pooled and per-document,
+  with the per-document macro beside the pooled number — ticked at the
+  reviewer's word, one checkbox per change set)*
 - Exit: measured contribution of structure alone (no learned model yet), with
   the per-document breakdown and both negative subsets.
 
@@ -514,11 +552,39 @@ sweeps are the orders.
   `analyze-omct` (e.g. the share of the similarity direction shared by all
   paragraphs of one document) — a separate change set, with the reviewer's
   approval, before the mechanism is called more than a hypothesis.
-- **The aggregation axis has no harness number (CS-2, 2026-10-24).** The
-  Stage-0 command scores full text against full text only, and §0.1's ad-hoc
-  chunking table was never re-derived, so the plan's chunking sensitivity
-  (~±0.03 AUC) stays indicative. Stage 1/2 must produce the axis
-  themselves, paired (Stage 2.5).
+- **The aggregation axis has a harness number for the paragraph-side atoms
+  (CS-3, 2026-10-25) — but only for them.** The Stage-0 command scored full
+  text against full text only, and §0.1's ad-hoc chunking table was never
+  re-derived, so the plan's chunking sensitivity (~±0.03 AUC) stayed
+  indicative. Stage 1.1a now measures the axis for the *sentence/clause
+  atoms* on the three Stage-0 models, paired, with the control side: the
+  paragraph side's structure is recorded as **not** helping on this data (the
+  floor gap narrows in 8 of the 9 atom arms; no arm's 95% interval excludes
+  zero on the positive side; the five that do exclude zero are all
+  negative). Still open: the word/sentence windows, the semantic boundaries
+  and the question-side chunker (Stage 2's ladder), and §0.1's ad-hoc table
+  is still **not** re-derived — it measured a different thing (word windows
+  and a chunked question side, unpaired, with no control), so the two are
+  not comparable and the ad-hoc numbers stay indicative.
+- **The question-side transform's effect is model-dependent (CS-3,
+  2026-10-25).** The Phase-2 probe found that stripping the "Answer
+  choices:" block raises the pair AUC for 6 of 6 embedders. On the Stage-1.1a
+  footing (the same 1,520 pairs, a paired bootstrap, the control side beside
+  it) the sign flips for voyage-4-nano (+0.0170 [−0.0056, +0.0392] for
+  `keep` against `strip_block`) while embeddinggemma (−0.0133) and arctic2
+  (−0.0167) prefer the stripped question. **Open:** is the block's value
+  model-specific (a prefix / instruction effect) or is the Phase-2 probe's
+  6/6 an artefact of the unpaired comparison? It changes what Stage 2 and
+  Stage 3 assume about the question side, so it must not be settled by one
+  more model.
+- **The length↔shift correlation the Stage-0 caveat asks for is still
+  unmeasured (CS-3, 2026-10-25).** The per-document control shifts are
+  reported (the inflation is not uniform, and it does not follow the
+  paragraph length: NU has the longest paragraphs and the smallest shift),
+  but the paragraph lengths live in the raw pair file, which this track's
+  log rule does not read. Measuring the correlation needs the lengths in the
+  artifact (a new command capability) or a derivation rule the reviewer
+  approves.
 
 ## 6. Milestones
 
@@ -579,8 +645,28 @@ set):
   flagged as indicative, never as results; no number is computed from the
   raw pair file. Plan checkboxes 0.2 and CS-2 ticked; Stage 1 is next, and
   its entry point (paragraph side first, control-side measurement) is
-  recorded in the write-up and as an open question in §5.*
-- Then Stage 1.
+  recorded in the write-up and as an open question in §5.)*
+- [x] **CS-3 — Stage 1.1a: the paragraph side's atoms.** The arms in the
+  `analyze-omct` command (the baseline arm plus the structural and
+  question-transform arms, one run, paired by construction), the paired
+  bootstrap of the AUC difference, the control-side counterpart, the
+  de-shifted AUC, the hit@k report, the `analysis:` config schema (the
+  chunker spec, the aggregation list, the question-transform list, the
+  bootstrap params), the new pure module `text_processors/aggregation.py`,
+  the `ANALYZE_OMCT_ARMS_COLUMNS` table shape and the track's Stage-1 sweep
+  (`experiments_text_processing/stage1_atoms_sweep.py`).
+  *(done 2026-10-25: three runs
+  `omct-analyze-{arctic2,voyage-4-nano,embeddinggemma}-atoms`; the baseline
+  arm reproduces the Stage-0 artifacts field by field (the same control cell
+  ids, the same per-cell scores, the same AUCs and control means);
+  **verdict: the falsification test does not fire** — the floor gap narrows
+  in 8 of the 9 atom arms, no arm's 95% interval excludes zero on the
+  positive side, and the five that do exclude zero are all negative, so the
+  paragraph side's structure mostly re-scales the scores instead of lowering
+  the floor. The question-side transform is model-dependent. Plan checkbox
+  1.1a ticked; 1.1b moved to Stage 3; two new open questions in §5; the
+  numbers are in the track log's Stage-1.1a section.)*
+- Then Stage 2.
 
 ## 8. The durable deliverable (named, so it is not lost)
 

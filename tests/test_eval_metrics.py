@@ -5,7 +5,28 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from cluster_rag.eval.metrics import pairwise_retrieval_metrics, roc_auc, subset_pair_metrics
+from cluster_rag.eval.metrics import (
+    paired_auc_bootstrap,
+    pairwise_retrieval_metrics,
+    roc_auc,
+    subset_pair_metrics,
+)
+
+
+def _reference_roc_auc(labels, scores) -> float:
+    """A naive O(n^2) AUC (the tie-aware pairwise count), for cross-checking."""
+    y = list(labels)
+    s = list(scores)
+    positives = [index for index, label in enumerate(y) if label == 1]
+    negatives = [index for index, label in enumerate(y) if label == 0]
+    total = 0.0
+    for positive in positives:
+        for negative in negatives:
+            if s[positive] > s[negative]:
+                total += 1.0
+            elif s[positive] == s[negative]:
+                total += 0.5
+    return total / (len(positives) * len(negatives))
 
 
 def test_roc_auc_perfect_separation() -> None:
@@ -29,6 +50,62 @@ def test_roc_auc_requires_both_classes() -> None:
     """AUC with one class only is undefined (clear error)."""
     with pytest.raises(ValueError, match="both label classes"):
         roc_auc([1, 1], [0.1, 0.2])
+
+
+def test_roc_auc_matches_a_naive_reference_on_random_data() -> None:
+    """The vectorized implementation agrees with the pairwise count (ties included)."""
+    rng = np.random.default_rng(7)
+    labels = [1] * 30 + [0] * 40
+    scores = np.round(rng.uniform(0.0, 1.0, size=70), 1)  # rounded -> many ties
+    assert roc_auc(labels, scores.tolist()) == pytest.approx(
+        _reference_roc_auc(labels, scores.tolist())
+    )
+
+
+def test_paired_auc_bootstrap_hand_computed() -> None:
+    """A strictly better arm: a positive difference and P(delta > 0) = 1."""
+    labels = [1, 1, 0, 0]
+    reference = [0.1, 0.2, 0.8, 0.9]
+    arm = [0.9, 0.8, 0.2, 0.1]
+    result = paired_auc_bootstrap(labels, reference, arm, n_resamples=200, seed=42)
+    assert result["auc_reference"] == 0.0
+    assert result["auc_arm"] == 1.0
+    assert result["delta_auc"] == 1.0
+    assert result["ci_low"] == 1.0 and result["ci_high"] == 1.0
+    assert result["p_delta_positive"] == 1.0
+    assert result["n_resamples"] == 200
+    assert result["seed"] == 42
+
+
+def test_paired_auc_bootstrap_of_identical_scorers_is_zero() -> None:
+    """The same scorer on both sides: no difference, no positive resample."""
+    labels = [1, 0, 1, 0, 1, 0]
+    scores = [0.4, 0.2, 0.9, 0.7, 0.1, 0.8]
+    result = paired_auc_bootstrap(labels, scores, scores, n_resamples=100, seed=1)
+    assert result["delta_auc"] == 0.0
+    assert result["ci_low"] == 0.0 and result["ci_high"] == 0.0
+    assert result["p_delta_positive"] == 0.0
+
+
+def test_paired_auc_bootstrap_is_reproducible_and_paired() -> None:
+    """The same seed gives the same interval; the pairing keeps the labels together."""
+    labels = [1, 1, 1, 0, 0, 0]
+    reference = [0.5, 0.4, 0.3, 0.6, 0.7, 0.8]
+    arm = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]
+    first = paired_auc_bootstrap(labels, reference, arm, n_resamples=300, seed=5)
+    second = paired_auc_bootstrap(labels, reference, arm, n_resamples=300, seed=5)
+    assert first == second
+    other = paired_auc_bootstrap(labels, reference, arm, n_resamples=300, seed=6)
+    assert other["delta_auc"] == first["delta_auc"]  # the point estimate is seed-free
+    assert other["ci_low"] <= first["ci_low"] or other["ci_high"] != first["ci_high"]
+
+
+def test_paired_auc_bootstrap_requires_both_classes() -> None:
+    """A single class makes the AUC undefined (clear error)."""
+    with pytest.raises(ValueError, match="both label classes"):
+        paired_auc_bootstrap([1, 1], [0.1, 0.2], [0.3, 0.4], n_resamples=10)
+    with pytest.raises(ValueError, match="same length"):
+        paired_auc_bootstrap([1, 0], [0.1, 0.2], [0.3], n_resamples=10)
 
 
 def test_pairwise_retrieval_metrics_hand_computed() -> None:

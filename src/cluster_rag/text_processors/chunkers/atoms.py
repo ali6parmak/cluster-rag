@@ -193,6 +193,15 @@ class AtomChunkerConfig:
     min_atom_chars: int = 1
     abbreviations: tuple[str, ...] = DEFAULT_ABBREVIATIONS
 
+    def __post_init__(self) -> None:
+        """Normalize the sequence parameters to tuples.
+
+        A config file carries them as lists, so the version hash (and the
+        splitter's behaviour) must not depend on the container type.
+        """
+        object.__setattr__(self, "clause_separators", tuple(self.clause_separators))
+        object.__setattr__(self, "abbreviations", tuple(self.abbreviations))
+
     def payload(self) -> dict[str, Any]:
         """JSON-friendly view of the parameters (hashed into the version)."""
         return {

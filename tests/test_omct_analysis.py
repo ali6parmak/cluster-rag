@@ -31,9 +31,17 @@ from cluster_rag.config import (
     EmbedderConfig,
     PreprocessConfig,
 )
-from cluster_rag.omct_analysis import build_dataset_view, document_code, score_model
+from cluster_rag.omct_analysis import (
+    SideEncoding,
+    build_dataset_view,
+    compare_arms,
+    document_code,
+    score_model_arms,
+    side_similarities,
+)
 from cluster_rag.pairs import load_pairs
 from cluster_rag.preprocess import build_preprocess_spec
+from cluster_rag.text_processors.aggregation import parse_aggregation
 from cluster_rag.text_processors.chunkers import FullTextChunker
 from cluster_rag.text_processors.control import (
     SAMPLING_RULE_PROPORTIONAL,
@@ -59,6 +67,31 @@ analysis:
   sampling_rule: proportional
   question_transform: strip_block
   chunker: full_text
+"""
+
+ANALYSIS_ARMS_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker:
+    name: atoms
+    params:
+      split_clauses: false
+  aggregations: [max, "top_k_mean:2", mean]
+  question_transforms: [keep]
+  bootstrap:
+    resamples: 50
+    seed: 7
 """
 
 
@@ -194,15 +227,15 @@ def test_score_model_produces_the_artifact_blocks(view) -> None:
     """The per-model block carries the pairs, the control cells and the numbers."""
     embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
     spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
-    report = score_model(
+    report = score_model_arms(
         view,
         model_name="fake-model",
         paragraph_embedder=embedder,
-        question_embedder=embedder,
-        chunker=FullTextChunker(),
-        preprocess_spec=spec,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
         question_transform="strip_block",
         question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
     )
     assert report["name"] == "fake-model"
     assert len(report["judged_pairs"]) == 6
@@ -219,6 +252,7 @@ def test_score_model_produces_the_artifact_blocks(view) -> None:
     }
     assert report["pair_auc"]["overall"] is not None
     assert report["top1_candidate_provenance"]["n_paragraphs"] == 6
+    assert report["arms"] == {} and report["comparisons"] == {}
     for pair in report["judged_pairs"]:
         assert "score" in pair and "rank_percentile" in pair
     for cell in report["control_cells"]:
@@ -315,3 +349,174 @@ def test_analysis_config_rejects_an_unknown_chunker() -> None:
             ),
             chunker="does-not-exist",
         )
+
+
+def test_analysis_config_accepts_a_bare_chunker_name() -> None:
+    """A bare string is read as the chunker's name (the Stage-0 configs load)."""
+    config = AnalysisConfig(
+        embedders=(
+            AnalysisEmbedderConfig(name="m", embed=EmbedderConfig(backend="hf", model_id="m")),
+        ),
+        chunker="atoms",
+    )
+    assert config.chunker.name == "atoms"
+    assert config.chunker.params == {}
+
+
+def test_analysis_config_rejects_unknown_arms() -> None:
+    """The arms are validated at config time (fail before any run)."""
+    embedders = (
+        AnalysisEmbedderConfig(name="m", embed=EmbedderConfig(backend="hf", model_id="m")),
+    )
+    with pytest.raises(ValueError, match="Unknown aggregation"):
+        AnalysisConfig(embedders=embedders, aggregations=("median",))
+    with pytest.raises(ValueError, match="need a chunker that splits"):
+        AnalysisConfig(embedders=embedders, aggregations=("max",))
+    with pytest.raises(ValueError, match="must not repeat the baseline transform"):
+        AnalysisConfig(embedders=embedders, question_transforms=("strip_block",))
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        AnalysisConfig(embedders=embedders, chunker={"name": "atoms", "params": {"nope": 1}})
+
+
+def test_side_similarities_folds_the_paragraph_chunks() -> None:
+    """A chunked paragraph side is folded by the aggregation rule."""
+    paragraph_side = SideEncoding(
+        texts=("p", "q"),
+        chunk_lists=(("p1", "p2"), ("q1",)),
+        vectors=np.array([[1.0, 0.0], [0.0, 1.0], [0.6, 0.8]]),
+    )
+    question_side = SideEncoding(
+        texts=("a",),
+        chunk_lists=(("a",),),
+        vectors=np.array([[1.0, 0.0]]),
+    )
+    maximum = side_similarities(paragraph_side, question_side, parse_aggregation("max"))
+    assert maximum.shape == (2, 1)
+    assert maximum[0, 0] == pytest.approx(1.0)
+    mean = side_similarities(paragraph_side, question_side, parse_aggregation("mean"))
+    assert mean[0, 0] == pytest.approx(0.5)
+    top1 = side_similarities(paragraph_side, question_side, parse_aggregation("top_k_mean:1"))
+    assert top1[0, 0] == pytest.approx(1.0)
+
+
+def test_side_similarities_refuses_a_chunked_question_side() -> None:
+    """The question-side chunker is out of scope: a chunked side is refused."""
+    paragraph_side = SideEncoding(
+        texts=("p",), chunk_lists=(("p1",),), vectors=np.array([[1.0, 0.0]])
+    )
+    question_side = SideEncoding(
+        texts=("a",), chunk_lists=(("a1", "a2"),), vectors=np.array([[1.0, 0.0], [0.0, 1.0]])
+    )
+    with pytest.raises(ValueError, match="one chunk per question"):
+        side_similarities(paragraph_side, question_side, parse_aggregation("max"))
+
+
+def test_compare_arms_is_paired_and_carries_the_control_side(view) -> None:
+    """The comparison: the paired statistic, the control shift and the de-shifted AUC."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    report = score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+    )
+    # the same arm compared with itself: no difference anywhere
+    comparison = compare_arms(
+        view,
+        arm_name="same",
+        reference_similarities=np.zeros((6, 4)),
+        arm_similarities=np.zeros((6, 4)),
+        resamples=20,
+        seed=1,
+    )
+    assert comparison["paired_auc"]["delta_auc"] == 0.0
+    assert comparison["control_shift"]["mean_delta"] == 0.0
+    assert comparison["floor_gap"]["delta"] == 0.0
+    assert comparison["deshifted_auc"]["overall"] is not None
+    assert set(comparison["deshifted_auc"]["per_document_shift"]) == {"Doc A", "Doc B", "Doc C"}
+    assert report["pair_auc"]["overall"] is not None
+
+
+def test_analyze_omct_arms_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """The arms land in the artifact, paired with the baseline arm on the same cells."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-arms",
+        data_external=sample_pairs,
+        extra=ANALYSIS_ARMS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-arms"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    model = payload["models"][0]
+    arms = model["arms"]
+    # the three aggregations of the atoms chunker + the question-transform arm
+    assert set(arms) == {"atoms_max", "atoms_top_k_mean_2", "atoms_mean", "full_text_keep"}
+    assert payload["analysis"]["aggregations"] == ["max", "top_k_mean:2", "mean"]
+    assert payload["analysis"]["question_transforms"] == ["keep"]
+    assert payload["analysis"]["bootstrap"] == {"resamples": 50, "seed": 7, "confidence": 0.95}
+
+    # the pairing is by construction: every arm measures the same cells
+    baseline_cells = [cell["cell_id"] for cell in model["control_cells"]]
+    for arm in arms.values():
+        assert [cell["cell_id"] for cell in arm["control_cells"]] == baseline_cells
+        assert [pair["pair_id"] for pair in arm["judged_pairs"]] == [
+            pair["pair_id"] for pair in model["judged_pairs"]
+        ]
+
+    # every arm carries its comparison against the baseline
+    comparisons = model["comparisons"]
+    assert set(comparisons) == set(arms)
+    for name, comparison in comparisons.items():
+        paired = comparison["paired_auc"]
+        assert paired["n_resamples"] == 50 and paired["seed"] == 7
+        assert paired["ci_low"] <= paired["delta_auc"] <= paired["ci_high"]
+        assert "control_shift" in comparison and "deshifted_auc" in comparison
+        assert comparison["reference_arm"] == "full_text"
+        assert name in arms
+
+    out = capsys.readouterr().out
+    assert "OMCT analysis (Stage 0): omct-analyze-arms" in out
+    assert "dAUC" in out
+
+
+def test_analyze_omct_arms_table_rows_use_the_arms_columns(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """A run with arms writes the Stage-1 columns (one row per model and arm)."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-arms-table",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=ANALYSIS_ARMS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    text = table.read_text("utf-8")
+    assert "## OMCT — analyze-omct" in text
+    data_rows = [line for line in text.splitlines() if line.startswith("| omct-analyze-arms-table")]
+    assert len(data_rows) == 5  # the baseline arm + four arms
+    assert any("| atoms_max |" in row for row in data_rows)
+    assert any("| full_text |" in row for row in data_rows)
+    # the baseline row carries no comparison (it is the reference)
+    baseline_row = next(row for row in data_rows if "| full_text |" in row)
+    assert "| n/a |" in baseline_row

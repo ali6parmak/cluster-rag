@@ -226,6 +226,70 @@ def sample_control(
     )
 
 
+def rank_positions(
+    similarities: np.ndarray,
+    rows: Sequence[int],
+    columns: Sequence[int],
+    candidate_columns: Sequence[Sequence[int]],
+) -> np.ndarray:
+    """The rank index of each measured pair inside its paragraph's candidate list.
+
+    The candidate list of a paragraph row is the questions of its document(s)
+    (``candidate_columns[row]``) — the same list the retrieval scope uses, so
+    the judged pairs and the control cells are measured on one scale.
+
+    **Convention:** the index counts from the top: ``0`` is the best-scoring
+    candidate. Ties keep the candidates' own order (a stable sort), so the
+    number is reproducible. The track's *rank percentile* is this index
+    divided by the candidate count, and a pair's *hit@k* is this index below
+    ``k``.
+
+    Args:
+        similarities: The (paragraphs x questions) score matrix.
+        rows: The paragraph row of each measured pair.
+        columns: The question column of each measured pair.
+        candidate_columns: The candidate columns per paragraph row.
+
+    Returns:
+        The rank index of each pair, in the order of ``rows``.
+    """
+    positions = np.zeros(len(rows), dtype=np.int64)
+    ranks_by_row: dict[int, dict[int, int]] = {}
+    for position, (row, column) in enumerate(zip(rows, columns, strict=True)):
+        ranks = ranks_by_row.get(row)
+        if ranks is None:
+            candidates = list(candidate_columns[row])
+            order = sorted(candidates, key=lambda col: -float(similarities[row, col]))
+            ranks = {col: index for index, col in enumerate(order)}
+            ranks_by_row[row] = ranks
+        positions[position] = ranks[column]
+    return positions
+
+
+def percentiles_from_positions(
+    positions: np.ndarray,
+    rows: Sequence[int],
+    candidate_columns: Sequence[Sequence[int]],
+) -> np.ndarray:
+    """The rank percentiles of given rank positions.
+
+    The percentile of a position is the position divided by the size of the
+    paragraph's candidate list (see :func:`rank_percentiles` for the
+    convention).
+
+    Args:
+        positions: The rank index of each measured pair (0 = the best
+            candidate).
+        rows: The paragraph row of each measured pair.
+        candidate_columns: The candidate columns per paragraph row.
+
+    Returns:
+        The percentile of each pair, in the order of ``rows``.
+    """
+    sizes = np.asarray([len(candidate_columns[row]) for row in rows], dtype=np.float64)
+    return np.asarray(positions, dtype=np.float64) / sizes
+
+
 def rank_percentiles(
     similarities: np.ndarray,
     rows: Sequence[int],
@@ -253,14 +317,5 @@ def rank_percentiles(
     Returns:
         The percentile of each pair, in the order of ``rows``.
     """
-    percentiles = np.zeros(len(rows), dtype=np.float64)
-    ranks_by_row: dict[int, dict[int, int]] = {}
-    for position, (row, column) in enumerate(zip(rows, columns, strict=True)):
-        ranks = ranks_by_row.get(row)
-        if ranks is None:
-            candidates = list(candidate_columns[row])
-            order = sorted(candidates, key=lambda col: -float(similarities[row, col]))
-            ranks = {col: index for index, col in enumerate(order)}
-            ranks_by_row[row] = ranks
-        percentiles[position] = ranks[column] / len(candidate_columns[row])
-    return percentiles
+    positions = rank_positions(similarities, rows, columns, candidate_columns)
+    return percentiles_from_positions(positions, rows, candidate_columns)

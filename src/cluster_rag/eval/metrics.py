@@ -10,8 +10,31 @@ file I/O, model clients or global state (AGENTS.md dependency-direction rule).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
+
+
+def _midranks(scores: np.ndarray) -> np.ndarray:
+    """Tie-aware midranks (1-based): tied scores share the mean of their positions."""
+    order = np.argsort(scores, kind="stable")
+    sorted_scores = scores[order]
+    starts = np.flatnonzero(np.r_[True, sorted_scores[1:] != sorted_scores[:-1]])
+    ends = np.r_[starts[1:], sorted_scores.size] - 1
+    midranks = (starts + ends) / 2.0 + 1.0
+    ranks_sorted = np.repeat(midranks, ends - starts + 1)
+    ranks = np.empty(scores.size, dtype=np.float64)
+    ranks[order] = ranks_sorted
+    return ranks
+
+
+def _auc(y: np.ndarray, scores: np.ndarray) -> float:
+    """The AUC of two arrays (both classes present); the tie-aware U statistic."""
+    positives = int((y == 1).sum())
+    negatives = int((y == 0).sum())
+    ranks = _midranks(scores)
+    u = ranks[y == 1].sum() - positives * (positives + 1) / 2.0
+    return float(u / (positives * negatives))
 
 
 def roc_auc(labels: Sequence[int], scores: Sequence[float]) -> float:
@@ -31,17 +54,84 @@ def roc_auc(labels: Sequence[int], scores: Sequence[float]) -> float:
     negatives = int((y == 0).sum())
     if positives == 0 or negatives == 0:
         raise ValueError("AUC is undefined unless both label classes are present")
-    # midranks (1-based; tied scores share the mean of their positions)
-    order = np.argsort(s, kind="stable")
-    sorted_scores = s[order]
-    run_starts = np.r_[0, np.flatnonzero(np.diff(sorted_scores) != 0) + 1]
-    run_ends = np.r_[run_starts[1:] - 1, s.size - 1]
-    ranks = np.empty(s.size, dtype=np.float64)
-    for start, end in zip(run_starts, run_ends, strict=True):
-        midrank = (start + end) / 2.0 + 1.0  # middle of the 1-based positions
-        ranks[order[start : end + 1]] = midrank
-    u = ranks[y == 1].sum() - positives * (positives + 1) / 2.0
-    return float(u / (positives * negatives))
+    return _auc(y, s)
+
+
+def paired_auc_bootstrap(
+    labels: Sequence[int],
+    scores_a: Sequence[float],
+    scores_b: Sequence[float],
+    *,
+    n_resamples: int = 2000,
+    seed: int = 42,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """Paired bootstrap of the AUC difference between two scorers.
+
+    The resampling is **paired**: the same resampled pair indices are used for
+    both scorers, so the difference is measured on identical pairs (the
+    track's rule — TEXT_PROCESSING_PLAN.md section 4: no verdict rests on two
+    independent AUCs). The resampling is stratified by class (the positives
+    and the negatives are drawn separately), so every resample holds both
+    classes and the AUC is always defined.
+
+    Args:
+        labels: The 0/1 labels of the pairs.
+        scores_a: The scores of the reference scorer (the baseline arm).
+        scores_b: The scores of the compared scorer (the method arm).
+        n_resamples: The number of bootstrap resamples.
+        seed: The seed of the numpy generator (recorded in the artifact).
+        confidence: The confidence level of the percentile interval.
+
+    Returns:
+        A JSON-serializable dict with both AUCs, the difference
+        (``auc_arm - auc_reference``), its percentile confidence interval,
+        ``p_delta_positive`` (the share of resamples with a positive
+        difference), the number of resamples, the seed and the method.
+
+    Raises:
+        ValueError: If the lengths differ or a class is missing.
+    """
+    y = np.asarray(labels, dtype=np.int64)
+    a = np.asarray(scores_a, dtype=np.float64)
+    b = np.asarray(scores_b, dtype=np.float64)
+    if not (y.size == a.size == b.size):
+        raise ValueError("labels and both score vectors must have the same length")
+    positives = np.flatnonzero(y == 1)
+    negatives = np.flatnonzero(y == 0)
+    if positives.size == 0 or negatives.size == 0:
+        raise ValueError("AUC is undefined unless both label classes are present")
+    if n_resamples < 1:
+        raise ValueError("n_resamples must be at least 1")
+
+    deltas = np.empty(n_resamples, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    for index in range(n_resamples):
+        rows = np.concatenate(
+            [
+                rng.choice(positives, size=positives.size, replace=True),
+                rng.choice(negatives, size=negatives.size, replace=True),
+            ]
+        )
+        resampled_labels = y[rows]
+        deltas[index] = _auc(resampled_labels, b[rows]) - _auc(resampled_labels, a[rows])
+
+    alpha = (1.0 - confidence) / 2.0
+    return {
+        "auc_reference": _auc(y, a),
+        "auc_arm": _auc(y, b),
+        "delta_auc": float(_auc(y, b) - _auc(y, a)),
+        "ci_low": float(np.quantile(deltas, alpha)),
+        "ci_high": float(np.quantile(deltas, 1.0 - alpha)),
+        "p_delta_positive": float((deltas > 0).mean()),
+        "n_resamples": int(n_resamples),
+        "seed": int(seed),
+        "confidence": float(confidence),
+        "method": (
+            "stratified paired bootstrap over the pairs; the percentile interval "
+            "of the AUC difference (arm - reference)"
+        ),
+    }
 
 
 def pairwise_retrieval_metrics(
