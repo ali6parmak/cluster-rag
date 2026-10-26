@@ -4166,3 +4166,12 @@ three forms (the fixed 0.5 cut, the fit-side threshold, the margin rule) with
 the label-blind counterpart beside them, and the shortlist rerank — the
 numbers the Phase-6 slot needs. **CS-10 (the LLM stage) still waits for the
 reviewer's explicit OK.**
+
+**Two bookkeeping notes on the track's UPR table** (the only hand edit of the
+table so far, and it is a *removal*, never a number): the CS-9 sweep's first
+run wrote its rows before the row helper carried the run id, the split and the
+scope, so ten rows with an empty run id sat next to the ten correct ones;
+they were **superseded and removed** (the table's upsert keys on the run id,
+so it could not replace them itself). The scratch smoke run (four texts, a
+temporary config) had written a section of its own; its section and its
+`results/upr-decide-smoke` folder were removed as well. No number was edited.
