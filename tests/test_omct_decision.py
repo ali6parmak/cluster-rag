@@ -190,6 +190,16 @@ def test_analyze_omct_adds_the_decision_arm(
     comparison = entry["comparisons"]["decision"]
     assert comparison["paired_auc"]["delta_auc"] is not None
     assert comparison["deshifted_auc"]["overall"] is not None
+    # the shortlist rerank (CS-7c): the K grid and the two references
+    rerank = entry["shortlist_rerank"]
+    assert "1" in rerank["by_k"]
+    assert rerank["references"]["cosine_hit1"] is not None
+    assert rerank["references"]["decision_hit1"] is not None
+    assert rerank["by_k"]["1"]["positives_hit1"] is not None
+    # a rerank of a one-candidate shortlist cannot move anything
+    assert rerank["by_k"]["1"]["positives_hit1"] == pytest.approx(
+        rerank["references"]["cosine_hit1"], abs=1e-9
+    )
     # the rule: the three variants and the label-blind counterpart
     rule = entry["rule"]
     assert set(rule["pooled"]) == {

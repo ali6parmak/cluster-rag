@@ -107,6 +107,7 @@ from cluster_rag.omct_analysis import (
     score_decision_arm,
     score_model_arms,
     score_stage3_model,
+    shortlist_rerank_block,
     side_cache_versions,
 )
 from cluster_rag.omct_decision import (
@@ -1835,6 +1836,12 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     "arms": {DECISION_ARM: decision_block},
                     "comparisons": {DECISION_ARM: comparison},
                     "rule": rule_block,
+                    "shortlist_rerank": shortlist_rerank_block(
+                        view,
+                        reference_similarities=baseline.similarities,
+                        decision_matrix=decision_grid.matrix,
+                        ks=analysis.decision.rerank_ks,
+                    ),
                     "truncation": {
                         "n_cells": decision_grid.n_cells,
                         "n_truncated": decision_grid.n_truncated,

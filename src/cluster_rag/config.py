@@ -885,11 +885,23 @@ class DecisionConfig(BaseModel):
     # that is not fitted on anything: it keeps the model's shape, its
     # calibration and its cost, and loses only the pairing.
     mismatched_control: bool = True
+    # The shortlist rerank's K grid (CS-7c): the cosine's top-K candidates per
+    # paragraph are re-decided by the decision model, and the positives' hit@1
+    # is measured against the cosine's and the decision model's own.
+    rerank_ks: tuple[int, ...] = (1, 5, 10, 20, 50)
     prompt_version: str = Field(default="v1", min_length=1)
     host: str = "http://localhost:11434"
     timeout: float = Field(default=600.0, gt=0)
     max_questions_per_call: int = Field(default=64, ge=1, le=64)
     bins: int = Field(default=10, ge=2, le=50)
+
+    @field_validator("rerank_ks")
+    @classmethod
+    def _rerank_ks_are_positive(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """The shortlist sizes must be positive integers."""
+        if not value or any(k < 1 for k in value):
+            raise ValueError(f"analysis.decision.rerank_ks must be positive, got {value}")
+        return value
 
     @field_validator("models")
     @classmethod

@@ -860,7 +860,7 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   reach 97.9% at the harm 60.5%) — the model is calibrated but its
   probabilities are compressed, so a *fitted* threshold is still needed. The
   numbers are in the track log's Stage-3.5.2 section.)*
-- [ ] **3.5.3 The shortlist rerank (PLAN Phase 6's shape).** The cosine's
+- [x] **3.5.3 The shortlist rerank (PLAN Phase 6's shape).** The cosine's
   top-K candidates per paragraph are re-decided by the decision model; the
   metric is the positives' **hit@1 / hit@K** (today 0.105–0.136 for the
   cosine, 0.065–0.092 for the learned arm — a lot of headroom) and the
@@ -870,6 +870,21 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   text carries no OMCT label). **If anyone fine-tunes a decision model on
   OMCT, rule (i) bites hard** (101 questions are positive in one document and
   negative in another) — that boundary is written into the plan.
+  *(done 2026-10-26, CS-7c: the rerank's block on the CS-7b run's grid (the
+  cosine's top-K per paragraph, reordered by the decision model's
+  probability; the positives' hit@1 with the shortlist's own recall as the
+  ceiling, against the cosine's own hit@1 and the decision model's own);
+  3 runs `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-rerank`
+  (**no new model calls** — the numbers come from the grid CS-7b already
+  scored). **Verdict: the rerank beats both of its references** — the
+  positives' hit@1 **0.1565** (arctic2, K=10) against the cosine's 0.1050
+  and the decision model's own 0.1317, i.e. the hybrid is above "rerank
+  everything" on all three embedders, and the hard negatives' hit@1 *falls*
+  with it (0.0171 -> 0.0100). The price is the shortlist's cells: 2,250 at
+  K=10 against the grid's 44,467 (~90 decision calls against 1,805, 20x
+  cheaper). The winning K differs by the cosine (10 / 20 / 5-10) and is read
+  off the reviewed set, so it is an upper bound. The numbers are in the
+  track log's Stage-3.5.3 section.)*
 - Exit: a measured answer to "does an independent, calibrated scorer beat
   the reviewed set's floor?", with the decision model's numbers sitting next
   to the embedding arms' in the same artifact and the same table, and the
@@ -1663,10 +1678,26 @@ set):
   operating point (the reach 97.9% at the harm 60.5%) — the model is
   calibrated but its probabilities are compressed, so a *fitted* threshold
   is still needed. The numbers are in the track log's Stage-3.5.2 section.)*
-- [ ] **CS-7c — the shortlist rerank (Stage 3.5.3).** The cosine's top-K
+- [x] **CS-7c — the shortlist rerank (Stage 3.5.3).** The cosine's top-K
   candidates re-decided by the decision model; the positives' hit@1 / hit@K
   against the cosine's and the learned arm's; the artifact is PLAN's Phase-6
   evidence.
+  *(done 2026-10-26: the rerank's block (`shortlist_rerank_block`) on the
+  CS-7b run's grid — the cosine's top-K per paragraph, reordered by the
+  decision model's probability, with the positives' hit@1, the per-document
+  macro, the shortlist's own recall as the ceiling, the hard negatives' and
+  the control cells' hit@1, and the two references (the cosine's own hit@1
+  and the decision model's own) — the config knob
+  `analysis.decision.rerank_ks`; the sweep
+  `experiments_text_processing/stage35_rerank_sweep.py`: 3 runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-rerank`, no
+  new model calls. **Verdict: the rerank beats both of its references** (the
+  positives' hit@1 0.1565 on arctic2 at K=10 against the cosine's 0.1050
+  and the decision model's own 0.1317) and the hard negatives' hit@1 falls
+  with it (0.0171 -> 0.0100) — PLAN's Phase-6 slot now has its evidence:
+  the hybrid is the best retriever on the reviewed set, at ~90 decision calls
+  instead of the grid's 1,805. The numbers are in the track log's
+  Stage-3.5.3 section.)*
 - [ ] **CS-7d — the chunk header (Stage 2.6).** The paragraph's own first
   sentence prepended to every chunk (the pack's option, so the embedding
   cache stays at one vector per text); the arm in the existing harness on all

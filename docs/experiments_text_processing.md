@@ -2885,3 +2885,88 @@ top-K candidates per paragraph re-decided by the decision model, with the
 positives' hit@1 / hit@K against the cosine's and the learned arm's. That is
 PLAN's Phase-6 slot, and the decision arm's numbers here (the hit@1 0.1317,
 the rank percentiles) are the reference it has to beat.
+
+## Stage 3.5.3 — the shortlist rerank (CS-7c, 2026-10-26)
+
+**The question.** The plan's Stage 3.5.3 is the track's **Phase-6 slot**: the
+cosine's **top-K candidates** per paragraph are re-decided by the decision
+model, and the metric is the reviewed set's positives' **hit@1 / hit@K** —
+the number PLAN's cross-encoder reranker needs. The decision models are
+frozen and zero-shot, so nothing leaks (the leakage rule (i) is about
+*fitted* question-level priors; a frozen model's question text carries no
+OMCT label).
+
+**What was run.** Three runs
+(`experiments_text_processing/stage35_rerank_sweep.py`, the sweep
+`stage35_rerank`): the three Stage-0 models as the cosine's reference, each
+with the decision arm of CS-7b —
+`omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-rerank`. The
+rerank's numbers come from the grid the decision arm **already scored**, so
+the sweep cost **no new model calls** (38 s, all cache hits).
+
+**1. The rerank beats both of its references.** The positives' hit@1 (the
+share of the true matches that end up **first** among their paragraph's
+candidates):
+
+| the rerank's shortlist | arctic2 | voyage-4-nano | embeddinggemma |
+|---|---|---|---|
+| the cosine's own hit@1 (the geometry alone) | 0.1050 | 0.1050 | 0.1355 |
+| the decision model's own hit@1 (rerank *everything*) | 0.1317 | 0.1317 | 0.1317 |
+| the **rerank** at K=5 | 0.1431 | 0.1240 | 0.1393 |
+| the **rerank** at K=10 | **0.1565** | 0.1374 | 0.1393 |
+| the **rerank** at K=20 | 0.1469 | **0.1431** | 0.1355 |
+| the **rerank** at K=50 | 0.1336 | 0.1412 | 0.1336 |
+| the track's learned arm's hit@1 (CS-6a) | 0.0859 | 0.0821 | 0.0897 |
+
+The hybrid is **above the decision model's own full-grid ranking** on all
+three embedders (0.1565 vs. 0.1317 on arctic2) and above the cosine's own
+on all three — the classic retrieve-and-rerank result, and the plan's
+CS-6d shape ("retrieve with the cosine, rank with the learned arm") with a
+*decision model* as the ranker. The per-document macro beside it: 0.1792
+(arctic2, K=10), 0.1578 (voyage-4-nano, K=20), 0.1658 (embeddinggemma,
+K=5–10).
+
+The K that wins differs by the cosine (10 for arctic2, 20 for
+voyage-4-nano, 5–10 for embeddinggemma) — the shortlist is the cosine's own,
+so the rerank inherits its retrieval quality.
+
+**2. The cost is a rounding error against the ceiling.** The shortlist's own
+recall (the positives' hit@K — the ceiling a rerank cannot beat, since a
+rerank reorders the shortlist but does not enlarge it) is 0.3073 at K=5,
+0.4256 at K=10, 0.5229 at K=20 and 0.7042 at K=50 (arctic2). The rerank
+recovers a *third* of that ceiling at K=10 (0.1565 of 0.4256). The price is
+the shortlist's cells: 225 candidates at K=1 and 2,250 at K=10 — against the
+44,467 cells the full grid costs (the decision calls: ~90 against 1,805, i.e.
+**20× cheaper** than scoring everything).
+
+**3. The rerank lowers the hard negatives' rise, too.** The reviewer-verified
+hard negatives' hit@1 *falls* with the rerank (arctic2: 0.0171 at K=1 →
+0.0100 at K=10) and the ordinary control cells' hit@1 falls with it
+(0.0045 → 0.0022). So the rerank is not trading the positives against the
+negatives: it lifts the true matches *and* pushes the reviewed set's hard
+negatives down — the opposite of what the embedding arms do (CS-6d: the
+learned arm ranks pairs better but retrieves worse).
+
+**What this run does not say.**
+
+- **Nothing about the precision** of the reranked shortlist: the unjudged
+  cells' true positive rate stays unmeasured (no human labelling in this
+  track), so the rerank's numbers are about the *reviewed* set's positives.
+- **Nothing about a K chosen on data**: the winning K is read off the same
+  reviewed set the metric is measured on, so it is an upper bound on what a
+  fit-side K would deliver (the K grid would have to be chosen on the fit
+  side, as the rule's parameters are).
+- **Nothing about a second decision model** (the arm is `tev1` only) and
+  **nothing about the `pair` shape** (the grid scope's cost decided that:
+  1,805 calls against 44,467).
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice, they are never a UPR metric.
+
+**The next step.** The plan's Stage 3.5 is measured end to end: the probe
+(CS-7a), the arm and the rule (CS-7b), the shortlist rerank (CS-7c). The
+track's remaining rungs are the **Stage-2 ones** — the chunk header (CS-7d)
+and the late chunking (CS-7e) — and they now have a much better yardstick
+than the embedding arms: the decision model's arm (the within-document AUC
+0.7701) and the shortlist rerank (the positives' hit@1 0.1565) are the
+numbers a new segmentation rung has to beat, not the cosine's 0.5020-0.5632
+and 0.1050-0.1355.

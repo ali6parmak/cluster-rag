@@ -3715,6 +3715,159 @@ def _decision_rule_masks(
     return judged, positive, ~judged
 
 
+def shortlist_rerank_block(
+    view: DatasetView,
+    *,
+    reference_similarities: np.ndarray,
+    decision_matrix: np.ndarray,
+    ks: Sequence[int],
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """The shortlist rerank: retrieve with the cosine, rank with the decision model.
+
+    The **shortlist** is the cosine's top-K candidates of a paragraph (the
+    geometry's own shortlist, the same one PLAN's Phase-6 reranker would
+    consume). The **rerank** reorders that shortlist by the decision model's
+    probability, and the metric is the reviewed set's positives' **hit@1**:
+    does the true match end up first among the paragraph's candidates?
+
+    Three numbers frame it:
+
+    - the **cosine's own hit@1** (the shortlist's first candidate, over the
+      whole candidate list): what the geometry does alone;
+    - the **decision model's own hit@1** (its first candidate over the whole
+      grid): what the decision model does alone, i.e. "rerank everything";
+    - the **reranked hit@1**: what the hybrid does, at the cost of the
+      decision calls the shortlist needs (``K`` per paragraph) instead of
+      the whole grid.
+
+    The hit@K is the shortlist's own recall — the **ceiling** the rerank
+    cannot beat, since a rerank reorders the shortlist but does not enlarge
+    it.
+    """
+    reference = np.asarray(reference_similarities, dtype=np.float64)
+    decision = np.asarray(decision_matrix, dtype=np.float64)
+    candidate_columns = view.candidate_columns()
+
+    # the cosine's own ranking of every paragraph's candidates
+    cosine_ranks: list[list[int]] = []
+    decision_ranks: list[list[int]] = []
+    for row, candidates in enumerate(candidate_columns):
+        ordered = sorted(candidates, key=lambda col: -float(reference[row, col]))
+        cosine_ranks.append(ordered)
+        decision_ranks.append(sorted(ordered, key=lambda col: -float(decision[row, col])))
+
+    judged_rows = [view.paragraph_row[record.paragraph_text] for record in view.pairs]
+    judged_columns = [view.question_col[record.question_text] for record in view.pairs]
+    labels = [record.label for record in view.pairs]
+    documents = [record.document for record in view.pairs]
+    control_rows = [row for _, row, _ in view.control.cells]
+    control_columns = [column for _, _, column in view.control.cells]
+
+    def _first_after_rerank(row: int, column: int, k: int) -> bool:
+        """Is the cell the paragraph's reranked top-1 inside the shortlist?"""
+        shortlist = cosine_ranks[row][:k]
+        if column not in shortlist:
+            return False
+        reranked = decision_ranks[row]
+        best = min(
+            (candidate for candidate in shortlist),
+            key=lambda candidate: reranked.index(candidate),
+        )
+        return best == column
+
+    def _in_shortlist(row: int, column: int, k: int) -> bool:
+        """Is the cell inside the cosine's top-K shortlist?"""
+        return column in cosine_ranks[row][:k]
+
+    def _own_first(row: int, column: int, ranking: list[list[int]]) -> bool:
+        """Is the cell the paragraph's own top-1 under the given ranking?"""
+        ordered = ranking[row]
+        return bool(ordered) and ordered[0] == column
+
+    blocks: dict[str, Any] = {}
+    for k in ks:
+        positive_hits = [
+            _first_after_rerank(row, column, k)
+            for row, column, label in zip(judged_rows, judged_columns, labels, strict=True)
+            if label == 1
+        ]
+        negative_hits = [
+            _first_after_rerank(row, column, k)
+            for row, column, label in zip(judged_rows, judged_columns, labels, strict=True)
+            if label == 0
+        ]
+        ceilings = [
+            _in_shortlist(row, column, k)
+            for row, column, label in zip(judged_rows, judged_columns, labels, strict=True)
+            if label == 1
+        ]
+        control_hits = [
+            _first_after_rerank(row, column, k)
+            for row, column in zip(control_rows, control_columns, strict=True)
+        ]
+        by_document: dict[str, Any] = {}
+        for document in sorted(set(documents)):
+            hits = [
+                _first_after_rerank(row, column, k)
+                for row, column, other, label in zip(
+                    judged_rows, judged_columns, documents, labels, strict=True
+                )
+                if other == document and label == 1
+            ]
+            by_document[document] = {
+                "n_positives": len(hits),
+                "hit1": float(np.mean(hits)) if hits else None,
+            }
+        document_aucs = [
+            block["hit1"] for block in by_document.values() if block["hit1"] is not None
+        ]
+        blocks[str(k)] = {
+            "k": int(k),
+            "n_shortlist_cells": int(sum(min(k, len(columns)) for columns in candidate_columns)),
+            "positives_hit1": float(np.mean(positive_hits)) if positive_hits else None,
+            "positives_hit1_macro": (float(np.mean(document_aucs)) if document_aucs else None),
+            "positives_hitk_ceiling": float(np.mean(ceilings)) if ceilings else None,
+            "negatives_hit1": float(np.mean(negative_hits)) if negative_hits else None,
+            "control_hit1": float(np.mean(control_hits)) if control_hits else None,
+            "by_document": by_document,
+        }
+
+    def _own_hit1(ranking: list[list[int]]) -> float:
+        """The positives' own hit@1 under a ranking (the rerank's convention)."""
+        hits = [
+            _own_first(row, column, ranking)
+            for row, column, label in zip(judged_rows, judged_columns, labels, strict=True)
+            if label == 1
+        ]
+        return float(np.mean(hits)) if hits else 0.0
+
+    return {
+        "definition": {
+            "shortlist": (
+                "the cosine's top-K candidates of a paragraph (the geometry's own shortlist)"
+            ),
+            "rerank": ("the same shortlist, reordered by the decision model's probability"),
+            "metric": (
+                "the reviewed set's positives' hit@1: does the true match end up "
+                "first among the paragraph's candidates? The hit@K is the "
+                "shortlist's own recall — the ceiling a rerank cannot beat"
+            ),
+        },
+        "references": {
+            "cosine_hit1": _own_hit1(cosine_ranks),
+            "decision_hit1": _own_hit1(decision_ranks),
+            "note": (
+                "the cosine's own hit@1 (the geometry alone) and the decision "
+                "model's own hit@1 (the decision model alone, i.e. reranking "
+                "everything): the rerank sits between them"
+            ),
+        },
+        "by_k": blocks,
+        "hit_ks": list(hit_ks),
+    }
+
+
 def decision_rule_block(
     view: DatasetView,
     *,
