@@ -1222,6 +1222,106 @@ class UprArmConfig(BaseModel):
         return self
 
 
+class UprLearnedFloorsConfig(BaseModel):
+    """The three sanity floors of the UPR learned arm (CS-8d).
+
+    The plan's Stage-3 discipline asks for floors, so that a "win" can be
+    checked against chance. On UPR all three are measured on the **same
+    statistic as the headline** (the decision view's micro-F1 and the ranking
+    view's nDCG@5 / shortlist recall), not on an AUC:
+
+    - ``chance``: the **label-permutation** floor. The fit side's whole label
+      vector (the gold cells and the non-gold cells together) is permuted: the
+      class counts and the training weights stay exactly as they are and only
+      the assignment changes, so the model has no label information at all.
+    - ``control_role``: the **control-role** floor. The fit side's gold cells'
+      positive labels are relocated into the non-gold space (the non-gold
+      cells keep their presumed-negative role as the negative class and the
+      original gold cells become negatives). The gap to the chance floor is
+      what the training design's own prior buys.
+    - ``random_vectors``: the **random-vector** floor. The feature pack's
+      embedding sides are replaced with seeded random unit vectors, so the
+      arm's lexical features stay real and the embedding geometry is gone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    chance: bool = True
+    control_role: bool = True
+    random_vectors: bool = True
+    permutation_resamples: int = Field(default=5, ge=0)
+    random_seed: int = Field(default=42)
+
+
+class UprLearnedConfig(BaseModel):
+    """The UPR learned arm (CS-8d): the feature pack, the combiner, the floors.
+
+    The arm is **fitted on train** (the train gold cells plus the train
+    non-gold cells as down-weighted presumed negatives) and **evaluated on
+    val** — the main pipeline's protocol (AGENTS.md: the indexes and the fit
+    side come from train, val is for tuning, test is touched once).
+
+    Attributes:
+        enabled: Whether the run computes the learned arms at all. The default
+            is ``False``, so every earlier run's artifact keeps its exact
+            content (the same precedent as the OMCT track's ``embeddings``
+            knob).
+        groups: The **feature groups** the combiner sees (the CS-8e's ablation
+            unit). The default is the two catalog-free groups.
+        top_k: The K of the top-K chunk similarities.
+        chunker: The chunker whose chunks the pack's chunk-level features are
+            measured on (the text side only).
+        combiner: The learned scorer (the logistic regression by default; the
+            gradient-boosted one is a config choice).
+        control_weight: The training weight of the non-gold cells (presumed
+            negatives whose true positive rate is unmeasured).
+        floors: The three sanity floors.
+        seed: The seed of the floors' permutations and of the random-vector
+            draw. ``None`` uses the run's seed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    groups: tuple[str, ...] = ("embedding", "lexical")
+    top_k: int = Field(default=3, ge=1)
+    chunker: ChunkerSpec = Field(
+        default_factory=lambda: ChunkerSpec(name="atoms", params={"split_clauses": True})
+    )
+    combiner: CombinerSpec = Field(default_factory=CombinerSpec)
+    control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    floors: UprLearnedFloorsConfig = Field(default_factory=UprLearnedFloorsConfig)
+    seed: int | None = None
+
+    @field_validator("groups")
+    @classmethod
+    def _groups_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown, an empty or a repeated feature group at config time."""
+        from cluster_rag.text_processors.features.upr_features import UPR_FEATURE_GROUPS
+
+        if not value:
+            raise ValueError("upr_analysis.learned.groups must name at least one feature group")
+        unknown = [group for group in value if group not in UPR_FEATURE_GROUPS]
+        if unknown:
+            raise ValueError(
+                f"Unknown feature group(s) {unknown} in upr_analysis.learned.groups; "
+                f"expected values in {list(UPR_FEATURE_GROUPS)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(f"upr_analysis.learned.groups must not repeat a group: {list(value)}")
+        return value
+
+    @model_validator(mode="after")
+    def _top_k_is_usable(self) -> UprLearnedConfig:
+        """``top_k = 2`` would duplicate the pack's top-2 mean column."""
+        if self.top_k == 2:
+            raise ValueError(
+                "upr_analysis.learned.top_k=2 would duplicate the pack's top-2 mean column: "
+                "use 1 or a value >= 3"
+            )
+        return self
+
+
 class UprAnalysisConfig(BaseModel):
     """The text-processing track's UPR analysis (``analyze-upr``) settings.
 
@@ -1250,6 +1350,9 @@ class UprAnalysisConfig(BaseModel):
             train records (the UPR analogue of OMCT's document rotation).
         semantic_criterion: The fit-side criterion of the threshold selection.
         bootstrap: The paired-bootstrap settings of the arm comparisons.
+        learned: The **learned arm** (CS-8d): the feature pack, the combiner
+            and the three floors. Off by default, so every earlier run's
+            artifact keeps its exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1262,6 +1365,7 @@ class UprAnalysisConfig(BaseModel):
     semantic_folds: int = Field(default=3, ge=2)
     semantic_criterion: Literal["micro_f1", "ndcg"] = "micro_f1"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
+    learned: UprLearnedConfig = Field(default_factory=UprLearnedConfig)
 
     @field_validator("length_buckets")
     @classmethod

@@ -1370,6 +1370,45 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   the document), which would separate "the context helps" from "the
   reviewed set's structure helps". Not measured; it needs the reviewer's
   go-ahead (a new arm in the harness).
+- **The UPR chance floor is a distribution, not a number (CS-8d, 2026-10-26).**
+  The label-permutation floor (the fit side's whole label vector permuted) has
+  a **micro-F1 between 0.045 and 0.378** over its five draws on UPR, against
+  the ~0.029 a random top-2 would give — the same construction landed on a
+  tight 0.494-0.505 AUC on OMCT. The mechanism: the UPR pack's feature space
+  has a dominant **topical** axis (the gold cells are its extremes), so a
+  linear model fitted on a *random* 2.7% target still finds that axis, with a
+  random sign; the label-blind model's val AUC moves between 0.44 and 0.66
+  across draws, and the top-2 decision amplifies the spread. **Open:** the
+  floor is therefore a weak yardstick on UPR — is the right reading the
+  floor's *best* draw (the most conservative comparison), its mean over many
+  more draws, or a scale-free statistic (the nDCG) instead of the micro-F1?
+  The same mechanism means the floor is *not* evidence of a leak; the
+  control-role floor (the construction that does not leave the true gold cells
+  unlabelled) is the tight one and sits at chance.
+- **The UPR control-role floor's construction had to be read (CS-8d,
+  2026-10-26).** The plan's wording ("the gold labels permuted, the non-gold
+  labels keeping their presumed-negative role") is unambiguous on OMCT, where
+  the judged pairs carry both classes; on UPR the gold cells are all positive,
+  so permuting them among themselves is a no-op. The construction used is the
+  structural analogue: the gold cells' positives are **relocated into the
+  non-gold space** (the original gold cells become negatives, the class counts
+  and the weights are preserved). It measures what it should — the training
+  design's prior alone — and it lands at chance, which is the expected
+  reading for a grid that is not rank-selected. **Open (for the reviewer):**
+  is the relocation the intended reading, or should the floor instead keep
+  the gold cells' positive labels and permute only the *label identities*
+  (the mismatched-pair construction, which would teach the inverse signal)?
+- **The UPR pack's lexical block finds the unseen labels (CS-8d, 2026-10-26).**
+  The soft lexical overlap discovers five of the eight label-holdout labels
+  (the unseen bucket's micro-F1 0.4758, the coverage 0.875, the shortlist
+  R@50 0.7211 — against the champion's 0.000 / 0.000 / 0.034) and not the
+  three generic ones ("General", "Other", "ESC rights - general"): for
+  "General" the gold cells even score *below* the background. **Open:** does
+  the mechanism (a label's *name* against the text) survive the CS-8e's
+  ablation — i.e. is it the lexical block, and would a label **description**
+  (the catalog CS-8d lacks) do better? This is the strongest UPR argument for
+  a label-side catalog, and it bears on PLAN's zero-shot route to the
+  held-out labels.
 
 ## 6. Milestones
 
@@ -1994,7 +2033,7 @@ The **pre-registered expectations** (written down before the runs):
   arm's 0.8158, and +0.06 of shortlist recall in the long-text tail) but not
   on the decision side, and none of its intervals excludes zero. The numbers
   are in the track log's CS-8c section.)*
-- [ ] **CS-8d — the feature pack (UPR variant) + the logistic combiner + the
+- [x] **CS-8d — the feature pack (UPR variant) + the logistic combiner + the
   floors.** The UPR pack: the global cosine, the best-chunk cosine, the mean
   of the 2 and of the K=3 best chunk cosines, their spread and the peak
   margin, the soft lexical overlap in both directions (text ↔ label name) and
@@ -2021,6 +2060,43 @@ The **pre-registered expectations** (written down before the runs):
   complete statement rather than a sampled one.
   *Exit:* the pack's verdict on UPR, the combiner's numbers on val, the three
   floors beside them.
+  *(done 2026-10-26: the new pure module
+  `text_processors/features/upr_features.py` (the UPR pack: the global cosine,
+  the best-chunk cosine, the means of the 2 and of the K=3 best chunk cosines,
+  their spread, the peak margin, the soft lexical overlap in both directions
+  against the label's **name**, and the char-3-gram cosine; the output is the
+  grid's cells, a cube of `(n_texts, n_labels, n_features)`), the new config
+  section `upr_analysis.learned` (the groups, the chunker, the combiner spec,
+  the control weight, the three floors and their resamples; **off** by
+  default, so the earlier runs' artifacts keep their exact content), the new
+  driver `upr_learning.py` (the fit on **train**, the evaluation on **val**,
+  the three floors), the edge module `label_catalog.py` (the optional
+  name / description / parent catalog behind the `paths.label_catalog` hook)
+  and the sweep `experiments_text_processing/upr_learned_sweep.py`: one run
+  `upr-analyze-learned`. The guard holds (all five UPR runs reproduce their
+  `evaluate` run field by field). **Verdict:** the pack is a **worse
+  classifier** than the champion (-0.0729 of micro-F1, the paired interval
+  [-0.1010, -0.0454]) and a **much better candidate generator** (the shortlist
+  R@50 0.8692 against the champion's 0.7423) — the same shape as the CS-8b
+  pair-scoring family, and the Phase-6-relevant fact. The **lexical** block
+  transfers and carries the ranking (the random-vector floor keeps 0.3837 of
+  the arm's 0.4749, and its shortlist recall is unchanged), so OMCT's finding
+  holds on a different vocabulary — but the lexical signal alone does not beat
+  the champion at the decision view. The **control-role floor is at chance**
+  (0.027-0.043), so UPR's grid carries no construction signal (unlike OMCT's
+  rank-selected reviewed set) and the arm's gain over its floor is entirely
+  label-driven; the **chance floor is a distribution, not a number** (0.045-0.378
+  over five draws), because the pack's feature space has a dominant topical
+  axis that even a label-blind linear model finds (with a random sign). And
+  the pack **discovers five of the eight unseen labels** (the unseen bucket's
+  micro-F1 0.4758, the coverage 0.875, the shortlist R@50 0.7211, against the
+  champion's 0.000 / 0.000 / 0.034) — the specific ones ("Gender-based
+  violence", "Freedom of association…", "Asylum-seekers - refugees", "Special
+  procedures"), not the generic ones ("General", "Other"). **The stated gap:**
+  the label-description coverage and the label-type features need a label
+  catalog (`paths.label_catalog: null`), so the run packs the two
+  catalog-free groups only. The numbers are in the track log's CS-8d
+  section; 540 unit tests green.)*
 - [ ] **CS-8e — the two "not the lever" checks and the ablation, re-run on
   UPR.** The **gradient-boosted combiner** (`HistGradientBoostingClassifier`,
   the pinned defaults, no grid) behind the same port, with the feature-group

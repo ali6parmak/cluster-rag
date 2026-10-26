@@ -715,6 +715,7 @@ def build_upr_report(
     length_edges: Sequence[int],
     guard: Mapping[str, Any] | None = None,
     families: Mapping[str, Any] | None = None,
+    learned: Mapping[str, Any] | None = None,
     total_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Assemble the run's artifact.
@@ -738,6 +739,9 @@ def build_upr_report(
         length_edges: The text-length bucket edges.
         guard: The reference-arm check against the ``evaluate`` run (the
             guard's outcome; ``None`` when it was not checked).
+        learned: The learned arm's block (CS-8d: the pack, the combiner, the
+            training's shape and the three floors); ``None`` when the run has
+            no learned arm.
         total_seconds: The run's wall time.
 
     Returns:
@@ -785,6 +789,7 @@ def build_upr_report(
         "metrics_config": dict(metrics_config),
         "guard": dict(guard) if guard else None,
         "families": dict(families) if families else None,
+        "learned": dict(learned) if learned else None,
         "arms": dict(arms),
         "total_seconds": total_seconds,
     }

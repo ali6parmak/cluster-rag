@@ -3640,3 +3640,165 @@ cosines, the lexical overlap, the char n-grams, the description coverage, the
 chunk profile), the logistic combiner fitted on train, and the three floors —
 the track's most interesting UPR question, whether the **lexical** block's
 gain (OMCT's finding) transfers to a 68-label human-rights vocabulary.
+
+## CS-8d — the UPR feature pack, the logistic combiner and the three floors (2026-10-26)
+
+**The run.** `upr-analyze-learned` — the track's UPR artifact
+(`results/upr-analyze-learned/analysis.json`) on the **val** split (660 texts,
+68 labels, 1,312 gold cells, 43,568 background cells). The whole-text
+**reference arm** (the standing champion: embeddinggemma, the fusion
+a=0.5 knn / b=1.0 prototype / c=1.0 zero-shot with knn k=10, `top_k k=2`) is
+computed in the same run, so the pairing is by construction; the guard holds
+(the reference arm reproduces `upr-eval-fusionc-embeddinggemma-k10-c1` field by
+field, and `uv run python tools/verify_upr_baseline.py "upr-analyze-*"` is
+green for all five UPR runs).
+
+**The pack** (`text_processors/features/upr_features.py`, the UPR analogue of
+the OMCT pack): the global cosine, the best-chunk cosine, the mean of the 2
+and of the K=3 best chunk cosines, their spread and the peak margin (the
+**embedding** group); the soft lexical overlap in both directions (the label's
+**name** ↔ the text) and the char-3-gram cosine (the **lexical** group). The
+chunker is the **atoms** (the CS-8b ladder's best chunker on UPR). The pack
+computes a grid, not a pair list: its output is a cube of
+`(n_texts, n_labels, n_features)`, one row per (text, label) cell.
+
+**The gap: the label catalog.** The pack's two label-side blocks — the
+**label-description coverage** and the **label-type features** (the label's
+parent category) — need a **label catalog** (a name / description / parent per
+label, `paths.label_catalog`). The repo has none (`label_catalog: null`), so
+the run packs the two catalog-free groups only. The catalog-gated groups are
+*implemented* behind the config hook (`upr_analysis.learned.groups`), and
+selecting them without a catalog is a config-time error; the artifact records
+the gap (`learned.pack.label_catalog`). **This is the stated gap of CS-8d.**
+
+**The combiner** (the track's `Combiner` port, the logistic regression): fitted
+on **train** only (the train grid's 113,968 rows — 3,087 gold cells at weight
+1 and 110,881 non-gold cells as down-weighted presumed negatives at weight
+0.3, as on OMCT) and evaluated on **val**. The scaler is fitted inside the
+fit, so the evaluated split never touches the model.
+
+### The headline (val; the UPR harness's own metrics)
+
+| arm | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | gold rank p50 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| the reference arm (the whole-text champion) | **0.5479** | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | **0.6725** | 0.7423 | 0.3666 | 0.0147 |
+| `learned_logistic` (the pack + the logistic) | 0.4749 | 0.4842 | 0.4622 | **0.971** | 0.2542 | 0.7066 | 0.6070 | **0.8692** | 0.3064 | 0.0294 |
+| `learned_logistic_random` (the random-vector floor) | 0.3837 | 0.3875 | 0.3739 | 0.941 | 0.2106 | 0.6033 | 0.4990 | 0.8723 | 0.2492 | 0.0441 |
+
+**The paired bootstrap** (2,000 resamples, seed 42, the **text** as the
+resampling unit, against the reference arm of the same run): the micro-F1
+difference is **-0.0729 [-0.1010, -0.0454]** and the nDCG@5 difference
+**-0.0654 [-0.0960, -0.0338]** — both intervals exclude zero, so the learned
+arm is **significantly worse than the champion at the decision view**. Per
+length bucket (the paired micro-F1): 0-99 **-0.1372** [-0.1964, -0.0761],
+100-199 **-0.0658** [-0.1034, -0.0277], 200-299 -0.0275 [-0.0933, +0.0359],
+300+ -0.0545 [-0.2163, +0.0952] — the loss is in the short texts, and the two
+long buckets' intervals include zero.
+
+### The verdict: a worse classifier, a much better candidate generator
+
+**The pack does not beat the champion at the decision view, and it is a far
+better shortlist generator.** The shortlist recall@50 is **0.8692 against the
+champion's 0.7423** (+0.127) — the same shape as the CS-8b pair-scoring
+family, and the same fact about the champion: its kNN and prototype terms push
+gold cells out of the top-50 that the zero-shot geometry keeps. PLAN's
+Phase-6 reranker slot lives on the **shortlist** side, so this is the track's
+most relevant UPR result so far. The arm's **coverage** is 0.971 against the
+champion's 0.868: it suggests more of the split's gold-bearing labels
+somewhere (a diversity win) and pays for it in precision (the gold cells' rank
+p50 degrades from 0.0147 to 0.0294).
+
+**The lexical block transfers — and it is the ranking signal.** The
+**random-vector floor** (the pack's embedding sides replaced with seeded noise,
+the lexical features left real) keeps **0.3837** of the arm's 0.4749
+(-0.0912, the paired interval against the reference arm: -0.1641 [-0.1955,
+-0.1333]) and its shortlist recall is **unchanged** (0.8723 against the real
+arm's 0.8692). So on UPR, as on OMCT, the **lexical** signal is the ranking
+signal and the **embedding geometry** contributes (almost) nothing to the
+ranking — on a completely different vocabulary (68 human-rights labels
+against OMCT's 294 questions). The pre-registered question ("does the lexical
+signal transfer?") is answered: **yes** — but the lexical signal alone does
+**not** beat the champion's fusion at the decision view.
+
+### The floors: the UPR grid carries no construction signal
+
+| floor | construction | micro-F1 (5 draws) | mean | nDCG@5 (mean) |
+|---|---|---|---|---|
+| chance (the label-permutation floor) | the fit side's whole label vector permuted (the class counts and the weights stay; only the assignment changes) | 0.0448 … 0.3777 | 0.2292 | 0.3066 |
+| control-role | the fit side's gold cells' positives relocated into the non-gold space (the non-gold cells keep their presumed-negative role; the original gold cells become negatives) | 0.0274 … 0.0426 | 0.0333 | 0.0590 |
+| random-vector | the pack's embedding sides replaced with seeded random unit vectors | 0.3837 (one draw) | — | 0.4990 |
+
+**The control-role floor is at chance** (0.027-0.043, against the random
+top-2 expectation of ~0.029). So on UPR the training design's own prior ("the
+ordinary cells are negative") buys **nothing** — the opposite of OMCT, where
+the control-role floor reached 0.557-0.579 (above the plain cosine) because
+the reviewed set was **rank-selected**. UPR's grid is not rank-selected, so
+there is no construction signal for a label-blind model to pick up. The
+arm's advantage over its floor is therefore **entirely label-driven**.
+
+**The chance floor is a distribution, not a number** (0.045-0.378 over the
+five draws), and that is the finding, not a defect: the pack's feature space
+has a dominant **topical** axis, so a linear model fitted on a *random* 2.7%
+target still finds that axis — with a random sign. The label-blind model's
+val AUC moves between 0.44 and 0.66 across draws, and the top-2 decision
+amplifies that spread. The honest reading: the arm (0.4749) is above the
+**best** chance draw (0.3777), but the chance floor's *mean* is a weak
+summary and its spread is wide. (On OMCT the same construction landed on a
+tight 0.494-0.505 — the same fit on a corpus whose feature space has no
+dominant axis.)
+
+### The unseen labels: the pack discovers five of the eight
+
+The label-holdout labels (the eight `unseen` ones) are **never** in train, so
+only a label-agnostic mechanism can find them. The champion's geometry cannot
+(its unseen bucket: micro-F1 0.0000, coverage 0.000, shortlist R@50 0.034).
+**The pack's soft lexical overlap can**: the unseen bucket's micro-F1
+**0.4758**, the coverage **0.875**, the shortlist R@50 **0.7211**.
+
+The per-label view (the artifact's per-label distributions) says *which*:
+
+| unseen label | the pack: the gold cells' mean vs the background's | the reference arm |
+|---|---|---|
+| Gender-based violence | 0.5521 vs 0.0751 | 0.3960 vs 0.2411 |
+| Freedom of association and peaceful assembly | 0.5385 vs 0.0781 | 0.3805 vs 0.2659 |
+| Freedom of religion and belief | 0.5246 vs 0.0539 | 0.3705 vs 0.2200 |
+| Asylum-seekers - refugees | 0.4502 vs 0.0142 | 0.3443 vs 0.1526 |
+| Special procedures | 0.4002 vs 0.0372 | 0.2685 vs 0.1751 |
+| ESC rights - general | 0.0917 vs 0.0633 | 0.2405 vs 0.2328 |
+| General | 0.0065 vs 0.0120 | 0.0946 vs 0.0881 |
+| Other | 0.0043 vs 0.0046 | 0.0759 vs 0.0679 |
+
+The five **specific** unseen labels ("Gender-based violence",
+"Freedom of association…", "Asylum-seekers - refugees", "Special
+procedures") are found with a wide separation; the three **generic** ones
+("General", "Other", "ESC rights - general") are not — for "General" the gold
+cells even score *below* the background (0.0065 vs 0.0120). The mechanism is
+the vocabulary, not the geometry: a label whose name is a distinct phrase
+matches the texts that are about it, whatever the model has never seen.
+
+**What this run does not say.**
+
+- **Nothing about the chunk-profile block, the gradient-boosted combiner or
+  the feature-group ablation** (CS-8e): the pack runs with two groups and the
+  logistic combiner only.
+- **Nothing about the calibration or the decision-rule comparison** (CS-8f).
+- **Nothing about the decision models on UPR** (CS-9).
+- **Nothing about `test`** — only val was touched.
+- **The floors are five draws.** The chance floor's spread is wide (above),
+  so its mean is a weak summary; the control-role floor is tight.
+- **The arm's level numbers are not comparable with the champion's**: the
+  combiner's output is a probability, the champion's a cosine. Only the
+  rank-based numbers (the gold cells' rank percentile, the shortlist recall)
+  and the paired intervals are comparable. The background's level shift
+  (-0.4882) is a scale artefact, and its **rank** shift is 0.0000.
+- **The pack has no length feature** (the length is measurable on UPR, so it
+  is recorded as a diagnostic and never fed to the model) and **no
+  label-frequency feature** (the label frequency is a corpus statistic; the
+  pack's spec has no frequency column, and the head/torso/tail/unseen buckets
+  already report its effect).
+
+**The next step.** CS-8e: the two "not the lever" checks re-run on UPR — the
+gradient-boosted combiner behind the same port, the chunk-profile block as the
+pack's fifth group, the feature-group ablation (the groups are a config knob)
+and the per-feature diagnostics — with the **lexical** block's transfer as the
+headline question, which this change set has answered.

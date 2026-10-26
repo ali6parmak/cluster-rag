@@ -478,13 +478,17 @@ def _token_ngrams(token: str, size: int = NGRAM_SIZE) -> frozenset[str]:
     return char_ngrams(token, size)
 
 
-def _soft_coverage(token_ngrams: Sequence[frozenset[str]], other_ngrams: frozenset[str]) -> float:
+def soft_coverage(token_ngrams: Sequence[frozenset[str]], other_ngrams: frozenset[str]) -> float:
     """The share of the tokens' n-grams that the other text contains.
 
     A token counts as covered in proportion to how many of its character
     n-grams the other text has: "frequently" is half covered by a text that
     says "frequency" (the shared 3-grams), fully covered by one that says
     "frequently". The value is in [0, 1] and is 0 when there is no token.
+
+    The helper is public because the UPR pack (CS-8d) measures the same soft
+    coverage between a text and a **label name** — the same statistic, a
+    different pair.
     """
     if not token_ngrams:
         return 0.0
@@ -497,10 +501,14 @@ def _soft_coverage(token_ngrams: Sequence[frozenset[str]], other_ngrams: frozens
     return total / len(token_ngrams)
 
 
-def _char_cosine(
+def char_cosine(
     counts: Mapping[str, int], other_counts: Mapping[str, int], norm: float, other_norm: float
 ) -> float:
-    """The cosine of two char-n-gram count vectors (the exact, sparse dot)."""
+    """The cosine of two char-n-gram count vectors (the exact, sparse dot).
+
+    Public because the UPR pack (CS-8d) measures the same char-n-gram cosine
+    between a text and a label name.
+    """
     if norm <= 0.0 or other_norm <= 0.0:
         return 0.0
     if len(counts) > len(other_counts):
@@ -1025,9 +1033,9 @@ class PairFeatureExtractor:
             paragraph_fact = paragraph_facts[row]
             stem_fact = question_stem_facts[column]
             parts = question_parts[column]
-            values[6] = _soft_coverage(stem_fact.token_ngrams, paragraph_fact.ngrams)
-            values[7] = _soft_coverage(paragraph_fact.token_ngrams, stem_fact.ngrams)
-            values[8] = _char_cosine(
+            values[6] = soft_coverage(stem_fact.token_ngrams, paragraph_fact.ngrams)
+            values[7] = soft_coverage(paragraph_fact.token_ngrams, stem_fact.ngrams)
+            values[8] = char_cosine(
                 paragraph_fact.gram_counts,
                 stem_fact.gram_counts,
                 paragraph_fact.gram_norm,
@@ -1037,7 +1045,7 @@ class PairFeatureExtractor:
             # 4. the question parts and the question type
             options_fact = question_option_facts[column]
             values[9] = (
-                _soft_coverage(options_fact.token_ngrams, paragraph_fact.ngrams)
+                soft_coverage(options_fact.token_ngrams, paragraph_fact.ngrams)
                 if options_fact is not None
                 else 0.0
             )

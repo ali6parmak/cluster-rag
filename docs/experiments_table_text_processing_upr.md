@@ -207,3 +207,11 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | upr-analyze-late | 2026-10-26 | val | late_norm_words25_mean | fusion | words25 | mean | 0.5304 | 0.4826 | 0.5092 | 0.868 | 0.2718 | 0.7059 | 0.6574 | 0.7965 | 0.3575 | 0.7370 | 0.0147 | 0.5000 | 0.5380 | -0.0180 | 0.0000 | 1.43 | 660 | 9.464 |
 | upr-analyze-late | 2026-10-26 | val | late_norm_words25_local_global_0.75_max | fusion | words25 | local_global:0.75:max | 0.5403 | 0.4902 | 0.5195 | 0.868 | 0.2752 | 0.7145 | 0.6659 | 0.8080 | 0.3605 | 0.7477 | 0.0147 | 0.5000 | 0.5525 | -0.0035 | 0.0000 | 1.43 | 660 | 9.464 |
 | upr-analyze-late | 2026-10-26 | val | late_norm_words25_peak_3_0.05 | fusion | words25 | peak:3:0.05 | 0.5319 | 0.4808 | 0.5104 | 0.868 | 0.2727 | 0.7095 | 0.6576 | 0.7972 | 0.3559 | 0.7424 | 0.0147 | 0.5000 | 0.5473 | -0.0086 | 0.0000 | 1.43 | 660 | 9.464 |
+
+## UPR — upr_learned
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-learned | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 5.452 |
+| upr-analyze-learned | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4749 | 0.4842 | 0.4622 | 0.971 | 0.2542 | 0.7066 | 0.6070 | 0.8692 | 0.3064 | 0.7226 | 0.0294 | 0.5000 | 0.0645 | -0.4882 | 0.0000 | 1.95 | 660 | 5.452 |
+| upr-analyze-learned | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.3837 | 0.3875 | 0.3739 | 0.941 | 0.2106 | 0.6033 | 0.4990 | 0.8723 | 0.2492 | 0.6098 | 0.0441 | 0.5000 | 0.0679 | -0.4847 | 0.0000 | 1.95 | 660 | 5.452 |

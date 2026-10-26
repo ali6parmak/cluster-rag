@@ -104,6 +104,7 @@ from cluster_rag.experiment_table import (
     table_path,
     table_target,
 )
+from cluster_rag.label_catalog import LabelEntry, load_label_catalog
 from cluster_rag.omct_analysis import (
     BASELINE_ARM,
     BASELINE_CHUNKER,
@@ -149,6 +150,11 @@ from cluster_rag.text_processors.features import (
     PairFeatureExtractor,
     ProfileUnits,
 )
+from cluster_rag.text_processors.features.upr_features import (
+    UprFeatureEmbedders,
+    UprFeatureExtractor,
+    UprLabel,
+)
 from cluster_rag.upr_analysis import (
     UprView,
     aggregation_of,
@@ -163,6 +169,7 @@ from cluster_rag.upr_analysis import (
     fusion_components,
     symmetric_arm_scores,
 )
+from cluster_rag.upr_learning import score_upr_learned_arms
 
 logger = logging.getLogger(__name__)
 
@@ -3546,6 +3553,171 @@ def _upr_refit_weights(
     return {"name": f"{name}_refit", "block": block, "report": report}
 
 
+def _upr_label_sides(
+    setup: EvalSetup,
+    catalog: Mapping[str, LabelEntry],
+) -> list[UprLabel]:
+    """The label space as the pack's label sides.
+
+    Every label carries its **name** (the taxonomy term — the lexical
+    features compare the text with it) and the text that is **embedded** for
+    it (the zero-shot label vector's own text: the bare name or the config
+    template). The catalog's description and parent are attached when the
+    catalog has them.
+    """
+    embedded_texts = _upr_label_texts(setup)
+    sides: list[UprLabel] = []
+    for label, text in zip(setup.labels, embedded_texts, strict=True):
+        entry = catalog.get(label)
+        sides.append(
+            UprLabel(
+                name=label,
+                text=text,
+                description=entry.description if entry else None,
+                parent=entry.parent if entry else None,
+            )
+        )
+    return sides
+
+
+def _upr_label_catalog(config: AppConfig) -> dict[str, LabelEntry]:
+    """The optional label catalog (``paths.label_catalog``).
+
+    An absent catalog is not an error: the pack's two catalog-gated feature
+    groups are then unavailable and the artifact records the gap.
+    """
+    path = config.paths.label_catalog
+    if path is None:
+        return {}
+    catalog = load_label_catalog(path)
+    logger.info("the label catalog %s carries %d entries", path, len(catalog))
+    return catalog
+
+
+def _upr_learned_arms(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    analysis_config: Any,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """The learned arm and its three floors (CS-8d).
+
+    The arm is **fitted on train** (the train gold cells plus the train
+    non-gold cells as down-weighted presumed negatives) and **scored on the
+    evaluated split** (val), in the same run as the whole-text reference arm
+    — so the pairing is by construction.
+
+    The three floors (the chance, the control-role and the random-vector one)
+    are measured on the same statistic as the headline: the UPR harness's own
+    decision-view and ranking-view metrics.
+    """
+    learned = analysis_config.learned
+    if not learned.enabled:
+        return {}, {}
+    embedder = _check_embedder_matches_artifact(config, setup)
+    spec = build_preprocess_spec(config.preprocess)
+    catalog = _upr_label_catalog(config)
+    labels = _upr_label_sides(setup, catalog)
+
+    chunker, chunk_embedder = _upr_chunker(config, embedder, learned.chunker, spec.version)
+    text_embedder = _cached_embedder(embedder, config, spec.version)
+    label_embedder = _cached_embedder(embedder, config, spec.version)
+    extractor = UprFeatureExtractor(
+        UprFeatureEmbedders(
+            text=text_embedder,
+            chunks=chunk_embedder,
+            labels=label_embedder,
+        ),
+        labels=labels,
+        text_chunker=chunker,
+        top_k=learned.top_k,
+        groups=learned.groups,
+        catalog_available=bool(catalog),
+    )
+    # The random-vector floor: the pack's embedding sides are seeded random
+    # unit vectors of the model's dimension (never written to the cache).
+    random_extractor = None
+    if learned.floors.random_vectors:
+        dimension = int(embedder.info.dimension or 0)
+        if dimension <= 0:
+            raise ValueError(
+                "the random-vector floor needs the model's dimension; the embed: "
+                "section's backend does not report one"
+            )
+        random_embedder = RandomEmbedder(dimension=dimension, seed=learned.floors.random_seed)
+        random_extractor = UprFeatureExtractor(
+            UprFeatureEmbedders(
+                text=random_embedder,
+                chunks=random_embedder,
+                labels=random_embedder,
+            ),
+            labels=labels,
+            text_chunker=chunker,
+            top_k=learned.top_k,
+            groups=learned.groups,
+            catalog_available=bool(catalog),
+        )
+
+    train_texts = [record.text for record in setup.train_records]
+    eval_texts = [record.text for record in setup.records]
+    train_gold = build_label_matrix(setup.train_records, setup.labels)
+    seed = learned.seed if learned.seed is not None else config.seed
+    result = score_upr_learned_arms(
+        train_texts=train_texts,
+        train_gold=train_gold,
+        eval_texts=eval_texts,
+        eval_gold=view.gold,
+        extractor=extractor,
+        combiner_factory=lambda: build_combiner(learned.combiner.name, learned.combiner.params),
+        decision=eval_decision(config),
+        ks=config.eval.metrics.ks,
+        shortlist_ms=config.eval.metrics.shortlist_ms,
+        control_weight=learned.control_weight,
+        permutation_resamples=learned.floors.permutation_resamples,
+        random_extractor=random_extractor,
+        seed=seed,
+        arm_name=f"learned_{learned.combiner.name}",
+    )
+    chunks_per_text = extractor.chunks_per_text(eval_texts)
+    arms: dict[str, dict[str, Any]] = {}
+    for name, scores in result.scores.items():
+        arms[name] = arm_block(
+            view,
+            scores,
+            decision=eval_decision(config),
+            ks=config.eval.metrics.ks,
+            shortlist_ms=config.eval.metrics.shortlist_ms,
+            reference_scores=setup.scores,
+            chunks_per_text=chunks_per_text,
+            arm=name,
+            predictor={
+                "name": "learned",
+                "combiner": learned.combiner.name,
+                "params": dict(learned.combiner.params),
+                "groups": list(learned.groups),
+            },
+            chunker=chunker.slug,
+            aggregation=None,
+            # The per-label distributions of the main arm only: they say which
+            # labels the arm finds (the unseen bucket's question), and the
+            # floors' per-label view would be noise.
+            per_label_distributions=name == result.meta["arm"],
+            paired=_upr_paired(config, view, scores, setup.scores),
+        )
+    meta = dict(result.meta)
+    meta["catalog"] = {
+        "path": str(config.paths.label_catalog) if config.paths.label_catalog else None,
+        "n_entries": len(catalog),
+        "note": (
+            "the label-description coverage and the label-type features need a "
+            "label catalog (a name / description / parent per label). Without "
+            "one the pack runs without those two groups and the gap is stated "
+            "here."
+        ),
+    }
+    return arms, meta
+
+
 def _select_semantic_threshold(
     config: AppConfig,
     setup: EvalSetup,
@@ -3815,6 +3987,8 @@ def _cmd_analyze_upr(config: AppConfig) -> int:
     arms: dict[str, dict[str, Any]] = {BASELINE_ARM: reference_block}
     chunked_arms, families = _upr_chunked_arms(config, setup, view, analysis_config)
     arms.update(chunked_arms)
+    learned_arms, learned_meta = _upr_learned_arms(config, setup, view, analysis_config)
+    arms.update(learned_arms)
 
     results_dir = config.paths.results / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -3836,6 +4010,7 @@ def _cmd_analyze_upr(config: AppConfig) -> int:
         length_edges=analysis_config.length_buckets,
         guard=guard,
         families=families,
+        learned=learned_meta,
         total_seconds=round(time.perf_counter() - started, 3),
     )
     (results_dir / "analysis.json").write_text(
