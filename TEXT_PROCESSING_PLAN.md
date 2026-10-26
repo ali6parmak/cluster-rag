@@ -775,7 +775,7 @@ by id **and digest**, and every call is cached with its prompt version
 Qwen3.5-4B fine-tune, digest `7954dce2…`) and `laya:latest` (Convai
 Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
 
-- [ ] **3.5.1 The probe: is the reviewed set learnable at all?** The decision
+- [x] **3.5.1 The probe: is the reviewed set learnable at all?** The decision
   models score the **1,520 judged pairs** (a `noul` question: "is the
   paragraph about the same topic as the question?"), and the artifact carries
   the same measurement blocks the other arms use (the pair AUC pooled and

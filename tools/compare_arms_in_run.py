@@ -167,9 +167,7 @@ def main() -> int:
     parser.add_argument("--resamples", type=int, default=2000)
     args = parser.parse_args()
     artifact = load_artifact(args.results, args.run_id)
-    report = compare(
-        artifact, args.arm_a, args.arm_b, resamples=args.resamples, seed=42
-    )
+    report = compare(artifact, args.arm_a, args.arm_b, resamples=args.resamples, seed=42)
     print(json.dumps(report, indent=2))
     return 0
 
