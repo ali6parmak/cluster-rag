@@ -24,7 +24,8 @@ Conventions (settled in the Phase 3 design review):
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -381,4 +382,198 @@ def label_coverage(
         "n_labels_with_gold": n_gold_present,
         "n_labels_suggested": int(suggested.sum()),
         "n_labels_in_view": int(view_predicted.shape[1]),
+    }
+
+
+# --- the paired bootstrap of a metric difference (two scorers, the same texts) ---
+
+# The metrics the paired bootstrap can compare.
+PAIRED_METRICS: tuple[str, ...] = ("micro_f1", "sample_f1", "ndcg")
+
+
+def _per_row_f1_counts(
+    predicted: np.ndarray, truth: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Every row's (true positives, false positives, false negatives)."""
+    tp = (predicted & truth).sum(axis=1).astype(np.float64)
+    fp = (predicted & ~truth).sum(axis=1).astype(np.float64)
+    fn = (~predicted & truth).sum(axis=1).astype(np.float64)
+    return tp, fp, fn
+
+
+def _per_row_ndcg(scores: np.ndarray, truth: np.ndarray, k: int) -> np.ndarray:
+    """Every row's nDCG@k (binary gains, the ideal from the row's gold count)."""
+    matrix = _as_matrix(scores)
+    n_labels = matrix.shape[1]
+    k_eff = min(k, n_labels)
+    order = _ranked_columns(matrix)
+    top_gold = np.take_along_axis(truth, order[:, :k_eff], axis=1)
+    gold_counts = truth.sum(axis=1)
+    discount = 1.0 / np.log2(np.arange(1, k_eff + 1, dtype=np.float64) + 1.0)
+    dcg = (top_gold * discount).sum(axis=1)
+    ideal_counts = np.minimum(gold_counts, k_eff).astype(np.int64)
+    idcg = np.cumsum(discount)[ideal_counts - 1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        values = np.where(idcg > 0, dcg / idcg, 0.0)
+    values = np.where(gold_counts > 0, values, np.nan)
+    return values
+
+
+def _micro_f1_from_counts(tp: np.ndarray, fp: np.ndarray, fn: np.ndarray) -> np.ndarray:
+    """The micro-F1 of a set of rows, from their per-row counts."""
+    total_tp = tp.sum(axis=0)
+    total_fp = fp.sum(axis=0)
+    total_fn = fn.sum(axis=0)
+    denominator = 2 * total_tp + total_fp + total_fn
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(denominator > 0, 2 * total_tp / denominator, 0.0)
+
+
+def _sample_f1_from_counts(tp: np.ndarray, fp: np.ndarray, fn: np.ndarray) -> np.ndarray:
+    """The per-row F1 of a set of rows, from their per-row counts."""
+    denominator = 2 * tp + fp + fn
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(denominator > 0, 2 * tp / denominator, 0.0)
+
+
+def paired_metric_bootstrap(
+    left_scores: np.ndarray,
+    right_scores: np.ndarray,
+    gold: np.ndarray,
+    *,
+    metric: str = "micro_f1",
+    k: int = 5,
+    decision: Mapping[str, Any] | None = None,
+    resamples: int = 2000,
+    seed: int = 42,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """The **paired** bootstrap of a metric difference between two scorers.
+
+    Two scorers are compared on the **same texts**: the resampling unit is
+    the text (the row), so the interval accounts for the texts' own
+    difficulty and the difference is paired (the track's discipline: no
+    verdict rests on two independent numbers).
+
+    The metric is one of:
+
+    - ``micro_f1`` / ``sample_f1`` — the decision view. The decision matrices
+      come from ``decision`` (a mapping with ``rule`` and the rule's
+      parameters, as in the ``eval.decision`` config); without it the scores
+      are used as they are (a threshold-free decision is not implied — the
+      caller must pass a rule).
+    - ``ndcg`` — the ranking view at ``k`` (the score ranking, no decision).
+
+    Args:
+        left_scores: The left scorer's ``(n_texts, n_labels)`` score matrix.
+        right_scores: The right scorer's score matrix (the same shape).
+        gold: The bool gold matrix of the same shape.
+        metric: The metric to compare (see above).
+        k: The k of the nDCG (the ranking view).
+        decision: The decision rule (the F1 metrics need one).
+        resamples: The number of bootstrap resamples.
+        seed: The seed of the generator (the statistic is reproducible).
+        confidence: The interval's coverage (0.95 → the 2.5 / 97.5
+            percentiles).
+
+    Returns:
+        A dict with the two point estimates, their difference, the interval
+        and the resampling's provenance.
+
+    Raises:
+        ValueError: If the metric is unknown, the shapes disagree, the
+            decision rule is missing for an F1 metric, or the resample count
+            is not positive.
+    """
+    if metric not in PAIRED_METRICS:
+        raise ValueError(
+            f"Unknown paired metric {metric!r}; expected one of {list(PAIRED_METRICS)}"
+        )
+    if resamples < 1:
+        raise ValueError(f"resamples must be positive, got {resamples}")
+    left = _as_matrix(left_scores)
+    right = _as_matrix(right_scores)
+    if left.shape != right.shape:
+        raise ValueError(
+            f"the two score matrices must share one shape, got {left.shape} and {right.shape}"
+        )
+    truth = _as_gold_matrix(gold, left.shape)
+    n_rows = left.shape[0]
+    if not 0.0 < confidence < 1.0:
+        raise ValueError(f"confidence must be in (0, 1), got {confidence}")
+
+    if metric == "ndcg":
+        left_values = _per_row_ndcg(left, truth, k)
+        right_values = _per_row_ndcg(right, truth, k)
+    else:
+        if decision is None:
+            raise ValueError(
+                f"the paired {metric} needs a decision rule (the mapping with 'rule' "
+                "and the rule's parameters)"
+            )
+        left_decision = apply_decision_rule(
+            left,
+            rule=decision["rule"],
+            k=decision.get("k"),
+            threshold=decision.get("threshold"),
+            min_score=decision.get("min_score"),
+        )
+        right_decision = apply_decision_rule(
+            right,
+            rule=decision["rule"],
+            k=decision.get("k"),
+            threshold=decision.get("threshold"),
+            min_score=decision.get("min_score"),
+        )
+        left_values = _per_row_f1_counts(left_decision, truth)
+        right_values = _per_row_f1_counts(right_decision, truth)
+
+    generator = np.random.default_rng(seed)
+    differences = np.empty(resamples, dtype=np.float64)
+    for index in range(resamples):
+        rows = generator.integers(0, n_rows, size=n_rows)
+        if metric == "ndcg":
+            left_value = float(np.nanmean(left_values[rows]))
+            right_value = float(np.nanmean(right_values[rows]))
+        elif metric == "micro_f1":
+            left_value = float(_micro_f1_from_counts(*(value[rows] for value in left_values)))
+            right_value = float(_micro_f1_from_counts(*(value[rows] for value in right_values)))
+        else:
+            left_value = float(
+                np.mean(_sample_f1_from_counts(*(value[rows] for value in left_values)))
+            )
+            right_value = float(
+                np.mean(_sample_f1_from_counts(*(value[rows] for value in right_values)))
+            )
+        differences[index] = left_value - right_value
+
+    if metric == "ndcg":
+        left_point = float(np.nanmean(left_values))
+        right_point = float(np.nanmean(right_values))
+    elif metric == "micro_f1":
+        left_point = float(_micro_f1_from_counts(*left_values))
+        right_point = float(_micro_f1_from_counts(*right_values))
+    else:
+        left_point = float(np.mean(_sample_f1_from_counts(*left_values)))
+        right_point = float(np.mean(_sample_f1_from_counts(*right_values)))
+
+    tail = (1.0 - confidence) / 2.0
+    quantiles = np.quantile(differences, [tail, 1.0 - tail])
+    return {
+        "metric": metric,
+        "k": k if metric == "ndcg" else None,
+        "left": left_point,
+        "right": right_point,
+        "delta": left_point - right_point,
+        "ci_low": float(quantiles[0]),
+        "ci_high": float(quantiles[1]),
+        "confidence": confidence,
+        "resamples": resamples,
+        "seed": seed,
+        "n_texts": n_rows,
+        "share_positive": float((differences > 0).mean()),
+        "note": (
+            "the resampling unit is the text: both scorers are judged on the same "
+            "resampled texts, so the interval is paired"
+        ),
     }

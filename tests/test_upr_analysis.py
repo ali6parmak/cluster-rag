@@ -162,6 +162,130 @@ def test_length_buckets_split_the_texts_at_the_edges() -> None:
     assert length_buckets([50], ()) == [-1]
 
 
+# --- the paired bootstrap of a metric difference ---
+
+
+def test_paired_metric_bootstrap_reports_a_null_for_identical_scorers() -> None:
+    """The same scorer against itself: exactly zero, every time."""
+    from cluster_rag.eval.multilabel import paired_metric_bootstrap
+
+    scores = np.asarray([[0.9, 0.1, 0.2], [0.1, 0.8, 0.3], [0.5, 0.4, 0.6]])
+    gold = np.asarray([[True, False, False], [False, True, False], [False, False, True]])
+    result = paired_metric_bootstrap(
+        scores,
+        scores,
+        gold,
+        metric="micro_f1",
+        decision={"rule": "top_k", "k": 1, "threshold": None, "min_score": None},
+        resamples=50,
+        seed=1,
+    )
+    assert result["delta"] == pytest.approx(0.0)
+    assert result["ci_low"] == pytest.approx(0.0)
+    assert result["ci_high"] == pytest.approx(0.0)
+    assert result["share_positive"] == 0.0
+    assert result["n_texts"] == 3
+
+
+def test_paired_metric_bootstrap_separates_a_better_scorer() -> None:
+    """A scorer that is right on every text: the interval excludes zero."""
+    from cluster_rag.eval.multilabel import paired_metric_bootstrap
+
+    n_texts = 8
+    gold = np.zeros((n_texts, 3), dtype=bool)
+    gold[:, 0] = True
+    worse = np.zeros((n_texts, 3))
+    worse[:, 1] = 1.0  # a confident wrong label
+    better = np.zeros((n_texts, 3))
+    better[:, 0] = 1.0  # the gold label
+    result = paired_metric_bootstrap(
+        better,
+        worse,
+        gold,
+        metric="micro_f1",
+        decision={"rule": "top_k", "k": 1, "threshold": None, "min_score": None},
+        resamples=200,
+        seed=3,
+    )
+    assert result["delta"] == pytest.approx(1.0)
+    assert result["ci_low"] > 0
+    assert result["share_positive"] == 1.0
+
+
+def test_paired_metric_bootstrap_rejects_a_missing_decision_rule() -> None:
+    """The F1 metrics need a decision rule (an implicit one would be a guess)."""
+    from cluster_rag.eval.multilabel import paired_metric_bootstrap
+
+    scores = np.zeros((2, 2))
+    gold = np.zeros((2, 2), dtype=bool)
+    with pytest.raises(ValueError, match="needs a decision rule"):
+        paired_metric_bootstrap(scores, scores, gold, metric="micro_f1", resamples=10)
+
+
+def test_paired_metric_bootstrap_rejects_an_unknown_metric() -> None:
+    """A typo in the metric name fails loudly."""
+    from cluster_rag.eval.multilabel import paired_metric_bootstrap
+
+    with pytest.raises(ValueError, match="Unknown paired metric"):
+        paired_metric_bootstrap(
+            np.zeros((2, 2)), np.zeros((2, 2)), np.zeros((2, 2), dtype=bool), metric="auc"
+        )
+
+
+# --- the chunked arms ---
+
+
+def test_fold_label_chunks_keeps_the_best_chunk_of_every_label() -> None:
+    """The symmetric family's label fold: a label keeps its best chunk."""
+    from cluster_rag.upr_analysis import fold_label_chunks
+
+    matrix = np.asarray([[0.1, 0.9, 0.2, 0.3], [0.4, 0.5, 0.6, 0.7]])
+    folded = fold_label_chunks(matrix, ((0, 1), (2, 3)))
+    assert folded.shape == (2, 2)
+    assert folded[0, 0] == pytest.approx(0.9)  # label 0: the best of chunks 0 and 1
+    assert folded[1, 1] == pytest.approx(0.7)  # label 1: the best of chunks 2 and 3
+
+
+def test_chunked_arm_scores_folds_the_chunks_per_text() -> None:
+    """The chunk-level scores are folded into one score per text."""
+    from cluster_rag.upr_analysis import aggregation_of, chunked_arm_scores
+
+    class _FakePredictor:
+        def score(self, texts, *, query_vectors=None):
+            # the first chunk of every text scores 0.9, the second 0.1
+            rows = []
+            for text in texts:
+                rows.append([0.9 if text.endswith("a") else 0.1, 0.2])
+            return np.asarray(rows, dtype=np.float32)
+
+    from cluster_rag.upr_analysis import ChunkedSide
+
+    side = ChunkedSide(
+        chunk_lists=(("xa", "xb"), ("ya", "yb")),
+        vectors=np.zeros((4, 2), dtype=np.float32),
+    )
+    scores = chunked_arm_scores(_FakePredictor(), side, aggregation_of("max"))
+    assert scores.shape == (2, 2)
+    assert scores[0, 0] == pytest.approx(0.9)  # the max over the text's chunks
+    assert scores[0, 1] == pytest.approx(0.2)
+
+
+def test_encode_chunks_refuses_a_text_without_a_chunk() -> None:
+    """A chunker that drops a text fails loudly (never a silent empty side)."""
+    from cluster_rag.upr_analysis import encode_chunks
+
+    class _EmptyChunker:
+        def segment(self, texts):
+            return [[] for _ in texts]
+
+    class _FakeEmbedder:
+        def encode(self, texts, kind):
+            return np.zeros((len(texts), 2), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="no chunk for a text"):
+        encode_chunks(_FakeEmbedder(), _EmptyChunker(), ["a text"], "query")
+
+
 # --- the driver ---
 
 

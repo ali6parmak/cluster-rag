@@ -54,6 +54,12 @@ import numpy as np
 from cluster_rag.data import Record, build_label_matrix
 from cluster_rag.eval.multilabel import apply_decision_rule
 from cluster_rag.eval.report import build_label_report
+from cluster_rag.text_processors.aggregation import (
+    Aggregation,
+    aggregate_chunk_similarities,
+    parse_aggregation,
+)
+from cluster_rag.text_processors.base import Chunker
 from cluster_rag.text_processors.upr_diagnostics import (
     cell_rank_percentiles,
     distribution,
@@ -221,11 +227,16 @@ def _length_sections(
 def _distributions(
     view: UprView,
     scores: np.ndarray,
+    *,
+    per_label: bool = True,
 ) -> dict[str, Any]:
     """The score distributions per label bucket and per label.
 
     Every group is reported twice: the **gold** cells' scores and the
     **background** (non-gold) cells' scores, so the two sides are never mixed.
+    The per-label breakdown is optional: a run with many arms would carry
+    68 labels x 2 distributions per arm, and only the reference arm's
+    per-label view is read.
     """
     matrix = np.asarray(scores, dtype=np.float64)
     truth = view.gold
@@ -240,16 +251,17 @@ def _distributions(
             "gold": distribution(matrix[:, columns][bucket_gold]),
             "background": distribution(matrix[:, columns][~bucket_gold]),
         }
-    per_label: dict[str, Any] = {}
-    for position, label in enumerate(view.labels):
-        column = matrix[:, position]
-        is_gold = truth[:, position]
-        per_label[label] = {
-            "bucket": view.buckets[label],
-            "gold": distribution(column[is_gold]),
-            "background": distribution(column[~is_gold]),
-        }
-    return {"per_bucket": per_bucket, "per_label": per_label}
+    per_label_block: dict[str, Any] = {}
+    if per_label:
+        for position, label in enumerate(view.labels):
+            column = matrix[:, position]
+            is_gold = truth[:, position]
+            per_label_block[label] = {
+                "bucket": view.buckets[label],
+                "gold": distribution(column[is_gold]),
+                "background": distribution(column[~is_gold]),
+            }
+    return {"per_bucket": per_bucket, "per_label": per_label_block}
 
 
 def arm_block(
@@ -265,6 +277,8 @@ def arm_block(
     predictor: Mapping[str, Any] | None = None,
     chunker: str | None = None,
     aggregation: str | None = None,
+    per_label_distributions: bool = True,
+    paired: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report block of one arm (one scoring method).
 
@@ -308,7 +322,7 @@ def arm_block(
         "predictor": dict(predictor) if predictor else None,
         "chunker": chunker,
         "aggregation": aggregation,
-        "chunks_per_text": _chunks_block(chunks_per_text),
+        "chunks_per_text": chunks_block(chunks_per_text),
         "metrics": {
             "overall": report["overall"],
             "per_bucket": report["per_bucket"],
@@ -332,8 +346,9 @@ def arm_block(
             "p50": float(np.median(matrix[~truth])) if view.n_background_cells else None,
         },
         "shift": shift,
+        "paired": dict(paired) if paired else None,
         "provenance": provenance(matrix, truth, PROVENANCE_KS),
-        "distributions": _distributions(view, matrix),
+        "distributions": _distributions(view, matrix, per_label=per_label_distributions),
     }
     return block
 
@@ -349,7 +364,7 @@ def _shift_block(
     return level_and_rank_shift(scores, gold, reference_scores)
 
 
-def _chunks_block(chunks_per_text: Sequence[int] | None) -> dict[str, Any] | None:
+def chunks_block(chunks_per_text: Sequence[int] | None) -> dict[str, Any] | None:
     """The chunk-count distribution of an arm (``None`` for the whole text)."""
     if chunks_per_text is None:
         return None
@@ -363,6 +378,232 @@ def _chunks_block(chunks_per_text: Sequence[int] | None) -> dict[str, Any] | Non
         "min": int(values.min()),
         "max": int(values.max()),
     }
+
+
+# --- the chunked arms (CS-8b) ---
+
+
+@dataclass(frozen=True)
+class ChunkedSide:
+    """One side's chunked encoding: the chunk lists and the chunk vectors.
+
+    ``vectors`` holds one row per chunk (a text's chunks are consecutive rows,
+    in text order), so :meth:`group_rows` gives every text's rows.
+    """
+
+    chunk_lists: tuple[tuple[str, ...], ...]
+    vectors: np.ndarray
+
+    @property
+    def n_texts(self) -> int:
+        """The number of texts on this side."""
+        return len(self.chunk_lists)
+
+    @property
+    def n_chunks(self) -> int:
+        """The number of chunks (the vectors' rows)."""
+        return int(self.vectors.shape[0])
+
+    def group_rows(self) -> tuple[tuple[int, ...], ...]:
+        """The row indices of every text's chunks (in text order)."""
+        groups: list[tuple[int, ...]] = []
+        cursor = 0
+        for chunk_list in self.chunk_lists:
+            groups.append(tuple(range(cursor, cursor + len(chunk_list))))
+            cursor += len(chunk_list)
+        return tuple(groups)
+
+    def chunks_per_text(self) -> tuple[int, ...]:
+        """The number of chunks every text contributed."""
+        return tuple(len(chunk_list) for chunk_list in self.chunk_lists)
+
+    def flat_chunks(self) -> list[str]:
+        """Every chunk's text, in row order."""
+        return [chunk for chunk_list in self.chunk_lists for chunk in chunk_list]
+
+
+def encode_chunks(embedder: Any, chunker: Chunker, texts: Sequence[str], kind: str) -> ChunkedSide:
+    """Chunk the texts and embed every chunk (one vector row per chunk).
+
+    Args:
+        embedder: The embedder (a port: the CLI wires the cached backend in).
+        chunker: The chunker.
+        texts: The texts to chunk.
+        kind: The encode kind (``"query"`` for the text side, ``"label"`` for
+            the label side).
+
+    Returns:
+        The encoded :class:`ChunkedSide`.
+
+    Raises:
+        ValueError: If the chunker produced no chunk for a text.
+    """
+    chunk_lists = chunker.segment(list(texts))
+    chunks: list[str] = []
+    for text, chunk_list in zip(texts, chunk_lists, strict=True):
+        if not chunk_list:
+            raise ValueError(f"the chunker produced no chunk for a text: {text[:60]!r}")
+        chunks.extend(chunk_list)
+    vectors = np.asarray(embedder.encode(chunks, kind))
+    return ChunkedSide(chunk_lists=tuple(tuple(item) for item in chunk_lists), vectors=vectors)
+
+
+def fold_label_chunks(matrix: np.ndarray, label_groups: Sequence[Sequence[int]]) -> np.ndarray:
+    """Fold a chunked **label** side: every label keeps its best chunk.
+
+    The symmetric family (the OMCT variants exp05/exp10 chunk both sides): the
+    label side is folded with the maximum — a label's evidence is its best
+    matching chunk — and the text side is then folded with the arm's own rule.
+
+    Args:
+        matrix: The ``(n_text_chunks, n_label_chunks)`` similarity matrix.
+        label_groups: The chunk rows of every label (in label order).
+
+    Returns:
+        The ``(n_text_chunks, n_labels)`` matrix of folded scores.
+
+    Raises:
+        ValueError: If a label has no chunk.
+    """
+    starts: list[int] = []
+    for position, group in enumerate(label_groups):
+        indices = list(group)
+        if not indices:
+            raise ValueError(f"label {position} has no chunk")
+        starts.append(indices[0])
+    return np.maximum.reduceat(matrix, np.asarray(starts, dtype=np.int64), axis=1)
+
+
+def chunked_arm_scores(
+    predictor: Any,
+    side: ChunkedSide,
+    rule: Aggregation,
+    *,
+    global_scores: np.ndarray | None = None,
+) -> np.ndarray:
+    """Score a chunked side with the pipeline's predictor and fold it per text.
+
+    The chunks are scored with the **same predictor** the whole-text arm uses
+    (so the geometry is the pipeline's own), and the chunk-level scores are
+    then folded into one score per (text, label) pair with the arm's rule.
+
+    Args:
+        predictor: The predictor (the port).
+        side: The chunked text side.
+        rule: The folding rule.
+        global_scores: The whole-text score matrix (the second input of the
+            local+global blend, ``exp06``).
+
+    Returns:
+        The ``(n_texts, n_labels)`` score matrix of the arm.
+    """
+    chunk_scores = predictor.score(side.flat_chunks(), query_vectors=side.vectors)
+    return aggregate_chunk_similarities(
+        np.asarray(chunk_scores, dtype=np.float64),
+        side.group_rows(),
+        rule,
+        global_similarities=global_scores,
+    )
+
+
+def symmetric_arm_scores(
+    text_side: ChunkedSide,
+    label_side: ChunkedSide,
+    rule: Aggregation,
+    *,
+    global_scores: np.ndarray | None = None,
+) -> np.ndarray:
+    """Score the text chunks against the **label chunks** (the symmetric family).
+
+    The label side is folded with the maximum first (a label keeps its best
+    chunk), then the text side is folded with the arm's own rule — the same
+    order as the OMCT symmetric variants.
+
+    Args:
+        text_side: The chunked text side.
+        label_side: The chunked label side.
+        rule: The text side's folding rule.
+        global_scores: The whole-text score matrix (the local+global blend).
+
+    Returns:
+        The ``(n_texts, n_labels)`` score matrix of the arm.
+    """
+    matrix = (
+        np.asarray(text_side.vectors, dtype=np.float64)
+        @ np.asarray(label_side.vectors, dtype=np.float64).T
+    )
+    folded = fold_label_chunks(matrix, label_side.group_rows())
+    return aggregate_chunk_similarities(
+        folded,
+        text_side.group_rows(),
+        rule,
+        global_similarities=global_scores,
+    )
+
+
+def arm_name(family: str, aggregation: Aggregation) -> str:
+    """The arm's name: the family (which names its chunker) and the rule."""
+    return f"{family}_{aggregation.slug}"
+
+
+def fusion_components(
+    context: Any,
+    chunk_vectors: np.ndarray,
+    *,
+    k: int,
+    power: float = 1.0,
+) -> dict[str, np.ndarray]:
+    """The fusion's three components, per chunk (the weight re-fit's inputs).
+
+    The components do not depend on the fusion's weights, so they are
+    computed **once** per chunker and the weight grid is explored by
+    re-blending them (the expensive part — the kNN votes against the train
+    index — is paid once).
+
+    The components are the pipeline's own: :func:`knn_vote_scores` (the
+    similarity-weighted votes of the top-k train neighbours),
+    :func:`prototype_scores` (the label prototypes' cosines) and the
+    zero-shot term (the query-label cosines).
+
+    Args:
+        context: The predictor context (the train vectors and the label
+            vectors).
+        chunk_vectors: The chunk vectors (the query side).
+        k: The kNN component's neighbour count.
+        power: The vote-weight exponent.
+
+    Returns:
+        The three component matrices (each ``(n_chunks, n_labels)``).
+    """
+    from cluster_rag.data import build_label_matrix
+    from cluster_rag.retrieve.knn import knn_vote_scores
+    from cluster_rag.retrieve.prototypes import label_prototypes, prototype_scores
+
+    train_vectors = context.train_document_vectors
+    label_vectors = context.label_vectors
+    if train_vectors is None:
+        raise ValueError(
+            "the fusion components need the train document vectors (the retrieval geometry's index)"
+        )
+    train_matrix = build_label_matrix(context.train_records, context.labels)
+    prototypes = label_prototypes(train_vectors, train_matrix)
+    knn = knn_vote_scores(train_vectors, train_matrix, chunk_vectors, k=k, power=power)
+    proto = prototype_scores(prototypes, chunk_vectors)
+    zeroshot = (
+        np.asarray(chunk_vectors, dtype=np.float64) @ np.asarray(label_vectors, dtype=np.float64).T
+        if label_vectors is not None
+        else np.zeros((chunk_vectors.shape[0], len(context.labels)), dtype=np.float64)
+    )
+    return {
+        "knn": np.asarray(knn, dtype=np.float64),
+        "proto": np.asarray(proto, dtype=np.float64),
+        "zeroshot": np.asarray(zeroshot, dtype=np.float64),
+    }
+
+
+def aggregation_of(spec: str) -> Aggregation:
+    """Parse a folding rule (the config-facing spelling)."""
+    return parse_aggregation(spec)
 
 
 def build_upr_report(
@@ -380,6 +621,7 @@ def build_upr_report(
     metrics_config: Mapping[str, Any],
     length_edges: Sequence[int],
     guard: Mapping[str, Any] | None = None,
+    families: Mapping[str, Any] | None = None,
     total_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Assemble the run's artifact.
@@ -449,6 +691,7 @@ def build_upr_report(
         "decision": dict(decision),
         "metrics_config": dict(metrics_config),
         "guard": dict(guard) if guard else None,
+        "families": dict(families) if families else None,
         "arms": dict(arms),
         "total_seconds": total_seconds,
     }

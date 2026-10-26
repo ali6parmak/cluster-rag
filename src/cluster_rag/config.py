@@ -1091,14 +1091,136 @@ class AnalysisConfig(BaseModel):
         return self
 
 
+class UprWeightGridConfig(BaseModel):
+    """The fusion weights re-fitted on val for the chunked components (CS-8b).
+
+    The Phase-4 convention is kept: ``b = 1`` (the prototype weight is the
+    fixed reference) and the two other weights explore the **ratios** around
+    it. The grid is applied to the chunk-level components *before* they are
+    folded, so each combination is a different folding, not a different
+    linear combination of the folded scores.
+
+    The selection happens on **val** (the plan's protocol: val is for
+    tuning), so a re-fitted arm's val numbers are optimistically biased — the
+    artifact records the grid, the criterion and the number of combinations,
+    and the arm's name carries the ``_refit`` suffix.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    a: tuple[float, ...] = (0.0, 0.25, 0.5, 1.0, 2.0)
+    c: tuple[float, ...] = (0.0, 0.25, 0.5, 1.0)
+
+    @model_validator(mode="after")
+    def _weights_are_usable(self) -> UprWeightGridConfig:
+        """Reject a negative weight or a grid with a single point."""
+        for name, values in (("a", self.a), ("c", self.c)):
+            if any(weight < 0 for weight in values):
+                raise ValueError(f"upr_analysis.weight_grid.{name} must be >= 0, got {values}")
+        if self.enabled and (not self.a or not self.c):
+            raise ValueError(
+                "upr_analysis.weight_grid is enabled but one of the weight grids is empty"
+            )
+        return self
+
+
+class UprArmConfig(BaseModel):
+    """One chunked **family** of the UPR analysis (``analyze-upr``, CS-8b).
+
+    A family is a chunker plus the aggregation rules it is folded with; the
+    command builds one **arm** per aggregation rule, named
+    ``<family>_<chunker slug>_<aggregation slug>``.
+
+    Attributes:
+        name: The family's name (the arm names' prefix).
+        chunker: The **text** side's chunker.
+        aggregations: The folding rules (the track's aggregation registry).
+        predictor: The scoring geometry, from the main pipeline's predictor
+            registry. ``zeroshot`` is the **pair-scoring** family (the text's
+            chunks against the zero-shot label vectors); ``knn`` /
+            ``prototype`` / ``fusion`` are the **retrieval** family (each chunk
+            is a query against the train-only index).
+        params: The predictor's own parameters (e.g. the fusion weights).
+        label_chunker: The **label** side's chunker, for the **symmetric**
+            family (``None`` = the label stays whole). The UPR labels are 1-3
+            words, so the symmetric arms are expected to be nulls — the
+            null-check, and the degeneracy is recorded in the artifact.
+        label_aggregation: The label side's folding rule (the maximum, as on
+            OMCT: a label keeps its best chunk).
+        semantic_threshold: The semantic chunker's boundary threshold. The
+            threshold is **selected on the fit side** (the train split); the
+            selected value and the per-fold numbers go into the artifact.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9._-]+$")
+    chunker: ChunkerSpec
+    aggregations: tuple[str, ...] = ("max",)
+    predictor: str = Field(default="fusion", min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    label_chunker: ChunkerSpec | None = None
+    label_aggregation: str = "max"
+    semantic_threshold: float | None = None
+
+    @field_validator("aggregations", "label_aggregation")
+    @classmethod
+    def _aggregation_is_known(cls, value: Any) -> Any:
+        """Reject unknown aggregation rules at config time (fail before the run)."""
+        from cluster_rag.text_processors.aggregation import parse_aggregation
+
+        if isinstance(value, str):
+            parse_aggregation(value)
+            return value
+        for spec in value:
+            parse_aggregation(spec)
+        return value
+
+    @model_validator(mode="after")
+    def _family_is_consistent(self) -> UprArmConfig:
+        """The family must be meaningful: a known predictor, a real chunker and
+        a semantic threshold only on the semantic chunker."""
+        from cluster_rag.predictors import PREDICTORS
+
+        if self.predictor not in PREDICTORS:
+            raise ValueError(
+                f"Unknown predictor {self.predictor!r}; expected one of {sorted(PREDICTORS)}"
+            )
+        if not self.aggregations:
+            raise ValueError(f"the UPR arm family {self.name!r} needs an aggregation rule")
+        if self.chunker.name == "full_text":
+            raise ValueError(
+                f"the UPR arm family {self.name!r} uses the 'full_text' chunker: that is "
+                "the whole-text reference arm, not a chunked family"
+            )
+        if self.semantic_threshold is not None and self.chunker.name != "semantic":
+            raise ValueError(
+                f"the UPR arm family {self.name!r} sets a semantic_threshold, but its "
+                f"chunker is {self.chunker.name!r} (only 'semantic' takes one)"
+            )
+        if self.label_chunker is not None and self.label_chunker.name == "full_text":
+            raise ValueError(
+                f"the UPR arm family {self.name!r} sets a label_chunker, but the "
+                "'full_text' chunker is the whole label (drop the field)"
+            )
+        return self
+
+
 class UprAnalysisConfig(BaseModel):
     """The text-processing track's UPR analysis (``analyze-upr``) settings.
 
-    The UPR counterpart of :class:`AnalysisConfig`: the text-length buckets (the
-    UPR texts' length is the axis the chunking question is really about) and
-    the reference ``evaluate`` run the whole-text arm must reproduce.
+    The UPR counterpart of :class:`AnalysisConfig`: the chunked arm families,
+    the text-length buckets (the UPR texts' length is the axis the chunking
+    question is really about) and the reference ``evaluate`` run the
+    whole-text arm must reproduce.
 
     Attributes:
+        arms: The chunked arm families. The whole-text **reference arm** is
+            always computed (it is the pipeline's own scoring), so an empty
+            list means "the reference arm only".
+        weight_grid: The fusion weights re-fitted on val for the chunked
+            components.
         length_buckets: The upper edges (in characters) of the text-length
             buckets. The texts are bucketed into
             ``[0, e1)``, ``[e1, e2)``, ..., ``[e_last, inf)``; the buckets are
@@ -1107,13 +1229,23 @@ class UprAnalysisConfig(BaseModel):
         reference_eval_run: The ``evaluate`` run whose numbers the whole-text
             reference arm must reproduce, field by field (the guard). ``None``
             disables the check (the run then records that it was not checked).
+        semantic_thresholds: The grid of the semantic chunker's threshold. The
+            threshold is **selected on the fit side** (the train split).
+        semantic_folds: The number of the fit-side cross-fit folds over the
+            train records (the UPR analogue of OMCT's document rotation).
+        semantic_criterion: The fit-side criterion of the threshold selection.
         bootstrap: The paired-bootstrap settings of the arm comparisons.
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    arms: tuple[UprArmConfig, ...] = ()
+    weight_grid: UprWeightGridConfig = Field(default_factory=UprWeightGridConfig)
     length_buckets: tuple[int, ...] = (100, 200, 300)
     reference_eval_run: str | None = None
+    semantic_thresholds: tuple[float, ...] = ()
+    semantic_folds: int = Field(default=3, ge=2)
+    semantic_criterion: Literal["micro_f1", "ndcg"] = "micro_f1"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
 
     @field_validator("length_buckets")
@@ -1125,6 +1257,27 @@ class UprAnalysisConfig(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError(f"upr_analysis.length_buckets must not repeat an edge: {value}")
         return tuple(sorted(value))
+
+    @field_validator("semantic_thresholds")
+    @classmethod
+    def _thresholds_are_usable(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        """Reject a threshold outside the cosine range or a repeated grid point."""
+        for threshold in value:
+            if not -1.0 <= threshold <= 1.0:
+                raise ValueError(
+                    f"upr_analysis.semantic_thresholds must be in [-1, 1], got {threshold}"
+                )
+        if len(set(value)) != len(value):
+            raise ValueError(f"upr_analysis.semantic_thresholds must not repeat a value: {value}")
+        return value
+
+    @model_validator(mode="after")
+    def _family_names_are_unique(self) -> UprAnalysisConfig:
+        """Two families of one run must not share a name (the arm names' prefix)."""
+        names = [arm.name for arm in self.arms]
+        if len(set(names)) != len(names):
+            raise ValueError(f"upr_analysis.arms must have unique names: {names}")
+        return self
 
 
 class TableConfig(BaseModel):

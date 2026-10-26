@@ -71,7 +71,12 @@ from cluster_rag.embed_artifact import (
     load_label_embedding_artifact,
 )
 from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
-from cluster_rag.eval.multilabel import apply_decision_rule
+from cluster_rag.eval.multilabel import (
+    apply_decision_rule,
+    decision_f1_metrics,
+    paired_metric_bootstrap,
+    ranking_metrics,
+)
 from cluster_rag.eval.report import build_label_report
 from cluster_rag.experiment_table import (
     ANALYZE_OMCT_ARMS_COLUMNS,
@@ -136,7 +141,7 @@ from cluster_rag.preprocess import (
 )
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
-from cluster_rag.text_processors.aggregation import parse_aggregations
+from cluster_rag.text_processors.aggregation import aggregate_chunk_similarities, parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
 from cluster_rag.text_processors.combining import COMBINER_LOGISTIC, build_combiner
 from cluster_rag.text_processors.features import (
@@ -145,9 +150,17 @@ from cluster_rag.text_processors.features import (
     ProfileUnits,
 )
 from cluster_rag.upr_analysis import (
+    UprView,
+    aggregation_of,
     arm_block,
+    arm_name,
     build_upr_report,
     build_upr_view,
+    chunked_arm_scores,
+    chunks_block,
+    encode_chunks,
+    fusion_components,
+    symmetric_arm_scores,
 )
 
 logger = logging.getLogger(__name__)
@@ -2661,6 +2674,8 @@ class EvalSetup:
     ids_by_split: dict[str, list[str]]
     dataset_counts: Counter[str]
     train_counts: Counter[str]
+    context: PredictorContext
+    query_vectors: np.ndarray | None
 
 
 def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
@@ -2795,18 +2810,20 @@ def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
         if artifact is not None and "document" in required_kinds
         else None  # zero-shot predictors use query vectors only
     )
+    context = PredictorContext(
+        labels=tuple(labels),
+        train_records=tuple(train_records),
+        train_document_vectors=train_vectors,
+        label_vectors=label_artifact.vectors if label_artifact is not None else None,
+    )
     predictor = build_predictor(
         eval_config.predictor.name,
         eval_config.predictor.params,
-        PredictorContext(
-            labels=tuple(labels),
-            train_records=tuple(train_records),
-            train_document_vectors=train_vectors,
-            label_vectors=label_artifact.vectors if label_artifact is not None else None,
-        ),
+        context,
         seed=config.seed,
     )
     texts = [record.text for record in eval_records]
+    query_vectors: np.ndarray | None = None
     if artifact is not None:
         query_vectors = artifact.select("query", ids_by_split[split])
         scores = predictor.score(texts, query_vectors=query_vectors)
@@ -2835,6 +2852,8 @@ def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
         ids_by_split=ids_by_split,
         dataset_counts=dataset_counts,
         train_counts=train_counts,
+        context=context,
+        query_vectors=query_vectors,
     )
 
 
@@ -3091,6 +3110,569 @@ def _check_reference_arm(
     }
 
 
+def _upr_chunker(
+    config: AppConfig,
+    embedder: Any,
+    spec: ChunkerSpec,
+    preprocess_version: str,
+    *,
+    threshold: float | None = None,
+) -> tuple[Any, Any]:
+    """A chunker and the (cached) embedder of its chunks.
+
+    The chunking version goes into the **existing** cache version slot (the
+    chunker's own ``cache_version``), so the cache key layout never changes
+    and two differently configured chunkers never share cached chunks. The
+    semantic chunker finds its boundaries from the **atom** embeddings, so it
+    takes the ``Embedder`` port: the atoms are cached under the atoms
+    chunker's own version (so a swept threshold re-uses them).
+
+    Args:
+        config: The resolved app config (the cache root).
+        embedder: The raw backend (the CLI wires it in).
+        spec: The chunker's config-facing spec.
+        preprocess_version: The preprocessing version the texts carry.
+        threshold: The semantic chunker's threshold (overrides the spec's).
+
+    Returns:
+        The chunker and the embedder of its chunks.
+    """
+    params = dict(spec.params)
+    if threshold is not None:
+        params["threshold"] = threshold
+    if spec.name == "semantic":
+        atom_chunker = build_chunker("atoms", {"split_clauses": False})
+        atom_version = atom_chunker.cache_version(preprocess_version)
+        chunker = build_chunker(
+            "semantic", params, embedder=_cached_embedder(embedder, config, atom_version)
+        )
+    else:
+        chunker = build_chunker(spec.name, params)
+    return chunker, _cached_embedder(embedder, config, chunker.cache_version(preprocess_version))
+
+
+def _check_embedder_matches_artifact(config: AppConfig, setup: EvalSetup) -> Any:
+    """Build the chunked arms' embedder and check it against the index's space.
+
+    The chunked arms' chunk vectors must live in the **same space** as the
+    embedding artifact the index is built from (the train document vectors and
+    the label vectors). A mismatch would silently score the chunks against a
+    different geometry, so it is refused with the fix named.
+
+    Returns:
+        The (uncached) backend.
+    """
+    if config.embed is None:
+        raise ValueError(
+            "the chunked arms need an embed: section (the chunks are encoded by the "
+            "run): set embed.backend / embed.model_id / embed.prefixes to the "
+            "embedding run's model"
+        )
+    if setup.artifact is None:
+        raise ValueError(
+            "the chunked arms need an embedding run (eval.embedding_run_id): the "
+            "chunks are compared with the index built from it"
+        )
+    embedder = build_embedder(config.embed)
+    meta = setup.artifact.meta["embedder"]
+    if embedder.info.model_id != meta["model_id"]:
+        raise ValueError(
+            f"the embed: section's model {embedder.info.model_id!r} is not the "
+            f"embedding run's model {meta['model_id']!r}: the chunks would be "
+            "encoded in a different space than the index"
+        )
+    prefixes = dict(config.embed.prefixes.model_dump())
+    if prefixes != dict(meta["prefixes"]):
+        raise ValueError(
+            f"the embed: section's prefixes {prefixes} are not the embedding run's "
+            f"prefixes {dict(meta['prefixes'])}: the chunks would be encoded with a "
+            "different prompt than the index's vectors"
+        )
+    return embedder
+
+
+def _upr_label_texts(setup: EvalSetup) -> list[str]:
+    """The label texts the zero-shot vectors were built from.
+
+    The label artifact's own metadata names the variant and the template, so
+    the label side is reconstructed from the artifact that produced the
+    vectors (never from a guess).
+    """
+    if setup.label_artifact is None:
+        raise ValueError(
+            "the chunked arms' label side needs the zero-shot label vectors: set "
+            "eval.label_embedding_run_id to a prior upr-labelembed-* run"
+        )
+    label_texts = setup.label_artifact.meta["label_texts"]
+    variant = label_texts.get("variant", "name")
+    template = label_texts.get("template")
+    if variant == "name":
+        return list(setup.labels)
+    if not template:
+        raise ValueError(
+            f"the label artifact's variant is {variant!r} but it carries no template: "
+            "the label texts cannot be reconstructed"
+        )
+    return [template.replace("{label}", label) for label in setup.labels]
+
+
+def _upr_chunked_arms(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    analysis_config: Any,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Score every configured chunked arm family (CS-8b).
+
+    The arms are the track's **ladder** on UPR: the text side chunked, the
+    chunk-level scores folded with the family's aggregation rules. The
+    families are the two the reviewer named — the **pair-scoring** family
+    (the text's chunks against the zero-shot label vectors) and the
+    **retrieval** family (each chunk is a query against the train-only index)
+    — plus the **symmetric** family (the label side chunked too).
+
+    The pairing is by construction: every arm is scored in the same run as
+    the whole-text reference arm, on the same texts, with the same predictor
+    and the same decision rule.
+
+    Returns:
+        The arms' blocks (keyed by the arm's name) and the families' metadata.
+    """
+    if not analysis_config.arms:
+        return {}, {}
+    embedder = _check_embedder_matches_artifact(config, setup)
+    spec = build_preprocess_spec(config.preprocess)
+    texts = [record.text for record in setup.records]
+    arms: dict[str, dict[str, Any]] = {}
+    families: dict[str, Any] = {}
+
+    for family in analysis_config.arms:
+        threshold = family.semantic_threshold
+        semantic_selection = None
+        if family.chunker.name == "semantic" and analysis_config.semantic_thresholds:
+            threshold, semantic_selection = _select_semantic_threshold(
+                config,
+                setup,
+                analysis_config,
+                embedder,
+                family.chunker,
+            )
+        chunker, chunk_embedder = _upr_chunker(
+            config, embedder, family.chunker, spec.version, threshold=threshold
+        )
+        text_side = encode_chunks(chunk_embedder, chunker, texts, "query")
+        label_side = None
+        if family.label_chunker is not None:
+            label_chunker, label_embedder = _upr_chunker(
+                config, embedder, family.label_chunker, spec.version
+            )
+            label_side = encode_chunks(
+                label_embedder, label_chunker, _upr_label_texts(setup), "label"
+            )
+        # The family's own whole-text score: the second input of the
+        # local+global blend (exp06). It is the *same geometry* as the arm's
+        # chunk-level scores, so the blend mixes two scales of one signal.
+        family_predictor = build_predictor(
+            family.predictor, family.params, setup.context, seed=config.seed
+        )
+        family_global = (
+            np.asarray(
+                family_predictor.score(texts, query_vectors=setup.query_vectors),
+                dtype=np.float64,
+            )
+            if setup.query_vectors is not None
+            else None
+        )
+        family_meta: dict[str, Any] = {
+            "name": family.name,
+            "chunker": chunker.slug,
+            "chunker_version": chunker.version,
+            "predictor": family.predictor,
+            "params": dict(family.params),
+            "aggregation_rules": list(family.aggregations),
+            "n_chunks": text_side.n_chunks,
+            "chunks_per_text": chunks_block(text_side.chunks_per_text()),
+            "semantic_threshold": threshold,
+            "semantic_selection": semantic_selection,
+            "whole_text_agrees_with_reference": (
+                bool(np.allclose(family_global, setup.scores))
+                if family_global is not None
+                else None
+            ),
+        }
+        if label_side is not None:
+            family_meta["label_chunker"] = label_side.n_chunks
+            family_meta["label_chunks_per_text"] = chunks_block(label_side.chunks_per_text())
+            family_meta["label_degeneracy"] = {
+                "n_labels": label_side.n_texts,
+                "n_labels_with_more_than_one_chunk": sum(
+                    1 for count in label_side.chunks_per_text() if count > 1
+                ),
+                "note": (
+                    "the UPR labels are 1-3 words, so the label side is almost always "
+                    "one chunk: the symmetric arms are the null-check, and this "
+                    "counter says how degenerate they are"
+                ),
+            }
+        families[family.name] = family_meta
+
+        for aggregation_spec in family.aggregations:
+            rule = aggregation_of(aggregation_spec)
+            name = arm_name(family.name, rule)
+            if label_side is not None:
+                scores = symmetric_arm_scores(
+                    text_side,
+                    label_side,
+                    rule,
+                    global_scores=family_global,
+                )
+            else:
+                scores = chunked_arm_scores(
+                    family_predictor, text_side, rule, global_scores=family_global
+                )
+            arms[name] = arm_block(
+                view,
+                scores,
+                decision=eval_decision(config),
+                ks=config.eval.metrics.ks,
+                shortlist_ms=config.eval.metrics.shortlist_ms,
+                reference_scores=setup.scores,
+                chunks_per_text=text_side.chunks_per_text(),
+                arm=name,
+                predictor={"name": family.predictor, **dict(family.params)},
+                chunker=chunker.slug,
+                aggregation=rule.spec,
+                per_label_distributions=False,
+                paired=_upr_paired(config, view, scores, setup.scores),
+            )
+            if analysis_config.weight_grid.enabled and family.predictor == "fusion":
+                refit = _upr_refit_weights(
+                    config,
+                    setup,
+                    view,
+                    analysis_config,
+                    family,
+                    text_side,
+                    rule,
+                    name,
+                    family_predictor,
+                    family_global,
+                )
+                if refit is not None:
+                    arms[refit["name"]] = refit["block"]
+                    family_meta.setdefault("weight_refits", {})[rule.slug] = refit["report"]
+    return arms, families
+
+
+def _upr_refit_weights(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    analysis_config: Any,
+    family: Any,
+    text_side: Any,
+    rule: Any,
+    name: str,
+    family_predictor: Any,
+    family_global: np.ndarray | None,
+) -> dict[str, Any] | None:
+    """Re-fit the fusion's weights on val for the chunked components (CS-8b).
+
+    The grid explores the two free weights (``a`` and ``c``; ``b`` stays 1,
+    the Phase-4 convention) **per chunk, before the fold** — so each
+    combination is a different folding, not a different linear combination of
+    the folded scores. The selection criterion is the run's decision rule's
+    micro-F1 on **val** (the plan's protocol: val is for tuning), so the
+    re-fitted arm's numbers are optimistically biased — the arm's name
+    carries the ``_refit`` suffix and the artifact records the grid.
+
+    The components are the pipeline's own, and the blend is checked against
+    the family's predictor (the champion's weights) before the grid is
+    explored, so the refit cannot silently use a different scoring path.
+    """
+    grid = analysis_config.weight_grid
+    params = dict(family.params)
+    k = int(params.get("k", 10))
+    power = float(params.get("power", 1.0))
+    components = fusion_components(setup.context, text_side.vectors, k=k, power=power)
+    base_a = float(params.get("a", 0.0))
+    base_b = float(params.get("b", 1.0))
+    base_c = float(params.get("c", 0.0))
+    base_blend = (
+        base_a * components["knn"] + base_b * components["proto"] + base_c * components["zeroshot"]
+    )
+    predictor_scores = np.asarray(
+        family_predictor.score(text_side.flat_chunks(), query_vectors=text_side.vectors),
+        dtype=np.float64,
+    )
+    if not np.allclose(base_blend, predictor_scores, atol=1e-4):
+        raise ValueError(
+            "the fusion components do not reproduce the predictor's chunk scores "
+            f"(max difference {float(np.max(np.abs(base_blend - predictor_scores))):.6f}): "
+            "the weight re-fit would use a different scoring path than the pipeline's"
+        )
+    per_combination: list[dict[str, Any]] = []
+    best: tuple[float, float, np.ndarray] | None = None
+    for weight_a in grid.a:
+        for weight_c in grid.c:
+            blended = (
+                weight_a * components["knn"]
+                + 1.0 * components["proto"]
+                + weight_c * components["zeroshot"]
+            )
+            folded = aggregate_chunk_similarities(
+                blended, text_side.group_rows(), rule, global_similarities=family_global
+            )
+            criterion = _upr_fit_criterion(folded, view.gold, config.eval.decision, "micro_f1")
+            per_combination.append({"a": weight_a, "c": weight_c, "micro_f1": criterion})
+            if best is None or criterion > best[0]:
+                best = (criterion, weight_a, weight_c, folded)
+    assert best is not None
+    criterion, best_a, best_c, best_scores = best
+    block = arm_block(
+        view,
+        best_scores,
+        decision=eval_decision(config),
+        ks=config.eval.metrics.ks,
+        shortlist_ms=config.eval.metrics.shortlist_ms,
+        reference_scores=setup.scores,
+        chunks_per_text=text_side.chunks_per_text(),
+        arm=f"{name}_refit",
+        predictor={"name": "fusion", "a": best_a, "b": 1.0, "c": best_c, "k": k},
+        chunker=family.chunker.name,
+        aggregation=rule.spec,
+        per_label_distributions=False,
+        paired=_upr_paired(config, view, best_scores, setup.scores),
+    )
+    report = {
+        "criterion": "micro_f1 at the run's decision rule, on val",
+        "selection_note": (
+            "the weights are re-fitted on val, so the arm's val numbers are "
+            "optimistically biased — the un-refitted arm is the comparable one"
+        ),
+        "grid": {"a": list(grid.a), "c": list(grid.c), "b": 1.0},
+        "n_combinations": len(per_combination),
+        "per_combination": per_combination,
+        "chosen": {"a": best_a, "b": 1.0, "c": best_c, "micro_f1": criterion},
+    }
+    return {"name": f"{name}_refit", "block": block, "report": report}
+
+
+def _select_semantic_threshold(
+    config: AppConfig,
+    setup: EvalSetup,
+    analysis_config: Any,
+    embedder: Any,
+    chunker_spec: ChunkerSpec,
+) -> tuple[float, dict[str, Any]]:
+    """The fit-side selection of the semantic chunker's threshold (CS-8b).
+
+    The threshold is chosen on the **fit side only** — the train split — with
+    the fit side's own label-scoring metric, and the **cross-fit** over the
+    train records reports what the choice is worth on records that did not
+    pick it (the UPR analogue of OMCT's document rotation).
+
+    The selection uses the **pair-scoring** geometry (the chunked cosine
+    against the label vectors): the retrieval geometry's fit-side score would
+    contain the text's own train example (a self-match), which is a leak the
+    track's rules forbid.
+
+    Returns:
+        The selected threshold and the selection's report.
+    """
+    grid = tuple(analysis_config.semantic_thresholds)
+    spec = build_preprocess_spec(config.preprocess)
+    train_texts = [record.text for record in setup.train_records]
+    gold = build_label_matrix(setup.train_records, setup.labels)
+    label_vectors = setup.context.label_vectors
+    if label_vectors is None:
+        raise ValueError(
+            "the semantic threshold's fit-side selection needs the zero-shot label "
+            "vectors: set eval.label_embedding_run_id to a prior upr-labelembed-* run"
+        )
+    folds = _upr_folds(len(train_texts), analysis_config.semantic_folds, config.seed)
+    per_threshold: list[dict[str, Any]] = []
+    scores_by_threshold: dict[float, np.ndarray] = {}
+    for candidate in grid:
+        chunker, chunk_embedder = _upr_chunker(
+            config, embedder, chunker_spec, spec.version, threshold=candidate
+        )
+        side = encode_chunks(chunk_embedder, chunker, train_texts, "query")
+        chunk_scores = (
+            np.asarray(side.vectors, dtype=np.float64)
+            @ np.asarray(label_vectors, dtype=np.float64).T
+        )
+        folded = aggregate_chunk_similarities(
+            chunk_scores, side.group_rows(), aggregation_of("max")
+        )
+        scores_by_threshold[candidate] = folded
+        per_threshold.append(
+            {
+                "threshold": candidate,
+                "criterion": _upr_fit_criterion(
+                    folded, gold, config.eval.decision, analysis_config.semantic_criterion
+                ),
+                "n_chunks": side.n_chunks,
+            }
+        )
+    chosen = max(per_threshold, key=lambda entry: entry["criterion"])["threshold"]
+    per_fold: list[dict[str, Any]] = []
+    for index, rows in enumerate(folds):
+        held_out = np.asarray(rows, dtype=np.int64)
+        others = np.asarray(
+            [row for position, fold in enumerate(folds) if position != index for row in fold],
+            dtype=np.int64,
+        )
+        fold_choice = max(
+            per_threshold,
+            key=lambda entry: _upr_fit_criterion(
+                scores_by_threshold[entry["threshold"]][others],
+                gold[others],
+                config.eval.decision,
+                analysis_config.semantic_criterion,
+            ),
+        )["threshold"]
+        per_fold.append(
+            {
+                "fold": index,
+                "n_records": int(held_out.size),
+                "chosen_threshold": fold_choice,
+                "criterion_held_out": _upr_fit_criterion(
+                    scores_by_threshold[fold_choice][held_out],
+                    gold[held_out],
+                    config.eval.decision,
+                    analysis_config.semantic_criterion,
+                ),
+                "criterion_reference": _upr_fit_criterion(
+                    scores_by_threshold[chosen][held_out],
+                    gold[held_out],
+                    config.eval.decision,
+                    analysis_config.semantic_criterion,
+                ),
+            }
+        )
+    report = {
+        "criterion": analysis_config.semantic_criterion,
+        "criterion_note": (
+            "the fit side's own label-scoring metric on the train split, at the "
+            "run's decision rule; the pair-scoring geometry (the chunked cosine "
+            "against the label vectors), because the retrieval geometry's fit-side "
+            "score would contain the text's own train example"
+        ),
+        "grid": list(grid),
+        "per_threshold": per_threshold,
+        "chosen_threshold": chosen,
+        "folds": per_fold,
+        "n_folds": len(folds),
+        "n_train_records": len(train_texts),
+        "selection": "the whole fit side (train) — the folds only report the transfer",
+    }
+    return chosen, report
+
+
+def _upr_folds(n_records: int, n_folds: int, seed: int) -> list[list[int]]:
+    """The fit-side cross-fit folds over the train records (seeded, deterministic)."""
+    generator = np.random.default_rng(seed)
+    order = generator.permutation(n_records)
+    return [sorted(int(row) for row in order[index::n_folds]) for index in range(n_folds)]
+
+
+def _upr_fit_criterion(
+    scores: np.ndarray,
+    gold: np.ndarray,
+    decision: Any,
+    criterion: str,
+) -> float:
+    """The fit side's label-scoring metric (the threshold selection's criterion)."""
+    predicted = apply_decision_rule(
+        scores,
+        rule=decision.rule,
+        k=decision.k,
+        threshold=decision.threshold,
+        min_score=decision.min_score,
+    )
+    metrics = decision_f1_metrics(predicted, gold)
+    if criterion == "micro_f1":
+        return float(metrics["micro_f1"])
+    ranking = ranking_metrics(scores, gold, (5,))
+    return float(ranking["ndcg@5"])
+
+
+def eval_decision(config: AppConfig) -> dict[str, Any]:
+    """The run's decision rule as a mapping (the arm blocks' input)."""
+    if config.eval is None:
+        raise ValueError("the eval: section is required")
+    return config.eval.decision.model_dump()
+
+
+def _upr_paired(
+    config: AppConfig,
+    view: UprView,
+    scores: np.ndarray,
+    reference_scores: np.ndarray,
+) -> dict[str, Any]:
+    """The arm's **paired** comparison against the whole-text reference arm.
+
+    The track's discipline (a paired interval, never two independent
+    numbers): the resampling unit is the **text**, so both scorers are
+    judged on the same resampled texts. The decision view (the micro-F1 at
+    the run's decision rule) and the ranking view (the nDCG@5) are both
+    reported, with the interval and the share of positive resamples — pooled
+    **and per text-length bucket** (the hypothesis is about the long texts,
+    and the pooled interval would hide them).
+    """
+    decision = eval_decision(config)
+    bootstrap = config.upr_analysis.bootstrap
+    seed = bootstrap.seed if bootstrap.seed is not None else config.seed
+    left = np.asarray(scores, dtype=np.float64)
+    right = np.asarray(reference_scores, dtype=np.float64)
+    block: dict[str, Any] = {
+        "micro_f1": paired_metric_bootstrap(
+            left,
+            right,
+            view.gold,
+            metric="micro_f1",
+            decision=decision,
+            resamples=bootstrap.resamples,
+            seed=seed,
+        ),
+        "ndcg5": paired_metric_bootstrap(
+            left,
+            right,
+            view.gold,
+            metric="ndcg",
+            k=5,
+            resamples=bootstrap.resamples,
+            seed=seed,
+        ),
+        "per_length_bucket": {},
+    }
+    for index, name in enumerate(view.length_bucket_names):
+        rows = np.asarray(
+            [
+                position
+                for position, bucket in enumerate(view.length_bucket_index)
+                if bucket == index
+            ],
+            dtype=np.int64,
+        )
+        if rows.size < 2:
+            continue
+        block["per_length_bucket"][name] = {
+            "n_texts": int(rows.size),
+            "micro_f1": paired_metric_bootstrap(
+                left[rows],
+                right[rows],
+                view.gold[rows],
+                metric="micro_f1",
+                decision=decision,
+                resamples=bootstrap.resamples,
+                seed=seed,
+            ),
+        }
+    return block
+
+
 def _cmd_analyze_upr(config: AppConfig) -> int:
     """Run the analyze-upr command: the track's UPR artifact (CS-8a).
 
@@ -3143,6 +3725,8 @@ def _cmd_analyze_upr(config: AppConfig) -> int:
     )
     guard = _check_reference_arm(config, analysis_config.reference_eval_run, reference_block)
     arms: dict[str, dict[str, Any]] = {BASELINE_ARM: reference_block}
+    chunked_arms, families = _upr_chunked_arms(config, setup, view, analysis_config)
+    arms.update(chunked_arms)
 
     results_dir = config.paths.results / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -3163,6 +3747,7 @@ def _cmd_analyze_upr(config: AppConfig) -> int:
         metrics_config=eval_config.metrics.model_dump(),
         length_edges=analysis_config.length_buckets,
         guard=guard,
+        families=families,
         total_seconds=round(time.perf_counter() - started, 3),
     )
     (results_dir / "analysis.json").write_text(

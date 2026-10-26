@@ -3384,3 +3384,149 @@ length buckets are reported separately from now on.
 this arm in the same run (the pairing is by construction), with the
 length buckets reported separately and the background's level and rank shift
 beside every headline number.
+
+## CS-8b — the segmentation ladder on UPR (2026-10-26)
+
+**The run.** `upr-analyze-ladder` — the whole ladder on the UPR val split
+(`results/upr-analyze-ladder/analysis.json`): the whole-text reference arm
+(the standing champion: embeddinggemma, the fusion a=0.5 knn / b=1.0
+prototype / c=1.0 zero-shot with knn k=10, `top_k k=2`) beside **153 arms**
+in **13 families**: the **pair-scoring** family (the text's chunks against the
+zero-shot label vectors), the **retrieval** family (every chunk is a query
+against the train-only index) and the **symmetric** family (the label side
+chunked too), over six chunkers (the atoms, the word windows N = 15 / 25 / 40,
+the sentence windows, the semantic boundaries) and eight folding rules (`max`,
+`top_k_mean:2`, `top_k_mean:3`, `mean`, `decayed_top_k:3:0.5:0.25`,
+`local_global:0.5|max`, `local_global:0.75|max`, `peak:3:0.05`), plus the
+fusion weights re-fitted on val (the `_refit` arms). The guard holds: the
+reference arm reproduces `upr-eval-fusionc-embeddinggemma-k10-c1` field by
+field.
+
+**The statistic.** The ladder's comparisons are **paired**: a paired bootstrap
+over the val **texts** (2,000 resamples, seed 42) of the micro-F1 difference
+(at the run's decision rule) and of the nDCG@5 difference between an arm and
+the whole-text reference arm, pooled **and per text-length bucket**. This is
+the function CS-8f planned ("one new function"); it was pulled forward into
+CS-8b because the ladder's verdict needs an interval, and it lives in
+`eval/multilabel.py` (`paired_metric_bootstrap`, next to the multi-label
+metrics it bootstraps).
+
+### The verdict: the pooled null is *almost* right — the effect is in the long texts
+
+**The pre-registered expectation was "a null on the ranking side, a possible
+small win on the retrieval side for the long-text tail".** The first half
+holds (pooled, the ladder is a near-null: the best un-refitted arm is
++0.0137 of micro-F1) and the second half is **confirmed**:
+
+| arm (retrieval family) | pooled Δ micro-F1 | 95% interval | 0-99 | 100-199 | 200-299 | 300+ |
+|---|---|---|---|---|---|---|
+| reference (whole text) | — | — | 0.5307 | 0.5620 | 0.5422 | 0.4727 |
+| `retr_atoms_max` | +0.0106 | [-0.0023, +0.0227] | +0.0000 | -0.0027 | **+0.0393** [+0.0039, +0.0757] | **+0.1091** [+0.0194, +0.2069] |
+| `retr_atoms_top_k_mean_2` | +0.0122 | [+0.0023, +0.0235] | +0.0000 | +0.0069 | +0.0314 | +0.0545 [+0.0000, +0.1132] |
+| `retr_words15_max` | +0.0008 | [-0.0123, +0.0145] | +0.0000 | -0.0192 | +0.0314 | **+0.1273** [+0.0377, +0.2264] |
+| `retr_words25_max` | +0.0076 | [-0.0008, +0.0168] | +0.0000 | -0.0041 | +0.0236 | **+0.1273** [+0.0367, +0.2281] |
+| `retr_words40_max` | +0.0030 | [+0.0008, +0.0061] | +0.0000 | +0.0000 | +0.0039 | +0.0545 [+0.0000, +0.1189] |
+| `retr_sent2_max` | +0.0000 | [0.0000, 0.0000] | +0.0000 | +0.0000 | +0.0000 | +0.0000 |
+| `retr_semantic_max` | +0.0000 | [0.0000, 0.0000] | +0.0000 | +0.0000 | +0.0000 | +0.0000 |
+
+(The per-bucket cells are the paired Δ micro-F1 with their 95% intervals; the
+bucket's own absolute micro-F1 is in the first row.)
+
+**The effect is exactly where a text is actually split.** The two chunkers
+that do not split UPR's texts (the sentence windows and the semantic
+boundaries: 1.00 chunks per text) give **exactly zero** in every bucket and
+every rule — the ladder's null, measured. The `words40` chunker splits only
+the longest texts (1.07 chunks per text) and gives exactly zero in the three
+short buckets and +0.0545 in the 300+ bucket. Every gain is a long-text gain.
+
+**The chunker matters more than the rule, and the sentence boundaries beat
+the word windows.** Pooled, the best un-refitted arm is the atoms chunker
+(+0.0106 to +0.0137, the interval excluding zero in six of its eight rules),
+while the word windows at the same or a higher chunk count are a wash
+(`words15`: +0.0008 pooled). In the long-text tail the two are equal
+(+0.109 vs +0.127). This is the **opposite** of the OMCT verdict, where the
+word windows won and the atoms were only the Stage-1 arm: on UPR the
+boundary *quality* (a sentence boundary) matters more than the boundary
+*density*.
+
+**The scale shift is there, and the ranking gain survives it.** The `max` rule
+takes a maximum over more candidates, so the background's score level rises
+(+0.0505 for `retr_atoms_max`) while the background's **rank** position does
+not move at all (Δ rank p50 = 0.0000) and the gold cells' rank p50 does not
+move either (0.0147 in both arms). The gain is a ranking gain, not a
+re-scaling — the track's reporting rule, satisfied.
+
+### The pair-scoring family: much worse at the decision, much better at the shortlist
+
+The **pair-scoring** family (the zero-shot label vectors only) is
+significantly **worse** at the decision view: micro-F1 0.4134-0.4514 against
+the champion's 0.5479, every paired interval excluding zero (-0.0965 to
+-0.1345). But its **shortlist recall is much better**: the gold cells' R@50
+is **0.8658-0.8701** against the champion's **0.7423**.
+
+That is a finding about the champion itself, not about the chunking: the
+champion's kNN and prototype terms **push 12.7 points of gold cells out of
+the top-50 shortlist** that the pure zero-shot geometry keeps. The decision
+view (the top-2) and the shortlist view (the top-50) are pulling in opposite
+directions, and PLAN's Phase 6 reranker slot lives on the shortlist side —
+so the zero-shot geometry is the better *candidate generator* even though it
+is the worse *classifier*.
+
+### The symmetric family: degenerate, exactly as predicted
+
+The symmetric arms (the label side chunked too) are **identical** to the
+one-sided pair-scoring arms (e.g. `sym_words15_max` and `pair_words15_max`:
+micro-F1 0.4483, R@50 0.8691, and the background's mean shift agrees to
+1e-10). The artifact records the degeneracy: **0 of the 68 labels** produce
+more than one chunk (the labels are 1-3 words), so the label side is the
+identity and the symmetric family is the ladder's null-check — as the
+reviewer's "the labels are only 1-3 words" said it would be. Chunking the
+label does nothing here, and the OMCT verdict ("never chunk the question")
+transfers.
+
+### The semantic threshold: selected on the fit side, and the grid is flat
+
+The semantic chunker's threshold is chosen on the **fit side** (the train
+split, 1,676 records) with the fit side's own label-scoring metric (the
+micro-F1 at the run's decision rule, in the **pair-scoring** geometry — the
+retrieval geometry's fit-side score would contain the text's own train
+example, a self-match leak). The grid's criterion is flat: 0.4609 / 0.4609 /
+0.4609 / 0.4606 / 0.4606 / 0.4606 for the thresholds 0.2 … 0.7, and the
+chunk counts barely move (1,685-1,704 chunks for 1,676 records). All three
+cross-fit folds choose the same threshold (0.2) and the held-out criterion
+matches the reference's to the fourth decimal. The semantic boundaries find
+**no** boundaries in UPR's one-topic recommendations — the expected null, now
+measured.
+
+### The weight re-fit: a val-selected number, and it moves
+
+The fusion weights re-fitted on val for the chunked components (a = 0 … 2, c
+= 0 … 1, b = 1; 20 combinations per rule) add **+0.0030 to +0.0167** of
+micro-F1 on top of the un-refitted arms, and they move the background's score
+level a lot (-0.17 for the families whose chunker does not split). These
+numbers are **selected on val**, so they are optimistically biased; the
+un-refitted arm is the comparable one. The blend is checked against the
+family's own predictor before the grid is explored, so the refit cannot
+silently use a different scoring path.
+
+**What this run does not say.**
+
+- **Nothing about the feature pack, the combiner or the floors** (CS-8d /
+  CS-8e): no learned scorer is involved here.
+- **Nothing about the chunk header, the late chunking or the label-side
+  transform** (CS-8c).
+- **Nothing about the calibration** (CS-8f) and nothing about the decision
+  models on UPR (CS-9).
+- **Nothing about `test`** — only val was touched.
+- **The long-text tail is 25 texts.** Its intervals are wide (the
+  `words15` arm's +0.1273 has a ±0.09 half-width) and the effect is measured
+  on one split. It is a *consistent* pattern across five chunkers and four
+  rules (the gain is in the long bucket in every arm that splits those
+  texts), not a single noisy number — but it is 25 texts.
+- **The `local_global` arms are not a pure chunking effect**: they blend the
+  chunk-level score with the *whole-text* score, so they are a different
+  method, not a segmentation of the same one.
+
+**The next step.** CS-8c: the text-side extras (the chunk header, the late
+chunking — HF-only, so the within-model comparison — and the label-side
+transform), each measured against this ladder's arms.

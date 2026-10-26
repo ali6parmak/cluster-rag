@@ -1927,6 +1927,38 @@ The **pre-registered expectations** (written down before the runs):
   *Exit:* the ladder's verdict on UPR, with the length buckets, the
   background-side shift beside every headline number, and the null recorded
   as a measured null.
+  *(done 2026-10-26: the chunked-arm machinery in the driver
+  (`upr_analysis.py`: the chunked side, the fold of the chunk-level scores
+  through the **pipeline's own predictor**, the symmetric family, the label
+  side's fold), the config's arm families and weight grid, the **paired
+  bootstrap of the F1 / nDCG difference** (the one new function CS-8f
+  planned — `eval/multilabel.paired_metric_bootstrap`, pulled forward
+  because the ladder's verdict needs an interval; the resampling unit is the
+  text, pooled **and per length bucket**), the sweep
+  `experiments_text_processing/upr_ladder_sweep.py` and one run
+  `upr-analyze-ladder` (153 arms in 13 families on val). **Verdict:** the
+  pre-registered expectation is **half confirmed and half refined** — the
+  pooled ladder is a near-null (the best un-refitted arm +0.0137 of micro-F1)
+  but the gain is **entirely in the long texts**: the 300+ character bucket
+  (+0.1091 micro-F1 [+0.0194, +0.2069] for the atoms, +0.1273 [+0.0377,
+  +0.2264] for the word windows) and the 200-299 bucket (+0.0393 [+0.0039,
+  +0.0757]), while the short buckets do not move at all. The two chunkers
+  that do not split UPR's texts (the sentence windows, the semantic
+  boundaries: 1.00 chunks per text) give **exactly zero** in every bucket and
+  every rule — the ladder's null, measured. The **sentence boundaries beat
+  the word windows** pooled (the opposite of the OMCT verdict), and the scale
+  shift is there while the ranking gain survives it (the background's mean
+  +0.0505, its rank position unchanged). Two further findings: the
+  **pair-scoring family is much worse at the decision view** (-0.0965 to
+  -0.1345, the intervals excluding zero) **and much better at the
+  shortlist** (R@50 0.8658-0.8701 against the champion's 0.7423 — the
+  champion's kNN and prototype terms push 12.7 points of gold cells out of
+  the top-50, which is a Phase-6-relevant fact about the champion itself),
+  and the **symmetric family is degenerate** (0 of the 68 labels produce more
+  than one chunk; the arms are identical to the one-sided pair-scoring arms).
+  The semantic threshold is selected on the fit side and the grid is flat
+  (0.4606-0.4609 over the six thresholds; all three folds choose the same
+  one). The numbers are in the track log's CS-8b section.)*
 - [ ] **CS-8c — the text-side extras and the label-side transform.** The
   **chunk header** (the text's own first sentence, prepended to every chunk,
   in both modes `others` and `all`; the other headings stay ruled out), the

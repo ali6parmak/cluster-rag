@@ -350,6 +350,43 @@ def test_upr_analysis_defaults_and_validation() -> None:
         UprAnalysisConfig.model_validate({"nope": 1})
 
 
+def test_upr_arm_families_are_validated() -> None:
+    """The UPR arm families: the checks that fail before the run starts."""
+    from cluster_rag.config import UprArmConfig, UprWeightGridConfig
+
+    family = UprArmConfig(
+        name="retr_words15",
+        chunker={"name": "word_windows", "params": {"n_words": 15, "stride": 7}},
+        aggregations=("max", "top_k_mean:2"),
+        predictor="fusion",
+        params={"a": 0.5, "b": 1.0, "c": 1.0, "k": 10},
+    )
+    assert family.aggregations == ("max", "top_k_mean:2")
+
+    # an unknown predictor fails at config time (the registry check)
+    with pytest.raises(ValueError, match="Unknown predictor"):
+        UprArmConfig(name="x", chunker=family.chunker, predictor="no-such-predictor")
+    # an unknown folding rule fails at config time
+    with pytest.raises(ValueError, match="Unknown aggregation"):
+        UprArmConfig(name="x", chunker=family.chunker, aggregations=("nope",))
+    # the whole-text chunker is the reference arm, not a chunked family
+    with pytest.raises(ValueError, match="whole-text reference arm"):
+        UprArmConfig(name="x", chunker={"name": "full_text"})
+    # a semantic threshold only belongs to the semantic chunker
+    with pytest.raises(ValueError, match="semantic_threshold"):
+        UprArmConfig(name="x", chunker=family.chunker, semantic_threshold=0.5)
+    # a family needs at least one folding rule
+    with pytest.raises(ValueError, match="needs an aggregation rule"):
+        UprArmConfig(name="x", chunker=family.chunker, aggregations=())
+
+    # the weight grid: the weights are non-negative and the grid is not empty
+    assert UprWeightGridConfig().enabled is False
+    with pytest.raises(ValueError, match="weight_grid"):
+        UprWeightGridConfig(enabled=True, a=(-1.0,))
+    with pytest.raises(ValueError, match="weight_grid"):
+        UprWeightGridConfig(enabled=True, c=())
+
+
 def test_analysis_stage3_defaults_and_validation() -> None:
     """The Stage-3 section: the settled defaults and the config-time checks."""
     from cluster_rag.config import (
