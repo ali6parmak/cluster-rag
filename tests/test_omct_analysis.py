@@ -226,6 +226,42 @@ analysis:
 """
 
 
+ANALYSIS_STAGE3_HISTGB_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 3
+  stage3:
+    features:
+      paragraph_chunker:
+        name: word_windows
+        params:
+          n_words: 3
+          stride: 2
+      top_k: 2
+    combiner:
+      name: histgb
+      params:
+        max_iter: 10
+        min_samples_leaf: 1
+    control_weight: 0.3
+    permutation_resamples: 3
+"""
+
+
 @pytest.fixture()
 def view(sample_pairs: Path):
     """The model-independent view of the pairwise fixture."""
@@ -999,6 +1035,58 @@ def test_analyze_omct_stage3_group_selection_end_to_end(
             0 <= overlap["n_holdout_questions_also_judged_in_fit"] <= overlap["n_holdout_questions"]
         )
         assert overlap["n_holdout_pairs_with_a_shared_question"] <= rotation["n_holdout_pairs"]
+
+
+def test_analyze_omct_stage3_histgb_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """A Stage-3.2 run: the gradient-boosted combiner and its feature usage."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-histgb",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_HISTGB_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-stage3-histgb"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    stage3 = payload["models"][0]["stage3"]
+    # the config is recorded, so the run is reproducible from the artifact
+    assert payload["analysis"]["stage3"]["combiner"]["name"] == "histgb"
+    assert stage3["combiner"]["name"] == "histgb"
+    assert stage3["combiner"]["params"]["max_iter"] == 10
+    # the same harness as the Stage-3.1 runs: three rotations, two floors
+    assert len(stage3["rotations"]) == 3
+    assert stage3["permutation_floor"]["n_resamples"] == 3
+    # the importances capability: the trees' split usage, named after the
+    # pack's features (a tree ensemble has no coefficients)
+    feature_names = set(stage3["feature_pack"]["feature_names"])
+    for rotation in stage3["rotations"]:
+        assert rotation["coefficients"] == {}
+        usage = rotation["feature_usage"]
+        assert set(usage["per_feature"]) == feature_names
+        for entry in usage["per_feature"].values():
+            assert set(entry) == {
+                "n_splits",
+                "total_gain",
+                "max_depth",
+                "split_share",
+                "gain_share",
+            }
+        total_splits = sum(entry["n_splits"] for entry in usage["per_feature"].values())
+        if total_splits:
+            assert sum(
+                entry["split_share"] for entry in usage["per_feature"].values()
+            ) == pytest.approx(1.0)
+
+    out = capsys.readouterr().out
+    assert "OMCT analysis (Stage 0): omct-analyze-stage3-histgb" in out
 
 
 def test_stage3_rotations_hold_out_one_document_at_a_time(view) -> None:

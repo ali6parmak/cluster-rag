@@ -20,6 +20,7 @@ from cluster_rag.text_processors.base import Combiner, FeatureExtractor, TextPai
 from cluster_rag.text_processors.chunkers import FullTextChunker, build_chunker
 from cluster_rag.text_processors.combining import (
     COMBINERS,
+    HistGbCombinerConfig,
     LogisticCombinerConfig,
     build_combiner,
     combiner_config_class,
@@ -319,12 +320,15 @@ def test_logistic_combiner_rejects_bad_input() -> None:
 
 def test_combiner_registry_validates_its_parameters() -> None:
     """The registry maps a name to its class and rejects unknown parameters."""
-    assert set(COMBINERS) == {"logistic"}
+    assert set(COMBINERS) == {"logistic", "histgb"}
     assert combiner_config_class("logistic") is LogisticCombinerConfig
+    assert combiner_config_class("histgb") is HistGbCombinerConfig
     with pytest.raises(ValueError, match="Unknown combiner"):
-        combiner_config_class("histgb")
+        combiner_config_class("lightgbm")
     with pytest.raises(ValueError, match="Unknown parameter"):
         build_combiner("logistic", {"not_a_parameter": 1})
+    with pytest.raises(ValueError, match="Unknown parameter"):
+        build_combiner("histgb", {"not_a_parameter": 1})
     with pytest.raises(ValueError, match="Unknown combiner"):
         build_combiner("does-not-exist")
 
@@ -337,3 +341,105 @@ def test_logistic_combiner_config_rejects_a_degenerate_parameter() -> None:
         LogisticCombinerConfig(max_iter=0)
     with pytest.raises(ValueError, match="class_weight"):
         LogisticCombinerConfig(class_weight="weird")
+
+
+# -- the gradient-boosted combiner (the Stage-3.2 learner) -------------------
+
+
+def test_histgb_combiner_fits_and_scores() -> None:
+    """The combiner scores a row higher when the informative feature is higher."""
+    combiner = build_combiner("histgb", {"min_samples_leaf": 1, "max_iter": 50})
+    assert isinstance(combiner, Combiner)
+    features = np.array([[0.0], [1.0], [2.0], [3.0]], dtype=np.float32)
+    labels = [0, 0, 1, 1]
+    combiner.fit(features, labels)
+    scores = combiner.score(features)
+    assert scores.shape == (4,)
+    assert scores.min() >= 0.0 and scores.max() <= 1.0
+    assert scores[0] < scores[-1]
+
+
+def test_histgb_combiner_honours_the_sample_weights() -> None:
+    """A down-weighted row moves the fit less than a full-weight row."""
+    features = np.array([[0.0], [0.2], [0.8], [1.0]], dtype=np.float32)
+    labels = [0, 0, 1, 1]
+    heavy = build_combiner("histgb", {"min_samples_leaf": 1, "max_iter": 50})
+    heavy.fit(features, labels, [1.0, 1.0, 0.01, 0.01])
+    light = build_combiner("histgb", {"min_samples_leaf": 1, "max_iter": 50})
+    light.fit(features, labels, [1.0, 1.0, 1.0, 1.0])
+    # the down-weighted positives make the model less confident about "high"
+    assert heavy.score(features)[-1] < light.score(features)[-1]
+
+
+def test_histgb_combiner_reports_the_trees_feature_usage() -> None:
+    """The usage diagnostic says which features the trees split on."""
+    rng = np.random.default_rng(0)
+    informative = rng.normal(size=200)
+    features = np.column_stack([informative, np.zeros(200)]).astype(np.float32)
+    labels = (informative > 0).astype(int).tolist()
+    combiner = build_combiner("histgb", {"min_samples_leaf": 5})
+    combiner.fit(features, labels)
+    usage = combiner.feature_usage()
+    # the constant column can never be split on
+    assert usage["1"]["n_splits"] == 0
+    assert usage["1"]["total_gain"] == 0.0
+    # the informative column is the one the trees use
+    assert usage["0"]["n_splits"] > 0
+    assert usage["0"]["total_gain"] > 0
+    assert usage["0"]["split_share"] == pytest.approx(1.0)
+    assert usage["0"]["gain_share"] == pytest.approx(1.0)
+    # every feature of the matrix gets an entry (a feature the trees never
+    # used is information, not a missing value)
+    assert set(usage) == {"0", "1"}
+
+
+def test_histgb_combiner_rejects_bad_input() -> None:
+    """The combiner fails loudly on a shape or label mismatch."""
+    combiner = build_combiner("histgb", {})
+    with pytest.raises(ValueError, match="not fitted"):
+        combiner.score(np.zeros((2, 1), dtype=np.float32))
+    with pytest.raises(ValueError, match="rows but"):
+        combiner.fit(np.zeros((3, 1), dtype=np.float32), [0, 1])
+    with pytest.raises(ValueError, match="0/1"):
+        combiner.fit(np.zeros((2, 1), dtype=np.float32), [0, 2])
+    with pytest.raises(ValueError, match="zero rows"):
+        combiner.fit(np.zeros((0, 1), dtype=np.float32), [])
+    with pytest.raises(ValueError, match="sample weights"):
+        combiner.fit(np.zeros((2, 1), dtype=np.float32), [0, 1], [1.0])
+
+
+def test_histgb_combiner_survives_a_one_class_fit() -> None:
+    """A degenerate fit (one class) scores every row the same."""
+    combiner = build_combiner("histgb", {})
+    combiner.fit(np.zeros((4, 2), dtype=np.float32), [1, 1, 1, 1])
+    scores = combiner.score(np.zeros((3, 2), dtype=np.float32))
+    assert scores.shape == (3,)
+    assert set(scores.tolist()) == {0.0}
+
+
+def test_histgb_combiner_config_rejects_a_degenerate_parameter() -> None:
+    """The parameters are validated at config time."""
+    with pytest.raises(ValueError, match="max_iter must be"):
+        HistGbCombinerConfig(max_iter=0)
+    with pytest.raises(ValueError, match="learning_rate must be"):
+        HistGbCombinerConfig(learning_rate=0.0)
+    with pytest.raises(ValueError, match="max_leaf_nodes must be"):
+        HistGbCombinerConfig(max_leaf_nodes=1)
+    with pytest.raises(ValueError, match="min_samples_leaf must be"):
+        HistGbCombinerConfig(min_samples_leaf=0)
+    with pytest.raises(ValueError, match="l2_regularization must be"):
+        HistGbCombinerConfig(l2_regularization=-1.0)
+    with pytest.raises(ValueError, match="max_depth must be"):
+        HistGbCombinerConfig(max_depth=0)
+    with pytest.raises(ValueError, match="max_bins must be"):
+        HistGbCombinerConfig(max_bins=1)
+
+
+def test_histgb_combiner_describes_itself() -> None:
+    """The description is the artifact's record of the learner."""
+    described = build_combiner("histgb", {}).describe()
+    assert described["name"] == "histgb"
+    assert described["params"]["max_iter"] == 100
+    assert described["params"]["early_stopping"] is False
+    assert described["fitted"] is False
+    assert "early stopping is off" in described["note"]

@@ -510,7 +510,7 @@ sweeps are the orders.
 - [x] **3.1 Feature pack v0 + LR baseline**, [x] **3.1b the feature-group
   ablation** (the v0 pack's four blocks — the embedding, the lexical, the
   question-part and the question-type block — measured one at a time: which
-  block carries the gain, and which block costs the hit@1), [ ] **3.2
+  block carries the gain, and which block costs the hit@1), [x] **3.2
   gradient-boosted combiner** (sklearn `HistGradientBoostingClassifier`;
   `lightgbm` only if it beats HistGB and the dependency is approved), [ ]
   **3.3 chunk-profile features** (best chunk matches, spread/peak features —
@@ -552,6 +552,30 @@ sweeps are the orders.
   all (hit@1 0.0076 against the cosine's 0.1355) — the hypothesis is right
   about the *mechanism* and wrong about the *size*. The numbers are in the
   track log's Stage-3.1b section.)*
+  *(3.2 done 2026-10-26, CS-6b: the **gradient-boosted combiner** (sklearn's
+  `HistGradientBoostingClassifier`) behind the same ``Combiner`` port, with
+  the feature-group selection as the knob (so the ablation's arms compose
+  with the learner): 9 runs (3 models × {`all`, `lex-only`, `embed-only`},
+  `omct-analyze-<model>-stage3-histgb-<groupset>`), the same harness, the same
+  three rotations, the same two floors; the hyperparameters are scikit-learn's
+  defaults, explicitly pinned, with **no** grid (a fit-side selection was
+  already measured to be unidentifiable here — the Stage-2 semantic
+  threshold). The artifact also gained the **importances capability**: a tree
+  ensemble has no coefficients, so the trees' split usage (per feature: the
+  splits, the gain, the depth) is recorded. **Verdict: the learner is not the
+  lever.** The booster is *below* the logistic regression on 8 of the 9 arms
+  (−0.022 to −0.049 of the within-document AUC; the ninth is a tie to four
+  decimals) and ahead in only 5 of the 27 per-rotation paired comparisons, so
+  the bar the reviewer set (beat a 3-feature logistic at 0.6461) is not met;
+  its hit@1 is worse on 8 of the 9 arms. The two learners' *label-driven*
+  parts (the excess over their own control-role floor) are a wash — the
+  logistic's advantage comes mostly from a **higher control-role floor**,
+  i.e. it is the better learner of the training design's own label-free
+  signal. The booster's gain is also diffuse (the top feature takes 16–17%
+  of the trees' gain) and it leans harder on the embedding block (43–52% of
+  the gain) — the block the ablation showed carries no label-driven signal.
+  So `lightgbm` stays deferred and no new dependency is proposed. The
+  numbers are in the track log's Stage-3.2 section.)*
 - **Discipline.**
   - *Split*: document-level holdout — fit on two of the three source
     documents, evaluate on the held-out third (all three rotations when
@@ -754,6 +778,33 @@ sweeps are the orders.
   corpus with a different vocabulary, and is a *retrieval* score (the
   cosine's geometry, with the learned features only re-ranking a shortlist)
   the better shape for the deliverable?
+- **The learner is not the lever; the features are (CS-6b, 2026-10-26).** A
+  gradient-boosted ensemble (sklearn's `HistGradientBoostingClassifier`, the
+  defaults, no grid) is *below* the logistic regression on 8 of the 9 arms
+  (−0.022 to −0.049 of the within-document AUC) and ahead in 5 of the 27
+  per-rotation paired comparisons, and it is the worse retriever on 8 of the
+  9 arms. The two learners' label-driven parts — the excess over their own
+  control-role floor — are a wash; the logistic's edge comes mostly from a
+  **higher control-role floor** (it is the better learner of the training
+  design's own label-free signal). The booster's trees also lean harder on
+  the embedding block (43–52% of their gain), the block the ablation showed
+  carries no label-driven signal. **Open:** is the *learner's* shape relevant
+  at all here, or is the ceiling set by the features and the corpus (a
+  294-question vocabulary)? A different question is now open for the
+  deliverable: the track's rule is that a safe-negative rule is measured
+  against the control-role floor, and the floor itself depends on the
+  learner — so which learner should the shipped rule use? (The logistic
+  regression, on this evidence: it is the better retriever and its floor is
+  the higher one.)
+- **The two learners' arms live in two runs, and the artifacts carry the
+  per-rotation AUCs, not the per-pair scores (CS-6b, 2026-10-26).** So the
+  paired evidence between the two arms is the per-rotation differences (the
+  same held-out document, the same pairs) plus each arm's own paired
+  interval against the common reference (the cosine). **Open:** a per-pair
+  paired bootstrap between the arms would need the arm's per-pair out-of-fold
+  scores in the artifact (a small additive block plus a re-run of the stage-3
+  runs). Worth it only if a later change set needs a formal paired CI
+  between two arms of different runs.
 
 ## 6. Milestones
 
@@ -911,10 +962,33 @@ set):
   prior that never looks at the paragraph) reaches only 0.5713 and is the
   worst retriever of all (hit@1 0.0076 vs the cosine's 0.1355). The numbers
   are in the track log's Stage-3.1b section; 376 unit tests green.)*
-- [ ] **CS-6b — Stage 3.2: the gradient-boosted combiner.** sklearn's
+- [x] **CS-6b — Stage 3.2: the gradient-boosted combiner.** sklearn's
   `HistGradientBoostingClassifier` behind the same `Combiner` port (the
   `combining/` registry's second entry); `lightgbm` stays deferred until
   HistGB is beaten (a new dependency needs the AGENTS.md §3 approval).
+  *(done 2026-10-26: the new combiner
+  `text_processors/combining/histgb.py` (`HistGbCombinerConfig` +
+  `HistGbCombiner`) and the registry entry — the existing
+  `analysis.stage3.combiner` knob validates the name and the parameters at
+  config time, so **no config-schema change**; the hyperparameters are
+  scikit-learn's defaults, explicitly pinned, with early stopping off (no
+  internal validation split carved out of the fit side) and no
+  standardization (the booster bins the features itself). The **importances
+  capability**: a tree ensemble has no coefficients, so the artifact now
+  carries the trees' split usage per rotation (the splits, the gain, the
+  depth, the shares) — a *usage* diagnostic, not an accuracy-based importance.
+  The sweep `experiments_text_processing/stage3_histgb_sweep.py`: 9 runs
+  (3 models × {`all`, `lex-only`, `embed-only`}),
+  `omct-analyze-<model>-stage3-histgb-<groupset>`. The guard holds (all 63
+  runs reproduce the Stage-0 baseline arm field by field).
+  **Verdict: the learner is not the lever** — the booster is below the
+  logistic regression on 8 of the 9 arms and ahead in 5 of the 27 per-rotation
+  paired comparisons, and it is the worse retriever on 8 of the 9 arms; the
+  two learners' label-driven parts (the excess over their own control-role
+  floor) are a wash, and the logistic's edge comes from a higher
+  control-role floor. `lightgbm` stays deferred; no new dependency is
+  proposed. The numbers are in the track log's Stage-3.2 section; 384 unit
+  tests green.)*
 - [ ] **CS-6c — Stage 3.3: the chunk-profile features.** exp15/16's
   remainder (the df and the alignment-kind one-hots) and exp17's ranked
   cross-chunk match profiles, folded into the pack.

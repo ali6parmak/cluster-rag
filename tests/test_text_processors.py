@@ -514,3 +514,4 @@ def test_the_only_heavy_import_is_the_combiner_scikit_learn() -> None:
             )
     # the exception is used where it is documented
     assert "sklearn" in (PACKAGE_ROOT / "combining" / "logistic.py").read_text(encoding="utf-8")
+    assert "sklearn" in (PACKAGE_ROOT / "combining" / "histgb.py").read_text(encoding="utf-8")

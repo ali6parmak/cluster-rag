@@ -1,8 +1,9 @@
 """The track's combiners: a learned scorer over the feature pack's rows.
 
 ``logistic`` is the Stage-3.1 baseline (a scikit-learn logistic regression
-behind the ``Combiner`` port of ``text_processors.base``). The
-gradient-boosted combiner (Stage 3.2) and the chunk-profile features
+behind the ``Combiner`` port of ``text_processors.base``) and ``histgb`` is the
+Stage-3.2 gradient-boosted combiner (scikit-learn's
+``HistGradientBoostingClassifier``, same port). The chunk-profile features
 (Stage 3.3) come later; ``lightgbm`` is deferred by the plan until
 scikit-learn's ``HistGradientBoostingClassifier`` has been beaten (a new
 dependency needs the AGENTS.md section-3 approval).
@@ -19,6 +20,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from cluster_rag.text_processors.base import Combiner
+from cluster_rag.text_processors.combining.histgb import (
+    COMBINER_HISTGB,
+    HistGbCombiner,
+    HistGbCombinerConfig,
+)
 from cluster_rag.text_processors.combining.logistic import (
     COMBINER_LOGISTIC,
     LogisticCombiner,
@@ -26,14 +32,16 @@ from cluster_rag.text_processors.combining.logistic import (
 )
 
 # The config-facing name of every combiner (the registry key).
-COMBINERS: dict[str, type[LogisticCombiner]] = {
+COMBINERS: dict[str, type[Combiner]] = {
     COMBINER_LOGISTIC: LogisticCombiner,
+    COMBINER_HISTGB: HistGbCombiner,
 }
 
 # The config class of every combiner (``None`` = the combiner takes no
 # parameters).
 COMBINER_CONFIGS: dict[str, type[Any] | None] = {
     COMBINER_LOGISTIC: LogisticCombinerConfig,
+    COMBINER_HISTGB: HistGbCombinerConfig,
 }
 
 
@@ -82,7 +90,10 @@ def build_combiner(name: str, params: Mapping[str, Any] | None = None) -> Combin
 __all__ = [
     "COMBINERS",
     "COMBINER_CONFIGS",
+    "COMBINER_HISTGB",
     "COMBINER_LOGISTIC",
+    "HistGbCombiner",
+    "HistGbCombinerConfig",
     "LogisticCombiner",
     "LogisticCombinerConfig",
     "build_combiner",

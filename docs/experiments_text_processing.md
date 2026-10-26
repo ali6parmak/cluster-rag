@@ -1702,3 +1702,212 @@ old columns carried the unweighted per-rotation means, which are not
 like-for-like with the headline). The Stage-3.1 sweep was re-run for the new
 shape; its artifacts reproduce the stored ones field by field, so the
 Stage-3.1 numbers in the table did not move.
+
+## Stage 3.2 — the gradient-boosted combiner (CS-6b, 2026-10-26)
+
+**The question.** The plan's Stage 3.2: can a **gradient-boosted** learner
+(scikit-learn's `HistGradientBoostingClassifier`) rank the OMCT pairs better
+than the Stage-3.1 logistic regression? The Stage-3.1b ablation had already
+narrowed the question: the learned arm's gain is the **lexical** block's (a
+bag-of-words overlap), not the embedding geometry's and not the question-type
+prior's. So the bar is explicit — a new learner has to beat a *three-feature*
+logistic regression (0.6461 within-document AUC on all three models) and must
+not cost more hit@1. A tree ensemble can only earn something if the signal is
+not linear in the features, or if the blocks interact.
+
+**The runs.** Nine runs (3 Stage-0 models x 3 feature-group sets,
+`experiments_text_processing/stage3_histgb_sweep.py`, the sweep
+`stage3_histgb`):
+
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-histgb-all`
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-histgb-lex-only`
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-histgb-embed-only`
+
+Each run holds all three rotations (the out-of-fold protocol needs them
+together). The guard holds: all **63** runs (the 54 earlier ones and these
+nine) reproduce the Stage-0 baseline arm field by field
+(`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**The protocol (unchanged from Stage 3.1).** The same document-level holdout
+(fit on two documents, predict the third; one out-of-fold score matrix), the
+same training data (the fit side's judged pairs plus its unjudged control
+cells as down-weighted presumed negatives, weight 0.3), the same two floors
+(the label-permutation chance floor and the control-role floor, 5 permutations
+per rotation, seed 42) and the same paired statistics against the full-text
+cosine (2,000 bootstrap resamples, seed 42).
+
+**The learner.** scikit-learn's `HistGradientBoostingClassifier` with **its
+defaults, explicitly pinned** (`max_iter` 100, `learning_rate` 0.1,
+`max_leaf_nodes` 31, `min_samples_leaf` 20, `l2_regularization` 0,
+`max_depth` `None`, `max_bins` 255, `random_state` 42) and **early stopping
+off** — so the fit side's rows are the fit side's rows (no internal validation
+split is carved out of them) and the fit is deterministic. No hyperparameter
+grid: the track has already measured that a fit-side selection did not
+transfer (the Stage-2 semantic threshold: the fit side's choice did not
+predict the holdout's). A tree ensemble needs no standardization (the booster
+bins the features itself), so — unlike the logistic arm — there is no scaler
+that could leak the holdout into the fit.
+
+**The logistic partners are the Stage-3.1b runs**
+(`omct-analyze-<model>-stage3-{all,lex-only,embed-only}`): the same protocol,
+the same control cells, the same rotations and the same seeds, so the two
+learners' arms are read on the same footing.
+
+**1. The headline: the within-document AUC, the booster beside the logistic
+regression** (OMCT auxiliary data, the reviewed set's 1,520 judged pairs —
+never a UPR metric). The CI is the arm's own paired bootstrap against the
+full-text cosine on the same held-out documents:
+
+| group set | model | HistGB | logistic | Δ (booster − logistic) | the booster's CI vs the cosine |
+|---|---|---|---|---|---|
+| `all` | embeddinggemma | 0.6323 | 0.6655 | **−0.0333** | +0.0690 [+0.0354, +0.1031] |
+| `all` | voyage-4-nano | 0.6318 | 0.6723 | **−0.0405** | +0.1080 [+0.0744, +0.1433] |
+| `all` | arctic2 | 0.5987 | 0.6472 | **−0.0485** | +0.0968 [+0.0601, +0.1353] |
+| `lex-only` | all three | 0.6238 | 0.6461 | **−0.0223** | +0.0605 / +0.1000 / +0.1218 (eg / voy / arc) |
+| `embed-only` | embeddinggemma | 0.5628 | 0.6006 | **−0.0378** | −0.0004 [−0.0326, +0.0347] |
+| `embed-only` | voyage-4-nano | 0.5435 | 0.5436 | −0.0001 | +0.0197 [−0.0086, +0.0499] |
+| `embed-only` | arctic2 | 0.5117 | 0.5126 | −0.0010 | +0.0097 [−0.0242, +0.0449] |
+
+The booster is **below** the logistic regression on eight of the nine arms; on
+the ninth (voyage-4-nano's `embed-only`) the two are tied to four decimals.
+The `lex-only` row is identical on the three models — the same built-in check
+the Stage-3.1b ablation used: the lexical features do not depend on the
+embeddings, so the arm must not move with the model.
+
+The booster still beats the full-text cosine on the two arms with the lexical
+block in them (all three models' intervals exclude zero on the positive side
+for `all` and `lex-only`), so it is a working learned arm — just not a better
+one.
+
+**2. The verdict: the learner is not the lever.** The paired evidence is the
+per-rotation difference (both arms on the *same* held-out document, the same
+pairs):
+
+| group set | model | NU | AI | CIDH | ahead in |
+|---|---|---|---|---|---|
+| `all` | embeddinggemma | −0.0513 | −0.0215 | −0.0035 | 0/3 |
+| `all` | voyage-4-nano | −0.0186 | −0.0152 | −0.0776 | 0/3 |
+| `all` | arctic2 | −0.0501 | −0.0734 | −0.0454 | 0/3 |
+| `lex-only` | all three | +0.0017 | −0.0057 | −0.0628 | 1/3 |
+| `embed-only` | embeddinggemma | −0.0242 | −0.1025 | −0.0591 | 0/3 |
+| `embed-only` | voyage-4-nano | +0.0275 | −0.0892 | −0.0444 | 1/3 |
+| `embed-only` | arctic2 | +0.0202 | −0.0304 | −0.0358 | 1/3 |
+
+The booster is ahead in **5 of the 27** per-rotation paired comparisons, and
+in none of the nine `all`-pack comparisons. The reviewer's bar — beat a
+three-feature logistic at 0.6461 — is not met: the booster's lexical arm
+reaches 0.6238.
+
+**3. The floors: where the difference actually sits.** Both floors again, on
+the within-document statistic, plus each arm's excess over **its own**
+control-role floor (the label-driven part; the yardstick the track's
+deliverable is measured against):
+
+| group set | model | the booster's control-role floor | the logistic's | the booster's excess | the logistic's excess |
+|---|---|---|---|---|---|
+| `all` | embeddinggemma | 0.5355 | 0.5788 | +0.0968 | +0.0868 |
+| `all` | voyage-4-nano | 0.5276 | 0.5765 | +0.1042 | +0.0958 |
+| `all` | arctic2 | 0.5113 | 0.5569 | +0.0874 | +0.0903 |
+| `lex-only` | all three | 0.5450 | 0.5632 | +0.0788 | +0.0829 |
+| `embed-only` | embeddinggemma | 0.5439 | 0.5940 | +0.0190 | +0.0066 |
+| `embed-only` | voyage-4-nano | 0.5060 | 0.5173 | +0.0375 | +0.0263 |
+| `embed-only` | arctic2 | 0.4883 | 0.5259 | +0.0233 | −0.0133 |
+
+The chance floor lands at chance everywhere (0.480–0.496). The reading: the
+booster's **label-driven** part is a wash with the logistic's (sometimes
+higher, sometimes lower), and the logistic's advantage on the `all` and
+`lex-only` arms comes mostly from a **higher control-role floor** — i.e. the
+logistic regression is the better learner of the *training design's own*
+label-free signal ("the ordinary unjudged cells are negative"), which is
+exactly the signal the floor measures. (The mechanism behind that difference
+is not measured here and is not claimed.)
+
+**4. The hit@1: the booster retrieves worse.** The positives' hit@1 (the true
+match is the paragraph's own best candidate):
+
+| group set | model | HistGB | logistic | the cosine |
+|---|---|---|---|---|
+| `all` | embeddinggemma | 0.0611 | 0.0897 | 0.1355 |
+| `all` | voyage-4-nano | 0.0840 | 0.0821 | 0.1050 |
+| `all` | arctic2 | 0.0515 | 0.0859 | 0.1050 |
+| `lex-only` | all three | 0.0153 | 0.0324 | 0.1355 / 0.1050 |
+| `embed-only` | embeddinggemma | 0.0553 | 0.1317 | 0.1355 |
+| `embed-only` | voyage-4-nano | 0.0515 | 0.1145 | 0.1050 |
+| `embed-only` | arctic2 | 0.0515 | 0.0916 | 0.1050 |
+
+The booster is the worse retriever on eight of the nine arms (the exception:
+voyage-4-nano's `all` arm, +0.0019). On the lexical block it retrieves
+*half* as well as the logistic (0.0153 against 0.0324) while ranking pairs
+worse too — so the booster is worse on both halves of the job there. The
+Stage-3.1 caveat ("a learned pair ranker is not a better retriever") is not
+just confirmed but deepened: the *shape* of the learner matters for the
+retrieval side too, and the booster is the worse shape.
+
+**5. The importances: which features the trees used.** A tree ensemble has no
+coefficients, so the artifact now carries the trees' **split usage** (the new
+capability: per feature, the number of split nodes, the total gain, the
+deepest level and the shares). It is a *usage* diagnostic — what the model
+splits on — not an accuracy-based importance. On the `all` arms, the three
+rotations together:
+
+| model | embedding block | lexical block | question-part | question-type | the top single feature |
+|---|---|---|---|---|---|
+| embeddinggemma | 52.3% | 30.8% | 8.1% | 8.7% | `chunk_cosine_best` 16.9% |
+| voyage-4-nano | 45.9% | 36.2% | 8.1% | 9.9% | `cosine_full` 15.9% |
+| arctic2 | 42.6% | 38.0% | 9.0% | 10.3% | `lex_question_coverage` 16.1% |
+
+Two readings. First, the booster's gain is **diffuse**: the top single
+feature takes only 16–17% of it, against the logistic's concentrated
+coefficients — a tree ensemble spreads its weight over the whole pack. Second,
+the trees lean *harder* on the embedding block (43–52% of the gain) than the
+lexical one, and the Stage-3.1b ablation showed that the embedding block adds
+no label-driven signal. So the booster spends much of its capacity on the
+block that carries the *training design's* signal — which is consistent with
+its lower control-role floor and its lower label-driven excess.
+
+**6. The control side: no inflation.** The control's rank percentile (0 = the
+top of the paragraph's own candidate list) barely moves for any arm (−0.0126
+to +0.0049), and the top-fifth share moves by ≤0.008. So the booster's
+numbers on the reviewed set are not an inflation of the ordinary cells. The
+de-shifted AUC (each document's control level removed) keeps the `all` arm's
+gain (0.6072 / 0.6047 / 0.5741 against the baseline's 0.5731 / 0.5252 /
+0.5056) but not the `embed-only` arm's (0.5233 / 0.5271 / 0.4910 — at or
+below the baseline).
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about a tuned booster.** The hyperparameters are scikit-learn's
+  defaults, pinned; no grid was run. A *fit-side* grid would need a fit-side
+  criterion that this track has already measured to be unidentifiable here
+  (the Stage-2 semantic threshold), and a holdout-tuned grid would be a
+  leakage.
+- **Nothing about `lightgbm`.** The plan defers it until scikit-learn's
+  HistGB is beaten; HistGB was not beaten, so the dependency is not proposed
+  (and no new dependency is added at all).
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule still
+  ships as the **margin half only**.
+- **No paired per-pair CI between the two learners.** The two learners' arms
+  live in two runs, and the artifacts carry the per-rotation AUCs (not the
+  per-pair scores), so the paired evidence is the per-rotation differences
+  above plus each arm's own paired interval against the common reference (the
+  cosine). A per-pair paired bootstrap between the arms would need the arms'
+  per-pair out-of-fold scores in the artifact — a small additive block, and a
+  later change set.
+- **Nothing about the reviewed set's own construction.** The hard negatives'
+  hit@1 also falls for the booster (0.0100 / 0.0090 / 0.0070 against the
+  cosine's 0.0201 / 0.0211 / 0.0171), so the booster is not simply "safer" —
+  but this benchmark's reviewed set is rank-selected (the Stage-0.2
+  classification), and no arm's number here changes that.
+
+**The next step (CS-6c).** The chunk-profile features (the plan's 3.3:
+exp15/16's df and alignment-kind one-hots, exp17's ranked cross-chunk match
+profiles) folded into the pack. The learner question is now settled for this
+benchmark: the *features* are the lever, not the learner — so 3.3 goes after
+new features with the logistic combiner, and the gradient-boosted combiner
+stays in the registry as the second entry (available, not better). Then
+CS-6d (the random-vector floor — the second sanity floor of the plan's
+Stage 3) and CS-6e (the calibration curves, the thresholds per document, and
+the safe-negative margin measured against the control-role floor).

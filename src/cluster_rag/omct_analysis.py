@@ -2363,6 +2363,7 @@ def _stage3_rotation(
             ),
         },
         "coefficients": _named_coefficients(combiner, feature_names),
+        "feature_usage": _named_feature_usage(combiner, feature_names),
         "combiner": combiner.describe(),
     }
 
@@ -2391,6 +2392,39 @@ def _named_coefficients(combiner: Combiner, feature_names: Sequence[str]) -> dic
             "the fit side's standardized coefficients: they say which features "
             "the fit leaned on. A question-type feature does not depend on the "
             "paragraph, so its coefficient is a question-level prior."
+        ),
+    }
+
+
+def _named_feature_usage(combiner: Combiner, feature_names: Sequence[str]) -> dict[str, Any]:
+    """Which features the fitted trees split on, keyed by the feature name.
+
+    A tree ensemble has no coefficients: the record of its splits is what
+    says which features the model used (the Stage-3.2 importances
+    capability). The combiner that has no such record (the logistic
+    regression) returns an empty block.
+
+    The block is a **usage** diagnostic, not an accuracy-based importance: it
+    says what the trees split on, not what would improve the score if a
+    feature were removed. It is computed on the fit side's rows only.
+    """
+    getter = getattr(combiner, "feature_usage", None)
+    if getter is None:
+        return {}
+    values = getter()
+    named: dict[str, dict[str, float]] = {}
+    for index, usage in values.items():
+        position = int(index)
+        name = feature_names[position] if position < len(feature_names) else f"feature_{position}"
+        named[name] = {key: float(value) for key, value in usage.items()}
+    return {
+        "per_feature": named,
+        "note": (
+            "the fit side's trees' split usage: how often each feature was "
+            "split on, the gain those splits bought and the shares of all the "
+            "splits and all the gain. It is a usage diagnostic (what the "
+            "model splits on), not an accuracy-based importance (what would "
+            "improve the score if the feature were removed)."
         ),
     }
 

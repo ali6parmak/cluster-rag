@@ -1687,6 +1687,24 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     f"        feature groups: {'+'.join(groups)} "
                     f"({stage3['feature_pack'].get('n_features')} features)"
                 )
+            rotations = stage3.get("rotations") or []
+            usage: dict[str, Any] = {}
+            if rotations:
+                usage = (rotations[0].get("feature_usage") or {}).get("per_feature") or {}
+            if usage:
+                top = sorted(
+                    usage.items(),
+                    key=lambda item: item[1].get("total_gain", 0.0),
+                    reverse=True,
+                )[:3]
+                print(
+                    "        top features by the trees' gain (first rotation): "
+                    + ", ".join(
+                        f"{name} ({int(entry.get('n_splits', 0))} splits, "
+                        f"gain {entry.get('total_gain', 0.0):.3f})"
+                        for name, entry in top
+                    )
+                )
             for rotation in stage3["rotations_summary"]:
                 print(
                     f"        holdout {rotation['holdout'][:40]}: arm "
