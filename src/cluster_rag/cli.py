@@ -56,6 +56,7 @@ from cluster_rag.data import (
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.decision import CachedDecider, SystemOneDecider
 from cluster_rag.embed import KINDS, build_embedder
+from cluster_rag.embed.base import token_capability
 from cluster_rag.embed.cache import CachedEmbedder
 from cluster_rag.embed.random import RandomEmbedder
 from cluster_rag.embed_artifact import (
@@ -98,6 +99,7 @@ from cluster_rag.omct_analysis import (
     DECISION_RULE_FIXED_CUT,
     BaselineArm,
     ChunkedSide,
+    LateSide,
     ReportingSpec,
     build_analysis_report,
     build_dataset_view,
@@ -1111,7 +1113,11 @@ def _analyze_omct_row(
         "dim": info["dimension"],
         "ctx": info["context_tokens"],
         "arm": arm_name,
-        "chunker": paragraph_side.get("chunker_slug") or paragraph_side.get("chunker_name"),
+        "chunker": (
+            paragraph_side.get("side_slug")
+            or paragraph_side.get("chunker_slug")
+            or paragraph_side.get("chunker_name")
+        ),
         "aggregation": (arm.get("aggregation") or {}).get("spec"),
         "transform": arm["sides"]["question"].get("transform"),
         "pair_auc": _fmt(arm["pair_auc"]["overall"], 4),
@@ -1238,6 +1244,49 @@ def _chunked_side(
         paragraph_embedder=paragraph_embedder,
         question_chunker=question_chunker,
         question_embedder=question_embedder,
+    )
+
+
+def _late_side(
+    config: AppConfig,
+    embedder: Any,
+    analysis: AnalysisConfig,
+) -> LateSide:
+    """The late-chunked side (Stage 2.7): the chunker, the embedder, the poolings.
+
+    The late side embeds the **whole document once** and pools the
+    token-level embeddings per chunk, so it needs an embedder that can
+    return token-level embeddings. The capability is checked here, before any
+    work: a backend without it (Ollama's ``/api/embed`` returns one vector
+    per text and nothing else) gets a clear message instead of a failure
+    deep inside the run.
+
+    The side uses the **raw** backend, not the cached one: the token-level
+    pass is not cached (the cache keys on the chunk's text, and a
+    late-chunked vector is a function of the whole document), so the cache
+    wrapper would only add a layer without a hit.
+    """
+    if analysis.late_chunker is None:
+        raise ValueError("the late-chunked side needs analysis.late_chunker")
+    if token_capability(embedder) is None:
+        backend = getattr(getattr(embedder, "info", None), "backend", "unknown")
+        raise ValueError(
+            "the late-chunked arm needs token-level embeddings; the backend "
+            f"{backend!r} cannot return them (Ollama's /api/embed returns one "
+            "vector per text and nothing else), so the arm is HF-only"
+        )
+    chunker = build_chunker(analysis.late_chunker.name, analysis.late_chunker.params)
+    question_chunker = None
+    if analysis.late_question_chunker is not None:
+        question_chunker = build_chunker(
+            analysis.late_question_chunker.name, analysis.late_question_chunker.params
+        )
+    return LateSide(
+        chunker=chunker,
+        paragraph_embedder=embedder,
+        question_chunker=question_chunker,
+        question_embedder=embedder if question_chunker is not None else None,
+        poolings=tuple(analysis.late_pooling),
     )
 
 
@@ -1641,6 +1690,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         # swept grid (the semantic threshold of Stage 2.3).
         chunked_side = None
         header_side = None
+        late_side = None
         swept_sides: list[ChunkedSide] = []
         if aggregations:
             if analysis.semantic_thresholds:
@@ -1676,6 +1726,12 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     analysis.question_transform,
                     analysis.question_block_markers,
                 )
+        if analysis.late_chunker is not None:
+            # The late chunking (Stage 2.7): the document embedded once and
+            # the token-level embeddings pooled per chunk. Its arms run
+            # beside the run's early-chunked arms, so the late geometry is
+            # measured against the early one in the same run.
+            late_side = _late_side(config, embedder, analysis)
         baseline = BaselineArm()
         model_block = score_model_arms(
             view,
@@ -1688,6 +1744,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             preprocess_spec=spec,
             chunked_side=chunked_side,
             header_side=header_side,
+            late_side=late_side,
             swept_sides=swept_sides,
             aggregations=aggregations,
             semantic_selection=analysis.semantic_selection,

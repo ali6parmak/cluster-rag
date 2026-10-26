@@ -591,6 +591,39 @@ sweeps are the orders.
   *Pre-registered hypothesis:* the same one as 2.6 (the retrieval side, not
   the ranking side) — and with the decision models' retrieval as the ceiling
   if Stage 3.5 pays off.
+  *(done 2026-10-26, CS-7e: the **optional token capability** of the
+  `Embedder` port (`TokenEmbedding` / `TokenEmbedder` / `token_capability`
+  in `embed/base.py`, the HF implementation in `embed/hf.py`, the cache
+  forwarding it **without** caching it — a late-chunked vector is a
+  function of the whole document, so the plan's cache-key layout is
+  unchanged), the **character spans** of a chunker (the optional
+  `SpanChunker` capability, the generic fallback in `BaseChunker` and the
+  **exact** word-window spans), the **pooling** as a new pure module
+  (`text_processors/late_chunking.py`: the model's own formula
+  `Normalize(mean(tokens))` and the per-token-normalized variant), the
+  "not available for this backend" path (Ollama's `/api/embed` cannot
+  return token-level embeddings, so the arm is HF-only and the CLI says so
+  before the run), the config knobs (`analysis.late_chunker`,
+  `analysis.late_question_chunker`, `analysis.late_pooling`) and the
+  **within-model** arm: 2 runs `omct-analyze-voyage-4-nano-late-{words25,
+  symwords25}`, each carrying the run's **early-chunked arm** beside the
+  late one (the pairing is by construction) and reproducing the published
+  early reference exactly (the cross-run check). **Verdict: the late
+  chunking is the ladder's one winner, and the pre-registered hypothesis is
+  falsified on the ranking side.** The within-document AUC rises by
+  **+0.0859** [+0.0650, +0.1074] against the early-chunked arm of the same
+  run (the interval excludes zero; the gain is in all three documents), and
+  the positives' hit@1 rises from 0.0916 to **0.1260** — the best
+  embedding-side arm of the track on this model, with the control's mean
+  shift at +0.0011 (against the early arm's +0.0413), so the gain is a
+  ranking gain and not a scale shift, and the reviewed hard negatives' hit@1
+  *falls* (0.0241 -> 0.0171) while the ordinary control cells stay put. The
+  model's own pooling formula beats the per-token-normalized variant
+  (+0.0260 of AUC). It is still **not** the deliverable's scorer: the
+  decision arm is at 0.7701 and the shortlist rerank at 0.1565 (the decision
+  model's own hit@1, 0.1317, is already above the late chunking's 0.1260).
+  The numbers are in the track log's Stage-2.7 section; the arm is
+  **HF-only**, so the other two Stage-0 models are unmeasured.)*
 - Exit: a ranked, artifact-backed statement of which segmentation+aggregation
   wins where — with paired CIs, per-document breakdown, and both negative
   subsets — or "no chunking beats full text" (an honest result too).
@@ -1308,6 +1341,35 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   document-level context worth a within-model-only result, or should the
   chunk header (Stage 2.6, which keeps all three models) be the only new
   chunking rung?
+  *(CS-7e answered it: **yes** — the late chunking gains +0.0859 of
+  within-document AUC and +0.0344 of hit@1 against the early-chunked arm of
+  the same run, with the interval excluding zero, while the chunk header
+  (CS-7d) lost 0.0315 of AUC and gained at most 0.0095 of hit@1. A
+  within-model-only result is worth having: the arm's mechanism (the
+  document's context in every chunk) is model-agnostic, and the two
+  Ollama-backed Stage-0 models are unmeasured only because their *backend*
+  cannot return token-level embeddings, not because the mechanism is
+  model-specific. The stage is now closed.)*
+- **The late chunking's gain is on the reviewed set, and the reviewed set is
+  rank-selected (CS-7e, 2026-10-26).** The late arm's within-document AUC
+  is 0.5944 against the early arm's 0.5084 — the largest segmentation
+  effect the track has measured — but the reviewed set's positives were
+  chosen by exp18's model, so a geometry change can pick up the
+  **construction** and not the labels. The track's mitigation is the
+  control side: the ordinary unjudged cells' score level and rank position
+  do not move (the control's mean shift +0.0011, the rank-p50 -0.0065, the
+  cells' hit@1 0.0037), and the **reviewed hard negatives' hit@1 falls**
+  (0.0241 -> 0.0171) while the positives' rises — a signature the early
+  chunking does not have (it lifts everything by +0.0413). **Open:** is
+  there a *label-free* way to tell a representation gain from a
+  construction gain on this benchmark? The decision models were that way for
+  the "are the labels learnable" question (CS-7a); for the "does this
+  geometry carry a topic signal" question the analogous test would be a
+  **label-blind counterpart** of the late arm (the same geometry with the
+  paragraph's topic destroyed — e.g. the chunk's tokens shuffled across
+  the document), which would separate "the context helps" from "the
+  reviewed set's structure helps". Not measured; it needs the reviewer's
+  go-ahead (a new arm in the harness).
 
 ## 6. Milestones
 
@@ -1732,13 +1794,31 @@ set):
   zero) and a wash elsewhere, and the retrieval payoff is at most +0.0095 of
   hit@1 (voyage-4-nano, `all`), far below the decision model's 0.1317 and the
   rerank's 0.1565. The numbers are in the track log's Stage-2.6 section.)*
-- [ ] **CS-7e — late chunking (Stage 2.7).** The token-level embedding port
+- [x] **CS-7e — late chunking (Stage 2.7).** The token-level embedding port
   (a new optional capability of the `Embedder` port, implemented by the HF
   backend only), the chunker's **character spans** (a new method on the
   `Chunker` port), the pooling of the parent's token embeddings per chunk, the
   graceful "not available for this backend" path, and the **within-model**
   arm (late-chunked voyage-4-nano against early-chunked voyage-4-nano, same
   cells, same seeds).
+  *(done 2026-10-26: the token capability (`TokenEmbedding` /
+  `TokenEmbedder` / `token_capability` in `embed/base.py`, the HF
+  implementation, the cache forwarding it without caching it), the spans
+  (the optional `SpanChunker` capability, the generic fallback and the exact
+  word-window spans), the pooling (the new pure module
+  `text_processors/late_chunking.py`, two rules), the "not available for
+  this backend" path, the config knobs and the within-model arm: 2 runs
+  `omct-analyze-voyage-4-nano-late-{words25,symwords25}`, each with the
+  run's early-chunked arm beside the late one. **Verdict: the late chunking
+  is the ladder's one winner** — the within-document AUC +0.0859
+  [+0.0650, +0.1074] against the early-chunked arm and the positives'
+  hit@1 0.0916 -> 0.1260, with the control's mean shift at +0.0011 (so the
+  gain is a ranking gain, not the early chunking's scale shift) — and the
+  pre-registered hypothesis (the ranking gain would be ≈ 0) is **falsified**.
+  It is still below the decision arm (0.7701) and the shortlist rerank
+  (0.1565), so the deliverable's scorer does not change; it is the best
+  embedding-side arm the track has. The numbers are in the track log's
+  Stage-2.7 section.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 
@@ -1822,3 +1902,18 @@ cost is a quality signal and not an artefact of the reviewed set's
 construction. The *precision* on the unjudged cells is still unmeasured (no
 human labelling), and the rule still ships as the **margin half only** — the
 fixed 0.5 cut is measured and rejected (the reach 97.9% at the harm 60.5%).
+
+**What the embedding side contributes to it (CS-7e, 2026-10-26).** The
+deliverable's *retrieval* half is the cosine (CS-6d's shape: "retrieve with
+the cosine, rank with the learned arm"). The late chunking makes that
+retrieval half measurably better on the same model: the positives' hit@1
+rises from the cosine's 0.1050 to **0.1260** and the within-document AUC
+from 0.5238 to **0.5944**, with the control's score level unmoved (+0.0011)
+and the reviewed hard negatives' hit@1 *falling* — i.e. a better first
+guess for a paragraph at no cost in ordinary cells, and with 5.3x fewer
+encoder calls (the document is embedded once, not every chunk). It does
+**not** replace the decision model as the deliverable's scorer (0.5944
+against 0.7701 within-document, 0.1260 against the rerank's 0.1565
+hit@1), and the arm is **HF-only** (the token-level capability), so the
+shape it suggests for the UPR port is "the late-chunked cosine retrieves,
+the decision model decides" — a Stage-5 question, not a Stage-2 one.

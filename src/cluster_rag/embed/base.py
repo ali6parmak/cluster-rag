@@ -15,13 +15,21 @@ never hard-coded here: they come from the config (``embed.prefixes.<kind>``)
 and are applied by the backend via :func:`apply_prefix`. Templates containing
 ``{content}`` are expanded per text (documented prompts like
 ``task: search result | query: {content}``).
+
+**The optional token-level capability** (Stage 2.7, the late chunking): a
+backend that can return the *token-level* embeddings of a text implements the
+:class:`TokenEmbedder` protocol on top of :meth:`Embedder.encode`. The
+capability is probed, never assumed (:func:`token_capability`): Ollama's
+``/api/embed`` returns one vector per text and nothing else, so the Ollama
+backend has no token-level capability and the late-chunking arm says so
+instead of failing deep inside a run.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast, runtime_checkable
 
 import numpy as np
 
@@ -70,6 +78,105 @@ class Embedder(Protocol):
             ValueError: If ``kind`` is unknown or a text is blank/empty.
         """
         ...
+
+
+@dataclass(frozen=True, eq=False)
+class TokenEmbedding:
+    """One text's **token-level** embeddings and their character spans.
+
+    The optional capability of Stage 2.7 (the late chunking): the arm embeds
+    the whole document once and pools its token-level vectors per chunk, so
+    every chunk carries the document's context.
+
+    Attributes:
+        vectors: One row per token, ``(n_tokens, d)`` float32, in the model's
+            own embedding space (the projection the model's own sentence
+            embedding would get).
+        spans: The character span of every token **in the embedded text** (the
+            prompt prefix is already removed), in token order. A token with an
+            empty span (a special token, or one of the prefix's own tokens)
+            carries no text and joins no chunk.
+        prefix_tokens: How many of the leading tokens belong to the prompt
+            prefix. They carry no text (no chunk can own them), but the
+            model's own embedding averages them, so a caller that wants to
+            reproduce the model's own vector needs to know them.
+    """
+
+    vectors: np.ndarray
+    spans: tuple[tuple[int, int], ...]
+    prefix_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        """Check that the vectors and the spans describe the same tokens.
+
+        Raises:
+            ValueError: If the shapes disagree or a vector is not finite.
+        """
+        vectors = np.asarray(self.vectors)
+        if vectors.ndim != 2:
+            raise ValueError(f"Token vectors must be 2-D (n_tokens, d); got {vectors.shape}")
+        if len(self.spans) != vectors.shape[0]:
+            raise ValueError(
+                f"Token vectors and spans disagree: {vectors.shape[0]} vectors, "
+                f"{len(self.spans)} spans"
+            )
+        if not 0 <= self.prefix_tokens <= vectors.shape[0]:
+            raise ValueError(
+                f"prefix_tokens must be between 0 and {vectors.shape[0]}, got {self.prefix_tokens}"
+            )
+        if vectors.size and not np.isfinite(vectors).all():
+            raise ValueError("Token vectors contain non-finite values (NaN/inf)")
+
+
+@runtime_checkable
+class TokenEmbedder(Protocol):
+    """The optional **token-level** capability of an embedder (Stage 2.7).
+
+    Not every backend can return token-level embeddings: Ollama's
+    ``/api/embed`` returns one vector per text and nothing else, so the
+    Ollama backend does not implement this protocol. A caller that needs the
+    capability asks for it (:func:`token_capability`) instead of assuming it.
+    """
+
+    def encode_tokens(self, texts: Sequence[str], kind: EncodeKind) -> list[TokenEmbedding]:
+        """Embed texts and return their token-level vectors and spans."""
+
+
+def token_capability(embedder: object) -> TokenEmbedder | None:
+    """The embedder's token-level capability, or ``None`` when it has none.
+
+    The probe is honest through the disk cache too: a
+    :class:`~cluster_rag.embed.cache.CachedEmbedder` reports the capability of
+    the backend it wraps, so a cached Ollama backend is correctly reported as
+    having none.
+
+    Args:
+        embedder: The embedder to probe (any object).
+
+    Returns:
+        The embedder as a :class:`TokenEmbedder`, or ``None`` when the backend
+        cannot return token-level embeddings.
+    """
+    supports = getattr(embedder, "supports_tokens", None)
+    if supports is None:
+        supports = hasattr(embedder, "encode_tokens")
+    if not supports:
+        return None
+    return cast(TokenEmbedder, embedder)
+
+
+def prefix_shift(prefix: str) -> int:
+    """The number of characters a prefix adds **in front of** the text.
+
+    A plain prefix is prepended (``len(prefix)``); a ``{content}`` template
+    puts the text after the template's head (``len(head)``). The token-level
+    path uses it to map the tokenizer's character offsets — which are offsets
+    into the *prefixed* text — back onto the text itself.
+    """
+    if CONTENT_PLACEHOLDER in prefix:
+        head, _, _ = prefix.partition(CONTENT_PLACEHOLDER)
+        return len(head)
+    return len(prefix)
 
 
 def resolve_prefix(prefixes: Mapping[str, str], kind: EncodeKind) -> str:

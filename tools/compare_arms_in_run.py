@@ -1,10 +1,15 @@
-"""Compare two arms of the **same** run (the paired difference between them).
+"""Compare two arms (the paired difference between them).
 
 The Stage-2.6 chunk-header arm is measured against the **no-header arm of the
 same run** (the same cells, the same candidate lists, the same labels), so the
 comparison is paired by construction. The harness's own ``comparisons`` block
 compares every arm with the run's **baseline** (the full-text cosine), so
 this tool adds the arm-vs-arm pairing the header's question needs.
+
+With ``--run-b`` the second arm may come from **another run**: the Stage-2.7
+late-chunked arm's early-chunked counterpart lives in the same run, but the
+*published* early reference is an earlier run, and the two must reproduce
+each other exactly (the cross-run reproducibility check).
 
 It reads the run's artifact (never the raw pair file) and reports:
 
@@ -18,9 +23,10 @@ It reads the run's artifact (never the raw pair file) and reports:
 Usage:
 
     uv run python tools/compare_arms_in_run.py <run_id> <arm_a> <arm_b>
+    uv run python tools/compare_arms_in_run.py <run_a> <arm_a> <arm_b> --run-b <run_b>
 
 The arms are named as in the artifact (``words25_max``,
-``words25_header_max``, ...).
+``words25_header_max``, ``late_mean_words25_max``, ...).
 """
 
 from __future__ import annotations
@@ -83,11 +89,17 @@ def _pairs(arm: dict[str, Any]) -> tuple[list[str], list[int], list[float], list
 
 
 def compare(
-    artifact: dict[str, Any], arm_a: str, arm_b: str, *, resamples: int = 2000, seed: int = 42
+    artifact_a: dict[str, Any],
+    arm_a: str,
+    artifact_b: dict[str, Any],
+    arm_b: str,
+    *,
+    resamples: int = 2000,
+    seed: int = 42,
 ) -> dict[str, Any]:
-    """The paired comparison of two arms of the same run."""
-    block_a = find_arm(artifact, arm_a)
-    block_b = find_arm(artifact, arm_b)
+    """The paired comparison of two arms (of one run, or of two runs)."""
+    block_a = find_arm(artifact_a, arm_a)
+    block_b = find_arm(artifact_b, arm_b)
     documents_a, labels_a, scores_a, percentiles_a = _pairs(block_a)
     documents_b, labels_b, scores_b, percentiles_b = _pairs(block_b)
     if documents_a != documents_b:
@@ -158,16 +170,28 @@ def compare(
 
 
 def main() -> int:
-    """Compare two arms of a run and print the paired numbers."""
+    """Compare two arms and print the paired numbers."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_id")
     parser.add_argument("arm_a")
     parser.add_argument("arm_b")
+    parser.add_argument(
+        "--run-b",
+        default=None,
+        help="the run of the second arm (default: the first run, i.e. both arms "
+        "of one run; a second run makes it a cross-run comparison)",
+    )
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
     parser.add_argument("--resamples", type=int, default=2000)
     args = parser.parse_args()
-    artifact = load_artifact(args.results, args.run_id)
-    report = compare(artifact, args.arm_a, args.arm_b, resamples=args.resamples, seed=42)
+    artifact_a = load_artifact(args.results, args.run_id)
+    run_b = args.run_b or args.run_id
+    artifact_b = artifact_a if run_b == args.run_id else load_artifact(args.results, run_b)
+    report = compare(
+        artifact_a, args.arm_a, artifact_b, args.arm_b, resamples=args.resamples, seed=42
+    )
+    report["run_a"] = args.run_id
+    report["run_b"] = run_b
     print(json.dumps(report, indent=2))
     return 0
 

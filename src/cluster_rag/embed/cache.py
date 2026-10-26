@@ -29,6 +29,7 @@ from cluster_rag.embed.base import (
     Embedder,
     EmbedderInfo,
     EncodeKind,
+    TokenEmbedding,
     empty_embeddings,
     ensure_embedding_contract,
     resolve_prefix,
@@ -210,3 +211,32 @@ class CachedEmbedder:
             np.stack([group_vectors[group] for group in group_of_index]),
             dimension=self._backend.info.dimension,
         )
+
+    @property
+    def supports_tokens(self) -> bool:
+        """Whether the wrapped backend can return token-level embeddings.
+
+        The capability is the backend's, not the cache's: a cached Ollama
+        backend still cannot return token-level vectors, and the late-chunking
+        arm must say so instead of failing inside the run.
+        """
+        return bool(
+            getattr(self._backend, "supports_tokens", hasattr(self._backend, "encode_tokens"))
+        )
+
+    def encode_tokens(self, texts: Sequence[str], kind: EncodeKind) -> list[TokenEmbedding]:
+        """The backend's token-level embeddings — **not** cached.
+
+        The token-level vectors are deliberately left out of the cache: the
+        plan's section 2 fixes the cache-key layout
+        ``(model, prefix, version, sha1(text))``, and a late-chunked vector is
+        a function of the **whole document**, not of one chunk — caching it
+        under the chunk's key would serve a wrong vector. The pass is one
+        forward pass per text, so it is re-run on every run that needs it.
+        """
+        if not self.supports_tokens:
+            raise ValueError(
+                "The wrapped backend cannot return token-level embeddings; the "
+                "token-level path (the late chunking) is not available for it"
+            )
+        return self._backend.encode_tokens(list(texts), kind)  # type: ignore[attr-defined]

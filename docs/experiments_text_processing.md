@@ -3073,3 +3073,213 @@ carries the document's context. It is HF-only (Ollama's `/api/embed`
 cannot return token-level embeddings), so the comparison is **within-model**
 (late-chunked voyage-4-nano against early-chunked voyage-4-nano, the same
 cells, the same seeds).
+
+## Stage 2.7 — the late chunking (CS-7e, 2026-10-26)
+
+**The question.** The plan's Stage 2.7 is the last rung of the segmentation
+ladder: instead of embedding each chunk separately, embed the **whole
+document once** and pool its **token-level** embeddings per chunk, so every
+chunk carries the document's context.
+
+Two costs were stated up front in the plan, and both bound the arm:
+
+- it needs **token-level** embeddings, which the `Embedder` port did not
+  expose and which Ollama's `/api/embed` **cannot** return — so the arm is
+  **HF-only** (the Stage-0 models are `embeddinggemma` (Ollama),
+  `voyage-4-nano` (HF) and `arctic2` (Ollama), so only `voyage-4-nano`
+  qualifies) and the comparison is **within-model**;
+- it needs the chunker's **character spans** (the `Chunker` port returned
+  strings), so the tokens could be pooled per chunk — plus a graceful
+  "not available for this backend" path.
+
+**What was run.** Two runs
+(`experiments_text_processing/stage27_late_sweep.py`, the sweep
+`stage27_late`), both on `voyage-4-nano`:
+
+- `omct-analyze-voyage-4-nano-late-words25` — the paragraph side
+  late-chunked, the question side whole (as the early-chunked reference
+  does);
+- `omct-analyze-voyage-4-nano-late-symwords25` — the symmetric reading: both
+  sides late-chunked.
+
+Each run carries the **early-chunked arm of the same run** beside the late
+one (the Stage-2.6 precedent), so the late-vs-early comparison is **paired
+by construction**: the same cells, the same candidate lists, the same
+control, the same seeds. The published early reference
+(`omct-analyze-voyage-4-nano-words25`, the Stage-2 ladder run) is the
+cross-run check of that arm, and it reproduces it **exactly** (the paired
+difference is 0.0000 on the pooled AUC, the within-document AUC and the
+positives' hit@1 — the repo tool `tools/compare_arms_in_run.py`, extended
+with an optional `--run-b` for the cross-run comparison).
+
+The geometry is the **same** on both sides of the comparison (25-word
+windows, stride 12 — the Stage-2 verdict's paragraph-side window), so the
+only difference between the two arms is *where the chunk's vector comes
+from*: its own embedding (early) or the document's token-level embeddings
+pooled over the chunk's character span (late). The two aggregation rules
+are the plan's early-chunked reference: `max` and `peak:3:0.05`.
+
+**The pooling rules, both measured** (the reviewer's rule: measure the
+alternatives rather than pick one): `mean` (the model's own formula,
+`Normalize(mean(tokens))`, restricted to the chunk) and `norm` (every token
+vector L2-normalized *before* the mean, so each token weighs the same).
+
+**1. The ranking side: the late geometry wins, and the pre-registered
+hypothesis is wrong.** The within-document AUC (the track's headline
+statistic), the late arm against the **early arm of the same run** (the
+paired bootstrap, 2,000 resamples, seed 42):
+
+| run | arm | the early arm | the late arm | the paired difference (95% CI) |
+|---|---|---|---|---|
+| late-words25 | mean / max | 0.5084 | **0.5944** | **+0.0859** [+0.0650, +0.1074] |
+| late-words25 | mean / peak | 0.5111 | **0.5940** | **+0.0829** [+0.0605, +0.1047] |
+| late-words25 | norm / max | 0.5084 | 0.5683 | +0.0599 [+0.0421, +0.0793] |
+| late-words25 | norm / peak | 0.5111 | 0.5623 | +0.0511 [+0.0321, +0.0702] |
+| late-symwords25 | mean / max | 0.4725 | **0.5599** | **+0.0874** [+0.0662, +0.1080] |
+| late-symwords25 | mean / peak | 0.4740 | **0.5618** | **+0.0878** [+0.0651, +0.1103] |
+| late-symwords25 | norm / max | 0.4725 | 0.4999 | +0.0273 [+0.0053, +0.0492] |
+| late-symwords25 | norm / peak | 0.4740 | 0.4907 | +0.0167 [-0.0061, +0.0387] |
+
+The plan's pre-registered hypothesis (the same as Stage 2.6's) said the
+chunk geometry carries no label-driven **ranking** signal, so the expected
+within-document AUC gain was ≈ 0. It is **not** ≈ 0: it is +0.086 on the
+paragraph side, with the interval excluding zero, on the model where the
+whole early-chunking ladder gained nothing (CS-4: "voyage-4-nano gains
+nothing — 3 of 42 arms positive"). The hypothesis is **falsified on the
+ranking side**, and the symmetric reading is no better than the paragraph
+side alone.
+
+**2. The retrieval side: the payoff is there, and it is the best
+embedding-side hit@1 of the track on this model.** The positives' hit@1:
+
+| run | arm | the early arm | the late arm | the paired counts (the late arm only / the early arm only) |
+|---|---|---|---|---|
+| late-words25 | mean / max | 0.0916 | **0.1240** | 26 / 9 |
+| late-words25 | mean / peak | 0.0897 | **0.1260** | 30 / 11 |
+| late-words25 | norm / max | 0.0916 | 0.1240 | 24 / 7 |
+| late-words25 | norm / peak | 0.0897 | 0.1221 | 25 / 8 |
+| late-symwords25 | mean / max | 0.0954 | 0.1069 | 20 / 14 |
+| late-symwords25 | mean / peak | 0.0954 | 0.0973 | 20 / 19 |
+
+The full-text cosine's own hit@1 is 0.1050 on this model, so the late arm
+is above the cosine (+0.0210) and above the early chunking (+0.0344). The
+positives' median rank percentile falls from 0.1429 to 0.0783. For scale:
+the decision model's own hit@1 is 0.1317 and the shortlist rerank's 0.1565 —
+the late chunking reaches neither, but it is the first **embedding-side**
+arm of the track that comes close to the decision model on the retrieval
+side.
+
+**3. The control side says the gain is a ranking gain, not a scale shift.**
+The track's reporting rule: no discrimination number without the control
+side next to it. The early chunking lifts the control's score level by
+**+0.0413** (the max-over-k inflation the plan's Stage 2.5 named) and the
+late chunking by **+0.0011** — the late arm's gain survives the
+de-shifting (the de-shifted AUC 0.5642 against the early arm's 0.4786).
+The ordinary control cells' rank position does not move (the rank-p50
+delta -0.0065) and their hit@1 stays at 0.0037, while the **reviewed hard
+negatives' hit@1 falls** (0.0241 → 0.0171) as the positives' rises — the
+same signature the shortlist rerank had (CS-7c), and the opposite of what
+the early chunking does.
+
+**4. The full arms of the primary run** (the pooled AUC and the
+per-document macro beside the within-document number; the control-side
+counterpart beside both):
+
+| arm | pooled AUC | macro AUC | within-doc AUC | de-shifted AUC | hit@1 (positives) | hit@1 (hard neg.) | hit@1 (control) | the control's mean shift |
+|---|---|---|---|---|---|---|---|---|
+| `full_text` (the baseline) | 0.5004 | 0.5588 | 0.5238 | — | 0.1050 | 0.0211 | 0.0030 | — |
+| `words25_max` (early) | 0.4856 | 0.5329 | 0.5084 | 0.4786 | 0.0916 | 0.0241 | 0.0035 | +0.0413 |
+| `words25_peak_3_0.05` (early) | 0.4867 | 0.5327 | 0.5111 | 0.4814 | 0.0897 | 0.0251 | 0.0035 | +0.0253 |
+| `late_mean_words25_max` | **0.5678** | **0.6312** | **0.5944** | **0.5642** | 0.1240 | 0.0171 | 0.0037 | +0.0011 |
+| `late_mean_words25_peak_3_0.05` | 0.5684 | 0.6271 | 0.5940 | 0.5674 | 0.1260 | 0.0141 | 0.0030 | -0.0148 |
+| `late_norm_words25_max` | 0.5445 | 0.6050 | 0.5683 | 0.5428 | 0.1240 | 0.0211 | 0.0030 | +0.0136 |
+| `late_norm_words25_peak_3_0.05` | 0.5406 | 0.6019 | 0.5623 | 0.5415 | 0.1221 | 0.0201 | 0.0032 | -0.0019 |
+
+The per-document AUCs of the primary run's best arm (the late `mean`/`max`)
+are 0.5755 (Colombia), 0.6943 (CIDH) and 0.6240 (NU), against the early
+arm's 0.4799 / 0.5639 / 0.5551 — the gain is in **all three** documents,
+so it is not one document's level moving.
+
+**5. The two pooling rules: `mean` wins.** The model's own formula beats
+the per-token-normalized variant by +0.0260 of within-document AUC
+(+0.0859 against +0.0599) and, on the symmetric run, the `norm` variant's
+gain is small and one of its two intervals includes zero. The reading: the
+*relative* magnitude of a token carries information (a token that stands
+out in the document should pull the chunk's vector), and flattening it
+before the mean throws that away.
+
+**6. The provenance the artifact carries.** The token-level path is checked
+inside every run: the **token coverage** is 1.000 (every one of the 20,251
+content tokens of the 225 paragraphs lands in at least one chunk — the
+windows tile the text), and the **consistency check** compares the
+document's own pooled vector with the model's own embedding of the same
+text: the "chunks' view" (the content tokens only — no chunk can own the
+prompt prefix's tokens) reaches a cosine of **0.9918**, and the "model's
+formula" (the content tokens plus the prefix's own, which is what the model
+itself averages) reaches **0.99998**. The token-level path therefore
+reproduces the model's own embedding, and the gap of the "chunks' view" is
+the prompt prefix's contribution, as expected.
+
+**7. The cost.** The late side embeds **225 documents** (one forward pass
+each) where the early side embeds **1,186 chunks** — 5.3x fewer encoder
+calls on the paragraph side, at the price of longer inputs and a token-level
+pass that is **not cached** (a late-chunked vector is a function of the
+whole document, so caching it under the chunk's key would be wrong; the
+plan's cache-key layout is unchanged). The whole run takes 12.4 s with a
+warm cache.
+
+**The verdict: the late chunking is the ladder's one winner — and it is
+still not the deliverable's scorer.** It is the first segmentation rung
+that improves the **ranking** side significantly (the pre-registered
+hypothesis expected ≈ 0), it is the best embedding-side arm of the track on
+this model (the within-document AUC 0.5944 against the cosine's 0.5238 and
+the early chunking's 0.5084), and it is the best embedding-side retriever
+(the positives' hit@1 0.1260 against the cosine's 0.1050 and the early
+chunking's 0.0916) — with a gain that is *not* a scale shift and that
+pushes the reviewed hard negatives down while the ordinary cells stay
+put.
+
+But it does not reach the systems that do not need a segmentation change
+at all: the decision model's arm is at the within-document AUC **0.7701**
+and the shortlist rerank at the positives' hit@1 **0.1565**, and the
+decision model's own hit@1 (0.1317) is already above the late chunking's
+0.1260. The track's own learned arm (0.6472-0.6723 within-document) is
+also above it — but most of that arm's gain is label-driven (its
+control-role floor is 0.557-0.579), while the late chunking is a
+**geometry change with no fitting at all**. So the late chunking is the
+best *representation-side* arm the track has, and the decision model is
+still the deliverable's scorer.
+
+**What this run does not say.**
+
+- **Nothing about the other two models.** The arm is HF-only, and only
+  `voyage-4-nano` is an HF model among the Stage-0 three. Whether the gain
+  transfers to `embeddinggemma` and `arctic2` is **unmeasured** (it would
+  need a backend that can return token-level embeddings).
+- **Nothing about the reviewed set's construction.** The reviewed set is
+  rank-selected (§0.1), so a geometry change can pick up the construction
+  and not the labels. The control side is the mitigation the track has: the
+  ordinary cells do not move, and the hard negatives fall while the
+  positives rise — but the track cannot *prove* the gain is a topic signal.
+- **Nothing about the late chunking on long documents.** The corpus's
+  paragraphs average 71 words; the arm's whole point is the document's
+  context, and a document short enough to be one chunk has no context to
+  carry. The measurement says nothing about the UPR scale (151 chars per
+  text — the plan's Stage 5 says the UPR-side chunking axis is near-vacuous
+  by construction).
+- **Nothing about a hybrid.** The late chunking's chunk vector and the
+  early chunk's own embedding were not combined; the arm measures the
+  pooling alone.
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice, they are never a UPR metric.
+
+**The next step.** The plan's Stage 2 is now complete (2.1–2.7): the
+ladder's ranked statement is in the track log's "Stage 2 — the verdict"
+section, and the two open rungs are closed — the chunk header does not
+ship, the late chunking does (as the best embedding-side arm, not as the
+deliverable's scorer). What is left in the plan is the reviewer's call:
+**Stage 4** (the LLM experiments: the exp09-style rerank and the
+question/side enrichment) and **Stage 5** (the UPR port). One thing the
+late chunking does say to both: the embedding axis's remaining job is
+cheap retrieval at scale, and the late geometry is the best the embedding
+side can do without a model that reads the text (the decision models).

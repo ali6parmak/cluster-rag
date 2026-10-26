@@ -24,6 +24,7 @@ For example, 71 words with ``n_words=15`` and ``stride=7`` give 9 windows
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -90,20 +91,56 @@ class WordWindowsChunker(BaseChunker):
         """Split each text into its word windows."""
         return [self.windows(text) for text in texts]
 
+    def window_starts(self, n_words: int) -> list[int]:
+        """The start index of every window of a text with ``n_words`` words.
+
+        The layout is the one :meth:`windows` uses: a text of at most
+        ``n_words`` words is one window; otherwise the window starts are
+        ``0, stride, 2 * stride, ...`` while the window still fits, plus one
+        **tail window** that ends at the last word.
+        """
+        size = self.config.n_words
+        if n_words <= size:
+            return [0]
+        starts = list(range(0, n_words - size + 1, self.config.stride))
+        tail = n_words - size
+        if starts[-1] != tail:
+            starts.append(tail)
+        return starts
+
     def windows(self, text: str) -> list[str]:
         """The word windows of one text (empty for a blank text)."""
         words = text.split()
         if not words:
             return []
         size = self.config.n_words
-        if len(words) <= size:
-            candidates = [words]
-        else:
-            starts = list(range(0, len(words) - size + 1, self.config.stride))
-            tail = len(words) - size
-            if starts[-1] != tail:
-                starts.append(tail)
-            candidates = [words[start : start + size] for start in starts]
         return [
-            " ".join(window) for window in candidates if len(window) >= self.config.min_chunk_words
+            " ".join(words[start : start + size])
+            for start in self.window_starts(len(words))
+            if len(words[start : start + size]) >= self.config.min_chunk_words
         ]
+
+    def segment_spans(self, texts: Sequence[str]) -> list[list[tuple[int, int]]]:
+        """The **exact** character span of every window (the words' own offsets).
+
+        The word windows are the reference chunker of the late-chunking arm
+        (Stage 2.7), so their spans are computed from the words' own character
+        offsets instead of the generic "find the chunk in the text" fallback:
+        the windows are the words joined by single spaces, which is not
+        necessarily a substring of the original text.
+        """
+        segmented: list[list[tuple[int, int]]] = []
+        for text in texts:
+            words = [(match.start(), match.end()) for match in re.finditer(r"\S+", text)]
+            if not words:
+                segmented.append([])
+                continue
+            size = self.config.n_words
+            spans: list[tuple[int, int]] = []
+            for start in self.window_starts(len(words)):
+                window = words[start : start + size]
+                if len(window) < self.config.min_chunk_words:
+                    continue
+                spans.append((window[0][0], window[-1][1]))
+            segmented.append(spans)
+        return segmented

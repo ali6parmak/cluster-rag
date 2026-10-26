@@ -966,6 +966,19 @@ class AnalysisConfig(BaseModel):
       one legal header on this data). It runs beside the plain chunked arms,
       so the header is measured against the no-header arm **in the same run**
       (the pairing is by construction).
+    - ``late_chunker``: the **late-chunked** arm (Stage 2.7): the document is
+      embedded once and the token-level embeddings are pooled per chunk, so
+      every chunk carries the document's context. It needs a backend that can
+      return token-level embeddings (HF only: Ollama's ``/api/embed`` returns
+      one vector per text), so the arm is within-model — the late-chunked
+      voyage-4-nano against the early-chunked voyage-4-nano of the same run.
+    - ``late_question_chunker``: the late-chunked **question** side (the
+      symmetric reading of Stage 2.7). ``None`` (the default) keeps the
+      question side whole, as the early-chunked reference does.
+    - ``late_pooling``: the pooling rules of the late-chunked arm (each one
+      an arm family of its own): ``"mean"`` (the model's own formula,
+      ``Normalize(mean(tokens))``) and ``"norm"`` (every token normalized
+      before the mean).
     - ``stage3``: the settings of the **learned** pair scorer (Stage 3.1):
       the feature pack's options, the combiner and the control's training
       weight. ``None`` (the default) means the run scores the Stage-0/1/2
@@ -986,6 +999,9 @@ class AnalysisConfig(BaseModel):
     chunker: ChunkerSpec = Field(default_factory=ChunkerSpec)
     question_chunker: ChunkerSpec | None = None
     header_chunker: ChunkerSpec | None = None
+    late_chunker: ChunkerSpec | None = None
+    late_question_chunker: ChunkerSpec | None = None
+    late_pooling: tuple[Literal["mean", "norm"], ...] = ("mean", "norm")
     aggregations: tuple[str, ...] = ()
     question_transforms: tuple[str, ...] = ()
     semantic_thresholds: tuple[float, ...] = ()
@@ -1051,6 +1067,16 @@ class AnalysisConfig(BaseModel):
             raise ValueError(
                 "analysis.header_chunker needs aggregation rules: the header's "
                 "chunks are folded into one pair score by an arm's rule"
+            )
+        if self.late_chunker is not None and not self.aggregations:
+            raise ValueError(
+                "analysis.late_chunker needs aggregation rules: the late-chunked "
+                "chunks are folded into one pair score by an arm's rule"
+            )
+        if self.late_question_chunker is not None and not self.aggregations:
+            raise ValueError(
+                "analysis.late_question_chunker needs aggregation rules: a "
+                "late-chunked question side is only scored through the arms' rules"
             )
         if self.question_chunker is not None and not self.aggregations:
             raise ValueError(

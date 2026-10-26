@@ -140,6 +140,57 @@ class BaseChunker:
         """Split each text into chunks (implemented by the subclasses)."""
         raise NotImplementedError
 
+    def segment_spans(self, texts: Sequence[str]) -> list[list[tuple[int, int]]]:
+        """The character span of every chunk (the generic fallback).
+
+        The fallback locates each chunk's text inside the text it came from,
+        searching from the previous chunk's end (so a repeated chunk resolves
+        in order). A chunker whose chunks are **not** substrings of the text
+        has no spans: the method raises, and the late-chunking arm says so
+        rather than guessing a span.
+
+        A chunker that can compute the spans exactly (the word windows, whose
+        words carry their own offsets) overrides this method.
+
+        Raises:
+            ValueError: If a chunk cannot be located in its text.
+        """
+        segmented: list[list[tuple[int, int]]] = []
+        for text, chunks in zip(texts, self.segment(list(texts)), strict=True):
+            spans: list[tuple[int, int]] = []
+            cursor = 0
+            for chunk in chunks:
+                position = text.find(chunk, cursor)
+                if position < 0:
+                    raise ValueError(
+                        f"The chunker {self.name!r} does not provide character spans: "
+                        f"its chunk {chunk[:40]!r} is not a substring of the text it "
+                        "came from (the late-chunking path needs the spans)"
+                    )
+                spans.append((position, position + len(chunk)))
+                cursor = position + len(chunk)
+            segmented.append(spans)
+        return segmented
+
+
+@runtime_checkable
+class SpanChunker(Protocol):
+    """The optional **character-span** capability of a chunker (Stage 2.7).
+
+    ``segment_spans`` returns the character span of every chunk of every
+    text, in the same order and with the same count as
+    :meth:`Chunker.segment`. The late-chunking arm needs it: the token-level
+    vectors are pooled per chunk, so the chunker must say *where* each chunk
+    is in the text.
+
+    A chunker that cannot say (one whose chunks are not substrings of the
+    text — the header chunker, which prepends the text's first sentence) has
+    no spans: the late-chunking arm reports that instead of guessing.
+    """
+
+    def segment_spans(self, texts: Sequence[str]) -> list[list[tuple[int, int]]]:
+        """The character span of every chunk of every text."""
+
 
 @runtime_checkable
 class FeatureExtractor(Protocol):

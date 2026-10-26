@@ -50,7 +50,7 @@ from typing import Any
 
 import numpy as np
 
-from cluster_rag.embed.base import Embedder
+from cluster_rag.embed.base import Embedder, token_capability
 from cluster_rag.eval.metrics import (
     grouped_auc_decomposition,
     paired_auc_bootstrap,
@@ -68,7 +68,13 @@ from cluster_rag.text_processors.aggregation import (
     aggregate_chunk_similarities,
     describe_aggregation,
 )
-from cluster_rag.text_processors.base import Chunker, Combiner, FeatureExtractor, TextPair
+from cluster_rag.text_processors.base import (
+    Chunker,
+    Combiner,
+    FeatureExtractor,
+    SpanChunker,
+    TextPair,
+)
 from cluster_rag.text_processors.calibration import (
     THRESHOLD_CRITERION_DESCRIPTIONS,
     THRESHOLD_CRITERION_FLOOR_GAP,
@@ -92,6 +98,13 @@ from cluster_rag.text_processors.control import (
     percentiles_from_positions,
     rank_positions,
     sample_control,
+)
+from cluster_rag.text_processors.late_chunking import (
+    LATE_POOLING_MEAN,
+    LATE_POOLINGS,
+    pool_chunk_vectors,
+    pool_document_vector,
+    pooling_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -691,6 +704,134 @@ def encode_side(
         cache_hits=hits,
         cache_misses=misses,
     )
+
+
+def encode_late_side(
+    embedder: Embedder,
+    chunker: Chunker,
+    texts: Sequence[str],
+    kind: str,
+    *,
+    poolings: Sequence[str] = (LATE_POOLING_MEAN,),
+) -> dict[str, SideEncoding]:
+    """Encode one side with **late chunking** (Stage 2.7).
+
+    The whole text is embedded **once** at the token level and every chunk's
+    vector is pooled out of the tokens that fall in its character span, so
+    each chunk carries the document's context. The pooling rules share the
+    one token pass: each rule gets its own encoding.
+
+    The two capabilities this path needs are **probed, never assumed**:
+
+    - the embedder must be able to return token-level embeddings (the HF
+      backend can; Ollama's ``/api/embed`` cannot);
+    - the chunker must be able to say where its chunks are (the word windows
+      do, exactly; a chunker whose chunks are not substrings of the text
+      does not).
+
+    Args:
+        embedder: The embedder (a port: the CLI wires the backend in).
+        chunker: The chunker whose spans the tokens are pooled over.
+        texts: The texts of the side.
+        kind: The encode kind (``"document"`` or ``"query"``).
+        poolings: The pooling rules (each one an encoding of its own).
+
+    Returns:
+        One :class:`SideEncoding` per pooling rule, keyed by the rule.
+
+    Raises:
+        ValueError: If the embedder has no token-level capability, the
+            chunker has no character spans, or a chunk has no token.
+    """
+    capability = token_capability(embedder)
+    if capability is None:
+        raise ValueError(
+            "the late-chunked arm needs token-level embeddings; this backend "
+            "cannot return them (Ollama's /api/embed returns one vector per "
+            "text and nothing else)"
+        )
+    if not isinstance(chunker, SpanChunker):
+        raise ValueError(
+            f"the late-chunked arm needs the chunker's character spans; the "
+            f"chunker {getattr(chunker, 'name', chunker)!r} does not provide them"
+        )
+    unknown = [rule for rule in poolings if rule not in LATE_POOLINGS]
+    if unknown:
+        raise ValueError(f"Unknown late pooling rule(s) {unknown}; expected {list(LATE_POOLINGS)}")
+
+    text_list = list(texts)
+    token_embeddings = capability.encode_tokens(text_list, kind)  # type: ignore[arg-type]
+    span_lists = chunker.segment_spans(text_list)
+
+    chunk_lists: list[tuple[str, ...]] = []
+    pooled_by_rule: dict[str, list[np.ndarray]] = {rule: [] for rule in poolings}
+    reports: list[dict[str, Any]] = []
+    for text, tokens, spans in zip(text_list, token_embeddings, span_lists, strict=True):
+        chunk_lists.append(tuple(text[start:end] for start, end in spans))
+        for rule in poolings:
+            pooled_by_rule[rule].append(pool_chunk_vectors(tokens, spans, pooling=rule))
+        reports.append(pooling_report(tokens, spans))
+
+    # The consistency check: the document's own pooled vector against the
+    # model's own embedding of the same text — the *chunks' view* (the
+    # content tokens only; no chunk can own the prompt prefix's tokens) and
+    # the *model's formula* (the content tokens plus the prefix's own, which
+    # is what the model itself averages).
+    consistency: dict[str, Any] = {"cosine_chunks_view": None, "cosine_model_formula": None}
+    if text_list:
+        own = np.asarray(embedder.encode([text_list[0]], kind))[0]
+        unit_own = own / max(float(np.linalg.norm(own)), 1e-12)
+        first = token_embeddings[0]
+        consistency["cosine_chunks_view"] = float(np.dot(pool_document_vector(first), unit_own))
+        consistency["cosine_model_formula"] = float(
+            np.dot(pool_document_vector(first, prefix_tokens=first.prefix_tokens), unit_own)
+        )
+
+    coverages = [report["token_coverage"] for report in reports]
+    encodings: dict[str, SideEncoding] = {}
+    for rule in poolings:
+        matrix = (
+            np.concatenate(pooled_by_rule[rule], axis=0)
+            if pooled_by_rule[rule]
+            else np.zeros((0, 0), dtype=np.float32)
+        )
+        encodings[rule] = SideEncoding(
+            texts=tuple(text_list),
+            chunk_lists=tuple(chunk_lists),
+            vectors=matrix,
+            meta={
+                "kind": kind,
+                "late_chunking": True,
+                "pooling": rule,
+                "chunker": chunker.version,
+                "chunker_name": _chunker_name(chunker),
+                "chunker_slug": _chunker_slug(chunker),
+                "side_slug": f"late_{rule}_{_chunker_slug(chunker)}",
+                "token_level": True,
+                "cache": (
+                    "the token-level pass is not cached: the embedding cache keys "
+                    "on the chunk's text, and a late-chunked vector is a function of "
+                    "the whole document, not of one chunk"
+                ),
+                "token_coverage_mean": float(np.mean(coverages)) if coverages else 0.0,
+                "token_coverage_min": float(np.min(coverages)) if coverages else 0.0,
+                "n_content_tokens": int(sum(report["n_content_tokens"] for report in reports)),
+                "pooling_consistency": {
+                    "note": (
+                        "the cosine between the document's pooled token vector and "
+                        "the model's own embedding of the same text: the 'chunks' "
+                        "view' pools the content tokens only (no chunk can own the "
+                        "prompt prefix's tokens), the 'model formula' pools them "
+                        "with the prefix's own (what the model itself averages) and "
+                        "is the exact check of the token-level path"
+                    ),
+                    **consistency,
+                },
+            },
+            cache_hits=0,
+            cache_misses=0,
+        )
+    return encodings
 
 
 def fold_question_chunks(
@@ -1383,6 +1524,39 @@ def _chunker_slug(chunker: Chunker) -> str:
     return slug if isinstance(slug, str) and slug else _chunker_name(chunker)
 
 
+@dataclass(frozen=True)
+class LateSide:
+    """The **late-chunked** side of a run (Stage 2.7).
+
+    Unlike the early-chunked side, this side's vectors are not the chunks'
+    own embeddings: the document is embedded **once** and each chunk's vector
+    is pooled out of the document's token-level embeddings, so every chunk
+    carries the document's context.
+
+    The driver never builds a chunker or an embedder itself: the CLI wires
+    them in (the model clients stay at the edge, AGENTS.md).
+
+    Attributes:
+        chunker: The chunker whose character spans the tokens are pooled over.
+        paragraph_embedder: The embedder of the paragraph side (it must be
+            able to return token-level embeddings).
+        question_chunker: The chunker of the **question** side (``None`` = the
+            question side stays whole, as the early-chunked reference does).
+        question_embedder: The embedder of the late-chunked question side.
+        poolings: The pooling rules (each one an arm family of its own).
+    """
+
+    chunker: Chunker
+    paragraph_embedder: Embedder
+    question_chunker: Chunker | None = None
+    question_embedder: Embedder | None = None
+    poolings: tuple[str, ...] = (LATE_POOLING_MEAN,)
+
+    def slug(self, pooling: str) -> str:
+        """The arm-name prefix of one pooling rule (``late_mean_words25``)."""
+        return f"late_{pooling}_{_chunker_slug(self.chunker)}"
+
+
 def _chunker_name(chunker: Chunker) -> str:
     """The chunker's config-facing name (its registry key)."""
     return getattr(chunker, "name", chunker.version)
@@ -1454,6 +1628,71 @@ def _fixed_variant_arms(
             hit_ks=hit_ks,
         )
         similarities_by_arm[arm_name] = similarities
+    return arms, similarities_by_arm
+
+
+def _late_variant_arms(
+    view: DatasetView,
+    *,
+    side: LateSide,
+    aggregations: Sequence[Aggregation],
+    paragraph_texts: Sequence[str],
+    question_texts: Sequence[str],
+    baseline_question_side: SideEncoding,
+    baseline_similarities: np.ndarray,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    preprocess_spec: PreprocessSpec,
+    hit_ks: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    """The arms of the late-chunked side (one arm per pooling rule and rule).
+
+    The late side's chunks are pooled out of the document's own token-level
+    embeddings, so its arms sit **beside** the run's early-chunked arms: the
+    late-vs-early comparison is paired by construction (the same cells, the
+    same candidate lists, the same control).
+    """
+    paragraph_encodings = encode_late_side(
+        side.paragraph_embedder,
+        side.chunker,
+        list(paragraph_texts),
+        "document",
+        poolings=side.poolings,
+    )
+    question_encodings: dict[str, SideEncoding] = {}
+    if side.question_chunker is not None:
+        if side.question_embedder is None:
+            raise ValueError("a late-chunked question side needs its own embedder")
+        question_encodings = encode_late_side(
+            side.question_embedder,
+            side.question_chunker,
+            list(question_texts),
+            "query",
+            poolings=side.poolings,
+        )
+    arms: dict[str, Any] = {}
+    similarities_by_arm: dict[str, np.ndarray] = {}
+    for pooling in side.poolings:
+        paragraph_side = paragraph_encodings[pooling]
+        question_side = question_encodings.get(pooling, baseline_question_side)
+        for rule in aggregations:
+            arm_name = f"{side.slug(pooling)}_{rule.slug}"
+            similarities = side_similarities(
+                paragraph_side,
+                question_side,
+                rule,
+                global_similarities=baseline_similarities,
+            )
+            arms[arm_name] = score_arm(
+                view,
+                arm_name=arm_name,
+                similarities=similarities,
+                paragraph_side=paragraph_side,
+                question_side=question_side,
+                aggregation=rule,
+                hit_ks=hit_ks,
+            )
+            similarities_by_arm[arm_name] = similarities
     return arms, similarities_by_arm
 
 
@@ -1733,6 +1972,7 @@ def score_model_arms(
     preprocess_spec: PreprocessSpec,
     chunked_side: ChunkedSide | None = None,
     header_side: ChunkedSide | None = None,
+    late_side: LateSide | None = None,
     swept_sides: Sequence[ChunkedSide] = (),
     aggregations: Sequence[Aggregation] = (),
     semantic_selection: str = SEMANTIC_CRITERION_AUC,
@@ -1766,6 +2006,10 @@ def score_model_arms(
             paragraph's own first sentence (the Stage-2.6 chunk header). Its
             arms run beside the plain chunked arms, so the header is measured
             against the no-header arm in the same run.
+        late_side: An optional **late-chunked** side (Stage 2.7): the document
+            is embedded once and the token-level embeddings are pooled per
+            chunk. Its arms run beside the early-chunked arms, so the late
+            geometry is measured against the early one in the same run.
         swept_sides: One chunked side per point of a swept grid (the semantic
             threshold); the arms are then cross-fitted per document.
         aggregations: The aggregation rules the chunked arms fold with.
@@ -1904,6 +2148,29 @@ def score_model_arms(
         )
         arms.update(header_arms)
         arm_similarities.update(header_similarities)
+
+    if late_side is not None:
+        # The late chunking (Stage 2.7): the document embedded once, the
+        # token-level embeddings pooled per chunk. The arms run beside the
+        # run's early-chunked arms, so the late geometry is measured against
+        # the early one in the same run (the pairing is by construction).
+        if not aggregations:
+            raise ValueError("the late-chunked arms need aggregation rules")
+        late_arms, late_similarities = _late_variant_arms(
+            view,
+            side=late_side,
+            aggregations=aggregations,
+            paragraph_texts=paragraph_texts,
+            question_texts=question_texts_by_transform[question_transform],
+            baseline_question_side=baseline_question_side,
+            baseline_similarities=baseline_similarities,
+            question_transform=question_transform,
+            question_block_markers=question_block_markers,
+            preprocess_spec=preprocess_spec,
+            hit_ks=hit_ks,
+        )
+        arms.update(late_arms)
+        arm_similarities.update(late_similarities)
 
     for arm_name, similarities in arm_similarities.items():
         comparisons[arm_name] = compare_arms(
