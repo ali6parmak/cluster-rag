@@ -64,6 +64,26 @@ DEFAULT_STRIP_OPENERS: tuple[str, ...] = (
     "intensify",
 )
 
+# The decision models' prompt template's placeholder for the question's text
+# (the text-processing track's Stage 3.5; the placeholder is rendered by
+# ``cluster_rag.text_processors.decision.questions.render_instructions``).
+DECISION_QUESTION_PLACEHOLDER = "{question}"
+
+# The decision models' state shapes: ``pair`` (the paragraph and the question
+# in one state) and ``paragraph`` (the paragraph alone as the state, with the
+# question in the instructions — the shape that allows 64 questions per call).
+DECISION_STATE_PAIR = "pair"
+DECISION_STATE_PARAGRAPH = "paragraph"
+
+# The decision models' question types.
+DECISION_QUESTION_NOUL = "noul"
+DECISION_QUESTION_CHOICE = "choice"
+
+# What a decision probe scores: the reviewed set plus the unjudged-proxy
+# control, or the whole same-document grid.
+DECISION_SCOPE_JUDGED = "judged"
+DECISION_SCOPE_GRID = "grid"
+
 
 class PathsConfig(BaseModel):
     """Filesystem locations used across the pipeline."""
@@ -723,6 +743,162 @@ class Stage3Config(BaseModel):
     reporting: Stage3ReportingConfig = Field(default_factory=Stage3ReportingConfig)
 
 
+class DecisionModelConfig(BaseModel):
+    """One decision model and the prompt it is asked with (Stage 3.5).
+
+    A decision model is Ollama's new model *type*: a **state** (the text to
+    judge) plus typed **questions**, answered with probabilities in one forward
+    pass. The model only *scores* — it never relabels anything.
+
+    - ``name``: the arm's handle (the run id's model part).
+    - ``model_id``: the Ollama tag (e.g. ``"tev1:latest"``).
+    - ``digest``: the **pinned** digest of that tag. The client reads the
+      server's ``/api/tags`` and the run *fails* when the digest differs, so a
+      re-pulled model can never be measured under the old arm's name.
+    - ``state``: the state's shape — ``pair`` (the paragraph and the question
+      in one state) or ``paragraph`` (the paragraph alone as the state, with
+      the question in the instructions; that shape allows up to 64 questions
+      per call and is the cheap one).
+    - ``question_type``: ``noul`` (a boolean statement, answered with the
+      probability that it is true) or ``choice`` (a pick from 2-26 options).
+    - ``instructions``: the prompt's **task** instruction (e.g. "is the
+      paragraph about the same topic as the question?"). It must **not** carry
+      the ``{question}`` placeholder: the state's shape decides where the
+      question goes (in the state for ``pair``, in the instructions for
+      ``paragraph``), and a task that repeats the question would put it into
+      the call twice — which biases the grid's comparison and breaks the
+      smaller model's input budget.
+    - ``options`` / ``criteria`` / ``positive_option``: the choice
+      question's options, their descriptions and the option whose probability
+      is the arm's score. They belong to the ``choice`` type only.
+    - ``max_input_tokens``: the model's **input budget** in tokens (its hard
+      context: measured 512 for laya and ~2,500 for tev1). The planner groups
+      the cells into calls that fit the budget and truncates the state's
+      paragraph when a single cell does not fit — the question and the
+      instructions are never cut, and the truncation is recorded per cell.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    digest: str = Field(min_length=64, max_length=64)
+    state: Literal["pair", "paragraph"] = DECISION_STATE_PAIR
+    question_type: Literal["noul", "choice"] = DECISION_QUESTION_NOUL
+    instructions: str = Field(min_length=1)
+    options: tuple[str, ...] = ()
+    criteria: dict[str, str] = Field(default_factory=dict)
+    positive_option: str | None = None
+    max_input_tokens: int | None = Field(default=None, ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_run_id_safe(cls, value: str) -> str:
+        """The arm's handle ends up in a run id and a table row: keep it safe."""
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(
+                "the decision model's name must be filesystem-safe "
+                f"([A-Za-z0-9._-]+), got {value!r}"
+            )
+        return value
+
+    @field_validator("digest")
+    @classmethod
+    def _digest_is_hex(cls, value: str) -> str:
+        """A digest is a sha256 hex string; anything else is a typo."""
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError(
+                "the decision model's digest must be a 64-character sha256 hex "
+                f"string, got {value!r}"
+            )
+        return value
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_are_the_task_alone(cls, value: str) -> str:
+        """The task instruction must not repeat the question (the shape's business)."""
+        if DECISION_QUESTION_PLACEHOLDER in value:
+            raise ValueError(
+                f"the decision model's instructions must not carry the "
+                f"{DECISION_QUESTION_PLACEHOLDER!r} placeholder: the state's shape "
+                "decides where the question goes (in the state for 'pair', in the "
+                "instructions for 'paragraph')"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _question_type_matches_its_options(self) -> DecisionModelConfig:
+        """A choice question needs its options, criteria and positive option."""
+        if self.question_type == "choice":
+            if not 2 <= len(self.options) <= 26:
+                raise ValueError(f"a choice question needs 2-26 options, got {len(self.options)}")
+            if set(self.criteria) != set(self.options):
+                raise ValueError(
+                    "a choice question's criteria must describe exactly its options: "
+                    f"criteria {sorted(self.criteria)} vs options {sorted(self.options)}"
+                )
+            if self.positive_option not in self.options:
+                raise ValueError(
+                    "a choice question needs a positive_option among its options; got "
+                    f"{self.positive_option!r} for options {sorted(self.options)}"
+                )
+        elif self.options or self.criteria or self.positive_option is not None:
+            raise ValueError(
+                "a 'noul' question takes no options, no criteria and no positive option"
+            )
+        return self
+
+
+class DecisionConfig(BaseModel):
+    """The decision models' settings (the track's Stage 3.5, CS-7a).
+
+    - ``models``: the arms to probe (each a
+      :class:`DecisionModelConfig`); the prompt grid lives here, not in the
+      code, so every variant is a config value the artifact records.
+    - ``scope``: which cells the probe scores — ``judged`` (the reviewed set
+      plus the unjudged-proxy control) or ``grid`` (every cell of the
+      same-document grid).
+    - ``competence_control``: whether the **synthetic competence control**
+      runs beside the arm (constructed positive pairs against unrelated
+      negatives). It is not optional: a chance-level result on the reviewed
+      set is ambiguous without it.
+    - ``competence_pairs``: how many positive/negative pairs the control holds.
+    - ``prompt_version``: the prompt's version, recorded in the artifact and
+      part of the decision cache's key (a re-prompted arm never reads the old
+      arm's answers).
+    - ``host`` / ``timeout``: the Ollama server (the first call pays the model
+      load, so the timeout is generous).
+    - ``max_questions_per_call``: how many questions one call may carry (the
+      API accepts at most 64).
+    - ``bins``: the reliability diagram's number of bins.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: tuple[DecisionModelConfig, ...] = ()
+    scope: Literal["judged", "grid"] = DECISION_SCOPE_JUDGED
+    competence_control: bool = True
+    competence_pairs: int = Field(default=100, ge=1)
+    prompt_version: str = Field(default="v1", min_length=1)
+    host: str = "http://localhost:11434"
+    timeout: float = Field(default=600.0, gt=0)
+    max_questions_per_call: int = Field(default=64, ge=1, le=64)
+    bins: int = Field(default=10, ge=2, le=50)
+
+    @field_validator("models")
+    @classmethod
+    def _models_are_present_and_unique(
+        cls, value: tuple[DecisionModelConfig, ...]
+    ) -> tuple[DecisionModelConfig, ...]:
+        """At least one arm, and the arm names are unique (they key the artifact)."""
+        if not value:
+            raise ValueError("analysis.decision.models must name at least one decision model")
+        names = [model.name for model in value]
+        if len(set(names)) != len(names):
+            raise ValueError(f"the decision models' names must be unique, got {names}")
+        return value
+
+
 class AnalysisConfig(BaseModel):
     """The text-processing track's Stage-0 analysis settings.
 
@@ -771,6 +947,10 @@ class AnalysisConfig(BaseModel):
       the feature pack's options, the combiner and the control's training
       weight. ``None`` (the default) means the run scores the Stage-0/1/2
       arms only, so the earlier runs are unaffected.
+    - ``decision``: the settings of the **decision models** (Stage 3.5): the
+      arms (the model, the pinned digest, the state's shape and the prompt),
+      the scope and the synthetic competence control. ``None`` (the default)
+      means the run does not touch a decision model.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -788,6 +968,7 @@ class AnalysisConfig(BaseModel):
     semantic_selection: Literal["auc", "floor_gap"] = "auc"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
     stage3: Stage3Config | None = None
+    decision: DecisionConfig | None = None
 
     @field_validator("aggregations")
     @classmethod

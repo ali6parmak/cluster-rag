@@ -219,6 +219,28 @@ Relaxed for this track only:
     re-judging on a re-run, and no temperature (there is no sampling). The
     pure side (the question specs, the arm's construction, the measurement)
     lives in `text_processors/` like every other pure piece.
+  - The decision models' **pure side** is the sub-package
+    `text_processors/decision/`: `questions.py` (the typed question specs and
+    the prompt's rendering) and `probe.py` (the cells, the **call plan**, the
+    synthetic competence control and the measurement). It imports numpy and
+    the standard library only — no httpx, no model client.
+  - **The prompt's two halves.** The config carries the **task** instruction
+    ("is the paragraph about the same topic as the question?") and the
+    **state's shape** decides where the *question* goes: the `pair` shape puts
+    it in the state (next to the paragraph), the `paragraph` shape puts it in
+    the instructions (in front of the task). A task that repeats the question
+    is rejected at config time: it would put the question into the call
+    **twice**, which biases the grid's comparison and breaks the smaller
+    model's budget (measured: laya cannot take the longest paragraph and
+    question twice at all).
+  - **The input budget** is a per-model config value (`max_input_tokens`):
+    the server refuses a prompt longer than the model's context, and the
+    measured limits are **512 tokens for laya** and **~2,500 for tev1**. The
+    call planner groups the cells into calls that fit the budget and
+    **truncates the state's paragraph** when a single cell does not fit — the
+    question and the instructions are never cut, and every truncated cell is
+    flagged in the artifact (a shortened input is never silent, the same
+    discipline as the embedding probe's "paragraphs over the context").
 - **Embedding cache: no change to the cache key layout.** The chunking version
   goes into the *existing* version slot —
   `CachedEmbedder(backend, root, preprocessing_version="<chunking-version>")`
@@ -763,6 +785,26 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   unmeasurable on this data, and Stage 4 (the LLM experiments) should be
   skipped; **at chance with the control failing** → the wrong tool (the
   MS MARCO cross-encoders in the HF cache are the next try).
+  *(done 2026-10-26, CS-7a: the `decide-omct` command, the `Decider` port,
+  the `/v1/systemone` client, the decision cache, the call planner and the
+  pure side (`text_processors/decision/`); 8 runs
+  `omct-decide-{tev1,laya}-{pair,paragraph}-{noul,choice}` (2 models x the
+  declared prompt grid), the scope `judged` (the 1,520 reviewed pairs plus the
+  same seeded 4,000-cell control the Stage-0 runs draw) with the synthetic
+  competence control beside every arm. **Verdict: the first branch, for
+  tev1.** The within-document AUC is **0.7767** (tev1-pair-choice), 0.7604
+  (tev1-pair-noul), 0.7708 (tev1-paragraph-choice), 0.7244
+  (tev1-paragraph-noul) — against the cosine's 0.5020–0.5632 and the track's
+  own learned arm's 0.6472–0.6723; laya's best arm is 0.5992, above the
+  cosine but below the learned arm. The **competence control passes
+  decisively** (the AUC 0.944–0.9996 on every arm), so the reviewed set is
+  *not* at the ceiling. tev1's probability is also better calibrated than
+  the track's learned arm (the ECE 0.0891–0.1365 pooled against the arm's
+  0.175–0.189), which is what a **fixed** cut needs. The `choice` type beats
+  the `noul` for tev1 in both shapes (and the `noul` beats the `choice` for
+  laya); the `paragraph` shape is 16× cheaper (339 calls against 5,520) for
+  0.006 of AUC. The numbers are in the track log's Stage-3.5 section; the
+  next step is 3.5.2 (CS-7b) with **tev1 + the two-option `choice`**.)*
 - [ ] **3.5.2 The decision arm on the grid + the rule's decider.** The decision
   model scores the **whole same-document grid** (44,467 cells), so it becomes
   an *arm* of `analyze-omct` (the hit@k, the rank percentiles, the control
@@ -1111,6 +1153,14 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   here — is the honest close-out then "this benchmark cannot validate a
   rule", and should the track's remaining effort move to the UPR side
   (Stage 5) instead of to more OMCT methods?
+  *(CS-7a answered it: **they do not sit at chance.** tev1's within-document
+  AUC is 0.7767 (the best arm) against the cosine's 0.5020-0.5632 and the
+  track's own learned arm's 0.6472-0.6723, and the synthetic competence
+  control passes decisively (the AUC 0.944-0.9996 on every arm). So the
+  reviewed set's labels **are** learnable and the Stage-0.2 classification's
+  "benchmark construction dominates" is **too strong**: the construction
+  makes the *embedding* geometry useless as a ranker here, not the labels.
+  What remains open is which learner to ship and CS-7b's rule.)*
 - **The decision models' calibration on OMCT is unmeasured (Stage 3.5).**
   laya is trained for calibrated probabilities (RLCD, strictly proper scoring
   rules, in-task ECE 0.060) and tev1's card says calibration is **untested**;
@@ -1122,6 +1172,34 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   decision model's probability is calibrated enough to take a **fixed** 0.5
   cut, does the rule's harm on the verified positives stop being reproduced
   by the control-role floor?
+  *(CS-7a measured the calibration on the reviewed set: tev1's ECE
+  **0.0891-0.1365 pooled** and 0.2009-0.2443 per-document macro, the Brier
+  0.1881-0.2064 - **better calibrated than the track's own learned arm**
+  (0.175-0.189 pooled / 0.327-0.349 macro), so tev1's probability can take a
+  fixed cut; laya's arms are the opposite (0.1188-0.2423 pooled). Whether
+  the *harm* stops being reproduced by the floor is CS-7b's question.)*
+- **The decision models' input budgets are small and differ by an order of
+  magnitude (CS-7a, 2026-10-26).** The server refuses a prompt longer than
+  the model's context, and the measured limits are **512 tokens for laya**
+  and **~2,500 for tev1** - the corpus's longest paragraph (2,255 characters)
+  and longest question (1,560) do not fit laya's budget, so the call planner
+  truncates the **state's paragraph** (never the question, never the
+  instructions) and flags every truncated cell (laya: 8.0-8.1% of the cells;
+  tev1: none). **Open:** does the truncation bias laya's arm? The truncated
+  cells are the *longest* paragraphs, so laya's arm is measured on a
+  systematically shorter view of the corpus's most content-rich paragraphs -
+  and that is not separable from the model difference in this change set. A
+  paired comparison (the same cell with and without the truncation) would
+  settle it; the track's own rule (never a silent absolute cut) says a
+  truncated input is a *different* input.
+- **The decision models are not deterministic (CS-7a, 2026-10-26).** The same
+  call with the same prompt returns a slightly different probability on a
+  re-run (the within-document AUC moves in the third decimal), so the
+  **cache** is what makes a re-run exactly reproducible, and two arms are
+  never a *paired* comparison at the level of the model's own noise.
+  **Open:** how large is that noise relative to the grid's differences? The
+  probe's arms are 0.006-0.22 apart and the observed drift is ~0.001-0.003,
+  but the drift is measured once (a fresh-cache re-run) and on one model.
 - **Late chunking is not portable to the Ollama backends (Stage 2.7).** It
   needs token-level embeddings, which `/api/embed` cannot return, so the arm
   is HF-only and its comparison is **within-model**. **Open:** is the
@@ -1434,24 +1512,55 @@ set):
   recall 0.02–0.06). The deliverable therefore ships with a **reach** claim
   and a **cost** claim and **no precision claim**; the numbers are in the
   track log's reporting section; 433 unit tests green.)*
-- [ ] **CS-7a — the decision-model client + the probe (Stage 3.5.1).** The
+- [x] **CS-7a — the decision-model client + the probe (Stage 3.5.1).** The
   `Decider` port, the `/v1/systemone` client, the decision cache and the
   probe command; the synthetic competence control; the declared prompt grid.
   **Explain-first (schema):** a new config section
   `analysis.decision` with `models` (each: `name`, `model_id`, `digest`
   (pinned; the run fails on a mismatch), `state` (`pair` | `paragraph`),
-  `question_type` (`noul` | `choice`), `instructions`, `criteria`),
-  `scope` (`judged` | `grid`), `competence_control: bool` and
-  `prompt_version`; a new command `decide-omct` writing
-  `results/<run_id>/decisions.json` (the per-pair probabilities, the
-  competence control, the measurement blocks, the provenance: the model id,
-  the digest, the prompt version, the cache's hit/miss counters). Runs:
-  `omct-decide-<model>-<variant>` (2 models x the prompt grid). The track's
-  hygiene: no relabelling (a decision model only *scores*), the model and
-  digest pinned, the prompt version recorded, the calls cached (no re-judging
-  on a re-run), and the **leakage boundary written down** (a frozen,
-  zero-shot model carries no OMCT label; a *fine-tuned* one would break
-  leakage rule (i)).
+  `question_type` (`noul` | `choice`), `instructions` (the **task**
+  instruction — the question's placement is the shape's business, so a
+  task that repeats the question is rejected), `options` / `criteria` /
+  `positive_option` (the `choice` type only) and `max_input_tokens` (the
+  model's input budget)), `scope` (`judged` | `grid`),
+  `competence_control: bool`, `competence_pairs`, `prompt_version`, `host`,
+  `timeout`, `max_questions_per_call` and `bins`; a new command
+  `decide-omct` writing `results/<run_id>/decisions.json` (the per-pair
+  probabilities, the competence control, the measurement blocks, the
+  provenance: the model id, the digest, the prompt version, the cache's
+  hit/miss counters). Runs: `omct-decide-<model>-<variant>` (2 models x the
+  prompt grid). The track's hygiene: no relabelling (a decision model only
+  *scores*), the model and digest pinned, the prompt version recorded, the
+  calls cached (no re-judging on a re-run), and the **leakage boundary
+  written down** (a frozen, zero-shot model carries no OMCT label; a
+  *fine-tuned* one would break leakage rule (i)).
+  *(done 2026-10-26: the new edge package `src/cluster_rag/decision/`
+  (`base.py` the port and the answer shapes, `systemone.py` the raw
+  `/v1/systemone` client with the digest check, `cache.py` the decision
+  models' own disk cache under `cache/decisions/`, keyed by the model id,
+  the digest, the prompt version, the state and the question specs); the new
+  pure package `src/cluster_rag/text_processors/decision/` (`questions.py`
+  the typed question specs and the prompt's rendering, `probe.py` the cells,
+  the call plan, the competence control and the measurement); the driver
+  `omct_decision.py`; the command `decide-omct` with the `decisions.json`
+  artifact; the config section `analysis.decision` (validated at config
+  time); the sweep cell `DecideOmctCell`; the shared model specs
+  `experiments/decision_pool.py` (the pinned digests, the task instruction
+  and the measured input budgets); the sweep
+  `experiments_text_processing/stage35_decision_sweep.py`: 8 runs
+  `omct-decide-{tev1,laya}-{pair,paragraph}-{noul,choice}`. **Verdict: the
+  reviewed set IS learnable** — the within-document AUC 0.7767 (the best
+  arm, tev1-pair-choice) against the cosine's 0.5020–0.5632 and the track's
+  own learned arm's 0.6472–0.6723, with the **competence control passing
+  decisively** (the AUC 0.944–0.9996 on every arm) and tev1's probability
+  better calibrated than the learned arm's (the ECE 0.0891–0.1365 pooled
+  against 0.175–0.189). The `choice` type beats the `noul` for tev1 (and the
+  `noul` beats the `choice` for laya); the `paragraph` shape is 16× cheaper
+  (339 calls against 5,520) for 0.006 of AUC. laya's 512-token context truncates 8.0–8.1% of the
+  cells' paragraphs (tev1: none), which is recorded per cell. The guard
+  holds (all 93 `omct-analyze-*` runs reproduce the Stage-0 baseline arm
+  field by field). The numbers are in the track log's Stage-3.5 section; 469
+  unit tests green.)*
 - [ ] **CS-7b — the decision arm on the grid + the rule's decider (Stage
   3.5.2).** The decision model's scores over the whole same-document grid as
   an **arm** of `analyze-omct` (the hit@k, the rank percentiles, the control
@@ -1519,3 +1628,28 @@ reviewed set was selected) makes the harm on the verified positives a
 construction — which is exactly what the control-role floor comparison
 refused to certify in CS-6e. If neither holds, the deliverable's claim
 stands as it is, and the track says so explicitly.
+
+**What the probe already settled (CS-7a, 2026-10-26).** Both preconditions
+**hold** for `tev1` (a Qwen3.5-4B fine-tune by Together AI):
+
+1. **It is calibrated on this corpus.** Its expected calibration error on the
+   reviewed set is 0.0891-0.1365 pooled and 0.2009-0.2443 per-document macro
+   (the Brier 0.1881-0.2064) - better calibrated than the track's own learned
+   arm (0.175-0.189 pooled / 0.327-0.349 macro), so a **fixed** cut is
+   meaningful.
+2. **It is independent of exp18's ranking.** It is frozen and zero-shot: it
+   never saw the corpus, so its scores cannot be a measurement of the
+   reviewed set's construction. On the reviewed set it reaches a
+   within-document AUC of **0.7767** (the best arm) where every embedder sits
+   at 0.5020-0.5632, and its **synthetic competence control** passes
+   decisively (the AUC 0.944-0.9996), so the reviewed set's labels *are*
+   learnable.
+
+So the deliverable's *quality* claim is no longer blocked by the scorer, and
+the plan's Stage-0.2 reading ("the benchmark's construction dominates its
+signal") is too strong: the construction makes the **embedding geometry**
+useless as a ranker on this set, not the labels themselves. What is **not**
+settled is the rule itself: the harm of a tev1-driven rule on the verified
+positives, measured against the control-role floor, is **CS-7b's** question,
+and the unjudged cells' true positive rate stays unmeasured (no human
+labelling in this track).

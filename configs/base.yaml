@@ -104,6 +104,27 @@ splits:
 #                                         # bootstrap of the AUC difference
 #                                         # (seed: null = the run's seed)
 #
+# The decision models (the track's Stage 3.5, `cluster-rag decide-omct`): the
+# prompt grid is config, not code, and every model is pinned by id AND digest
+# (the run fails on a digest mismatch). The schema defaults are:
+#   analysis.decision: {models: [{name: <arm handle>,
+#                                 model_id: <ollama tag>,
+#                                 digest: <the pinned sha256>,
+#                                 state: pair,        # pair | paragraph
+#                                 question_type: noul,  # noul | choice
+#                                 instructions: <the TASK instruction, no
+#                                            {question} placeholder>,
+#                                 options: [], criteria: {},
+#                                 positive_option: null,   # the choice type only
+#                                 max_input_tokens: null}],  # the model's context
+#                              scope: judged,       # judged | grid
+#                              competence_control: true,
+#                              competence_pairs: 100,
+#                              prompt_version: v1,  # part of the decision cache's key
+#                              host: http://localhost:11434,
+#                              timeout: 600, max_questions_per_call: 64,
+#                              bins: 10}            # the reliability diagram's bins
+#
 # strip_openers defaults come from the Phase 1 prefix analysis (17.8% of texts
 # start with "continue"); longest opener wins, so multi-word forms are listed
 # before their shorter prefixes.

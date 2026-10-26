@@ -54,6 +54,7 @@ from cluster_rag.data import (
     select_records_by_ids,
 )
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
+from cluster_rag.decision import CachedDecider, SystemOneDecider
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
 from cluster_rag.embed.random import RandomEmbedder
@@ -74,6 +75,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS,
+    DECIDE_OMCT_COLUMNS,
+    DECIDE_OMCT_KEY_COLUMNS,
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
@@ -100,6 +103,7 @@ from cluster_rag.omct_analysis import (
     score_stage3_model,
     side_cache_versions,
 )
+from cluster_rag.omct_decision import DecisionArm, run_decision_arm
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
@@ -268,6 +272,34 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the YAML config with an analysis: section (or sweep-resolved "
         "configs; experiment values live in experiments_text_processing/*.py sweeps).",
+    )
+
+    decide_omct = subparsers.add_parser(
+        "decide-omct",
+        help="Text-processing track: the decision-model probe (Stage 3.5).",
+        description=(
+            "The text-processing track's Stage 3.5 probe "
+            "(TEXT_PROCESSING_PLAN.md, Stage 3.5.1): score the reviewed OMCT "
+            "pairs (and the unjudged-proxy control) with the configured "
+            "decision models — Ollama's decision-model type, answered with "
+            "probabilities — and report the pair AUC, the within-document AUC, "
+            "the rank percentiles, the control side and the calibration curve, "
+            "beside the synthetic competence control that separates 'the "
+            "reviewed set is at the ceiling' from 'the model is the wrong "
+            "shape'. The model is pinned by id AND digest (the run fails on a "
+            "mismatch) and every call is cached. Writes "
+            "results/omct-<run_id>/decisions.json — the omct- dataset prefix is "
+            "added by the command itself (AGENTS.md run-id grammar); the row "
+            "goes to the track's own table."
+        ),
+    )
+    decide_omct.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with an analysis.decision: section (or "
+        "sweep-resolved configs; experiment values live in "
+        "experiments_text_processing/*.py sweeps).",
     )
 
     evaluate = subparsers.add_parser(
@@ -1936,6 +1968,267 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     return 0
 
 
+def build_decider(model_config: Any, config: AppConfig) -> Any:
+    """Build the decision model client for one arm (the CLI's wiring seam).
+
+    The client is the raw ``POST /v1/systemone`` caller (the endpoint is in
+    neither the Ollama CLI nor its Python/JS libraries); it checks the pinned
+    digest against the server's and **fails the run** on a mismatch. The
+    decision models' own disk cache wraps it (its own root under ``cache/``,
+    never the embedding cache), so a re-run is reproducible and never
+    re-judges a pair.
+    """
+    # The probe makes thousands of calls; httpx logs one INFO line per request,
+    # which would bury the run's own output.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    client = SystemOneDecider(
+        model_config,
+        host=config.analysis.decision.host if config.analysis and config.analysis.decision else "",
+        timeout=(
+            config.analysis.decision.timeout
+            if config.analysis and config.analysis.decision
+            else 600.0
+        ),
+    )
+    prompt_version = (
+        config.analysis.decision.prompt_version
+        if config.analysis and config.analysis.decision
+        else "v1"
+    )
+    return CachedDecider(client, config.paths.cache, prompt_version=prompt_version)
+
+
+def _decide_omct_row(
+    model_block: dict[str, Any],
+    *,
+    run_id: str,
+    n_pairs: int,
+    n_control: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One row of the decision probe's comparison table."""
+    measurement = model_block["measurement"]
+    pair_auc = measurement["pair_auc"]
+    decomposition = measurement["pair_auc_decomposition"]
+    calibration = measurement["calibration"]
+    distributions = measurement["score_distributions"]
+    competence = model_block.get("competence_control") or {}
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "model": model_block["model"]["model_id"],
+        "model_version": model_block["model"]["digest"][:12],
+        "state": model_block["state"],
+        "question_type": model_block["question_type"],
+        "scope": model_block["scope"],
+        "within_auc": _fmt(decomposition.get("within_group_auc"), 4),
+        "pooled_auc": _fmt(pair_auc.get("overall"), 4),
+        "macro_auc": _fmt(pair_auc.get("macro"), 4),
+        "cross_auc": _fmt(decomposition.get("cross_group_auc"), 4),
+        "ece": _fmt((calibration.get("pooled") or {}).get("ece"), 4),
+        "ece_macro": _fmt(calibration.get("macro_ece"), 4),
+        "brier": _fmt((calibration.get("pooled") or {}).get("brier"), 4),
+        "pos_mean": _fmt((distributions.get("label1") or {}).get("mean"), 4),
+        "neg_mean": _fmt((distributions.get("label0") or {}).get("mean"), 4),
+        "ctrl_mean": _fmt((distributions.get("control") or {}).get("mean"), 4),
+        "floor_gap": _fmt((measurement.get("floor_gap") or {}).get("gap"), 4),
+        "comp_auc": _fmt(competence.get("pair_auc"), 4),
+        "comp_pos_mean": _fmt((competence.get("positive") or {}).get("mean"), 4),
+        "comp_neg_mean": _fmt((competence.get("negative") or {}).get("mean"), 4),
+        "n_pairs": n_pairs,
+        "n_control": n_control,
+        "n_comp": competence.get("n_cells"),
+        "n_calls": model_block.get("n_calls_planned"),
+        "trunc": _fmt((model_block.get("truncation") or {}).get("share"), 4),
+        "seconds": _fmt(seconds, 3),
+    }
+
+
+def _cmd_decide_omct(config: AppConfig) -> int:
+    """Run decide-omct: the track's Stage-3.5 decision-model probe.
+
+    Writes ``results/omct-<run_id>/{config.yaml, decisions.json}``: the
+    per-cell probabilities, the measurement blocks (the pair AUC pooled and per
+    document, the within-document AUC, the rank percentiles, the control side,
+    the calibration curve), the synthetic competence control and the
+    provenance (the model id, the pinned digest, the prompt version, the
+    cache's hit/miss counters) — per arm.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    if config.analysis is None or config.analysis.decision is None:
+        raise ValueError(
+            "the analysis.decision: section (the decision models and the prompt "
+            "grid) is required for the `decide-omct` command"
+        )
+    if config.paths.data_external is None:
+        raise ValueError("paths.data_external must be set in the config to run decide-omct")
+
+    decision = config.analysis.decision
+    pair_report = load_pairs(config.paths.data_external)
+    view = build_dataset_view(
+        pair_report.records,
+        control_size=config.analysis.control_size,
+        seed=config.seed,
+        sampling_rule=config.analysis.sampling_rule,
+    )
+
+    models: list[dict[str, Any]] = []
+    for model_config in decision.models:
+        decider = build_decider(model_config, config)
+        arm = DecisionArm(
+            name=model_config.name,
+            state=model_config.state,
+            question_type=model_config.question_type,
+            instructions=model_config.instructions,
+            options=model_config.options,
+            criteria=model_config.criteria,
+            positive_option=model_config.positive_option,
+            max_input_tokens=model_config.max_input_tokens,
+        )
+        block = run_decision_arm(
+            view,
+            decider,
+            arm,
+            scope=decision.scope,
+            question_transform=config.analysis.question_transform,
+            question_block_markers=config.analysis.question_block_markers,
+            competence_control=decision.competence_control,
+            competence_pairs=decision.competence_pairs,
+            max_questions_per_call=decision.max_questions_per_call,
+            bins=decision.bins,
+        )
+        info = decider.info
+        block["model"] = {
+            "name": model_config.name,
+            "model_id": info.model_id,
+            "digest": info.digest,
+            "backend": info.backend,
+            "host": info.host,
+            "prompt_version": decision.prompt_version,
+            "extra": info.extra,
+        }
+        block["cache"] = {
+            "hits": getattr(decider, "cache_hits", 0),
+            "misses": getattr(decider, "cache_misses", 0),
+            "stored": getattr(decider, "n_stored", 0),
+        }
+        block["usage"] = dict(getattr(decider, "usage", {}))
+        models.append(block)
+
+    omct_run_id = _omct_run_id(run_id)
+    payload = {
+        "run_id": omct_run_id,
+        "command": "decide-omct",
+        "source": str(config.paths.data_external),
+        "source_sha256": file_sha256(config.paths.data_external),
+        "n_valid_pairs": pair_report.n_valid,
+        "n_malformed_pairs": pair_report.n_invalid,
+        "seed": config.seed,
+        "analysis": {
+            "scope": decision.scope,
+            "prompt_version": decision.prompt_version,
+            "question_transform": config.analysis.question_transform,
+            "question_block_markers": list(config.analysis.question_block_markers),
+            "control": view.control.describe(),
+            "grid": {
+                "n_documents": view.pooled["n_documents"],
+                "n_paragraphs": view.pooled["n_paragraphs"],
+                "n_questions": view.pooled["n_questions"],
+                "n_cells": view.pooled["grid_cells"],
+                "n_judged_cells": view.pooled["judged_cells"],
+                "n_unjudged_cells": view.pooled["unjudged_cells"],
+                "coverage": view.pooled["grid_coverage"],
+            },
+            "strata": list(view.strata),
+            "pooled": view.pooled,
+            "notes": [
+                "OMCT is auxiliary data (PLAN.md section 2): these numbers annotate "
+                "method choice, they are never a UPR metric.",
+                "The two negative subsets are never pooled: the reviewer-verified "
+                "hard negatives (the reviewed set's label 0) and the unjudged-proxy "
+                "control cells are separate groups.",
+                "The decision models are frozen and zero-shot: they carry no OMCT "
+                "label, so nothing leaks. Fine-tuning one on OMCT would break the "
+                "track's leakage rule (i) (101 question numbers are positive in one "
+                "document and negative in another).",
+                "A decision model only scores: it never relabels, curates or "
+                "corrects the data (the raw pair file is read-only).",
+                "The rank percentiles and the hit@k are measured inside the cells "
+                "the run scored for a paragraph (the restricted candidate list), "
+                "not inside the paragraph's full same-document question list: the "
+                "full list needs the grid scope.",
+            ],
+        },
+        "models": models,
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    results_dir = config.paths.results / omct_run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    (results_dir / "decisions.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    seconds = payload["total_seconds"]
+    rows = [
+        _decide_omct_row(
+            block,
+            run_id=omct_run_id,
+            n_pairs=view.pooled["n_pairs"],
+            n_control=view.control.n_cells,
+            seconds=seconds,
+        )
+        for block in models
+    ]
+    _append_command_rows(
+        config,
+        "decide-omct",
+        columns=DECIDE_OMCT_COLUMNS,
+        key_columns=DECIDE_OMCT_KEY_COLUMNS,
+        rows=rows,
+    )
+
+    print(f"OMCT decision probe (Stage 3.5): {omct_run_id}")
+    print(
+        f"  scope: {decision.scope}; {view.pooled['n_pairs']} reviewed pairs, "
+        f"{view.control.n_cells} control cells, "
+        f"{view.pooled['n_documents']} documents"
+    )
+    for block in models:
+        measurement = block["measurement"]
+        decomposition = measurement["pair_auc_decomposition"]
+        calibration = measurement["calibration"]
+        competence = block.get("competence_control") or {}
+        print(
+            f"  [{block['arm']}] {block['model']['model_id']} "
+            f"(digest {block['model']['digest'][:12]}, {block['state']}/"
+            f"{block['question_type']}): within-document AUC "
+            f"{_fmt(decomposition.get('within_group_auc'), 4)}, pooled AUC "
+            f"{_fmt(measurement['pair_auc'].get('overall'), 4)}, macro "
+            f"{_fmt(measurement['pair_auc'].get('macro'), 4)}"
+        )
+        print(
+            f"      calibration: ECE {_fmt((calibration.get('pooled') or {}).get('ece'), 4)} "
+            f"(per-document macro {_fmt(calibration.get('macro_ece'), 4)}), the Brier "
+            f"{_fmt((calibration.get('pooled') or {}).get('brier'), 4)}; the floor gap "
+            f"{_fmt((measurement.get('floor_gap') or {}).get('gap'), 4)}"
+        )
+        if competence:
+            print(
+                f"      competence control: AUC {_fmt(competence.get('pair_auc'), 4)} "
+                f"(the positives' mean {_fmt((competence.get('positive') or {}).get('mean'), 4)}, "
+                f"the negatives' {_fmt((competence.get('negative') or {}).get('mean'), 4)})"
+            )
+        print(
+            f"      calls: {(block.get('usage') or {}).get('n_calls', 0)}; the cache's "
+            f"hits {(block.get('cache') or {}).get('hits', 0)}, misses "
+            f"{(block.get('cache') or {}).get('misses', 0)}"
+        )
+    print(f"Report written to {results_dir / 'decisions.json'}")
+    return 0
+
+
 def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     """Run the evaluate command: any predictor on a fixed split (Phase 3 exit criterion).
 
@@ -2372,6 +2665,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_probe_omct(run.config)
         elif run.command == "analyze-omct":  # the text-processing track's Stage 0
             code = _cmd_analyze_omct(run.config)
+        elif run.command == "decide-omct":  # the text-processing track's Stage 3.5
+            code = _cmd_decide_omct(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
@@ -2418,6 +2713,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_probe_omct(config)
         if args.command == "analyze-omct":
             return _cmd_analyze_omct(config)
+        if args.command == "decide-omct":
+            return _cmd_decide_omct(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

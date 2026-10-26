@@ -48,18 +48,25 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── dataset_stats.py     # UPR dataset statistics (pure functions)
     │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
     │   ├── omct_analysis.py     # track's Stage-0 analysis driver (analyze-omct)
+    │   ├── omct_decision.py     # track's Stage-3.5 decision-probe driver (decide-omct)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── text_processors/     # text-processing track: chunkers, features, combiners (pure)
     │   │   ├── aggregation.py   # the chunk-level aggregation rules (Stage 1.1a)
     │   │   ├── calibration.py   # the Stage-3 reporting's pure core: calibration, thresholds, margins
     │   │   ├── control.py       # the same-document grid + the seeded control sample (subset B)
+    │   │   ├── decision/        # the decision models' pure side (Stage 3.5): the question
+    │   │   │                   # specs, the call plan, the competence control, the measurement
     │   ├── embed/
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend
     │   │   ├── ollama.py        # Ollama /api/embed backend
     │   │   ├── random.py        # seeded random vectors (the track's Stage-3 floor)
     │   │   └── cache.py
+    │   ├── decision/            # the decision models at the edge (Stage 3.5): the Decider
+    │   │   ├── base.py          #   port + the answer shapes
+    │   │   ├── systemone.py     #   the /v1/systemone client (a raw HTTP call)
+    │   │   └── cache.py         #   the decision models' own disk cache
     │   ├── index.py             # ExampleIndex, LabelIndex
     │   ├── retrieve/            # knn.py, prototypes.py, zeroshot.py, fusion.py, threshold.py
     │   ├── cluster.py           # discovery + routing
@@ -98,7 +105,7 @@ Check the prefixes against the model card before running experiments.
 - Embeddings are `np.float32`, shape `(n, d)`, L2-normalized. Assert this at index boundaries.
 - Pure functions for scoring and metrics, with no hidden global state. Components take a config object.
 - Dependency direction: `cli.py` orchestrates, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
-- The text-processing track's package (`text_processors/`) is a pure core too: it may import `cluster_rag.embed.base` (Protocol + numpy) and nothing heavier — no `torch`/`sentence-transformers`/`httpx`/`sqlite3`. Model clients (embedders, Ollama LLMs) are wired in CLI code, never inside the package. A test enforces this. One exception, reviewed and recorded in `TEXT_PROCESSING_PLAN.md` §2: the track's *combiners* (`text_processors/combining/logistic.py`, `text_processors/combining/histgb.py`) import scikit-learn — a core dependency of the main pipeline, with no model download, no network and no I/O.
+- The text-processing track's package (`text_processors/`) is a pure core too: it may import `cluster_rag.embed.base` (Protocol + numpy) and nothing heavier — no `torch`/`sentence-transformers`/`httpx`/`sqlite3`. Model clients (embedders, Ollama LLMs) are wired in CLI code, never inside the package. A test enforces this. One exception, reviewed and recorded in `TEXT_PROCESSING_PLAN.md` §2: the track's *combiners* (`text_processors/combining/logistic.py`, `text_processors/combining/histgb.py`) import scikit-learn — a core dependency of the main pipeline, with no model download, no network and no I/O. The track's *decision* side (`text_processors/decision/`) stays pure the same way: the question specs, the call plan, the competence control and the measurement are pure, and the model client (`cluster_rag/decision/`, the `/v1/systemone` caller) lives at the edge.
 - No hard-coded paths, thresholds or model names in the logic. Put them in `configs/`.
 - Pass explicit seeds (`numpy`, `random`, `torch`, UMAP `random_state`).
 - Logging uses the `logging` module, not `print`, in library code.
@@ -119,10 +126,10 @@ Every run (one CLI command execution or sweep cell) is identified by its
 
 - **Run-id grammar:** `<dataset>-<command>-<detail>[-<split>]` — e.g.
   `upr-embed-e5-base-v2`, `upr-eval-mf-topk2-val`, `omct-stats-base`,
-  `omct-probe2-arctic2`. Datasets: `upr` (the UPR train/val/test data) and
-  `omct` (the auxiliary OMCT pairwise data).
-- **Prefixes per command:** the OMCT commands (`probe-omct`, and `stats
-  --omct`) add the `omct-` prefix themselves at run time — configs and sweep
+  `omct-probe2-arctic2`, `omct-decide-tev1-pair-noul`. Datasets: `upr` (the
+  UPR train/val/test data) and `omct` (the auxiliary OMCT pairwise data).
+- **Prefixes per command:** the OMCT commands (`probe-omct`, `analyze-omct`,
+  `decide-omct`, and `stats --omct`) add the `omct-` prefix themselves at run time — configs and sweep
   cells carry the bare detail (`run_id: stats-base` → `results/omct-stats-base/`);
   a run_id that already carries a dataset prefix is warned about (it would
   double up). The UPR commands (`stats`/`split`/`embed`/`evaluate`) take the
@@ -169,6 +176,7 @@ Every run (one CLI command execution or sweep cell) is identified by its
     uv run cluster-rag sweep      --file experiments/omct_probe_sweep.py
     uv run cluster-rag embed      --config <yaml with an embed: section>
     uv run cluster-rag probe-omct --config <yaml with an embed: section>
+    uv run cluster-rag decide-omct --config <yaml with an analysis.decision: section>
     uv run cluster-rag evaluate   --config <yaml with an eval: section> --split val
     uv run cluster-rag clusters   --config <yaml with a clusters: section>
     uv run cluster-rag simulate   --config <yaml with a simulate: section>

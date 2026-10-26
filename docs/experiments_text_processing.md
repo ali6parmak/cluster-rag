@@ -2590,3 +2590,186 @@ that the unjudged cells' true positive rate is unmeasured). The reporting is
 every earlier run's artifact keeps its exact content: re-running the
 Stage-3.3 sweep reproduces its numbers field for field (verified — only the
 config echo carries the new key).
+
+## Stage 3.5 — the decision models: the probe (CS-7a, 2026-10-26)
+
+**The question.** The plan's Stage 3.5 asks the question the whole track has
+been circling: **is the reviewed set learnable at all?** Every embedder sits at
+chance on it — the within-document AUC **0.5632** (embeddinggemma), **0.5238**
+(voyage-4-nano) and **0.5020** (arctic2) — and the reviewed set is
+**rank-selected** (exp18's model chose which pairs got reviewed), so those
+numbers may be measuring the selection rather than the labels. A **decision
+model** — a frozen, zero-shot scorer that answers a typed question with a
+**probability** — is the first *independent* ranker on this benchmark, and it
+attacks the deliverable's weakest link at the same time: a calibrated
+probability means the safe-negative rule can take a **fixed** cut instead of a
+fitted, non-transferable threshold (CS-6e's open question).
+
+**What was run.** Eight runs
+(`experiments_text_processing/stage35_decision_sweep.py`, the sweep
+`stage35_decision`): 2 models x 2 state shapes x 2 question types —
+`omct-decide-{tev1,laya}-{pair,paragraph}-{noul,choice}`. The scope is
+`judged`: the 1,520 reviewed pairs plus the **same seeded 4,000-cell unjudged
+control** the Stage-0 runs draw, so the control side is comparable. The
+**synthetic competence control** (100 constructed positive pairs against 100
+unrelated ones) runs beside every arm.
+
+**The infrastructure (new).** The `Decider` port, the `/v1/systemone` client
+(a raw HTTP call — the endpoint is in neither the Ollama CLI nor its
+Python/JS libraries), the decision models' **own** disk cache (its own root
+under `cache/`, keyed by the model id, the digest, the prompt version, the
+state and the question specs — never the embedding cache), the **call
+planner** (the state's shape and the model's input budget decide the
+grouping) and the pure side (`text_processors/decision/`: the question specs,
+the plan, the competence control, the measurement). The models are pinned by
+id **and digest** and the run **fails** on a mismatch. The prompt is a config
+value, not a code constant.
+
+### 1. The verdict: the reviewed set IS learnable, and tev1 beats every embedding arm
+
+The headline is the **within-document AUC** (the pooled number sits beside it,
+never alone: 58.7% of the reviewed set's positive-negative pairs are
+cross-document, so the pooled number moves with the documents' score levels).
+
+| arm | within-doc AUC | pooled AUC | per-doc macro | ECE (pooled / macro) | Brier | the floor gap | the competence AUC | the calls |
+|---|---|---|---|---|---|---|---|---|
+| **tev1-pair-choice** | **0.7767** | 0.7691 | 0.8028 | **0.0891** / 0.2009 | 0.1881 | 0.3943 | 0.9992 | 5,520 + 200 |
+| tev1-paragraph-choice | 0.7708 | 0.7689 | 0.8021 | 0.1128 / 0.2235 | 0.1932 | 0.3532 | 0.9996 | 339 + 100 |
+| tev1-pair-noul | 0.7604 | 0.7575 | 0.7846 | 0.1128 / 0.2364 | 0.1966 | 0.3064 | 0.9996 | 5,520 + 200 |
+| tev1-paragraph-noul | 0.7244 | 0.7350 | 0.7605 | 0.1365 / 0.2443 | 0.2064 | 0.2689 | 0.9996 | 339 + 100 |
+| laya-paragraph-noul | 0.5992 | 0.6049 | 0.6089 | 0.1188 / 0.2142 | 0.2330 | 0.2013 | 0.9443 | 2,048 + 100 |
+| laya-pair-noul | 0.5984 | 0.5982 | 0.6215 | 0.1863 / 0.2574 | 0.2551 | 0.2466 | 0.9475 | 5,520 + 200 |
+| laya-pair-choice | 0.5700 | 0.5890 | 0.6323 | 0.2423 / 0.2305 | 0.2944 | 0.1733 | 0.9671 | 5,520 + 200 |
+| laya-paragraph-choice | 0.5555 | 0.5665 | 0.6138 | 0.2355 / 0.2535 | 0.2929 | 0.1438 | 0.9547 | 2,048 + 100 |
+
+(The calls are the arm's own plus the competence control's; the first run
+served them from a cold cache, and the re-run reproduced every number exactly
+from the cache.)
+
+The comparison that matters (all on the same 1,520 reviewed pairs of the
+**OMCT** data):
+
+| scorer | within-doc AUC | pooled AUC | the ECE (pooled) | the positives' hit@1 |
+|---|---|---|---|---|
+| the full-text cosine (the Stage-0 arms) | 0.5020–0.5632 | 0.4680–0.5371 | — | 0.1050–0.1355 |
+| the track's learned arm (the v0 pack, CS-5) | 0.6472–0.6723 | 0.5419–0.5831 | 0.175–0.189 | 0.0821–0.0897 |
+| the control-role floor (the learned arm's yardstick) | 0.5569–0.5788 | — | — | — |
+| **tev1 (the best arm)** | **0.7767** | **0.7691** | **0.0891** | — |
+| laya (the best arm) | 0.5992 | 0.6049 | 0.1188 | — |
+
+**tev1 is far above every other scorer on this benchmark** — above the
+embedders by 0.21–0.27 of within-document AUC and above the track's own
+learned arm by 0.10. **laya is not**: its best arm (0.5992) beats the cosine
+(0.5020–0.5632) but loses to the track's learned arm (0.6472–0.6723). So the
+plan's decision tree lands on its first branch — *well above chance* — **for
+tev1**, and on a middle branch for laya.
+
+**The control side agrees.** The floor gap (the verified positives' mean minus
+the control cells' mean) is 0.269–0.394 for tev1 (the positives average
+0.337–0.465, the ordinary cells 0.061–0.071) against 0.144–0.247 for laya.
+The reviewed set's positives are **not** the ordinary cells, and an
+independent, label-blind-free scorer separates them.
+
+**What this changes.** The track's Stage-0.2 classification said the reviewed
+set's *construction* dominates its signal ("the benchmark is construction-
+dominated"). That is now **too strong**: the labels are learnable, and the
+learner is a zero-shot model with no knowledge of the corpus. What the
+construction *does* do is make the **embedding** geometry useless as a
+ranker on this set — the rank-selection means an embedder's score on a
+reviewed pair mostly measures *where the pair sat in exp18's ranking*, not
+whether the pair is a true match. The deliverable's quality claim was
+blocked by that; the blocker was the *scorer*, not the labels.
+
+### 2. The competence control passes decisively — the models are the right shape
+
+The synthetic control (a paragraph and a question **sharing** a distinctive
+phrase against an **unrelated** pair) reaches an AUC of **0.944–0.9996** on
+every arm: the positives average 0.776–0.924, the negatives 0.046–0.379. So
+both models can do the task, and the reviewed set's labels are topically
+separable — the ambiguity the plan flagged ("*the data is at the ceiling* vs.
+*the model is the wrong shape*") is resolved: **the data is not at the
+ceiling**.
+
+### 3. The prompt grid: the two-option `choice` wins for tev1, the `noul` wins for laya
+
+The docs warn that a `noul` question can get "stuck on no". That is
+measurable here, and it is **model-dependent**:
+
+- **tev1**: the `choice` type beats the `noul` in both shapes (the
+  within-document AUC 0.7767 vs. 0.7604 in the `pair` shape, 0.7708 vs.
+  0.7244 in the `paragraph` shape), and it is also the better-calibrated arm
+  (the ECE 0.0891 vs. 0.1128 pooled).
+- **laya**: the `noul` wins in both shapes (0.5984 vs. 0.5700, 0.5992 vs.
+  0.5555) — the opposite of the warning, and laya's `choice` arms are the
+  worst-calibrated of the eight (the ECE 0.2355–0.2423 pooled).
+
+**The state's shape costs, but it is nearly free in quality.** The `pair`
+shape (the pair in one state) needs **5,520 calls** per arm; the `paragraph`
+shape (the paragraph alone as the state, the question in the instructions)
+needs **339** (tev1) or **2,048** (laya) — a **16× / 2.7×** cheaper arm for
+0.006 (tev1, `choice`) to 0.036 (tev1, `noul`) of within-document AUC. For
+the grid scope (CS-7b, the whole 44,467-cell grid) that difference is the
+difference between minutes and hours.
+
+### 4. The calibration: tev1's probability is a probability (and it is better calibrated than the track's own arm)
+
+tev1's card says its calibration is **untested**. It is now measured, on the
+reviewed set: the expected calibration error **0.0891–0.1365 pooled** and
+**0.2009–0.2443 per-document macro**, the Brier score **0.1881–0.2064**. The
+track's own learned arm (CS-6e) had the ECE 0.175–0.189 pooled and
+0.327–0.349 per-document macro at a Brier of 0.259–0.265 — so **tev1's
+probability is better calibrated than the logistic arm's**, and the pooled
+ECE still flatters it (the AI document's own ECE is 0.342–0.416, the same
+effect CS-6e measured on the learned arm). laya's arms are the opposite:
+0.1188–0.2423 pooled, and its `choice` arms are the worst of the eight.
+
+This is what CS-7b needs: a **fixed 0.5 cut** is only meaningful on a
+calibrated probability, and tev1's is the one to cut.
+
+### 5. The input budget: laya's context is 512 tokens, and that costs it cells
+
+The server refuses a prompt longer than the model's context. The measured
+limits (2026-10-26) are **512 tokens for laya** and **~2,500 for tev1**; the
+corpus's longest paragraph (2,255 characters) and longest question (1,560)
+do not fit laya's budget. The call planner therefore groups the cells into
+calls that fit the budget and **truncates the state's paragraph** (never the
+question, never the instructions) when a cell does not fit: **441–448 of the
+5,520 cells (8.0–8.1%)** were truncated for laya, **0** for tev1. Every
+truncated cell is flagged in the artifact (`truncation` and the per-cell
+`paragraph_truncated`).
+
+The truncation is not random: it hits the **longest** paragraphs, so laya's
+arm is measured on a systematically shorter view of the corpus's most
+content-rich paragraphs. That is part of why laya's arms are the weaker ones,
+and it is not separable from the model difference in this change set.
+
+### What this run does not say.
+
+- **Nothing about the unjudged cells' positive rate.** The probe measures the
+  reviewed set; the safe-negative rule's precision is still unmeasured (no
+  human labelling in this track).
+- **Nothing comparable about the rank-based numbers.** The probe's candidate
+  list is the **scored** cells of a paragraph (the reviewed pairs plus its
+  control cells), not the paragraph's full same-document question list, so
+  the rank percentiles, the hit@k and the top-1 provenance are **not**
+  comparable with the embedding arms' (which rank against the full list).
+  The AUCs are comparable (the same 1,520 pairs, the same labels). The grid
+  scope (CS-7b) is what makes the rank numbers comparable.
+- **Nothing about the grid.** The probe scores the reviewed set and the
+  control sample, not the 44,467-cell grid.
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice, they are never a UPR metric.
+- **Nothing about a second seed or a second prompt wording.** The prompt
+  grid is one task instruction, one `noul` question and one two-option
+  `choice`; the models are also **not deterministic** (the same call returns
+  a slightly different probability on a re-run — the within-document AUC
+  moves in the third decimal), which is why the **cache** is what makes a
+  re-run exactly reproducible.
+
+**The next step.** CS-7b (Stage 3.5.2): the decision arm on the **whole
+same-document grid**, with the safe-negative rule re-measured with tev1's
+probability as the ranking signal and a **fixed** cut (0.5) beside the
+fit-side-threshold comparison, and the control-role floor's counterpart
+beside both. The probe has settled which arm to carry: **tev1 with the
+two-option `choice`** (the best AUC, the best calibration, and the
+`paragraph` shape is 16× cheaper for 0.006 of AUC).

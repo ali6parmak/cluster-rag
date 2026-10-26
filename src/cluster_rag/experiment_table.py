@@ -65,6 +65,7 @@ COMMAND_TARGETS: dict[str, TableTarget] = {
     "probe-omct": TableTarget("omct"),
     # Text-processing track (TEXT_PROCESSING_PLAN.md section 2).
     "analyze-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
+    "decide-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "chunk-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "chunk-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
 }
@@ -408,6 +409,45 @@ ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS: tuple[str, ...] = (
     "rule_harm",
     "rule_floor_harm",
 )
+
+# The decision probe's table (the `decide-omct` command, Stage 3.5): one row
+# per arm of a run. The headline is the **within-document** AUC (the pooled
+# number sits beside it, never alone); the **calibration** columns sit next to
+# it because a decision model is only useful as a decider when its
+# probability is calibrated (tev1's card says its calibration is untested);
+# and the **competence** columns carry the synthetic control's AUC, which is
+# what tells "the reviewed set is at the ceiling" from "the model is the wrong
+# shape".
+DECIDE_OMCT_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "model",
+    "model_version",
+    "state",
+    "question_type",
+    "scope",
+    "within_auc",
+    "pooled_auc",
+    "macro_auc",
+    "cross_auc",
+    "ece",
+    "ece_macro",
+    "brier",
+    "pos_mean",
+    "neg_mean",
+    "ctrl_mean",
+    "floor_gap",
+    "comp_auc",
+    "comp_pos_mean",
+    "comp_neg_mean",
+    "n_pairs",
+    "n_control",
+    "n_comp",
+    "n_calls",
+    "trunc",
+    "seconds",
+)
+DECIDE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "state", "question_type")
 
 
 def _cell(value: Any) -> str:
