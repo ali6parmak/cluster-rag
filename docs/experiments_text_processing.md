@@ -2515,7 +2515,7 @@ read off the **floor's own curve of the same rule** at the real arm's reach,
 per document, then averaged over the three documents.)
 
 **The two-part rule is the best of the three**: it reaches 50–60% of the
-unjudged space (21,741–25,555 cells of the 42,947) while discarding
+unjudged space (21,471–25,555 cells of the 42,947) while discarding
 11–19% of the verified positives, where the geometry alone reaches much
 further (78–83%) at a much higher cost (31–34%) and the arm's margin alone
 reaches 59–65% at 26–40%. This is CS-6d's "retrieve with the cosine, rank
