@@ -72,6 +72,7 @@ from cluster_rag.text_processors.base import Chunker, Combiner, FeatureExtractor
 from cluster_rag.text_processors.calibration import (
     THRESHOLD_CRITERION_DESCRIPTIONS,
     THRESHOLD_CRITERION_FLOOR_GAP,
+    THRESHOLD_CRITERION_YOUDEN,
     choose_margin,
     choose_threshold,
     harm_at_coverage,
@@ -1943,6 +1944,29 @@ class Stage3Grid:
         return int(self.rows.size)
 
 
+# The name of the decision model's arm (Stage 3.5.2): the decision model is
+# an *arm* of the analysis, not another embedding model.
+DECISION_ARM = "decision"
+
+# The decision rule's variants (CS-7b). The first two are the probability
+# cuts (the fixed one and the fit-side fitted one), the third is the margin
+# rule with the decision model's probability as the ranking signal.
+DECISION_RULE_FIXED_CUT = "decision_fixed_cut"
+DECISION_RULE_FIT_THRESHOLD = "decision_fit_threshold"
+DECISION_RULE_MARGIN = "decision_margin"
+DECISION_RULE_VARIANTS: tuple[str, ...] = (
+    DECISION_RULE_FIXED_CUT,
+    DECISION_RULE_FIT_THRESHOLD,
+    DECISION_RULE_MARGIN,
+)
+
+# The decision model's fixed operating point: the probability below which the
+# model calls a pair a non-match. A calibrated model makes an absolute cut
+# meaningful (the track's rule against absolute cuts is about the *embedding*
+# geometry, whose scale no absolute cut separates).
+DECISION_FIXED_CUT = 0.5
+
+
 def build_stage3_grid(view: DatasetView) -> Stage3Grid:
     """The grid's cells (documents in the strata's order, rows and columns ascending)."""
     rows: list[int] = []
@@ -3621,6 +3645,467 @@ def _assemble_reporting(
             "variants": variants,
             "unmeasured": next(iter(per_document.values()))["safe_negative"]["unmeasured"],
         },
+    }
+
+
+def score_decision_arm(
+    view: DatasetView,
+    *,
+    decision: Any,
+    arm_name: str = DECISION_ARM,
+    hit_ks: Sequence[int] = HIT_KS,
+) -> dict[str, Any]:
+    """The decision model's arm over the whole same-document grid (CS-7b).
+
+    The block is the **existing arm's shape** (the pair AUC pooled and per
+    document, the within/cross decomposition, the score distributions, the
+    rank percentiles, the hit@k, the top-1 provenance, the length
+    correlation), so the decision arm's numbers sit next to the embedding
+    arms' in the same artifact and the same table.
+
+    Two things are *not* comparable with the embedding arms':
+
+    - the **level** numbers (a probability against a cosine): the scales are
+      different units, exactly as the CS-6e note says for the learned arm's
+      probability against the cosine's;
+    - nothing else: the rank numbers are measured in the **same** candidate
+      lists (the paragraph's document's questions), because the arm scores the
+      whole grid.
+    """
+    paragraph_side = SideEncoding(
+        texts=tuple(view.paragraphs),
+        chunk_lists=tuple((text,) for text in view.paragraphs),
+        vectors=np.zeros((len(view.paragraphs), 1), dtype=np.float32),
+        meta={
+            "kind": "decision",
+            "scorer": "a decision model (Ollama's decision-model type)",
+            "n_cells": int(decision.n_cells),
+        },
+    )
+    question_side = SideEncoding(
+        texts=tuple(view.questions),
+        chunk_lists=tuple((text,) for text in view.questions),
+        vectors=np.zeros((len(view.questions), 1), dtype=np.float32),
+        meta={"kind": "decision", "n_cells": int(decision.n_cells)},
+    )
+    block = score_arm(
+        view,
+        arm_name=arm_name,
+        similarities=decision.matrix,
+        paragraph_side=paragraph_side,
+        question_side=question_side,
+        hit_ks=hit_ks,
+    )
+    block["decision"] = dict(decision.metadata)
+    return block
+
+
+def _decision_rule_masks(
+    view: DatasetView, grid: Stage3Grid
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The grid's masks: the judged cells, the verified positives, the unjudged ones."""
+    judged = np.zeros(grid.n_cells, dtype=bool)
+    positive = np.zeros(grid.n_cells, dtype=bool)
+    for record in view.pairs:
+        position = grid.index[
+            (view.paragraph_row[record.paragraph_text], view.question_col[record.question_text])
+        ]
+        judged[position] = True
+        positive[position] = record.label == 1
+    return judged, positive, ~judged
+
+
+def decision_rule_block(
+    view: DatasetView,
+    *,
+    grid: Stage3Grid,
+    scores: np.ndarray,
+    mismatched_scores: np.ndarray | None = None,
+    reporting: ReportingSpec,
+    fixed_cut: float = DECISION_FIXED_CUT,
+) -> dict[str, Any]:
+    """The safe-negative rule with the decision model's probability (CS-7b).
+
+    Three forms, all measured the way CS-6e measured the rule (the same
+    document-level holdout, the same fit-side choices, the same pooled
+    numbers over the whole unjudged grid):
+
+    - the **fixed cut** (the probability below which the model calls the pair
+      a non-match): the operating point a calibrated model makes meaningful,
+      and the one the deliverable would ship;
+    - the **fit-side threshold** (the same cut, but fitted on the fit side and
+      applied to the holdout): the old way, beside it;
+    - the **margin rule** (the cell at least X below its own paragraph's best
+      candidate, X fitted on the fit side): the existing rule's shape with the
+      decision model's probability as the ranking signal.
+
+    Beside every form: the **label-blind counterpart** — the same model, the
+    same prompts, but every cell's question replaced by another question of
+    the same document. It is the control-role floor's counterpart for a model
+    that is not fitted on anything: it keeps the model's shape, its
+    calibration and its cost, and loses only the pairing.
+
+    The unjudged cells' true positive rate stays **unmeasured** (no human
+    labelling in this track): the numbers are the rule's reach and its harm
+    on the verified positives, never its precision.
+    """
+    values = np.asarray(scores, dtype=np.float64)
+    blind = None if mismatched_scores is None else np.asarray(mismatched_scores, dtype=np.float64)
+    judged_mask, positive_mask, unjudged_mask = _decision_rule_masks(view, grid)
+    cells_by_document = _cells_by_document(grid)
+    documents = sorted(cells_by_document)
+
+    def _margins(document: str, source: np.ndarray) -> np.ndarray:
+        """The margins of one document's cells (the cell's distance below its row's best)."""
+        cells = cells_by_document[document]
+        return _margins_of_document(grid.rows[cells], grid.columns[cells], source[cells])
+
+    def _counterpart(
+        *,
+        coverage: float | None,
+        harm: float | None,
+        matched_harm: float | None,
+        note: str,
+    ) -> dict[str, Any]:
+        """The label-blind counterpart's numbers (the same shape as the floor's)."""
+        return {
+            "n_draws": 1 if blind is not None else 0,
+            "per_draw": (
+                [
+                    {
+                        "coverage": coverage,
+                        "harm": harm,
+                        "harm_at_matched_coverage": matched_harm,
+                    }
+                ]
+                if blind is not None
+                else []
+            ),
+            "mean": {"coverage": coverage, "harm": harm},
+            "harm_at_matched_coverage": {
+                "coverage": coverage,
+                "harm": matched_harm,
+                "n_draws_compared": 1 if blind is not None else 0,
+            },
+            "note": note,
+        }
+
+    per_document: dict[str, Any] = {}
+    for holdout in documents:
+        fit_side_documents = [document for document in documents if document != holdout]
+        cells = cells_by_document[holdout]
+        holdout_unjudged = unjudged_mask[cells]
+        holdout_positive = positive_mask[cells]
+        holdout_values = values[cells]
+        fit_cells = np.concatenate([cells_by_document[document] for document in fit_side_documents])
+        fit_unjudged = unjudged_mask[fit_cells]
+        fit_positive = positive_mask[fit_cells]
+        fit_values = values[fit_cells]
+
+        variants: dict[str, Any] = {}
+
+        # -- the fixed cut ------------------------------------------------
+        cleared = holdout_values < fixed_cut
+        counts = rule_counts(cleared, unjudged=holdout_unjudged, positives=holdout_positive)
+        blind_counts = None
+        if blind is not None:
+            blind_cleared = blind[cells] < fixed_cut
+            blind_counts = rule_counts(
+                blind_cleared, unjudged=holdout_unjudged, positives=holdout_positive
+            )
+        variants[DECISION_RULE_FIXED_CUT] = {
+            "space": (
+                "the decision model's probability, cut at a FIXED "
+                f"{fixed_cut:g} (the calibrated model's own operating point)"
+            ),
+            "fit_side": {
+                "cut": fixed_cut,
+                "note": (
+                    "no fitting: the cut is the model's own probability scale, "
+                    "which the calibration block measures (CS-7a: the ECE "
+                    "0.089-0.137 pooled for tev1)"
+                ),
+            },
+            "holdout": {"counts": counts},
+            "counterpart": _counterpart(
+                coverage=None if blind_counts is None else blind_counts["coverage"],
+                harm=None if blind_counts is None else blind_counts["harm"],
+                matched_harm=None if blind_counts is None else blind_counts["harm"],
+                note=(
+                    "the label-blind counterpart: the same model with every cell's "
+                    "question replaced by another question of the same document, "
+                    "so it keeps the model's shape and its calibration and loses "
+                    "only the pairing. Its harm is at the same cut."
+                ),
+            ),
+        }
+
+        # -- the fit-side threshold ---------------------------------------
+        threshold_block: dict[str, Any] = {"threshold": None, "error": None}
+        if reporting.threshold_criterion == THRESHOLD_CRITERION_YOUDEN:
+            # the reviewer-verified hard negatives (the reviewed set's own
+            # ground truth) as the negative class
+            negative_class = "the reviewer-verified hard negatives (subset A, ground truth)"
+        else:
+            # the unjudged ordinary cells (the rule's target negative class)
+            negative_class = "the unjudged ordinary cells (presumed negatives)"
+        if fit_values.size:
+            positives_mask = positive_mask[fit_cells]
+            if reporting.threshold_criterion == THRESHOLD_CRITERION_YOUDEN:
+                negatives_mask = judged_mask[fit_cells] & ~positive_mask[fit_cells]
+            else:
+                negatives_mask = unjudged_mask[fit_cells]
+            candidates = threshold_candidates(fit_values, n_quantiles=reporting.threshold_quantiles)
+            try:
+                choice = choose_threshold(
+                    fit_values,
+                    positives=positives_mask,
+                    negatives=negatives_mask,
+                    candidates=candidates,
+                )
+                threshold = float(choice["threshold"])
+                threshold_block = {
+                    "threshold": threshold,
+                    "criterion_value": choice["value"],
+                    "tpr": choice["tpr"],
+                    "fpr": choice["fpr"],
+                    "n_candidates": len(candidates),
+                    "curve": choice["curve"],
+                    "error": None,
+                }
+            except ValueError as error:
+                threshold_block = {"threshold": None, "error": str(error)}
+        threshold = threshold_block.get("threshold")
+        if "negative_class" not in threshold_block:
+            threshold_block["negative_class"] = negative_class
+        if threshold is not None:
+            threshold_cleared = holdout_values < threshold
+            counts = rule_counts(
+                threshold_cleared, unjudged=holdout_unjudged, positives=holdout_positive
+            )
+            blind_counts = None
+            if blind is not None:
+                blind_cleared = blind[cells] < threshold
+                blind_counts = rule_counts(
+                    blind_cleared, unjudged=holdout_unjudged, positives=holdout_positive
+                )
+        else:
+            counts = rule_counts(
+                np.zeros_like(holdout_values, dtype=bool),
+                unjudged=holdout_unjudged,
+                positives=holdout_positive,
+            )
+            blind_counts = None
+        variants[DECISION_RULE_FIT_THRESHOLD] = {
+            "space": (
+                "the decision model's probability, cut at a threshold chosen on "
+                "the FIT SIDE and applied to the holdout (the old way)"
+            ),
+            "fit_side": {
+                **threshold_block,
+                "criterion": reporting.threshold_criterion,
+                "negative_class": negative_class,
+                "note": (
+                    "the threshold is chosen on the fit side (the other two "
+                    "documents) by the report's own criterion and applied to the "
+                    "held-out one"
+                ),
+            },
+            "holdout": {"counts": counts},
+            "counterpart": _counterpart(
+                coverage=None if blind_counts is None else blind_counts["coverage"],
+                harm=None if blind_counts is None else blind_counts["harm"],
+                matched_harm=None if blind_counts is None else blind_counts["harm"],
+                note=(
+                    "the label-blind counterpart at the same threshold: the same "
+                    "model with every cell's question replaced by another question "
+                    "of the same document"
+                ),
+            ),
+        }
+
+        # -- the margin rule ----------------------------------------------
+        fit_margins = np.concatenate(
+            [_margins(document, values) for document in fit_side_documents]
+        )
+        holdout_margins = _margins(holdout, values)
+        margin_grid = (
+            margin_candidates(fit_margins[fit_unjudged], n_quantiles=reporting.margin_quantiles)
+            if fit_unjudged.any()
+            else np.asarray([], dtype=np.float64)
+        )
+        margin_choice, margin_error = _safe_margin_rule(
+            fit_margins,
+            unjudged=fit_unjudged,
+            positives=fit_positive,
+            n_quantiles=reporting.margin_quantiles,
+        )
+        margin = margin_choice["margin"] if margin_choice else None
+        margin_cleared = (
+            holdout_margins >= margin
+            if margin is not None
+            else np.zeros_like(holdout_margins, dtype=bool)
+        )
+        margin_counts = rule_counts(
+            margin_cleared, unjudged=holdout_unjudged, positives=holdout_positive
+        )
+        margin_curve_values = margin_curve(
+            holdout_margins,
+            unjudged=holdout_unjudged,
+            positives=holdout_positive,
+            candidates=margin_grid,
+        )
+        blind_matched = None
+        blind_coverage = None
+        blind_harm = None
+        if blind is not None:
+            blind_fit_margins = np.concatenate(
+                [_margins(document, blind) for document in fit_side_documents]
+            )
+            blind_holdout_margins = _margins(holdout, blind)
+            blind_choice, _ = _safe_margin_rule(
+                blind_fit_margins,
+                unjudged=fit_unjudged,
+                positives=fit_positive,
+                n_quantiles=reporting.margin_quantiles,
+            )
+            if blind_choice is not None:
+                blind_cleared = blind_holdout_margins >= blind_choice["margin"]
+                blind_counts = rule_counts(
+                    blind_cleared, unjudged=holdout_unjudged, positives=holdout_positive
+                )
+                blind_coverage = blind_counts["coverage"]
+                blind_harm = blind_counts["harm"]
+                blind_curve = margin_curve(
+                    blind_holdout_margins,
+                    unjudged=holdout_unjudged,
+                    positives=holdout_positive,
+                    candidates=margin_grid,
+                )
+                blind_matched = harm_at_coverage(blind_curve, margin_counts["coverage"])
+        variants[DECISION_RULE_MARGIN] = {
+            "space": (
+                "the decision model's margin: the cell's distance below its own "
+                "paragraph's best candidate (the existing rule's shape with the "
+                "decision model's probability as the ranking signal)"
+            ),
+            "fit_side": {
+                "margin": margin,
+                "criterion_value": margin_choice["value"] if margin_choice else None,
+                "coverage": margin_choice["coverage"] if margin_choice else None,
+                "harm": margin_choice["harm"] if margin_choice else None,
+                "n_candidates": margin_choice["n_candidates"] if margin_choice else 0,
+                "error": margin_error,
+                "note": (
+                    "the margin is chosen on the fit side by the rule's own "
+                    "criterion — the coverage over the fit side's unjudged cells "
+                    "minus the harm on the fit side's verified positives — and "
+                    "applied to the held-out one"
+                ),
+            },
+            "holdout": {"counts": margin_counts, "curve": margin_curve_values},
+            "counterpart": _counterpart(
+                coverage=blind_coverage,
+                harm=blind_harm,
+                matched_harm=blind_matched,
+                note=(
+                    "the label-blind counterpart: the same model with every cell's "
+                    "question replaced by another question of the same document, "
+                    "running the same rule (its own fit-side margin choice). Its "
+                    "harm at the matched coverage is read off its own curve."
+                ),
+            ),
+        }
+
+        per_document[holdout] = {
+            "fit_side_documents": fit_side_documents,
+            "variants": variants,
+        }
+
+    # the pooled numbers: the three holdouts partition the grid
+    pooled: dict[str, Any] = {}
+    for variant in DECISION_RULE_VARIANTS:
+        totals = {
+            "n_unjudged_cells": 0,
+            "n_unjudged_cleared": 0,
+            "n_positives": 0,
+            "n_positives_discarded": 0,
+        }
+        counterpart_coverages: list[float] = []
+        counterpart_harms: list[float] = []
+        counterpart_matched: list[float] = []
+        for block in per_document.values():
+            counts = block["variants"][variant]["holdout"]["counts"]
+            for key in totals:
+                totals[key] += int(counts[key])
+            counterpart = block["variants"][variant]["counterpart"]
+            counterpart_mean = counterpart.get("mean") or {}
+            if counterpart_mean.get("coverage") is not None:
+                counterpart_coverages.append(float(counterpart_mean["coverage"]))
+            if counterpart_mean.get("harm") is not None:
+                counterpart_harms.append(float(counterpart_mean["harm"]))
+            matched = (counterpart.get("harm_at_matched_coverage") or {}).get("harm")
+            if matched is not None:
+                counterpart_matched.append(float(matched))
+        coverage = (
+            totals["n_unjudged_cleared"] / totals["n_unjudged_cells"]
+            if totals["n_unjudged_cells"]
+            else None
+        )
+        harm = (
+            totals["n_positives_discarded"] / totals["n_positives"]
+            if totals["n_positives"]
+            else None
+        )
+        pooled[variant] = {
+            **totals,
+            "coverage": coverage,
+            "harm": harm,
+            "counterpart": {
+                "mean": {
+                    "coverage": (
+                        float(np.mean(counterpart_coverages)) if counterpart_coverages else None
+                    ),
+                    "harm": float(np.mean(counterpart_harms)) if counterpart_harms else None,
+                },
+                "harm_at_matched_coverage": {
+                    "coverage": coverage,
+                    "harm": (float(np.mean(counterpart_matched)) if counterpart_matched else None),
+                    "n_documents_compared": len(counterpart_matched),
+                },
+            },
+            "note": (
+                "the rule's reach over the WHOLE unjudged grid (every "
+                "same-document cell without a record), pooled over the three "
+                "documents, and the share of the verified positives the rule "
+                "would discard — read against the label-blind counterpart"
+            ),
+        }
+
+    return {
+        "definition": {
+            "fixed_cut": (
+                "the decision model's probability below which the model calls "
+                "the pair a non-match: a cell under the cut is a candidate safe "
+                "negative"
+            ),
+            "margin": (
+                "the cell's distance below its own paragraph's best candidate, "
+                "inside the paragraph's document"
+            ),
+            "counterpart": (
+                "the label-blind counterpart: the same model with every cell's "
+                "question replaced by another question of the same document"
+            ),
+        },
+        "per_document": per_document,
+        "pooled": pooled,
+        "unmeasured": (
+            "the unjudged cells' true positive rate is UNMEASURED: no human "
+            "labelling in this track. The numbers are the rule's reach and its "
+            "harm on the verified positives, never its precision on the unjudged "
+            "cells."
+        ),
     }
 
 

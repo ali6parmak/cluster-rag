@@ -30,6 +30,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 from cluster_rag.decision.base import Decider, answer_probability
 from cluster_rag.omct_analysis import DatasetView
 from cluster_rag.preprocess import apply_question_transform
@@ -77,14 +79,23 @@ def build_cells(
     scope: str,
     question_transform: str,
     question_block_markers: Sequence[str],
+    mismatched: bool = False,
 ) -> tuple[DecisionCell, ...]:
     """The cells a probe scores: the reviewed set plus the ordinary cells.
 
     The ``judged`` scope scores the 1,520 reviewed pairs and the 4,000
-    unjudged-proxy control cells; the ``grid`` scope scores every cell of the
-    same-document grid. The reviewed set's label-0 pairs (the reviewer-verified
+    unjudged-proxy control cells; the ``grid`` scope scores **every** cell of
+    the same-document grid (in the grid's own order — the documents' order,
+    the rows and columns ascending — so the scores line up with the Stage-3
+    grid cell by cell). The reviewed set's label-0 pairs (the reviewer-verified
     hard negatives) and the ordinary cells (the control, or the unjudged grid)
     are **separate groups** — they are never pooled.
+
+    ``mismatched=True`` builds the **label-blind control**: every cell's
+    question is replaced by another question of the same document (a
+    deterministic cyclic shift), so the model keeps its shape, its calibration
+    and its cost but loses the pairing — the control-role floor's counterpart
+    for a model that is not fitted on anything.
     """
     codes = {report["document"]: report["code"] for report in view.documents}
     questions = list(view.questions)
@@ -92,8 +103,42 @@ def build_cells(
         questions, question_transform, tuple(question_block_markers)
     )
     question_texts = dict(zip(questions, transformed, strict=True))
+    labels = {
+        (view.paragraph_row[record.paragraph_text], view.question_col[record.question_text]): int(
+            record.label
+        )
+        for record in view.pairs
+    }
 
-    cells: list[DecisionCell] = []
+    if scope == "grid":
+        cells: list[DecisionCell] = []
+        for grid in view.grids:
+            columns = list(grid.question_cols)
+            for row in grid.paragraph_rows:
+                for position, column in enumerate(columns):
+                    label = labels.get((row, column))
+                    asked = columns[(position + 1) % len(columns)] if mismatched else column
+                    cells.append(
+                        DecisionCell(
+                            cell_id=_cell_id(
+                                codes[grid.document],
+                                view.paragraph_numbers[row],
+                                view.question_numbers[column],
+                            ),
+                            group=GROUP_JUDGED if label is not None else GROUP_UNJUDGED,
+                            document=grid.document,
+                            paragraph_row=row,
+                            question_col=column,
+                            paragraph_text=view.paragraphs[row],
+                            question_text=question_texts[view.questions[asked]],
+                            label=label,
+                            paragraph_number=view.paragraph_numbers[row],
+                            question_number=view.question_numbers[column],
+                        )
+                    )
+        return tuple(cells)
+
+    cells = []
     for record, cell in zip(view.pairs, view.judged_cells, strict=True):
         row = view.paragraph_row[record.paragraph_text]
         column = view.question_col[record.question_text]
@@ -111,33 +156,6 @@ def build_cells(
                 question_number=int(cell["question_number"]),
             )
         )
-
-    if scope == "grid":
-        judged_cells = {(cell.paragraph_row, cell.question_col) for cell in cells}
-        for grid in view.grids:
-            for row in grid.paragraph_rows:
-                for column in grid.question_cols:
-                    if (row, column) in judged_cells:
-                        continue
-                    cells.append(
-                        DecisionCell(
-                            cell_id=_cell_id(
-                                codes[grid.document],
-                                view.paragraph_numbers[row],
-                                view.question_numbers[column],
-                            ),
-                            group=GROUP_UNJUDGED,
-                            document=grid.document,
-                            paragraph_row=row,
-                            question_col=column,
-                            paragraph_text=view.paragraphs[row],
-                            question_text=question_texts[view.questions[column]],
-                            label=None,
-                            paragraph_number=view.paragraph_numbers[row],
-                            question_number=view.question_numbers[column],
-                        )
-                    )
-        return tuple(cells)
 
     for document, row, column in view.control.cells:
         cells.append(
@@ -159,6 +177,82 @@ def build_cells(
             )
         )
     return tuple(cells)
+
+
+@dataclass(frozen=True)
+class DecisionGrid:
+    """The decision model's scores over the whole same-document grid.
+
+    ``scores`` holds one score per grid cell, in the grid's own order (the
+    documents' order, the rows and columns ascending) — the same order the
+    Stage-3 grid uses, so the two are comparable cell by cell. ``matrix`` is
+    the same scores as a (paragraphs x questions) matrix, with the
+    cross-document cells left empty (they are never asked: the grid is
+    same-document).
+    """
+
+    scores: np.ndarray
+    rows: np.ndarray
+    columns: np.ndarray
+    documents: np.ndarray
+    matrix: np.ndarray
+    n_cells: int
+    n_truncated: int
+    n_calls: int
+    metadata: dict[str, Any]
+
+
+def score_decision_grid(
+    view: DatasetView,
+    decider: Decider,
+    arm: DecisionArm,
+    *,
+    question_transform: str,
+    question_block_markers: Sequence[str],
+    max_questions_per_call: int = 64,
+    mismatched: bool = False,
+) -> DecisionGrid:
+    """Score the whole same-document grid with the decision model.
+
+    The cells come from :func:`build_cells` in the grid's own order, so the
+    scores line up with the Stage-3 grid cell by cell — that is what makes
+    the decision arm an *arm* of the analysis rather than a separate
+    measurement.
+    """
+    cells = build_cells(
+        view,
+        scope="grid",
+        question_transform=question_transform,
+        question_block_markers=question_block_markers,
+        mismatched=mismatched,
+    )
+    probabilities, truncated, n_calls = score_cells(
+        decider, cells, arm, max_questions_per_call=max_questions_per_call
+    )
+    scores = np.asarray(probabilities, dtype=np.float64)
+    rows = np.asarray([cell.paragraph_row for cell in cells], dtype=np.int64)
+    columns = np.asarray([cell.question_col for cell in cells], dtype=np.int64)
+    documents = np.asarray([cell.document for cell in cells])
+    n_paragraphs = max(len(view.paragraphs), 1)
+    n_questions = max(len(view.questions), 1)
+    matrix = np.full((n_paragraphs, n_questions), np.nan, dtype=np.float64)
+    matrix[rows, columns] = scores
+    return DecisionGrid(
+        scores=scores,
+        rows=rows,
+        columns=columns,
+        documents=documents,
+        matrix=matrix,
+        n_cells=len(cells),
+        n_truncated=int(sum(truncated)),
+        n_calls=n_calls,
+        metadata={
+            "mismatched": mismatched,
+            "truncated_cells": int(sum(truncated)),
+            "n_calls": n_calls,
+            "n_cells": len(cells),
+        },
+    )
 
 
 def score_cells(

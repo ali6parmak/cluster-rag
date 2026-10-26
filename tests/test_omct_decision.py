@@ -21,6 +21,7 @@ from cluster_rag import cli
 from cluster_rag.cli import main
 from cluster_rag.decision.base import DecisionAnswer, DecisionInfo
 from cluster_rag.text_processors.decision.probe import GROUP_COMPETENCE, GROUP_CONTROL, GROUP_JUDGED
+from fake_embedder import FakeEmbedder
 
 DIGEST = "c" * 64
 
@@ -122,6 +123,115 @@ def test_decide_omct_writes_the_artifact(
     assert {cell["label"] for cell in competence["cells"]} == {0, 1}
     # the competence cells live in their own block, never in the arm's cells
     assert GROUP_COMPETENCE not in groups
+
+
+ANALYZE_DECISION_CONFIG_EXTRA = f"""
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 7
+  decision:
+    models:
+      - name: fake-decider
+        model_id: fake:latest
+        digest: {DIGEST}
+        state: paragraph
+        question_type: noul
+        instructions: "Is the paragraph about the same topic as the question?"
+        max_input_tokens: 512
+    scope: grid
+    competence_control: false
+    mismatched_control: true
+    prompt_version: v1
+"""
+
+
+def test_analyze_omct_adds_the_decision_arm(
+    sample_pairs, write_config, fake_decider, tmp_path, monkeypatch
+) -> None:
+    """The decision model becomes an arm of the analysis (CS-7b)."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-decision",
+        data_external=sample_pairs,
+        extra=ANALYZE_DECISION_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-decision"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    decision = [model for model in payload["models"] if model.get("kind") == "decision"]
+    assert len(decision) == 1
+    entry = decision[0]
+    assert entry["model"]["model_id"] == "fake:latest"
+    assert entry["model"]["digest"] == DIGEST
+    arm = entry["arms"]["decision"]
+    assert arm["pair_auc"]["overall"] is not None
+    assert arm["hit_at_k"]["label1"]["hit@1"] is not None
+    # the comparison against the full-text cosine (the same run, the same cells)
+    comparison = entry["comparisons"]["decision"]
+    assert comparison["paired_auc"]["delta_auc"] is not None
+    assert comparison["deshifted_auc"]["overall"] is not None
+    # the rule: the three variants and the label-blind counterpart
+    rule = entry["rule"]
+    assert set(rule["pooled"]) == {
+        "decision_fixed_cut",
+        "decision_fit_threshold",
+        "decision_margin",
+    }
+    fixed = rule["pooled"]["decision_fixed_cut"]
+    assert fixed["coverage"] is not None
+    assert fixed["harm"] is not None
+    # the label-blind counterpart ran (its harm is None only when a document
+    # carries no verified positive to discard)
+    assert "mean" in fixed["counterpart"]
+    per_document = rule["per_document"]
+    assert per_document
+    for block in per_document.values():
+        counterpart = block["variants"]["decision_fixed_cut"]["counterpart"]
+        assert counterpart["n_draws"] == 1
+
+
+def test_the_decision_arm_gets_its_own_table_row(
+    sample_pairs, write_config, fake_decider, tmp_path, monkeypatch
+) -> None:
+    """The decision arm's row lands in the track's table (the arms shape)."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "track_table.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-decision",
+        data_external=sample_pairs,
+        extra=ANALYZE_DECISION_CONFIG_EXTRA,
+        experiment_table_text_processing_omct=table,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    text = table.read_text("utf-8")
+    assert "## OMCT — analyze-omct" in text
+    assert "| decision |" in text
+    assert "fake:latest" in text
 
 
 def test_decide_omct_appends_the_track_table_row(

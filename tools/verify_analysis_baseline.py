@@ -108,6 +108,11 @@ def check_run(results: Path, run_id: str) -> list[str]:
     artifact = load_artifact(results, run_id)
     problems: list[str] = []
     for model in artifact.get("models", []):
+        if model.get("kind") == "decision":
+            # The decision arm (CS-7b) is not an embedding model: it has no
+            # Stage-0 full-text baseline arm to reproduce (it is compared with
+            # the cosine inside the run, as an arm).
+            continue
         name = model.get("name", "unknown")
         try:
             reference = load_artifact(results, reference_run_id(name))["models"][0]

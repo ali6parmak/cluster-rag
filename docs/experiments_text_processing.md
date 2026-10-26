@@ -2773,3 +2773,115 @@ fit-side-threshold comparison, and the control-role floor's counterpart
 beside both. The probe has settled which arm to carry: **tev1 with the
 two-option `choice`** (the best AUC, the best calibration, and the
 `paragraph` shape is 16× cheaper for 0.006 of AUC).
+
+## Stage 3.5.2 — the decision arm on the grid + the rule's decider (CS-7b, 2026-10-26)
+
+**The question.** The plan's Stage 3.5.2 turns the deliverable's rule around:
+the safe-negative rule gets a **label-driven** scorer behind it. The decision
+model scores the **whole same-document grid** (44,467 cells) and becomes an
+*arm* of `analyze-omct` — the same cells, the same candidate lists, the same
+control, the paired comparison against the full-text cosine — and the rule is
+re-measured with the decision model's probability as the ranking signal.
+
+**What was run.** Three runs
+(`experiments_text_processing/stage35_grid_sweep.py`, the sweep
+`stage35_grid`): the three Stage-0 models as the cosine's reference, each
+with the **decision arm** (`tev1`, the `paragraph` shape, the two-option
+`choice` — the CS-7a winner) scoring the whole grid, plus its
+**label-blind counterpart** (the same model, the same prompts, but every
+cell's question replaced by another question of the same document) —
+`omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-grid`. The
+decision arm's numbers are the same in the three runs (it does not depend on
+an embedder); the *reference* differs, so the paired comparison against the
+cosine is per model.
+
+**1. The decision arm beats every other scorer on the reviewed set.** The
+within-document AUC is **0.7701** (the pooled 0.7688, the per-document macro
+0.8014) — against the full-text cosine's 0.5020–0.5632 and the track's own
+learned arm's 0.6472–0.6723. The paired difference against the cosine is
+**+0.2069 / +0.2463 / +0.2681** (embeddinggemma / voyage-4-nano / arctic2),
+all with 95% intervals excluding zero, and the **de-shifted** AUC (the
+control's per-document mean shift removed) stays at 0.7592–0.7639: the gain
+survives the scale shift, so it is a ranking gain, not a re-scaling. The
+floor gap (the verified positives' mean minus the ordinary cells' mean) is
+**0.3530** against the cosine's 0.1276–0.1442.
+
+The *retrieval* side is a different story: the positives' hit@1 is **0.1317**
+against the cosine's 0.1050–0.1355 — the decision model ranks a *pair* much
+better but picks a paragraph's first candidate about the same. (The rank
+percentiles do improve: the positives' median rank 0.0507 against the
+cosine's 0.078–0.097.) The cost: **1,805 calls** for the grid in the
+`paragraph` shape — the `pair` shape would have needed 44,467.
+
+**2. The rule with the decision model: the same cost, far more reach.** The
+rule's numbers over the **whole 42,947-cell unjudged grid**, with the harm on
+the **524 verified positives** and the label-blind counterpart beside it:
+
+| rule (the decision model's probability) | the reach | the harm | the label-blind counterpart's harm |
+|---|---|---|---|
+| the **fit-side threshold** | **0.8313** | **0.1851** | 0.4147 |
+| the **margin rule** (the cell below its paragraph's best) | 0.7952 | 0.3015 | 0.5336 |
+| the **fixed 0.5 cut** | 0.9789 | 0.6050 | 0.8035 |
+
+Beside the **learned arm's** rule, measured in the same three runs (CS-6e's
+numbers):
+
+| rule (the learned arm's probability) | the reach | the harm | the control-role floor's harm at the same reach |
+|---|---|---|---|
+| the **two-part rule** (the cosine's margin AND the arm's margin) | 0.4999–0.5950 | 0.1355–0.1927 | 0.1286–0.1638 |
+| the arm's margin | 0.5895–0.6539 | 0.2824–0.4008 | 0.2489–0.2847 |
+| the cosine's margin | 0.7763–0.8286 | 0.3130–0.3378 | — (the geometry has no floor) |
+
+**The best form of the rule now reaches 83% of the unjudged space at the harm
+the old best form paid** (0.1851 against 0.1355–0.1927) — where the old best
+form reached 50–60%. That is 1.4–1.7× the reach at the same cost, and it is
+the first version of the rule whose reach is *not* bought with the harm.
+
+**3. The harm is label-driven — the certification CS-6e could not give.** The
+label-blind counterpart (the same model, the wrong pairings) discards
+**41.5%** of the verified positives at the same reach where the real arm
+discards **18.5%** (and 80.4% against 60.5% at the fixed cut). CS-6e could
+not certify the harm because the *control-role floor* — a model that knows
+nothing about the labels — reproduced it; here the label-blind scorer is
+**2.2× worse** on the same cells at the same reach. So the harm on the
+verified positives is a **label-driven number**, not a measurement of the
+reviewed set's construction ✓✓ — the deliverable's cost claim is finally a
+*quality* claim and not only a reach claim.
+
+**4. The fixed 0.5 cut is NOT the good operating point — a negative result
+about the plan's premise.** The plan hoped that a calibrated model would let
+the rule take a **fixed** cut. The measurement says otherwise: at 0.5 the
+rule clears 97.9% of the unjudged grid but discards **60.5%** of the verified
+positives. The model *is* calibrated (CS-7a: the ECE 0.089–0.137 pooled),
+but its probabilities are compressed toward the low end: it answers "no" for
+most pairs, including 60% of the **true** ones (the positives' mean
+probability is 0.41). Calibration fixes the *meaning* of the probability; it
+does not remove the need for a **fitted** operating point. The fit-side
+threshold (the harm 0.1851 at the reach 0.8313) is the form that ships, and
+its choice transfers (it is chosen on two documents and applied to the
+third ✓).
+
+**What this run does not say.**
+
+- **Nothing about the unjudged cells' positive rate.** The rule's *reach*
+  and its *harm* on the verified positives are measured; its *precision* on
+  the unjudged cells is not (no human labelling in this track).
+- **Nothing about a *second* decision model on the grid.** The arm is `tev1`
+  only (the CS-7a winner); `laya`'s best arm (0.5992) is below the track's
+  learned arm, so it was not carried to the grid.
+- **Nothing about the pair shape on the grid.** The `pair` shape is the
+  better of the two on the reviewed set (0.7767 vs. 0.7708) but it needs
+  44,467 calls instead of 1,805; the grid scope is where that difference
+  decides.
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice, they are never a UPR metric.
+- **Nothing about the models' non-determinism** (CS-7a): the same call
+  returns a slightly different probability on a re-run, so the *cache* is
+  what makes a re-run exactly reproducible (the re-run of this sweep
+  reproduced every number).
+
+**The next step.** CS-7c (Stage 3.5.3): the shortlist rerank — the cosine's
+top-K candidates per paragraph re-decided by the decision model, with the
+positives' hit@1 / hit@K against the cosine's and the learned arm's. That is
+PLAN's Phase-6 slot, and the decision arm's numbers here (the hit@1 0.1317,
+the rank percentiles) are the reference it has to beat.

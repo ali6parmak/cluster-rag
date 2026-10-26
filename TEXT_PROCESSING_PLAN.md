@@ -805,7 +805,7 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   laya); the `paragraph` shape is 16× cheaper (339 calls against 5,520) for
   0.006 of AUC. The numbers are in the track log's Stage-3.5 section; the
   next step is 3.5.2 (CS-7b) with **tev1 + the two-option `choice`**.)*
-- [ ] **3.5.2 The decision arm on the grid + the rule's decider.** The decision
+- [x] **3.5.2 The decision arm on the grid + the rule's decider.** The decision
   model scores the **whole same-document grid** (44,467 cells), so it becomes
   an *arm* of `analyze-omct` (the hit@k, the rank percentiles, the control
   side, the de-shifted AUC — all the existing blocks, unchanged) and the
@@ -816,6 +816,50 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   (the permuted-label model) says how much of the rule's quality is the
   training design's prior. The unjudged cells' true positive rate stays
   **unmeasured** — the rule still ships as the margin half only.
+  *(the design proposal, recorded before the code — CS-7b, 2026-10-26: the
+  **arm** goes into `analyze-omct` (the plan's wording), so the decision
+  model's grid scores, the embedding arms' scores and the rule live in **one
+  run** and the pairing is by construction. The arm reuses the existing
+  blocks unchanged: the pair AUC, the within/cross decomposition, the score
+  distributions, the rank percentiles, the hit@k, the top-1 provenance and
+  the comparison against the full-text cosine (the paired bootstrap, the
+  control shift, the de-shifted AUC) — with the arm's **level** numbers
+  flagged as a different scale (a probability vs. a cosine), the CS-6e
+  precedent. The **rule** takes three forms with the decision model's
+  probability as the ranking signal: (i) the **fixed 0.5 cut** (the absolute
+  rule the calibrated model makes meaningful), (ii) the **fit-side
+  threshold** (the same probability cut, but fitted on the fit side and
+  applied to the holdout — the old way, beside it), and (iii) the **margin
+  rule** (the cell at least X below its own paragraph's best candidate, X
+  fitted on the fit side — the existing rule's shape with the decision model's
+  probability). The **control-role floor's counterpart** is proposed as the
+  **mismatched-pair control**: the same model, the same prompts, but every
+  cell's question replaced by another question of the same document (a
+  deterministic shift), so the arm is label-blind while keeping the model's
+  shape, its calibration and its cost. The alternative readings (a permuted-
+  paragraph control, or no counterpart at all) are recorded as the open
+  question in section 5; the mismatched control is *measured* either way, so
+  the choice is settled by the numbers and not by taste.)*
+  *(done 2026-10-26, CS-7b: the decision model scores the **whole
+  same-document grid** inside `analyze-omct` (44,467 cells, 1,805 calls in the
+  `paragraph` shape), so it becomes an arm with the existing blocks unchanged
+  and the paired comparison against the full-text cosine; the rule's three
+  forms (the fixed 0.5 cut, the fit-side threshold, the margin rule) with the
+  **label-blind counterpart** beside them; 3 runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-grid`.
+  **Verdict: the arm is the best scorer on the reviewed set** (the
+  within-document AUC 0.7701 against the cosine's 0.5020-0.5632 and the
+  track's own learned arm's 0.6472-0.6723; the paired delta +0.207 to +0.268
+  with the intervals excluding zero, and the de-shifted AUC 0.759-0.764), and
+  **the rule reaches 83.1% of the unjudged grid at the harm 0.1851** — the
+  same cost the old best form paid at a 50-60% reach. **The harm is
+  label-driven**: the label-blind counterpart discards 41.5% of the verified
+  positives at the same reach where the real arm discards 18.5%, so the
+  cost claim is finally a quality claim. **And the plan's premise is
+  half-wrong**: the fixed 0.5 cut is *not* the good operating point (the
+  reach 97.9% at the harm 60.5%) — the model is calibrated but its
+  probabilities are compressed, so a *fitted* threshold is still needed. The
+  numbers are in the track log's Stage-3.5.2 section.)*
 - [ ] **3.5.3 The shortlist rerank (PLAN Phase 6's shape).** The cosine's
   top-K candidates per paragraph are re-decided by the decision model; the
   metric is the positives' **hit@1 / hit@K** (today 0.105–0.136 for the
@@ -1200,6 +1244,33 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   **Open:** how large is that noise relative to the grid's differences? The
   probe's arms are 0.006-0.22 apart and the observed drift is ~0.001-0.003,
   but the drift is measured once (a fresh-cache re-run) and on one model.
+- **A calibrated probability does NOT give the rule a fixed operating point
+  (CS-7b, 2026-10-26).** The plan's premise was that a calibrated decision
+  model would let the safe-negative rule take a **fixed 0.5 cut**. Measured:
+  the fixed cut clears 97.9% of the unjudged grid but discards **60.5%** of
+  the verified positives — the model is calibrated (the ECE 0.089-0.137) but
+  its probabilities are *compressed* toward the low end (the positives' mean
+  probability is 0.41), so it answers "no" for most true pairs. The
+  **fit-side threshold** is the form that ships (the reach 83.1% at the harm
+  0.1851). **Open:** is the compression a property of the model (it is
+  trained to be cautious) or of the *prompt* (the "same topic" question is
+  harder than "is this a match")? A prompt that asks the model for the
+  *match* probability rather than the *same topic* probability would move the
+  whole scale up — and the fixed cut would only become meaningful if the
+  compression is the prompt's, not the model's.
+- **The harm on the verified positives is finally label-driven (CS-7b,
+  2026-10-26).** The **label-blind counterpart** — the same decision model
+  with every cell's question replaced by another question of the same
+  document — discards **41.5%** of the verified positives at the same reach
+  where the real arm discards **18.5%** (and 80.4% against 60.5% at the
+  fixed cut). CS-6e could not certify the harm because the *control-role
+  floor* reproduced it; here the label-blind scorer is 2.2x worse on the same
+  cells. So the deliverable's cost claim is a *quality* claim. **Open:** is
+  the counterpart the right one? The alternatives are a permuted-paragraph
+  control and no counterpart at all; the mismatched control was measured
+  rather than chosen by taste, and it is the only one of the three that keeps
+  the model's shape, its calibration and its cost while losing only the
+  pairing.
 - **Late chunking is not portable to the Ollama backends (Stage 2.7).** It
   needs token-level embeddings, which `/api/embed` cannot return, so the arm
   is HF-only and its comparison is **within-model**. **Open:** is the
@@ -1561,13 +1632,37 @@ set):
   holds (all 93 `omct-analyze-*` runs reproduce the Stage-0 baseline arm
   field by field). The numbers are in the track log's Stage-3.5 section; 469
   unit tests green.)*
-- [ ] **CS-7b — the decision arm on the grid + the rule's decider (Stage
+- [x] **CS-7b — the decision arm on the grid + the rule's decider (Stage
   3.5.2).** The decision model's scores over the whole same-document grid as
   an **arm** of `analyze-omct` (the hit@k, the rank percentiles, the control
   side, the de-shifted AUC — the existing blocks, unchanged) and the
   safe-negative rule re-measured with the decision model's probability as the
   ranking signal and a **fixed** cut (0.5) beside the fit-side-threshold
   comparison; the control-role floor's counterpart beside both.
+  *(done 2026-10-26: the decision arm inside `analyze-omct` (the
+  `score_decision_arm` block + the `compare_arms` comparison against the
+  full-text cosine, the pairing by construction), the rule's three forms
+  (the fixed 0.5 cut, the fit-side threshold, the margin rule) with the
+  **label-blind counterpart** (the same model, every cell's question replaced
+  by another question of the same document) beside them, the config knob
+  `analysis.decision.mismatched_control`, and the sweep
+  `experiments_text_processing/stage35_grid_sweep.py`: 3 runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage35-grid` (the
+  decision arm: `tev1`, the `paragraph` shape, the two-option `choice`; the
+  whole 44,467-cell grid plus its label-blind counterpart, 1,805 calls each).
+  **Verdict: the decision arm is the best scorer on the reviewed set** (the
+  within-document AUC 0.7701 vs. the cosine's 0.5020-0.5632 and the track's
+  learned arm's 0.6472-0.6723; the paired delta +0.207 to +0.268, the
+  intervals excluding zero, the de-shifted AUC 0.759-0.764), and **the rule
+  reaches 83.1% of the unjudged grid at the harm 0.1851** — the same cost
+  the old best form paid at a 50-60% reach. **The harm is label-driven**:
+  the label-blind counterpart discards 41.5% of the verified positives at
+  the same reach where the real arm discards 18.5%, so the deliverable's
+  cost claim is finally a *quality* claim and not only a reach claim. **And
+  the plan's premise is half-wrong**: the fixed 0.5 cut is *not* the good
+  operating point (the reach 97.9% at the harm 60.5%) — the model is
+  calibrated but its probabilities are compressed, so a *fitted* threshold
+  is still needed. The numbers are in the track log's Stage-3.5.2 section.)*
 - [ ] **CS-7c — the shortlist rerank (Stage 3.5.3).** The cosine's top-K
   candidates re-decided by the decision model; the positives' hit@1 / hit@K
   against the cosine's and the learned arm's; the artifact is PLAN's Phase-6
@@ -1653,3 +1748,17 @@ settled is the rule itself: the harm of a tev1-driven rule on the verified
 positives, measured against the control-role floor, is **CS-7b's** question,
 and the unjudged cells' true positive rate stays unmeasured (no human
 labelling in this track).
+
+**What the rule now measures (CS-7b, 2026-10-26).** With `tev1` behind it, the
+rule's best form — the **fit-side threshold** on the decision model's
+probability — reaches **83.1% of the 42,947-cell unjudged grid** at a harm
+of **18.5% of the 524 verified positives** (the old best form, the learned
+arm's two-part rule, reached 50–60% at 13.6–19.3%). And the harm is
+**label-driven**: the label-blind counterpart (the same model, the wrong
+pairings) discards 41.5% of the positives at the same reach. So the
+deliverable now ships with a **reach claim** (83% of the unjudged space), a
+**cost claim** (18.5% of the known positives) **and** the evidence that the
+cost is a quality signal and not an artefact of the reviewed set's
+construction. The *precision* on the unjudged cells is still unmeasured (no
+human labelling), and the rule still ships as the **margin half only** — the
+fixed 0.5 cut is measured and rejected (the reach 97.9% at the harm 60.5%).

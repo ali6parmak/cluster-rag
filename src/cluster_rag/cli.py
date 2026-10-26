@@ -94,16 +94,26 @@ from cluster_rag.experiment_table import (
 from cluster_rag.omct_analysis import (
     BASELINE_ARM,
     BASELINE_CHUNKER,
+    DECISION_ARM,
+    DECISION_RULE_FIXED_CUT,
     BaselineArm,
     ChunkedSide,
     ReportingSpec,
     build_analysis_report,
     build_dataset_view,
+    build_stage3_grid,
+    compare_arms,
+    decision_rule_block,
+    score_decision_arm,
     score_model_arms,
     score_stage3_model,
     side_cache_versions,
 )
-from cluster_rag.omct_decision import DecisionArm, run_decision_arm
+from cluster_rag.omct_decision import (
+    DecisionArm,
+    run_decision_arm,
+    score_decision_grid,
+)
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
 from cluster_rag.pairs import PairLoadReport, load_pairs, summarize_pairs
 from cluster_rag.predictors import build_predictor, predictor_requirements
@@ -1471,6 +1481,101 @@ def _stage3_table_row(
     return row
 
 
+def _decision_arm_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    arm_name: str,
+    arm: dict[str, Any],
+    comparison: dict[str, Any] | None,
+    n_pairs: int,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the decision arm (CS-7b).
+
+    The row fills both table shapes' keys (the arms shape and the Stage-3
+    shape), so the decision arm's numbers show up whichever shape the run's
+    section uses. The Stage-3-only keys (the feature groups, the combiner, the
+    permutation floors) are **n/a** for a decision arm: it is not a learned
+    arm, it is a frozen zero-shot scorer.
+    """
+    info = model["model"]
+    distributions = arm["score_distributions"]
+    enrichment = arm["negative_enrichment"]["rank_percentile"]
+    paired = comparison["paired_auc"] if comparison else None
+    decomposition = comparison.get("auc_decomposition", {}) if comparison else {}
+    within_paired = decomposition.get("within_group_paired") or {}
+    hit_at_k = comparison["hit_at_k"] if comparison else {}
+    rule = (model.get("rule") or {}).get("pooled") or {}
+    fixed = rule.get(DECISION_RULE_FIXED_CUT) or {}
+    counterpart = fixed.get("counterpart") or {}
+    matched = counterpart.get("harm_at_matched_coverage") or {}
+    row: dict[str, Any] = {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "backend": info.get("backend"),
+        "model": info.get("model_id"),
+        "model_version": (info.get("digest") or "")[:12],
+        "dim": None,
+        "ctx": None,
+        "arm": arm_name,
+        "chunker": None,
+        "aggregation": None,
+        "transform": "strip_block",
+        "groups": None,
+        "features": None,
+        "combiner": None,
+        "pair_auc": _fmt(arm["pair_auc"]["overall"], 4),
+        "pooled_auc": _fmt(arm["pair_auc"]["overall"], 4),
+        "pooled_d_auc": _fmt(paired.get("delta_auc"), 4) if paired else None,
+        "pooled_d_auc_ci": (
+            f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None
+        ),
+        "macro_auc": _fmt(arm["pair_auc"].get("macro"), 4),
+        "within_auc": _fmt((arm.get("pair_auc_decomposition") or {}).get("within_group_auc"), 4),
+        "cross_auc": _fmt((arm.get("pair_auc_decomposition") or {}).get("cross_group_auc"), 4),
+        "within_d_auc": _fmt(decomposition.get("within_group_delta"), 4),
+        "within_d_auc_ci": (
+            f"[{within_paired['ci_low']:+.4f}, {within_paired['ci_high']:+.4f}]"
+            if within_paired
+            else None
+        ),
+        "d_auc": _fmt(paired.get("delta_auc"), 4) if paired else None,
+        "d_auc_ci": (f"[{paired['ci_low']:+.4f}, {paired['ci_high']:+.4f}]" if paired else None),
+        "deshift_auc": (_fmt(comparison["deshifted_auc"]["overall"], 4) if comparison else None),
+        "floor_gap_delta": (_fmt(comparison["floor_gap"]["delta"], 4) if comparison else None),
+        "floor_gap": _fmt((comparison or {}).get("floor_gap", {}).get("arm"), 4),
+        "ctrl_mean": _fmt(distributions["control"].get("mean"), 4),
+        "ctrl_mean_delta": (
+            _fmt(comparison["control_shift"]["mean_delta"], 4) if comparison else None
+        ),
+        "ctrl_p50": _fmt(distributions["control"].get("quantiles", {}).get("0.5"), 4),
+        "ctrl_rank_p50": _fmt(enrichment["control"].get("quantiles", {}).get("0.5"), 4),
+        "ctrl_rank_p50_delta": (
+            _fmt(comparison["control_shift"].get("rank_p50_delta"), 4) if comparison else None
+        ),
+        "pos_rank_p50": _fmt(enrichment["label1"].get("quantiles", {}).get("0.5"), 4),
+        "neg_rank_p50": _fmt(enrichment["label0"].get("quantiles", {}).get("0.5"), 4),
+        "chunks_per_text": None,
+        "perm_auc_within": None,
+        "ctrl_role_auc_within": None,
+        "hit1_pos": _fmt((hit_at_k.get("arm") or {}).get("label1", {}).get("hit@1"), 4),
+        "hit1_pos_ref": _fmt((hit_at_k.get("reference") or {}).get("label1", {}).get("hit@1"), 4),
+        # the decision rule: the fixed cut's reach and harm, and the
+        # label-blind counterpart's harm at the same reach
+        "rule_cov": _fmt(fixed.get("coverage"), 4),
+        "rule_harm": _fmt(fixed.get("harm"), 4),
+        "rule_floor_harm": _fmt(matched.get("harm"), 4),
+        "n_pairs": n_pairs,
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+    return row
+
+
 def _cmd_analyze_omct(config: AppConfig) -> int:
     """Run analyze-omct: the text-processing track's Stage-0 artifact.
 
@@ -1638,6 +1743,128 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             )
         models.append(model_block)
 
+    # The decision arm (CS-7b): the decision model scores the **whole**
+    # same-document grid, so it becomes an arm of this run — the same cells,
+    # the same candidate lists, the same control, and the paired comparison
+    # against the full-text cosine. The decision scorer is not an embedding
+    # model, so it enters the artifact as its own entry.
+    if analysis.decision is not None:
+        reporting = ReportingSpec(
+            enabled=True,
+            bins=analysis.stage3.reporting.bins if analysis.stage3 is not None else 10,
+            threshold_criterion=(
+                analysis.stage3.reporting.threshold_criterion
+                if analysis.stage3 is not None
+                else "floor_gap"
+            ),
+            threshold_quantiles=(
+                analysis.stage3.reporting.threshold_quantiles if analysis.stage3 is not None else 99
+            ),
+            margin_quantiles=(
+                analysis.stage3.reporting.margin_quantiles if analysis.stage3 is not None else 49
+            ),
+        )
+        for model_config in analysis.decision.models:
+            decider = build_decider(model_config, config)
+            arm = DecisionArm(
+                name=model_config.name,
+                state=model_config.state,
+                question_type=model_config.question_type,
+                instructions=model_config.instructions,
+                options=model_config.options,
+                criteria=model_config.criteria,
+                positive_option=model_config.positive_option,
+                max_input_tokens=model_config.max_input_tokens,
+            )
+            decision_grid = score_decision_grid(
+                view,
+                decider,
+                arm,
+                question_transform=analysis.question_transform,
+                question_block_markers=analysis.question_block_markers,
+                max_questions_per_call=analysis.decision.max_questions_per_call,
+            )
+            mismatched_grid = None
+            if analysis.decision.mismatched_control:
+                mismatched_grid = score_decision_grid(
+                    view,
+                    decider,
+                    arm,
+                    question_transform=analysis.question_transform,
+                    question_block_markers=analysis.question_block_markers,
+                    max_questions_per_call=analysis.decision.max_questions_per_call,
+                    mismatched=True,
+                )
+            decision_block = score_decision_arm(view, decision=decision_grid)
+            comparison = compare_arms(
+                view,
+                arm_name=DECISION_ARM,
+                reference_similarities=baseline.similarities,
+                arm_similarities=decision_grid.matrix,
+                resamples=analysis.bootstrap.resamples,
+                seed=bootstrap_seed,
+            )
+            rule_block = decision_rule_block(
+                view,
+                grid=build_stage3_grid(view),
+                scores=decision_grid.scores,
+                mismatched_scores=(None if mismatched_grid is None else mismatched_grid.scores),
+                reporting=reporting,
+            )
+            info = decider.info
+            models.append(
+                {
+                    "name": f"decision-{model_config.name}",
+                    "kind": "decision",
+                    "model": {
+                        "name": model_config.name,
+                        "model_id": info.model_id,
+                        "digest": info.digest,
+                        "backend": info.backend,
+                        "host": info.host,
+                        "prompt_version": analysis.decision.prompt_version,
+                        "state": model_config.state,
+                        "question_type": model_config.question_type,
+                        "instructions": model_config.instructions,
+                        "options": list(model_config.options),
+                        "criteria": dict(model_config.criteria),
+                        "positive_option": model_config.positive_option,
+                        "max_input_tokens": model_config.max_input_tokens,
+                        "extra": info.extra,
+                    },
+                    "arms": {DECISION_ARM: decision_block},
+                    "comparisons": {DECISION_ARM: comparison},
+                    "rule": rule_block,
+                    "truncation": {
+                        "n_cells": decision_grid.n_cells,
+                        "n_truncated": decision_grid.n_truncated,
+                        "share": (
+                            decision_grid.n_truncated / decision_grid.n_cells
+                            if decision_grid.n_cells
+                            else None
+                        ),
+                        "mismatched": {
+                            "n_cells": 0 if mismatched_grid is None else mismatched_grid.n_cells,
+                            "n_truncated": (
+                                0 if mismatched_grid is None else mismatched_grid.n_truncated
+                            ),
+                        },
+                        "note": (
+                            "the cells whose paragraph was cut to fit the model's "
+                            "input budget (the question and the instructions are "
+                            "never cut): a shortened input is never silent"
+                        ),
+                    },
+                    "cache": {
+                        "hits": getattr(decider, "cache_hits", 0),
+                        "misses": getattr(decider, "cache_misses", 0),
+                        "stored": getattr(decider, "n_stored", 0),
+                    },
+                    "usage": dict(getattr(decider, "usage", {})),
+                    "n_calls_planned": decision_grid.n_calls,
+                }
+            )
+
     omct_run_id = _omct_run_id(run_id)
     payload = build_analysis_report(
         view,
@@ -1706,6 +1933,23 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     table_rows: list[dict[str, Any]] = []
     has_stage3 = False
     for model in models:
+        if model.get("kind") == "decision":
+            # The decision arm (CS-7b): its own entry, one row per arm.
+            for arm_name, arm in (model.get("arms") or {}).items():
+                table_rows.append(
+                    _decision_arm_row(
+                        model,
+                        run_id=omct_run_id,
+                        arm_name=arm_name,
+                        arm=arm,
+                        comparison=(model.get("comparisons") or {}).get(arm_name),
+                        n_pairs=view.pooled["n_pairs"],
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            continue
         stage3 = model.get("stage3")
         if stage3 is not None:
             has_stage3 = True
@@ -1802,6 +2046,30 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         )
     )
     for model in models:
+        if model.get("kind") == "decision":
+            # The decision arm (CS-7b): its own entry, printed on its own lines.
+            decision_block = model["arms"][DECISION_ARM]
+            decision_measurement = decision_block.get("measurement", decision_block)
+            decomposition = decision_measurement.get("pair_auc_decomposition") or {}
+            rule = (model.get("rule") or {}).get("pooled") or {}
+            fixed = rule.get(DECISION_RULE_FIXED_CUT) or {}
+            counterpart = fixed.get("counterpart") or {}
+            print(
+                f"  [decision:{model['model']['name']}] {model['model']['model_id']} "
+                f"(digest {model['model']['digest'][:12]}, {model['model']['state']}/"
+                f"{model['model']['question_type']}): within-document AUC "
+                f"{_fmt(decomposition.get('within_group_auc'), 4)}, pooled AUC "
+                f"{_fmt(decision_measurement['pair_auc'].get('overall'), 4)}, macro "
+                f"{_fmt(decision_measurement['pair_auc'].get('macro'), 4)}"
+            )
+            print(
+                f"      the rule's fixed cut: the reach "
+                f"{_fmt(fixed.get('coverage'), 4)} over the unjudged grid, the harm "
+                f"{_fmt(fixed.get('harm'), 4)} on the verified positives; the "
+                "label-blind counterpart's harm "
+                f"{_fmt((counterpart.get('mean') or {}).get('harm'), 4)}"
+            )
+            continue
         info = model["embedder"]
         distributions = model["score_distributions"]
         enrichment = model["negative_enrichment"]["rank_percentile"]

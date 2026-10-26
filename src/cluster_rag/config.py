@@ -879,6 +879,12 @@ class DecisionConfig(BaseModel):
     scope: Literal["judged", "grid"] = DECISION_SCOPE_JUDGED
     competence_control: bool = True
     competence_pairs: int = Field(default=100, ge=1)
+    # The **label-blind counterpart** (CS-7b): the same model, the same
+    # prompts, but every cell's question replaced by another question of the
+    # same document. It is the control-role floor's counterpart for a model
+    # that is not fitted on anything: it keeps the model's shape, its
+    # calibration and its cost, and loses only the pairing.
+    mismatched_control: bool = True
     prompt_version: str = Field(default="v1", min_length=1)
     host: str = "http://localhost:11434"
     timeout: float = Field(default=600.0, gt=0)
