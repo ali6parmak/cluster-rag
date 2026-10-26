@@ -963,6 +963,27 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   151 chars — one recommendation each — so chunking them is near-vacuous by
   construction); the stage's real deliverable is the combiner/feature
   transfer to PLAN's Phase 6 reranker slot.
+  *(the port's **methods** are done — CS-8a…CS-9f: the UPR command and the
+  guard, the segmentation ladder, the text-side extras, the feature pack with
+  the logistic combiner and the three floors, the chunk profile / the
+  ablation / the boosted combiner, the reporting blocks, and the decision
+  probe. Two of the stage's premises need the reviewer's attention, and the
+  checkbox stays open because the **one test shot for the adopted config** is
+  still owed:*
+
+  * ***The chunking axis is a null *pooled*, not everywhere*** (CS-8b): the
+    two chunkers that do not split UPR's texts give exactly zero in every
+    bucket, but the atoms and the word windows gain +0.11 to +0.13 of
+    micro-F1 in the 300+ character bucket (25 texts). The exit criterion's
+    "near-vacuous by construction" holds for the *pooled* number and not for
+    the long-text tail.
+  * ***The stage's deliverable is bigger than the combiner*** (CS-9): the
+    decision model (tev1) reaches a shortlist recall@50 of **0.9978** on the
+    UPR sample against the champion's 0.7322 — it is a near-perfect
+    *candidate generator*, and it finds the eight unseen labels (the unseen
+    bucket's micro-F1 0.4706 against the champion's 0.0000), which the
+    champion's geometry cannot do at all. PLAN's Phase 6 reranker slot has
+    its evidence; **the slot decision is the reviewer's**.)*
 
 ## 4. Cross-cutting rules (binding here)
 
