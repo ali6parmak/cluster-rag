@@ -51,6 +51,7 @@ from cluster_rag.config import (
     LabelTextsConfig,
     PreprocessConfig,
     ProbeConfig,
+    UprAnalysisConfig,
     load_config,
     merge_configs,
     validate_embedding_run_id,
@@ -61,7 +62,14 @@ from cluster_rag.embed.base import KINDS
 # ``stats-omct`` is the sweep command for `stats --omct` (separate name, so
 # the dataset decides nothing at execution time); ``stats`` is the plain UPR
 # dataset statistics run.
-UPR_COMMANDS: tuple[str, ...] = ("stats", "split", "embed", "labelembed", "evaluate")
+UPR_COMMANDS: tuple[str, ...] = (
+    "stats",
+    "split",
+    "embed",
+    "labelembed",
+    "evaluate",
+    "analyze-upr",
+)
 OMCT_COMMANDS: tuple[str, ...] = (
     "stats-omct",
     "probe-omct",
@@ -79,6 +87,7 @@ COMMANDS: tuple[str, ...] = (
     "probe-omct",
     "analyze-omct",
     "decide-omct",
+    "analyze-upr",
 )
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
@@ -370,8 +379,98 @@ class DecideOmctCell(_LabelledCell):
         return {"analysis": self.analysis.model_dump(mode="python")}
 
 
+class AnalyzeUprCell(_LabelledCell):
+    """One ``analyze-upr`` cell: the reference predictor + the track's arms.
+
+    The text-processing track's UPR artifact
+    (TEXT_PROCESSING_PLAN.md section 7, CS-8a): the whole-text **reference
+    arm** (the main pipeline's own scoring of the split, which must reproduce
+    the matching ``evaluate`` run field by field) beside the track's chunked
+    arms, with the UPR-side diagnostics (the non-gold labels as the
+    background, the rank percentiles, the hit@k, the level and rank shift).
+
+    The reference predictor is the **same** wiring the ``evaluate`` command
+    uses (``eval.predictor`` and the two embedding runs), so the reference arm
+    is the pipeline's own numbers and not a re-implementation of them.
+    ``embed`` is the embedder the chunked arms encode their chunks with (it
+    must live in the same space as the embedding run's vectors); it is
+    optional, because a run with no chunked arm needs no encoder.
+    """
+
+    predictor: str = Field(min_length=1)  # name from the predictors registry
+    params: dict[str, Any] = Field(default_factory=dict)
+    decision: EvalDecisionConfig | None = None
+    k: int | None = Field(default=None, ge=1)
+    split: Literal["val", "test"] = "val"
+    metrics: EvalMetricsConfig | None = None
+    embedding_run: str
+    label_embedding_run: str | None = None
+    analysis: UprAnalysisConfig
+    embed: EmbedderConfig | None = None
+
+    @field_validator("embedding_run")
+    @classmethod
+    def _embedding_run_is_valid(cls, value: str) -> str:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        return validate_embedding_run_id(value)
+
+    @field_validator("label_embedding_run")
+    @classmethod
+    def _label_embedding_run_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        if value is None:
+            return None
+        return validate_label_embedding_run_id(value)
+
+    @model_validator(mode="after")
+    def _decision_xor_k(self) -> AnalyzeUprCell:
+        """``decision`` and the ``k`` shorthand are exactly one thing."""
+        if self.decision is not None and self.k is not None:
+            raise ValueError(
+                f"AnalyzeUprCell {self.label!r}: give decision= or the top_k shorthand k=, not both"
+            )
+        if self.decision is None and self.k is None:
+            raise ValueError(
+                f"AnalyzeUprCell {self.label!r}: needs a decision rule — pass the "
+                "top_k shorthand k= or a full decision="
+            )
+        return self
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "analyze-upr"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (the ``eval`` section + ``upr_analysis``)."""
+        decision = self.decision or EvalDecisionConfig(rule="top_k", k=self.k)
+        payload: dict[str, Any] = {
+            "eval": {
+                "predictor": {"name": self.predictor, "params": self.params},
+                "decision": decision.model_dump(mode="python"),
+                "split": self.split,
+                "embedding_run_id": self.embedding_run,
+                "label_embedding_run_id": self.label_embedding_run,
+            },
+            "upr_analysis": self.analysis.model_dump(mode="python"),
+        }
+        if self.metrics is not None:
+            payload["eval"]["metrics"] = self.metrics.model_dump(mode="python")
+        if self.embed is not None:
+            payload["embed"] = self.embed.model_dump(mode="python")
+        return payload
+
+
 Cell = (
-    SweepCell | EvalCell | EmbedCell | LabelEmbedCell | ProbeCell | AnalyzeOmctCell | DecideOmctCell
+    SweepCell
+    | EvalCell
+    | EmbedCell
+    | LabelEmbedCell
+    | ProbeCell
+    | AnalyzeOmctCell
+    | DecideOmctCell
+    | AnalyzeUprCell
 )
 
 

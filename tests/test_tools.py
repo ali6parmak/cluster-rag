@@ -102,3 +102,63 @@ def test_compare_stage3_arms_needs_the_out_of_fold_scores() -> None:
     artifact["models"][0]["stage3"] = {}
     with pytest.raises(KeyError, match="out_of_fold_scores"):
         module.model_scores(artifact, "fake-model")
+
+
+def _upr_artifacts(tmp_path: Path, report: dict[str, Any]) -> Path:
+    """Write a matching pair of artifacts (the evaluate run + the analyze run)."""
+    results = tmp_path / "results"
+    (results / "upr-eval-ref").mkdir(parents=True)
+    (results / "upr-analyze-x").mkdir(parents=True)
+    (results / "upr-eval-ref" / "metrics.json").write_text(
+        json.dumps({"report": report, "n_records": 2, "n_labels": 3}), encoding="utf-8"
+    )
+    (results / "upr-analyze-x" / "analysis.json").write_text(
+        json.dumps(
+            {
+                "guard": {"reference_run": "upr-eval-ref", "matches": True},
+                "arms": {
+                    "full_text": {
+                        "metrics": {
+                            "overall": report["overall"],
+                            "per_bucket": report["per_bucket"],
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return results
+
+
+def test_verify_upr_baseline_accepts_a_matching_reference(tmp_path: Path) -> None:
+    """The guard tool: a reference arm that reproduces the evaluate run passes."""
+    module = _load("verify_upr_baseline")
+    report = {"overall": {"n_records": 2, "n_labels": 3}, "per_bucket": {"tail": {"n": 1}}}
+    results = _upr_artifacts(tmp_path, report)
+    assert module.check_run(results, "upr-analyze-x") == []
+
+
+def test_verify_upr_baseline_reports_a_mismatch(tmp_path: Path) -> None:
+    """The guard tool: a differing report is a problem, not a pass."""
+    module = _load("verify_upr_baseline")
+    report = {"overall": {"n_records": 2, "n_labels": 3}, "per_bucket": {"tail": {"n": 1}}}
+    results = _upr_artifacts(tmp_path, report)
+    artifact_path = results / "upr-analyze-x" / "analysis.json"
+    artifact = json.loads(artifact_path.read_text("utf-8"))
+    artifact["arms"]["full_text"]["metrics"]["overall"]["n_records"] = 99
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+    problems = module.check_run(results, "upr-analyze-x")
+    assert problems and "the overall report differs" in problems[0]
+
+
+def test_verify_upr_baseline_reports_an_unchecked_run(tmp_path: Path) -> None:
+    """A run without a guard block is reported as unchecked, never as passing."""
+    module = _load("verify_upr_baseline")
+    results = tmp_path / "results"
+    (results / "upr-analyze-x").mkdir(parents=True)
+    (results / "upr-analyze-x" / "analysis.json").write_text(
+        json.dumps({"arms": {}}), encoding="utf-8"
+    )
+    problems = module.check_run(results, "upr-analyze-x")
+    assert problems and "no guard block" in problems[0]

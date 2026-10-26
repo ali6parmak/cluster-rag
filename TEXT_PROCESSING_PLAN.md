@@ -1820,6 +1820,217 @@ set):
   embedding-side arm the track has. The numbers are in the track log's
   Stage-2.7 section.)*
 
+### 7.1 The UPR port — the change sets (CS-8a … CS-10)
+
+*Pre-registered 2026-10-26, before the first UPR run.* The intent: run
+**every** method the track measured on OMCT on the UPR data — **including the
+ones that failed there** — so that "it does not work here" is a *measurement*
+and not an assumption. One change set per commit, one checkbox per change set;
+every number comes from a `results/<run_id>/` artifact; the claims discipline
+holds (a UPR number is a UPR metric and always names its split; an OMCT number
+is method-choice evidence only; `test` is touched once, for the final adopted
+config).
+
+The **pre-registered expectations** (written down before the runs):
+
+1. *The chunking axis is a null on the ranking side.* UPR texts average 151
+   characters; the track's smallest word window was 40 words (~250
+   characters), so a text is usually **one** chunk and the fold is the
+   identity. Expect ≈ 0 difference in every headline number, and a measured
+   null (with an artifact) is the deliverable, not a failure.
+2. *A possible small win on the retrieval side for the long-text tail.* The
+   pooled UPR number would hide exactly that effect, so the texts are bucketed
+   by length and every length bucket is reported separately.
+3. *The lexical block's transfer is the open question.* On OMCT the learned
+   pack's gain was the **lexical** block's, not the embedding geometry's. The
+   UPR vocabulary is a different corpus (68 human-rights labels against 294
+   questions), so the question "does the lexical signal transfer?" is re-asked
+   here, and the answer is the track's most interesting UPR result either way.
+4. *The chunk header and the symmetric (label-side) variants are expected
+   nulls* — the labels are 1–3 words, so chunking them is near-vacuous (the
+   degeneracy is recorded in the artifact).
+
+- [x] **CS-8a — the UPR command, the plumbing, the UPR-side background.** The
+  track's UPR command (`analyze-upr`, the UPR analogue of `analyze-omct`; the
+  placeholder `chunk-upr` in `experiment_table.py` is renamed), the sweep cell
+  and the sweep's allowed command set, the `upr_analysis:` config section, the
+  track's UPR table file (`paths.experiment_table_text_processing_upr`), the
+  UPR driver (`src/cluster_rag/upr_analysis.py`) with the UPR-side
+  diagnostics: the gold (text, label) matrix per split, the **non-gold labels
+  as the background** (fully enumerable on UPR — no control sampling, no seed
+  to pin, and the artifact says so), each label's **rank percentile** inside
+  its own text's 68-label list (0 = best) and the **top-fifth share**, the
+  gold label's **hit@1 / hit@10**, the score distributions per bucket (head /
+  torso / tail / unseen) and per label, the **level and rank shift of the
+  non-gold labels** beside every headline number, the **text-length and
+  chunk-count distributions**, and the **top-1 provenance** analogue. The
+  whole-text reference arm must reproduce the main pipeline's `evaluate`
+  numbers for the same predictor and split, field by field (the guard, the
+  UPR analogue of `tools/verify_analysis_baseline.py`: a new repo tool). The
+  leak-free boundaries: the indexes and the fit side come from **train** only,
+  val is for tuning, the label-holdout split's 8 held-out labels are excluded
+  everywhere in the train artifacts, `test` is touched once, for the final
+  adopted config.
+  *Artifacts:* `results/<run_id>/analysis.json` (the resolved config beside
+  it), the auto-appended rows in `docs/experiments_table_text_processing_upr.md`,
+  the log entry in `docs/experiments_text_processing.md`.
+  *Exit:* the command runs, the reference arm reproduces the `evaluate` run
+  field by field, the guard tool is green, the table file exists with its
+  first rows, and the log carries the run.
+  *(done 2026-10-26: the command `analyze-upr` (the placeholder `chunk-upr`
+  renamed; the never-implemented `chunk-omct` entry removed, so every
+  registered command exists), the shared evaluation wiring
+  (`cli._prepare_evaluation` — the `evaluate` command and the track's
+  reference arm now run the **same** code path, which is what makes the
+  field-by-field guard possible; the champion's `evaluate` artifact is
+  byte-identical after the refactor), the `upr_analysis:` config section
+  (the length buckets, the guard's reference run, the bootstrap settings),
+  the pure diagnostics module `text_processors/upr_diagnostics.py`, the
+  driver `upr_analysis.py`, the sweep cell `AnalyzeUprCell` (a UPR sweep
+  command, so the labels carry the `upr-` prefix), the sweep
+  `experiments_text_processing/upr_analysis_sweep.py`, the repo tool
+  `tools/verify_upr_baseline.py` and the track's **first UPR table**
+  (`docs/experiments_table_text_processing_upr.md`). One run
+  `upr-analyze-champion` (the whole-text reference arm of the standing
+  champion on **val**). **Verdict:** the guard holds (the reference arm
+  reproduces `upr-eval-fusionc-embeddinggemma-k10-c1` field by field, inside
+  the command and through the tool), the background needs no sampling
+  (43,568 non-gold cells against 1,312 gold ones), the background's rank p50
+  is exactly 0.5000 (the random expectation — a check of the rank machinery)
+  against the gold side's 0.0147, and two UPR facts fall out that the
+  pipeline's own harness does not show: the **unseen** labels are not
+  discoverable by the champion's geometry (coverage 0.000, shortlist R@50
+  0.034; the per-label distributions show the gold and the background cells of
+  an unseen label score the same, e.g. "General" 0.0946 vs 0.0881), and the
+  **long-text tail** (300+ characters, 25 val texts) is the champion's
+  weakest bucket (micro-F1 0.4727, nDCG@5 0.6104) — the starting point of
+  the CS-8b hypothesis. The numbers are in the track log's CS-8a section; 511
+  unit tests green.)*
+- [ ] **CS-8b — the segmentation ladder on UPR.** The one-sided family (the
+  **text** chunked with `atoms`, `word_windows` N = 15/25/40,
+  `sentence_windows`, `semantic`) folded with `max`, `top_k_mean:2`,
+  `top_k_mean:3`, `mean`, `decayed_top_k:3:0.5:0.25`, `local_global:0.5|max`,
+  `local_global:0.75|max`, `peak:3:0.05`; the **symmetric** family (the
+  **label** side chunked too — run anyway, as the null-check, with the
+  degeneracy recorded). The semantic chunker's threshold is selected on the
+  **fit side only** (the train split's own label-scoring metric; the grid, the
+  chosen threshold and the per-fold numbers go into the artifact). Two
+  families, because UPR has both: the **pair-scoring** family (the text's
+  chunks against the zero-shot label vectors) and the **retrieval** family
+  (each chunk is a query against the kNN / prototype index, per-label scores
+  per chunk, folded the same way; the fusion's weights re-fitted on val for
+  the chunked components). Every number per bucket (head / torso / tail /
+  unseen) and per **length bucket**, against the standing champion
+  (embeddinggemma; fusion a=0.5 / b=1.0 / c=1.0, knn k=10, `top_k k=2` →
+  val micro-F1 0.5479; 0.5988 at the calibrated `score_threshold t=1.75`) and
+  against the plain `zeroshot` and `knn` predictors.
+  *Exit:* the ladder's verdict on UPR, with the length buckets, the
+  background-side shift beside every headline number, and the null recorded
+  as a measured null.
+- [ ] **CS-8c — the text-side extras and the label-side transform.** The
+  **chunk header** (the text's own first sentence, prepended to every chunk,
+  in both modes `others` and `all`; the other headings stay ruled out), the
+  **late chunking** (the text embedded once, its token-level embeddings pooled
+  per chunk, with the model's own `Normalize(mean(tokens))` formula and the
+  per-token-normalized variant; **HF-only**, so the comparison is
+  within-model against the early-chunked arm of the same run, and the CLI says
+  so *before* the run), and the **label-side transform** (the label text as
+  the bare name vs the config template — the analogue of OMCT's `keep` vs
+  `strip_block`; paired, on the same cells, with the non-gold labels' level
+  and rank shift beside it).
+  *Exit:* every arm measured and logged, including the ones expected to be
+  nulls.
+- [ ] **CS-8d — the feature pack (UPR variant) + the logistic combiner + the
+  floors.** The UPR pack: the global cosine, the best-chunk cosine, the mean
+  of the 2 and of the K=3 best chunk cosines, their spread and the peak
+  margin, the soft lexical overlap in both directions (text ↔ label name) and
+  the char-n-gram cosine, the label-description coverage, the label-type
+  features and the chunk-profile block. **No length feature as such** — the
+  length is *measurable* on UPR, so it is recorded and reported as a
+  diagnostic (the CS-6c precedent), never fed to the model (length tracks the
+  label's frequency and the record's nature: a document proxy); the label
+  frequency is a **corpus statistic** (fit side only). The **question-part and
+  question-type blocks have no clean UPR analogue** (a UPR label has no answer
+  options, no "no data" option and no yes/no structure) and their label-side
+  counterparts (the label's name vs description vs parent) need a **label
+  catalog**, which the repo does not have (`label_catalog: null`): the pack
+  therefore runs **without the label-type block** and the gap is stated in
+  the log. The **combiner**: the logistic regression behind the `Combiner`
+  port, fitted on train (the train gold pairs plus the train non-gold labels
+  as down-weighted presumed negatives, weight 0.3 as on OMCT), evaluated on
+  val. The **floors**, all three, on the same statistic as the headline: the
+  label-permutation **chance floor**, the **control-role floor** (the gold
+  labels permuted, the non-gold labels keeping their presumed-negative role)
+  and the **random-vector floor** (the embedding sides replaced with seeded
+  noise). On UPR the control-role floor is more natural than on OMCT: the
+  non-gold labels are enumerable, so "the ordinary pairs are negative" is a
+  complete statement rather than a sampled one.
+  *Exit:* the pack's verdict on UPR, the combiner's numbers on val, the three
+  floors beside them.
+- [ ] **CS-8e — the two "not the lever" checks and the ablation, re-run on
+  UPR.** The **gradient-boosted combiner** (`HistGradientBoostingClassifier`,
+  the pinned defaults, no grid) behind the same port, with the feature-group
+  selection as the knob; the **chunk-profile block** as the pack's fifth group
+  (the same three arms: base / full / profile-alone); the **feature-group
+  ablation** (the groups are a config knob) with the lexical block's transfer
+  as the headline question; and the **per-feature diagnostics** (every
+  feature's own ranking quality, its background-side counterpart and its
+  length correlation).
+  *Exit:* the two OMCT verdicts ("the learner is not the lever", "the chunk
+  profile is not the lever") re-measured on UPR, and the ablation's answer.
+- [ ] **CS-8f — the reporting blocks.** The **calibration** block (ECE, Brier,
+  the reliability diagram, pooled and per bucket) and the **decision-rule
+  comparison** (`top_k`, `score_threshold`, `top_k_min_score`) on the best
+  arm. The **paired-F1 bootstrap** (a paired bootstrap over the val texts of
+  the F1 / nDCG difference between two scorers on the same texts) is **one
+  new pure function** — the existing bootstraps in `eval/metrics.py` are
+  AUC-specific, and the track's "a gain needs a paired interval that excludes
+  zero" discipline is worth keeping on an F1 difference. *Proposal, not an
+  assumption:* the reviewer decides whether the function is added.
+  *Exit:* the reporting blocks in the artifact and in the table, and the
+  paired intervals where they were approved.
+- [ ] **CS-9 — the decision models on UPR (a measurement, not a pipeline
+  component).** `tev1` and `laya` through the existing `Decider` port and the
+  `/v1/systemone` client, with the existing disk cache and the track's LLM
+  hygiene (model id + digest, prompt version, cached calls, no temperature).
+  The **probe**: the UPR-native question type ("is this text about
+  <label>?") per label, with the `noul` and `choice` types and both prompt
+  shapes in the declared prompt grid, each variant logged with its prompt
+  version; the `paragraph` shape (state = the text, up to 64 typed questions
+  per call) is the cheap one (68 labels → 2 calls per text). The **synthetic
+  competence control** beside every arm (without it a chance-level result is
+  ambiguous between "the data is at the ceiling" and "the model is the wrong
+  shape"). The **grid arm** (the decision model as an arm of the UPR
+  evaluation, over the whole (text × label) grid) and the **safe-negative
+  rule** in its three forms (the fixed 0.5 cut, the fit-side threshold, the
+  margin rule) with the **label-blind counterpart** beside them (the same
+  model, the same prompts, every text's label list replaced by a deterministic
+  shuffle) — the yardstick that turns the rule's cost into a *quality* claim.
+  The **shortlist rerank** (the fusion's top-K labels per text, re-decided by
+  the decision model, with the shortlist's own recall as the ceiling, against
+  the cosine's own hit@1 and the decision model's own). The **probability
+  compression** is measured, not assumed. The deliverable's honesty rule
+  carries over: the non-gold labels' true positive rate is **unmeasured**, so
+  any rule this produces ships as a **reach claim + a cost claim, with no
+  precision claim**. *Open for the reviewer:* the Phase-6 slot decision (a
+  decision model returns probabilities with no decoder — arguably a zero-shot
+  cross-encoder rather than an LLM reranker) stays the reviewer's call; the
+  decision models enter as **measurement instruments** only.
+- [ ] **CS-10 — the LLM stage on UPR (needs the reviewer's explicit OK).** The
+  **exp09-style rerank** on the embedding shortlist with the local models
+  (gemma4:e2b, llama3.2:3b, gpt-oss — the decision models are far too small
+  for a generative role) and the **side enrichment**, which on UPR becomes
+  **label-side enrichment** (LLM-written label descriptions or paraphrases
+  embedded as extra label vectors). Two things to raise with the reviewer
+  first: `PLAN.md` Phase 6 crossed out "LLM reranker via Ollama" — *Skipped by
+  decision (2026-10): no LLMs in the pipeline* — so this stage is
+  measurement-only, exactly like CS-9; and the label enrichment would touch
+  the **train-time index build**, a different kind of intervention from
+  scoring. If the reviewer prefers, the label-description catalog that
+  CS-8d needs can be produced here instead (a human-readable `labels.jsonl`
+  with name / description / parent — the config hook the plan already
+  provides).
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized

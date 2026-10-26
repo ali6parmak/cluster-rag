@@ -233,7 +233,7 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-fusionc-embeddinggemma-k10-c0.1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5471 | 0.4998 | 0.5267 | 0.868 | 0.2745 | 0.7073 | 0.6699 | 0.7337 | 660 | 0.131 |
 | upr-eval-fusionc-embeddinggemma-k10-c0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5479 | 0.4994 | 0.5272 | 0.868 | 0.2752 | 0.7105 | 0.6705 | 0.7337 | 660 | 0.138 |
 | upr-eval-fusionc-embeddinggemma-k10-c0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5456 | 0.4978 | 0.5245 | 0.868 | 0.2755 | 0.7115 | 0.6703 | 0.7337 | 660 | 0.157 |
-| upr-eval-fusionc-embeddinggemma-k10-c1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.132 |
+| upr-eval-fusionc-embeddinggemma-k10-c1 | 2026-10-26 | val | fusion | embeddinggemma | top_k k=2 | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 660 | 0.129 |
 | upr-eval-fusionc-embeddinggemma-k20-c0.1 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5418 | 0.4922 | 0.5213 | 0.853 | 0.2742 | 0.7057 | 0.6648 | 0.7337 | 660 | 0.132 |
 | upr-eval-fusionc-embeddinggemma-k20-c0.25 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5410 | 0.4956 | 0.5209 | 0.853 | 0.2748 | 0.7067 | 0.6649 | 0.7337 | 660 | 0.134 |
 | upr-eval-fusionc-embeddinggemma-k20-c0.5 | 2026-10-20 | val | fusion | embeddinggemma | top_k k=2 | 0.5403 | 0.4950 | 0.5203 | 0.853 | 0.2764 | 0.7077 | 0.6662 | 0.7337 | 660 | 0.133 |

@@ -24,6 +24,7 @@ from cluster_rag.sweep import (
     COMMANDS,
     DATASET_COMMANDS,
     SHARED_EXPERIMENTS_DIR,
+    AnalyzeUprCell,
     EmbedCell,
     EvalCell,
     LabelEmbedCell,
@@ -73,9 +74,10 @@ def test_sweep_cell_validation() -> None:
         "probe-omct",
         "analyze-omct",
         "decide-omct",
+        "analyze-upr",
     )
     assert DATASET_COMMANDS == {
-        "upr": ("stats", "split", "embed", "labelembed", "evaluate"),
+        "upr": ("stats", "split", "embed", "labelembed", "evaluate", "analyze-upr"),
         "omct": ("stats-omct", "probe-omct", "analyze-omct", "decide-omct"),
     }
 
@@ -280,6 +282,74 @@ def test_define_sweep_rejects_unknown_dataset_and_command(repo_root: Path) -> No
         define_sweep([SweepCell(label="upr-x", command="stats-omct")], dataset="upr", label="x")
     with pytest.raises(ValueError, match="not a 'omct' sweep command"):
         define_sweep([SweepCell(label="x", command="split")], dataset="omct", label="x")
+
+
+def test_analyze_upr_cell_resolves_the_reference_arm(repo_root: Path) -> None:
+    """The analyze-upr cell: the eval wiring + the upr_analysis section."""
+    from cluster_rag.config import UprAnalysisConfig
+
+    cell = AnalyzeUprCell(
+        label="upr-analyze-x",
+        predictor="fusion",
+        params={"a": 0.5, "b": 1.0, "c": 1.0, "k": 10},
+        k=2,
+        embedding_run="upr-embed-fix",
+        label_embedding_run="upr-labelembed-fix",
+        analysis=UprAnalysisConfig(length_buckets=(100, 200), reference_eval_run="upr-eval-ref"),
+    )
+    assert cell.command == "analyze-upr"
+    overrides = cell.overrides
+    assert overrides["eval"]["predictor"]["name"] == "fusion"
+    assert overrides["eval"]["embedding_run_id"] == "upr-embed-fix"
+    assert overrides["eval"]["label_embedding_run_id"] == "upr-labelembed-fix"
+    assert overrides["eval"]["decision"] == {
+        "rule": "top_k",
+        "k": 2,
+        "threshold": None,
+        "min_score": None,
+    }
+    assert overrides["upr_analysis"]["reference_eval_run"] == "upr-eval-ref"
+    assert overrides["upr_analysis"]["length_buckets"] == (100, 200)
+    runs = define_sweep([cell], dataset="upr", label="upr_analysis")
+    assert runs[0].config.run_id == "upr-analyze-x"
+    assert runs[0].config.upr_analysis is not None
+    assert runs[0].config.upr_analysis.reference_eval_run == "upr-eval-ref"
+
+
+def test_analyze_upr_cell_needs_a_decision_and_an_upr_prefix(repo_root: Path) -> None:
+    """The cell's decision xor k rule and the upr- label prefix."""
+    from cluster_rag.config import UprAnalysisConfig
+
+    with pytest.raises(ValueError, match="not both"):
+        AnalyzeUprCell(
+            label="upr-analyze-x",
+            predictor="fusion",
+            k=2,
+            decision=EvalDecisionConfig(rule="top_k", k=3),
+            embedding_run="upr-embed-fix",
+            analysis=UprAnalysisConfig(),
+        )
+    with pytest.raises(ValueError, match="needs a decision rule"):
+        AnalyzeUprCell(
+            label="upr-analyze-x",
+            predictor="fusion",
+            embedding_run="upr-embed-fix",
+            analysis=UprAnalysisConfig(),
+        )
+    with pytest.raises(ValueError, match="must start with 'upr-'"):
+        define_sweep(
+            [
+                AnalyzeUprCell(
+                    label="analyze-x",
+                    predictor="fusion",
+                    k=2,
+                    embedding_run="upr-embed-fix",
+                    analysis=UprAnalysisConfig(),
+                )
+            ],
+            dataset="upr",
+            label="upr_analysis",
+        )
 
 
 def test_define_sweep_label_prefix_rules(repo_root: Path) -> None:

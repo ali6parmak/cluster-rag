@@ -49,6 +49,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
     │   ├── omct_analysis.py     # track's Stage-0 analysis driver (analyze-omct)
     │   ├── omct_decision.py     # track's Stage-3.5 decision-probe driver (decide-omct)
+    │   ├── upr_analysis.py      # track's UPR analysis driver (analyze-upr)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── text_processors/     # text-processing track: chunkers, features, combiners (pure)

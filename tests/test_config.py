@@ -329,6 +329,27 @@ def test_label_texts_variants() -> None:
         LabelTextsConfig.model_validate({"variant": "name", "template": "oops"})
 
 
+def test_upr_analysis_defaults_and_validation() -> None:
+    """The UPR analysis section: the defaults and the config-time checks."""
+    from cluster_rag.config import UprAnalysisConfig
+
+    section = UprAnalysisConfig()
+    assert section.length_buckets == (100, 200, 300)
+    assert section.reference_eval_run is None
+    assert section.bootstrap.resamples == 2000
+
+    # the length edges are sorted, positive and unique
+    assert UprAnalysisConfig(length_buckets=(300, 100)).length_buckets == (100, 300)
+    with pytest.raises(ValueError, match="length_buckets"):
+        UprAnalysisConfig(length_buckets=(0, 100))
+    with pytest.raises(ValueError, match="length_buckets"):
+        UprAnalysisConfig(length_buckets=(100, 100))
+
+    # unknown keys are rejected (a typo fails before the run)
+    with pytest.raises(ValueError, match="Extra inputs"):
+        UprAnalysisConfig.model_validate({"nope": 1})
+
+
 def test_analysis_stage3_defaults_and_validation() -> None:
     """The Stage-3 section: the settled defaults and the config-time checks."""
     from cluster_rag.config import (

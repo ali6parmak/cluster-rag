@@ -38,6 +38,7 @@ def write_config(tmp_path: Path):
         experiment_table_upr: Path | None = None,
         experiment_table_omct: Path | None = None,
         experiment_table_text_processing_omct: Path | None = None,
+        experiment_table_text_processing_upr: Path | None = None,
     ) -> Path:
         config_file = tmp_path / "cfg.yaml"
         run_id_line = f"run_id: {run_id}\n" if run_id else ""
@@ -58,6 +59,12 @@ def write_config(tmp_path: Path):
             if experiment_table_text_processing_omct
             else ""
         )
+        track_upr_table_line = (
+            f"  experiment_table_text_processing_upr: "
+            f"{experiment_table_text_processing_upr.as_posix()}\n"
+            if experiment_table_text_processing_upr
+            else ""
+        )
         config_file.write_text(
             run_id_line + "paths:\n"
             f"  data_raw: {data_raw.as_posix()}\n"
@@ -67,6 +74,7 @@ def write_config(tmp_path: Path):
             + upr_table_line
             + omct_table_line
             + track_table_line
+            + track_upr_table_line
             + f"  cache: {(tmp_path / 'cache').as_posix()}\n"
             f"  results: {(tmp_path / 'results').as_posix()}\n" + extra,
             encoding="utf-8",

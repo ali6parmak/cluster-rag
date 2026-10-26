@@ -53,7 +53,7 @@ class TableTarget:
 
 
 # The command -> (dataset, track) mapping. Command-derived, never a heuristic:
-# the track's command family (analyze-omct / chunk-omct / chunk-upr) maps to
+# the track's command family (analyze-omct / analyze-upr) maps to
 # dataset=omct|upr + track=text_processing, i.e. the track's own table files.
 COMMAND_TARGETS: dict[str, TableTarget] = {
     "stats": TableTarget("upr"),
@@ -66,8 +66,7 @@ COMMAND_TARGETS: dict[str, TableTarget] = {
     # Text-processing track (TEXT_PROCESSING_PLAN.md section 2).
     "analyze-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "decide-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
-    "chunk-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
-    "chunk-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
+    "analyze-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
 }
 
 
@@ -448,6 +447,46 @@ DECIDE_OMCT_COLUMNS: tuple[str, ...] = (
     "seconds",
 )
 DECIDE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "state", "question_type")
+
+# The text-processing track's UPR table (the `analyze-upr` command): one row
+# per arm of a run. The **decision view** (the F1s and the coverage) comes
+# first, then the **ranking view** (the decision-rule-independent P@k / R@k /
+# nDCG@k and the shortlist recall), then the **background side** — the
+# non-gold labels' rank position and score level, and their shift against the
+# whole-text reference arm. The track's reporting rule carries over: no
+# headline number is quoted without its background-side counterpart beside it.
+#
+# The `hit@k` columns are the gold cells' hit@k (is the gold label among the
+# text's top-k labels?): the UPR analogue of the OMCT probe's same-document
+# hit@k.
+ANALYZE_UPR_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "arm",
+    "predictor",
+    "chunker",
+    "aggregation",
+    "micro-F1",
+    "macro-F1",
+    "sample-F1",
+    "coverage",
+    "P@5",
+    "R@10",
+    "nDCG@5",
+    "shortlist R@50",
+    "hit@1",
+    "hit@10",
+    "gold_rank_p50",
+    "bg_rank_p50",
+    "bg_mean",
+    "bg_mean_delta",
+    "bg_rank_delta",
+    "chunks_per_text",
+    "n_texts",
+    "seconds",
+)
+ANALYZE_UPR_KEY_COLUMNS: tuple[str, ...] = ("run_id", "arm")
 
 
 def _cell(value: Any) -> str:

@@ -9,17 +9,20 @@ Commands: stats (--omct for the OMCT pairwise data), split, embed
 (Phase 2: dataset embedding through the disk cache), labelembed (Phase 4:
 the zero-shot label-text artifact), probe-omct (Phase 2: the
 OMCT pairwise embedding probe), analyze-omct (the text-processing track's
-Stage-0 pair-score artifact), evaluate (Phase 3: any predictor on a
-fixed val/test split), sweep (Phases 2.5+: run a Python sweep file's resolved
-cells). Run from the repository root so relative
+Stage-0 pair-score artifact), decide-omct (the track's Stage-3.5 decision
+probe), analyze-upr (the track's UPR-side analysis artifact), evaluate
+(Phase 3: any predictor on a fixed val/test split), sweep (Phases 2.5+: run a
+Python sweep file's resolved cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
 ``results/<run_id>/`` (frozen resolved config plus a JSON report), so
 ``run_id`` must be set in the config for any command. When the command's
 comparison table is set (``paths.experiment_table_upr`` /
 ``paths.experiment_table_omct``, or the text-processing track's
 ``paths.experiment_table_text_processing_omct`` / ``_upr``), ``embed``,
-``labelembed``, ``evaluate``, ``probe-omct`` and ``analyze-omct`` also append
-one row per run (per transform for probe-omct, per model for analyze-omct) to
+``labelembed``, ``evaluate``, ``probe-omct``, ``analyze-omct`` and
+``analyze-upr`` also append
+one row per run (per transform for probe-omct, per model for analyze-omct, per
+arm for analyze-upr) to
 it, upserted by run key — the file comes
 from the command's (dataset, track) pair, the section heading from the run's
 ``table.sweep_label`` when the run came from a sweep, else
@@ -34,7 +37,8 @@ import logging
 import sys
 import time
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -47,6 +51,7 @@ from cluster_rag.config import AnalysisConfig, AppConfig, ChunkerSpec, load_conf
 from cluster_rag.data import (
     SPLIT_NAMES,
     LoadReport,
+    Record,
     build_label_matrix,
     build_splits,
     load_jsonl,
@@ -76,6 +81,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS,
+    ANALYZE_UPR_COLUMNS,
+    ANALYZE_UPR_KEY_COLUMNS,
     DECIDE_OMCT_COLUMNS,
     DECIDE_OMCT_KEY_COLUMNS,
     EMBED_COLUMNS,
@@ -136,6 +143,11 @@ from cluster_rag.text_processors.features import (
     FeatureEmbedders,
     PairFeatureExtractor,
     ProfileUnits,
+)
+from cluster_rag.upr_analysis import (
+    arm_block,
+    build_upr_report,
+    build_upr_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,6 +323,33 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="Path to the YAML config with an analysis.decision: section (or "
+        "sweep-resolved configs; experiment values live in "
+        "experiments_text_processing/*.py sweeps).",
+    )
+
+    analyze_upr = subparsers.add_parser(
+        "analyze-upr",
+        help="Text-processing track: the UPR analysis artifact (analyze-upr).",
+        description=(
+            "The text-processing track's UPR artifact "
+            "(TEXT_PROCESSING_PLAN.md, CS-8a): score the evaluated split with the "
+            "main pipeline's own predictor (the whole-text reference arm) and "
+            "report the UPR-side diagnostics — the gold cells' rank percentiles "
+            "inside their own text's label list, the hit@1 / hit@10, the non-gold "
+            "cells as the background (fully enumerable on UPR: no control sample, "
+            "no seed), the background's level and rank shift beside every headline "
+            "number, the score distributions per bucket and per label, the texts' "
+            "length buckets and the top-1 provenance. The reference arm must "
+            "reproduce the matching `evaluate` run field by field (the guard). "
+            "Writes results/<run_id>/analysis.json; the row goes to the track's "
+            "own UPR table."
+        ),
+    )
+    analyze_upr.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with eval: and upr_analysis: sections (or "
         "sweep-resolved configs; experiment values live in "
         "experiments_text_processing/*.py sweeps).",
     )
@@ -2576,27 +2615,81 @@ def _cmd_decide_omct(config: AppConfig) -> int:
     return 0
 
 
-def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
-    """Run the evaluate command: any predictor on a fixed split (Phase 3 exit criterion).
+@dataclass(frozen=True)
+class EvalSetup:
+    """The evaluated split, the predictor and its score matrix (shared wiring).
 
-    Loads the dataset and the fixed split ids (with a provenance sha check, never
-    re-splitting), constructs the configured predictor from **train** context only,
-    scores the evaluation split and assembles the per-bucket report. Embedding-
-    dependent predictors (Phase 4) additionally consume
-    ``eval.embedding_run_id``: the artifact is loaded, hard-validated and
-    id-aligned (train document vectors only at construction; query vectors at
-    score time), and its lineage is recorded in the metrics. Writes
-    ``results/<run_id>/{config.yaml, metrics.json}`` and the auto table row.
+    The ``evaluate`` command and the text-processing track's ``analyze-upr``
+    command share this wiring, so the track's whole-text **reference arm** *is*
+    the pipeline's own scoring of the same split — not a re-implementation of
+    it. That is what makes the field-by-field guard (the reference arm against
+    the matching ``evaluate`` run) possible at all.
+
+    Attributes:
+        split: The evaluated split's name (``val`` or ``test``).
+        records: The evaluated records (the split's order).
+        train_records: The train split's records (the only context a
+            predictor may see).
+        labels: The label space (the sorted unique labels).
+        buckets: The ``label -> bucket`` mapping (head / torso / tail /
+            unseen).
+        predictor: The configured predictor.
+        artifact: The embedding artifact (``None`` for embedding-free
+            predictors).
+        label_artifact: The zero-shot label artifact (``None``).
+        scores: The predictor's ``(n_texts, n_labels)`` score matrix.
+        gold: The bool gold matrix of the same shape.
+        source_sha256: The dataset's sha256 (the splits' provenance).
+        provenances: The split files' provenance (per split).
+        ids_by_split: The split id lists (per split).
+        dataset_counts: The full-dataset label counts (the bucket sizes).
+        train_counts: The train split's label counts (the unseen labels).
     """
-    started = time.perf_counter()
-    run_id = _require_run_id(config)
-    _warn_upr_prefix(run_id)
+
+    split: str
+    records: list[Record]
+    train_records: list[Record]
+    labels: list[str]
+    buckets: dict[str, str]
+    predictor: Any
+    artifact: EmbeddingArtifact | None
+    label_artifact: LabelEmbeddingArtifact | None
+    scores: np.ndarray
+    gold: np.ndarray
+    source_sha256: str
+    provenances: dict[str, dict[str, Any]]
+    ids_by_split: dict[str, list[str]]
+    dataset_counts: Counter[str]
+    train_counts: Counter[str]
+
+
+def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
+    """Load the split, build the predictor from train context, score the split.
+
+    The shared wiring of the ``evaluate`` command and of the track's
+    ``analyze-upr`` command: the dataset and the fixed split ids (with the
+    provenance sha check — never re-split silently), the predictor's
+    construction context (**train** only), the embedding artifacts (validated
+    and id-aligned) and the score matrix.
+
+    Args:
+        config: The resolved app config (the ``eval:`` section is required).
+        split: The split to evaluate (``val`` or ``test``).
+
+    Returns:
+        The :class:`EvalSetup` of the run.
+
+    Raises:
+        ValueError: If the ``eval:`` section is missing, an embedding run is
+            not set for an embedding-dependent predictor, the splits do not
+            match the dataset, or the predictor's score matrix has the wrong
+            shape.
+    """
     if config.eval is None:
         raise ValueError(
             "the eval: section (predictor, decision) is required for the `evaluate` command"
         )
     eval_config = config.eval
-    split_name = split or eval_config.split
 
     full_report = load_jsonl(config.paths.data_raw)
     if full_report.errors:
@@ -2605,7 +2698,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
 
     ids_by_split: dict[str, list[str]] = {}
     provenances: dict[str, dict[str, Any]] = {}
-    for name in (split_name, "train"):
+    for name in (split, "train"):
         ids, provenance = load_split_ids(config.paths.data_splits, name)
         recorded = provenance.get("source_sha256")
         if recorded and recorded != source_sha:
@@ -2616,7 +2709,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
         ids_by_split[name] = ids
         provenances[name] = provenance
 
-    eval_records = select_records_by_ids(full_report.records, ids_by_split[split_name])
+    eval_records = select_records_by_ids(full_report.records, ids_by_split[split])
     train_records = select_records_by_ids(full_report.records, ids_by_split["train"])
 
     # Phase 4 wiring (PLAN Phase 4 opening D + zero-shot): resolve the
@@ -2715,7 +2808,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     )
     texts = [record.text for record in eval_records]
     if artifact is not None:
-        query_vectors = artifact.select("query", ids_by_split[split_name])
+        query_vectors = artifact.select("query", ids_by_split[split])
         scores = predictor.score(texts, query_vectors=query_vectors)
     else:
         scores = predictor.score(texts)
@@ -2726,20 +2819,64 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
             f"expected {expected_shape} (n_eval_records, n_labels)"
         )
 
-    gold = build_label_matrix(eval_records, labels)
+    return EvalSetup(
+        split=split,
+        records=eval_records,
+        train_records=train_records,
+        labels=labels,
+        buckets=buckets,
+        predictor=predictor,
+        artifact=artifact,
+        label_artifact=label_artifact,
+        scores=scores,
+        gold=build_label_matrix(eval_records, labels),
+        source_sha256=source_sha,
+        provenances=provenances,
+        ids_by_split=ids_by_split,
+        dataset_counts=dataset_counts,
+        train_counts=train_counts,
+    )
+
+
+def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
+    """Run the evaluate command: any predictor on a fixed split (Phase 3 exit criterion).
+
+    Loads the dataset and the fixed split ids (with a provenance sha check, never
+    re-splitting), constructs the configured predictor from **train** context only,
+    scores the evaluation split and assembles the per-bucket report. Embedding-
+    dependent predictors (Phase 4) additionally consume
+    ``eval.embedding_run_id``: the artifact is loaded, hard-validated and
+    id-aligned (train document vectors only at construction; query vectors at
+    score time), and its lineage is recorded in the metrics. Writes
+    ``results/<run_id>/{config.yaml, metrics.json}`` and the auto table row.
+
+    The wiring itself lives in :func:`_prepare_evaluation`, which the
+    text-processing track's ``analyze-upr`` command shares — so the track's
+    whole-text reference arm is this command's own scoring.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.eval is None:
+        raise ValueError(
+            "the eval: section (predictor, decision) is required for the `evaluate` command"
+        )
+    eval_config = config.eval
+    setup = _prepare_evaluation(config, split or eval_config.split)
+
     decision = eval_config.decision
     predicted = apply_decision_rule(
-        scores,
+        setup.scores,
         rule=decision.rule,
         k=decision.k,
         threshold=decision.threshold,
         min_score=decision.min_score,
     )
     report = build_label_report(
-        scores,
-        gold,
-        labels,
-        buckets,
+        setup.scores,
+        setup.gold,
+        setup.labels,
+        setup.buckets,
         predicted,
         ks=eval_config.metrics.ks,
         shortlist_ms=eval_config.metrics.shortlist_ms,
@@ -2752,17 +2889,19 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
     payload: dict[str, Any] = {
         "run_id": run_id,
         "command": "evaluate",
-        "split": split_name,
+        "split": setup.split,
         "source": str(config.paths.data_raw),
-        "source_sha256": source_sha,
-        "split_provenance": provenances,
-        "n_records": len(eval_records),
-        "n_records_train_context": len(train_records),
-        "n_labels": len(labels),
+        "source_sha256": setup.source_sha256,
+        "split_provenance": setup.provenances,
+        "n_records": len(setup.records),
+        "n_records_train_context": len(setup.train_records),
+        "n_labels": len(setup.labels),
         "seed": config.seed,
-        "predictor": predictor.describe(),
-        "embedding_run": artifact.lineage if artifact is not None else None,
-        "label_embedding_run": (label_artifact.lineage if label_artifact is not None else None),
+        "predictor": setup.predictor.describe(),
+        "embedding_run": setup.artifact.lineage if setup.artifact is not None else None,
+        "label_embedding_run": (
+            setup.label_artifact.lineage if setup.label_artifact is not None else None
+        ),
         "decision": decision.model_dump(),
         "metrics_config": eval_config.metrics.model_dump(),
         "buckets": {
@@ -2771,9 +2910,9 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
                 "torso_min": config.stats.frequency_torso_min,
             },
             "n_labels_per_bucket": {
-                name: len(subset) for name, subset in labels_by_bucket(buckets).items()
+                name: len(subset) for name, subset in labels_by_bucket(setup.buckets).items()
             },
-            "labels_by_bucket": labels_by_bucket(buckets),
+            "labels_by_bucket": labels_by_bucket(setup.buckets),
         },
         "report": report,
         "total_seconds": round(time.perf_counter() - started, 3),
@@ -2796,11 +2935,11 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
             {
                 "run_id": run_id,
                 "date": date.today().isoformat(),
-                "split": split_name,
+                "split": setup.split,
                 "predictor": eval_config.predictor.name,
                 "embedding": (
                     eval_config.embedding_run_id.removeprefix("upr-embed-")
-                    if artifact is not None
+                    if setup.artifact is not None
                     else None
                 ),
                 "f1 decision": decision_cell,
@@ -2812,7 +2951,7 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
                 "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
                 "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
                 "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
-                "n_texts": len(eval_records),
+                "n_texts": len(setup.records),
                 "seconds": payload["total_seconds"],
             }
         ],
@@ -2820,8 +2959,8 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
 
     ranking = overall["ranking"]
     print(
-        f"Evaluated {len(eval_records)} record(s) [{split_name}] with predictor "
-        f"'{eval_config.predictor.name}' ({len(labels)} label columns)"
+        f"Evaluated {len(setup.records)} record(s) [{setup.split}] with predictor "
+        f"'{eval_config.predictor.name}' ({len(setup.labels)} label columns)"
     )
     print(
         f"  decision: {decision.rule} (k={decision.k}, threshold={decision.threshold}, "
@@ -2845,6 +2984,229 @@ def _cmd_evaluate(config: AppConfig, split: str | None = None) -> int:
             f"coverage {section['coverage']['coverage']:.3f}"
         )
     print(f"Report written to {results_dir / 'metrics.json'}")
+    return 0
+
+
+def _upr_arm_rows(
+    arms: Mapping[str, dict[str, Any]],
+    *,
+    run_id: str,
+    split: str,
+    seconds: float,
+) -> list[dict[str, Any]]:
+    """One table row per arm of the run (the track's UPR table shape)."""
+    rows: list[dict[str, Any]] = []
+    for name, block in arms.items():
+        overall = block["metrics"]["overall"]
+        chunks = block.get("chunks_per_text") or {}
+        rows.append(
+            {
+                "run_id": run_id,
+                "date": date.today().isoformat(),
+                "split": split,
+                "arm": name,
+                "predictor": (block.get("predictor") or {}).get("name"),
+                "chunker": block.get("chunker"),
+                "aggregation": block.get("aggregation"),
+                "micro-F1": _fmt(overall["f1"]["micro_f1"], 4),
+                "macro-F1": _fmt(overall["f1"]["macro_f1"], 4),
+                "sample-F1": _fmt(overall["f1"]["sample_f1"], 4),
+                "coverage": _fmt(overall["coverage"]["coverage"], 3),
+                "P@5": _fmt(overall["ranking"].get("precision@5"), 4),
+                "R@10": _fmt(overall["ranking"].get("recall@10"), 4),
+                "nDCG@5": _fmt(overall["ranking"].get("ndcg@5"), 4),
+                "shortlist R@50": _fmt(overall["shortlist"].get("recall@50"), 4),
+                "hit@1": _fmt(block["gold"].get("hit@1"), 4),
+                "hit@10": _fmt(block["gold"].get("hit@10"), 4),
+                "gold_rank_p50": _fmt(block["gold"].get("rank_p50"), 4),
+                "bg_rank_p50": _fmt(block["background"].get("rank_p50"), 4),
+                "bg_mean": _fmt(block["background"].get("mean"), 4),
+                "bg_mean_delta": _fmt(block["shift"].get("background_mean_delta"), 4),
+                "bg_rank_delta": _fmt(block["shift"].get("background_rank_p50_delta"), 4),
+                "chunks_per_text": _fmt(chunks.get("mean"), 2),
+                "n_texts": overall["n_records"],
+                "seconds": seconds,
+            }
+        )
+    return rows
+
+
+def _check_reference_arm(
+    config: AppConfig,
+    reference_run_id: str | None,
+    reference_block: dict[str, Any],
+) -> dict[str, Any] | None:
+    """The guard: the whole-text arm must reproduce the ``evaluate`` run.
+
+    The UPR analogue of ``tools/verify_analysis_baseline.py``: the track's
+    whole-text reference arm is the main pipeline's own scoring, so it must
+    match the matching ``evaluate`` run's report **field by field**. A
+    mismatch means the run's numbers cannot be compared with the pipeline's.
+
+    Args:
+        config: The resolved app config (the results folder).
+        reference_run_id: The ``evaluate`` run to compare with (``None``
+            disables the check).
+        reference_block: The reference arm's block (its ``metrics``).
+
+    Returns:
+        The guard's outcome (recorded in the artifact), or ``None`` when the
+        check was not requested.
+
+    Raises:
+        ValueError: If the check fails — a mismatch is never a warning.
+    """
+    if not reference_run_id:
+        return None
+    path = config.paths.results / reference_run_id / "metrics.json"
+    if not path.is_file():
+        raise ValueError(
+            f"the reference evaluate run {reference_run_id!r} has no metrics artifact "
+            f"({path}); the guard cannot check the whole-text arm"
+        )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    expected = payload.get("report")
+    actual = reference_block["metrics"]["overall"]
+    differences: list[str] = []
+    if expected is None:
+        differences.append("the reference run has no report block")
+    else:
+        if expected.get("overall") != actual:
+            differences.append("the overall report differs")
+        if expected.get("per_bucket") != reference_block["metrics"]["per_bucket"]:
+            differences.append("the per-bucket report differs")
+    if payload.get("n_records") != actual.get("n_records"):
+        differences.append("the record count differs")
+    if payload.get("n_labels") != actual.get("n_labels"):
+        differences.append("the label count differs")
+    if differences:
+        raise ValueError(
+            f"the whole-text reference arm does not reproduce the evaluate run "
+            f"{reference_run_id!r}: {'; '.join(differences)}"
+        )
+    return {
+        "reference_run": reference_run_id,
+        "checked": ["overall", "per_bucket", "n_records", "n_labels"],
+        "matches": True,
+    }
+
+
+def _cmd_analyze_upr(config: AppConfig) -> int:
+    """Run the analyze-upr command: the track's UPR artifact (CS-8a).
+
+    The text-processing track's UPR counterpart of ``analyze-omct``: the
+    whole-text **reference arm** (the main pipeline's own scoring of the
+    split — the same predictor, the same embedding runs, the same decision
+    rule) beside the track's chunked arms, with the UPR-side diagnostics:
+    the gold cells' rank percentiles inside their own text's label list, the
+    hit@1 / hit@10, the **non-gold cells as the background** (fully
+    enumerable on UPR: no control sample, no seed), the background's level
+    and rank shift beside every headline number, the score distributions per
+    bucket and per label, the texts' length buckets and the top-1 provenance.
+
+    The reference arm must reproduce the matching ``evaluate`` run field by
+    field (the guard, ``upr_analysis.reference_eval_run``).
+
+    Writes ``results/<run_id>/{config.yaml, analysis.json}`` and the track's
+    UPR table rows.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.eval is None:
+        raise ValueError(
+            "the eval: section (predictor, decision) is required for the `analyze-upr` command"
+        )
+    if config.upr_analysis is None:
+        raise ValueError("the upr_analysis: section is required for the `analyze-upr` command")
+    eval_config = config.eval
+    analysis_config = config.upr_analysis
+    setup = _prepare_evaluation(config, eval_config.split)
+    decision = eval_config.decision.model_dump()
+
+    view = build_upr_view(
+        setup.records,
+        setup.labels,
+        setup.buckets,
+        analysis_config.length_buckets,
+    )
+    reference_block = arm_block(
+        view,
+        setup.scores,
+        decision=decision,
+        ks=eval_config.metrics.ks,
+        shortlist_ms=eval_config.metrics.shortlist_ms,
+        arm=BASELINE_ARM,
+        predictor=setup.predictor.describe(),
+        chunker="full_text",
+        aggregation=None,
+    )
+    guard = _check_reference_arm(config, analysis_config.reference_eval_run, reference_block)
+    arms: dict[str, dict[str, Any]] = {BASELINE_ARM: reference_block}
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    payload = build_upr_report(
+        view,
+        arms,
+        run_id=run_id,
+        split=setup.split,
+        source=str(config.paths.data_raw),
+        source_sha256=setup.source_sha256,
+        predictor=setup.predictor.describe(),
+        embedding_run=setup.artifact.lineage if setup.artifact is not None else None,
+        label_embedding_run=(
+            setup.label_artifact.lineage if setup.label_artifact is not None else None
+        ),
+        decision=decision,
+        metrics_config=eval_config.metrics.model_dump(),
+        length_edges=analysis_config.length_buckets,
+        guard=guard,
+        total_seconds=round(time.perf_counter() - started, 3),
+    )
+    (results_dir / "analysis.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    _append_command_rows(
+        config,
+        "analyze-upr",
+        columns=ANALYZE_UPR_COLUMNS,
+        key_columns=ANALYZE_UPR_KEY_COLUMNS,
+        rows=_upr_arm_rows(
+            arms,
+            run_id=run_id,
+            split=setup.split,
+            seconds=payload["total_seconds"],
+        ),
+    )
+
+    overall = reference_block["metrics"]["overall"]
+    print(
+        f"Analyzed {view.n_texts} record(s) [{setup.split}] with predictor "
+        f"'{eval_config.predictor.name}' ({view.n_labels} labels, "
+        f"{view.n_gold_cells} gold cells, {view.n_background_cells} background cells)"
+    )
+    print(
+        f"  reference arm: micro-F1 {overall['f1']['micro_f1']:.4f}, "
+        f"macro-F1 {overall['f1']['macro_f1']:.4f}, "
+        f"sample-F1 {overall['f1']['sample_f1']:.4f}, "
+        f"coverage {overall['coverage']['coverage']:.3f}, "
+        f"P@5 {overall['ranking'].get('precision@5', 0.0):.4f}, "
+        f"R@10 {overall['ranking'].get('recall@10', 0.0):.4f}, "
+        f"nDCG@5 {overall['ranking'].get('ndcg@5', 0.0):.4f}, "
+        f"shortlist R@50 {overall['shortlist'].get('recall@50', 0.0):.4f}"
+    )
+    print(
+        f"  gold: rank p50 {reference_block['gold']['rank_p50']}, "
+        f"hit@1 {reference_block['gold']['hit@1']}, "
+        f"hit@10 {reference_block['gold']['hit@10']}; "
+        f"background: rank p50 {reference_block['background']['rank_p50']}, "
+        f"mean {reference_block['background']['mean']}"
+    )
+    if guard is not None:
+        print(f"  guard: the reference arm reproduces {guard['reference_run']} field by field")
+    print(f"Artifact written to {results_dir / 'analysis.json'}")
     return 0
 
 
@@ -3014,6 +3376,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_analyze_omct(run.config)
         elif run.command == "decide-omct":  # the text-processing track's Stage 3.5
             code = _cmd_decide_omct(run.config)
+        elif run.command == "analyze-upr":  # the text-processing track's UPR side
+            code = _cmd_analyze_upr(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
@@ -3062,6 +3426,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_analyze_omct(config)
         if args.command == "decide-omct":
             return _cmd_decide_omct(config)
+        if args.command == "analyze-upr":
+            return _cmd_analyze_upr(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

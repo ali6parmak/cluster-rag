@@ -3283,3 +3283,104 @@ question/side enrichment) and **Stage 5** (the UPR port). One thing the
 late chunking does say to both: the embedding axis's remaining job is
 cheap retrieval at scale, and the late geometry is the best the embedding
 side can do without a model that reads the text (the decision models).
+
+## CS-8a — the UPR side: the command, the plumbing, the UPR-side background (2026-10-26)
+
+**The run.** `upr-analyze-champion` — the text-processing track's UPR
+artifact (`results/upr-analyze-champion/analysis.json`), the **whole-text
+reference arm** of the standing champion: embeddinggemma, the fusion
+(a=0.5 knn / b=1.0 prototype / c=1.0 zero-shot, knn k=10) and the `top_k k=2`
+decision rule, on the **val** split. The arm is the main pipeline's own
+scoring — the same predictor, the same two embedding runs, the same decision
+rule — so the artifact's numbers *are* the pipeline's numbers.
+
+**The guard (the UPR analogue of `tools/verify_analysis_baseline.py`).** The
+reference arm reproduces the matching `evaluate` run
+(`upr-eval-fusionc-embeddinggemma-k10-c1`) **field by field** — the overall
+report, the per-bucket reports, the record count and the label count. The
+check runs **inside** the command (a mismatch is a hard error, never a
+warning) and is re-checkable from the artifacts with the new repo tool
+`tools/verify_upr_baseline.py` (`uv run python tools/verify_upr_baseline.py
+"upr-analyze-*"` → OK).
+
+**What is new on the UPR side: the background needs no sample.** On OMCT the
+track had to *draw* a control (the unjudged same-document cells, with a seed
+and a per-document quota). UPR's grid is small and fully enumerable, so the
+**non-gold cells are the background**: 43,568 cells against the split's 1,312
+gold cells, complete, with **no sampling, no seed and no quota** (the artifact
+records `sampling: null` and `seed: null` and says why). Every UPR number
+below is therefore exact — there is no sampling error to argue about.
+
+**The headline numbers (val; the reference arm).**
+
+| view | number |
+|---|---|
+| decision (top_k k=2) | micro-F1 **0.5479**, macro-F1 0.5006, sample-F1 0.5269, coverage 0.868 |
+| ranking | P@5 0.2770, R@10 0.7126, nDCG@5 0.6725, shortlist R@50 0.7423 |
+| gold side | rank p50 **0.0147**, top-fifth share 0.7599, hit@1 0.3666, hit@10 0.7462 |
+| background side | rank p50 **0.5000**, top-fifth share 0.1892, mean 0.5526, p50 0.5396 |
+| provenance | the top-1 label is gold for **481/660** texts (0.7288); the mean gold labels in the top-5 is 1.385 and in the top-10 is 1.483 (of 1.988 gold labels per text) |
+
+The **background's rank p50 is exactly 0.5000** — the expected value for a
+random cell in a 68-label list, and a useful check of the rank machinery
+itself. The gold side is not near chance: the median gold label is the
+**best** of its text's 68 (rank p50 0.0147) and three quarters of the gold
+cells sit in the top fifth of their list.
+
+**Per label bucket** (the frequency buckets; the 8 label-holdout labels are
+the `unseen` ones):
+
+| bucket | labels | micro-F1 | macro-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|
+| head | 16 | 0.6953 | 0.6701 | 1.000 | 0.2849 | 1.0000 | 0.9558 | 1.0000 |
+| torso | 26 | 0.5121 | 0.5383 | 1.000 | 0.2329 | 0.9859 | 0.8857 | 1.0000 |
+| tail | 18 | 0.5287 | 0.5181 | 0.944 | 0.2064 | 1.0000 | 0.9153 | 1.0000 |
+| unseen | 8 | **0.0000** | 0.0000 | **0.000** | 0.1531 | 1.0000 | 0.6575 | **0.034** |
+
+**The unseen labels are not discoverable by the champion's geometry, and the
+per-label distributions say why.** The `unseen` labels are never suggested
+(coverage 0.000) and their gold cells sit outside the top-50 shortlist
+(R@50 0.034). The artifact's per-label score distributions make the mechanism
+explicit: for the head label "Detention" the gold cells average **2.242**
+against the background's 0.626 (a well-separated label), while for the unseen
+"General" the gold cells average **0.0946** against the background's **0.0881**
+— the two distributions are the same. The zero-shot term (c=1.0 on the
+`about` label template) carries the unseen labels at chance, not at a
+disadvantage; there is simply no signal in this geometry for them.
+
+**Per text-length bucket** (the axis the chunking hypothesis is about; the
+val split's texts average 153 characters):
+
+| bucket | texts | micro-F1 | macro-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|
+| 0-99 | 155 | 0.5307 | 0.4481 | 0.788 | 0.2245 | 0.7005 | 0.6678 | 0.7167 |
+| 100-199 | 366 | 0.5620 | 0.5142 | 0.868 | 0.2770 | 0.7115 | 0.6742 | 0.7429 |
+| 200-299 | 114 | 0.5422 | 0.4650 | 0.781 | 0.3404 | 0.7398 | 0.6869 | 0.7778 |
+| 300+ | 25 | **0.4727** | 0.4498 | 0.643 | 0.3120 | 0.6800 | **0.6104** | 0.7300 |
+
+**The long-text tail is where the champion is weakest** (micro-F1 0.4727 and
+nDCG@5 0.6104 against the corpus's 0.5479 / 0.6725) — the starting point of
+the CS-8b hypothesis ("a possible small win on the retrieval side for the
+long-text tail"). Note the tail is small (25 texts), so its numbers carry a
+wide error bar: the pooled number would hide it, which is exactly why the
+length buckets are reported separately from now on.
+
+**What this run does not say.**
+
+- **Nothing about any chunking.** This is the whole-text reference arm; the
+  ladder, the chunk header, the late chunking and the symmetric variants are
+  CS-8b / CS-8c.
+- **Nothing about the feature pack, the combiner or the floors** (CS-8d /
+  CS-8e) and nothing about the decision models on UPR (CS-9).
+- **Nothing about `test`.** Only the val split was touched; `test` stays
+  reserved for the final adopted config.
+- **Nothing about the calibration.** The artifact reports the discrimination
+  and the background side, not the calibration block (CS-8f).
+- **No OMCT claim.** Everything above is a UPR number on the val split; the
+  OMCT side's findings (the late chunking's win, the lexical block's gain)
+  are method-choice evidence only and are re-measured here, not transferred.
+
+**The next step.** CS-8b: the segmentation ladder on UPR, measured against
+this arm in the same run (the pairing is by construction), with the
+length buckets reported separately and the background's level and rank shift
+beside every headline number.

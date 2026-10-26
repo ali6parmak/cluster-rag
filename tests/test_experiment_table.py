@@ -242,8 +242,7 @@ def test_command_targets_map_dataset_and_track() -> None:
     assert table_target("evaluate") == TableTarget("upr", MAIN_TRACK)
     assert table_target("probe-omct") == TableTarget("omct", MAIN_TRACK)
     assert table_target("analyze-omct") == TableTarget("omct", TEXT_PROCESSING_TRACK)
-    assert table_target("chunk-omct") == TableTarget("omct", TEXT_PROCESSING_TRACK)
-    assert table_target("chunk-upr") == TableTarget("upr", TEXT_PROCESSING_TRACK)
+    assert table_target("analyze-upr") == TableTarget("upr", TEXT_PROCESSING_TRACK)
     with pytest.raises(ValueError, match="Unknown command"):
         table_target("not-a-command")
 
@@ -260,8 +259,7 @@ def test_table_path_is_command_derived() -> None:
     assert table_path(paths, "embed") == Path("docs/upr.md")
     assert table_path(paths, "probe-omct") == Path("docs/omct.md")
     assert table_path(paths, "analyze-omct") == Path("docs/tp_omct.md")
-    assert table_path(paths, "chunk-omct") == Path("docs/tp_omct.md")
-    assert table_path(paths, "chunk-upr") == Path("docs/tp_upr.md")
+    assert table_path(paths, "analyze-upr") == Path("docs/tp_upr.md")
 
 
 def test_table_path_none_skips_the_append() -> None:

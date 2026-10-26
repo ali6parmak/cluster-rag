@@ -1091,6 +1091,42 @@ class AnalysisConfig(BaseModel):
         return self
 
 
+class UprAnalysisConfig(BaseModel):
+    """The text-processing track's UPR analysis (``analyze-upr``) settings.
+
+    The UPR counterpart of :class:`AnalysisConfig`: the text-length buckets (the
+    UPR texts' length is the axis the chunking question is really about) and
+    the reference ``evaluate`` run the whole-text arm must reproduce.
+
+    Attributes:
+        length_buckets: The upper edges (in characters) of the text-length
+            buckets. The texts are bucketed into
+            ``[0, e1)``, ``[e1, e2)``, ..., ``[e_last, inf)``; the buckets are
+            reported separately, because the pooled number hides the long-text
+            tail the chunking hypothesis is about.
+        reference_eval_run: The ``evaluate`` run whose numbers the whole-text
+            reference arm must reproduce, field by field (the guard). ``None``
+            disables the check (the run then records that it was not checked).
+        bootstrap: The paired-bootstrap settings of the arm comparisons.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    length_buckets: tuple[int, ...] = (100, 200, 300)
+    reference_eval_run: str | None = None
+    bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
+
+    @field_validator("length_buckets")
+    @classmethod
+    def _length_buckets_are_usable(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """Reject a non-positive or repeated length-bucket edge."""
+        if any(edge < 1 for edge in value):
+            raise ValueError(f"upr_analysis.length_buckets must be positive, got {value}")
+        if len(set(value)) != len(value):
+            raise ValueError(f"upr_analysis.length_buckets must not repeat an edge: {value}")
+        return tuple(sorted(value))
+
+
 class TableConfig(BaseModel):
     """Experiment-table bookkeeping carried into runs (Phase 3.5).
 
@@ -1136,6 +1172,9 @@ class AppConfig(BaseModel):
     # The text-processing track's Stage-0 analysis (the `analyze-omct`
     # command): the models to score with and the control-set design.
     analysis: AnalysisConfig | None = None
+    # The text-processing track's UPR analysis (the `analyze-upr` command): the
+    # arms to score with, the text-length buckets and the guard's reference.
+    upr_analysis: UprAnalysisConfig | None = None
     table: TableConfig = Field(default_factory=TableConfig)  # Phase 3.5: sweep bookkeeping
     # Zero-shot label texts (Phase 4): required by the `labelembed` command,
     # which embeds one text per dataset label into the label-embedding artifact.
