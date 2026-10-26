@@ -168,13 +168,17 @@ Relaxed for this track only:
     comma/semicolon splits), `semantic.py` (boundary detection à la exp18;
     injects an `Embedder` port — NO model client inside), `question_parts.py`
     (question stem vs. answer-option decomposition, exp12),
+    `units.py` (the Stage-3.3 chunk profile's two granularities: the
+    sentences and the word pieces inside them — the pieces tile a sentence),
     `full_text.py` (the no-op baseline chunker that keeps everything
     comparable).
-  - `features/pair_features.py` — feature pack v0 (the global and best chunk
+  - `features/pair_features.py` — the feature pack (the global and best chunk
     cosines, the top-K chunk sims + spread, the soft lexical overlap + char
     n-grams, the question-part coverage, the question-type one-hots; **no
     length feature** — length is a document proxy, see Stage 3's leakage
-    rules; label-free by construction; **no document-identity feature**). It
+    rules; label-free by construction; **no document-identity feature**; and
+    the Stage-3.3 **chunk profile** in its own group: the ranked cross-chunk
+    match profile (exp17) and the alignment kinds (exp16)). It
     is a pure core (numpy + the standard library), but the chunk-level
     features need the chunk embeddings, so it takes the **`Embedder` port**
     (as the semantic chunker does) and embeds the pair's own chunks — the
@@ -512,7 +516,7 @@ sweeps are the orders.
   question-part and the question-type block — measured one at a time: which
   block carries the gain, and which block costs the hit@1), [x] **3.2
   gradient-boosted combiner** (sklearn `HistGradientBoostingClassifier`;
-  `lightgbm` only if it beats HistGB and the dependency is approved), [ ]
+  `lightgbm` only if it beats HistGB and the dependency is approved), [x]
   **3.3 chunk-profile features** (best chunk matches, spread/peak features —
   exp17/15/16 lineage) folded in.
   *(3.1 done 2026-10-26, CS-5: the v0 feature pack (15 features — the
@@ -576,6 +580,39 @@ sweeps are the orders.
   the gain) — the block the ablation showed carries no label-driven signal.
   So `lightgbm` stays deferred and no new dependency is proposed. The
   numbers are in the track log's Stage-3.2 section.)*
+  *(3.3 done 2026-10-26, CS-6c: the **chunk profile** as the pack's fifth
+  group (`chunk_profile`, 10 features), the four existing groups untouched
+  (so the CS-6a arms still describe the same feature sets). The block holds
+  exp17's **ranked cross-chunk match profile** (both sides cut into sentence
+  units and 5-word pieces, every piece×piece cosine sorted, the top three
+  ranks of each granularity kept) and exp16's **alignment kinds** (which
+  granularity produced the best alignment, and whether the two aligned units
+  share a content word) — the taxonomy the reviewer chose on 2026-10-26.
+  exp16's `log(1+df)` was **dropped** (a corpus-level statistic; the pack is
+  pair-local by contract). 9 runs (3 models × {`base` = the v0 pack (the
+  control), `full` = v0 + the profile, `profile` = the block alone},
+  `omct-analyze-<model>-stage3-cp-<groupset>`), the same harness, the same
+  three rotations, the same two floors. The artifact also gained the
+  **per-feature diagnostics** (every feature's own within-document AUC, its
+  control-side counterpart and its length correlation), the **length check**
+  (the arm's length ↔ score correlation beside the cosine's, plus the length
+  ↔ rank-shift correlation — the §5 open item about the shift) and the arms'
+  **per-pair out-of-fold scores** (which make a paired per-pair comparison
+  between two arms of different runs possible: the new tool
+  `tools/compare_stage3_arms.py`). **Verdict: the chunk profile is not the
+  lever either.** The block alone is indistinguishable from the full-text
+  cosine (all three intervals include zero); in the full pack it buys a
+  small gain that is established on one of the three models only (+0.0172 on
+  voyage-4-nano, the interval excluding zero; +0.0066 and −0.0049 elsewhere,
+  both including zero; 7 of the 9 per-rotation paired comparisons favour
+  it). Its best feature re-measures the v0 pack's best chunk cosine at a
+  finer granularity (0.5642 against 0.6049 on embeddinggemma) and its lower
+  ranks are **length proxies** (the length correlation grows to +0.43…+0.56
+  with the rank's depth), and it *raises the chance floor* above chance
+  (0.514–0.534 against the v0 pack's 0.494–0.505) — a label-free signal. The
+  full arm is also a slightly worse retriever (the positives' hit@1 0.0802 /
+  0.0763 / 0.0649 against the v0 pack's 0.0897 / 0.0821 / 0.0859). The
+  numbers are in the track log's Stage-3.3 section.)*
 - **Discipline.**
   - *Split*: document-level holdout — fit on two of the three source
     documents, evaluate on the held-out third (all three rotations when
@@ -797,14 +834,54 @@ sweeps are the orders.
   regression, on this evidence: it is the better retriever and its floor is
   the higher one.)
 - **The two learners' arms live in two runs, and the artifacts carry the
-  per-rotation AUCs, not the per-pair scores (CS-6b, 2026-10-26).** So the
-  paired evidence between the two arms is the per-rotation differences (the
-  same held-out document, the same pairs) plus each arm's own paired
-  interval against the common reference (the cosine). **Open:** a per-pair
-  paired bootstrap between the arms would need the arm's per-pair out-of-fold
-  scores in the artifact (a small additive block plus a re-run of the stage-3
-  runs). Worth it only if a later change set needs a formal paired CI
-  between two arms of different runs.
+  per-rotation AUCs, not the per-pair scores (CS-6b asked; CS-6c answered,
+  2026-10-26).** So the paired evidence between the two arms is the per-rotation
+  differences (the same held-out document, the same pairs) plus each arm's own
+  paired interval against the common reference (the cosine). **Answered:** the
+  Stage-3 block now carries each arm's **per-pair out-of-fold scores**
+  (`out_of_fold_scores`), and the repo tool
+  `tools/compare_stage3_arms.py` reads them: a paired per-pair bootstrap of
+  the within-document AUC difference between two arms of different runs
+  (stratified by document and class, 2,000 resamples, seed 42). The CS-6c runs
+  use it for the chunk profile's arms. **Still open:** the *older* Stage-3
+  runs (the CS-5/CS-6a/CS-6b ones) predate the block, so a paired CI between
+  two of *those* arms would need them re-run — only worth it if a later change
+  set needs it.
+- **The chunk profile is not the lever either (CS-6c, 2026-10-26).** The
+  features that say *where* the paragraph and the question match carry no
+  label-driven signal beyond what the v0 pack's best chunk cosine already
+  carries: the block alone is indistinguishable from the full-text cosine
+  (all three paired intervals include zero), in the full pack it buys a small
+  gain that is established on one of the three models only (+0.0172 on
+  voyage-4-nano), and it *raises the chance floor* above chance (0.514–0.534
+  against the v0 pack's 0.494–0.505) — a label-free signal. Its lower ranks
+  are **length proxies** (the length correlation grows to +0.43…+0.56 with
+  the rank's depth), which the plan's leakage rule (ii) forbids as a feature.
+  **Open:** the feature ceiling on this benchmark is the **corpus**, not the
+  pack: 294 questions, a 1,520-pair reviewed set and a bag-of-words overlap
+  over them. Is any *other* family of features (not a re-measurement of the
+  similarity, not a corpus statistic) likely to beat the lexical block here,
+  or is the track's feature work done at 0.65?
+- **exp16's `log(1+df)` was dropped, not measured (CS-6c, 2026-10-26).** The
+  reviewer's decision: it is a statistic of the **labeled corpus**, so it
+  breaks the pack's pair-local contract; a fit-side df would need a
+  per-rotation feature matrix (the features are currently computed once for
+  the grid); and with ~150 fit-side paragraphs the counts would be 0/1/2, so
+  the feature would be noise. **Open:** if a *rarity* signal is wanted, the
+  pair-local way to get it is not df but the **alignment's specificity**
+  (does the best alignment match a *distinctive* phrase or a generic one?) —
+  which would need a corpus statistic of some kind, so the tension between
+  "rarity" and "pair-local" is the real open question, not the feature's
+  name.
+- **The alignment-kind taxonomy is a choice, and the chosen one is at chance
+  (CS-6c, 2026-10-26).** The reviewer chose "which granularity produced the
+  best alignment × whether the two aligned units share a content word"
+  (2026-10-26); measured, the kinds are at chance (0.469–0.531) and nearly
+  constant on the ordinary cells (the best alignment is a word-piece match
+  99% of the time). **Open:** would a taxonomy that says *which question part*
+  the alignment lands in (the stem vs an answer option) say something? It
+  would need the question's options inside the profile's question side, so it
+  is a different cut of the same machinery, not a new dependency.
 
 ## 6. Milestones
 
@@ -989,9 +1066,42 @@ set):
   control-role floor. `lightgbm` stays deferred; no new dependency is
   proposed. The numbers are in the track log's Stage-3.2 section; 384 unit
   tests green.)*
-- [ ] **CS-6c — Stage 3.3: the chunk-profile features.** exp15/16's
-  remainder (the df and the alignment-kind one-hots) and exp17's ranked
-  cross-chunk match profiles, folded into the pack.
+- [x] **CS-6c — Stage 3.3: the chunk-profile features.** exp17's ranked
+  cross-chunk match profile and exp16's alignment kinds folded into the pack
+  as a fifth group (`chunk_profile`); exp16's corpus-level df dropped (the
+  reviewer's decision).
+  *(done 2026-10-26: the new pure module
+  `text_processors/chunkers/units.py` (the profile's two granularities: the
+  sentences and the 5-word pieces inside them) and the pack's fifth group
+  (10 features: the six profile ranks and the four alignment kinds, with
+  `analysis.stage3.features.profile_top_k` / `profile_ngram_size` as the new
+  config knobs — validated at config time; the four existing groups keep
+  their exact meaning, so the CS-6a arms still describe the same feature
+  sets). Four new embedding sides (the units of each side, each with its own
+  cache-version slot), four new pure-core feature functions, and the
+  **per-feature diagnostics** + the **length check** + the arms' **per-pair
+  out-of-fold scores** in the Stage-3 artifact (the last one with the new
+  repo tool `tools/compare_stage3_arms.py`, which answers the CS-6b open
+  question about a paired per-pair CI between two arms of different runs).
+  The sweep `experiments_text_processing/stage3_chunk_profile_sweep.py`: 9
+  runs (3 models × {`base` = the v0 pack (the control), `full` = v0 + the
+  profile, `profile` = the block alone}),
+  `omct-analyze-<model>-stage3-cp-<groupset>`. The guard holds (all 72 runs
+  reproduce the Stage-0 baseline arm field by field).
+  **Verdict: the chunk profile is not the lever either** — the block alone
+  is indistinguishable from the full-text cosine (all three paired intervals
+  include zero), in the full pack it buys a small gain that is established on
+  one of the three models only (+0.0172 on voyage-4-nano, the interval
+  excluding zero; +0.0066 and −0.0049 elsewhere, both including zero; 7 of
+  the 9 per-rotation paired comparisons favour it); its best feature
+  re-measures the v0 pack's best chunk cosine at a finer granularity
+  (0.5642 against 0.6049 on embeddinggemma), its lower ranks are **length
+  proxies** (the length correlation grows to +0.43…+0.56 with the rank's
+  depth), it *raises the chance floor* above chance (0.514–0.534 against the
+  v0 pack's 0.494–0.505 — a label-free signal), and the full arm is a
+  slightly worse retriever (the positives' hit@1 0.0802 / 0.0763 / 0.0649
+  against the v0 pack's 0.0897 / 0.0821 / 0.0859). The numbers are in the
+  track log's Stage-3.3 section; 398 unit tests green.)*
 - [ ] **CS-6d — the Stage-3 random-vector floor.** The second sanity floor
   of the plan's Stage 3 (the label-permutation one is done): the arm is
   fitted on random vectors instead of the model's embeddings, so a "win"

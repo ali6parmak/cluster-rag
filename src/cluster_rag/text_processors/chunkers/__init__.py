@@ -43,6 +43,11 @@ from cluster_rag.text_processors.chunkers.sentence_windows import (
     SentenceWindowsChunker,
     SentenceWindowsConfig,
 )
+from cluster_rag.text_processors.chunkers.units import (
+    UNIT_KINDS,
+    UnitSplitter,
+    UnitSplitterConfig,
+)
 from cluster_rag.text_processors.chunkers.word_windows import (
     WordWindowsChunker,
     WordWindowsConfig,
@@ -54,6 +59,7 @@ CHUNKERS: dict[str, type[BaseChunker]] = {
     "word_windows": WordWindowsChunker,
     "sentence_windows": SentenceWindowsChunker,
     "semantic": SemanticChunker,
+    "units": UnitSplitter,
 }
 
 # The config class of each chunker (``None`` = the chunker takes no
@@ -64,6 +70,7 @@ CHUNKER_CONFIGS: dict[str, type[Any] | None] = {
     "word_windows": WordWindowsConfig,
     "sentence_windows": SentenceWindowsConfig,
     "semantic": SemanticChunkerConfig,
+    "units": UnitSplitterConfig,
 }
 
 
@@ -133,6 +140,7 @@ __all__ = [
     "CHUNKERS",
     "CHUNKER_CONFIGS",
     "DEFAULT_ABBREVIATIONS",
+    "UNIT_KINDS",
     "AtomChunker",
     "AtomChunkerConfig",
     "BaseChunker",
@@ -141,6 +149,8 @@ __all__ = [
     "SemanticChunkerConfig",
     "SentenceWindowsChunker",
     "SentenceWindowsConfig",
+    "UnitSplitter",
+    "UnitSplitterConfig",
     "WordWindowsChunker",
     "WordWindowsConfig",
     "build_chunker",

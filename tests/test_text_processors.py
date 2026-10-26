@@ -455,7 +455,18 @@ def test_protocols_are_runtime_checkable() -> None:
         def feature_names(self) -> tuple[str, ...]:
             return ("cos",)
 
+        @property
+        def all_feature_names(self) -> tuple[str, ...]:
+            return ("cos",)
+
+        @property
+        def selected_indices(self) -> tuple[int, ...]:
+            return (0,)
+
         def extract(self, pairs: list[TextPair]) -> np.ndarray:
+            return np.zeros((len(pairs), 1), dtype=np.float32)
+
+        def extract_all(self, pairs: list[TextPair]) -> np.ndarray:
             return np.zeros((len(pairs), 1), dtype=np.float32)
 
     class _FakeCombiner:

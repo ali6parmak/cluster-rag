@@ -112,7 +112,11 @@ from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
 from cluster_rag.text_processors.combining import build_combiner
-from cluster_rag.text_processors.features import FeatureEmbedders, PairFeatureExtractor
+from cluster_rag.text_processors.features import (
+    FeatureEmbedders,
+    PairFeatureExtractor,
+    ProfileUnits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1226,10 +1230,11 @@ def _stage3_extractor(
 
     The pack takes the ``Embedder`` **port** (the same precedent as the
     semantic chunker): the package never imports a model client, the CLI
-    wires the cached backends in here. The three sides have three different
-    cache-version slots, so they are three ports: the whole paragraph (the
-    baseline arm's paragraph slot), the whole question (the baseline arm's
-    question slot) and the chunks (the chunker's slot).
+    wires the cached backends in here. Every side has its own cache-version
+    slot, so they are separate ports: the whole paragraph (the baseline arm's
+    paragraph slot), the whole question (the baseline arm's question slot),
+    the chunks (the chunker's slot) and the Stage-3.3 chunk profile's four
+    unit sides (the sentences and the word pieces, on each side).
     """
     features = analysis.stage3.features
     paragraph_chunker, chunk_embedder = _chunker_with_embedder(
@@ -1254,6 +1259,18 @@ def _stage3_extractor(
             analysis.question_block_markers,
             base_version=question_version,
         )
+    # The chunk profile's units (the sentences and the word pieces). The
+    # paragraph side is cached under the preprocessing version, the question
+    # side under the question transform's version (the profile's question
+    # units are cut from the transformed question).
+    question_version = question_transform_version(
+        analysis.question_transform, analysis.question_block_markers
+    )
+    sentence_chunker = build_chunker("units", {"kind": "sentence"})
+    ngram_chunker = build_chunker(
+        "units", {"kind": "ngram", "n_words": features.profile_ngram_size}
+    )
+    profile_units = ProfileUnits(sentences=sentence_chunker, ngrams=ngram_chunker)
     question_embedding_texts = dict(
         zip(
             view.questions,
@@ -1271,11 +1288,25 @@ def _stage3_extractor(
             question=question_embedder,
             chunks=chunk_embedder,
             question_chunks=question_chunks_embedder,
+            paragraph_sentences=_cached_embedder(
+                embedder, config, sentence_chunker.cache_version(spec.version)
+            ),
+            question_sentences=_cached_embedder(
+                embedder, config, sentence_chunker.cache_version(question_version)
+            ),
+            paragraph_ngrams=_cached_embedder(
+                embedder, config, ngram_chunker.cache_version(spec.version)
+            ),
+            question_ngrams=_cached_embedder(
+                embedder, config, ngram_chunker.cache_version(question_version)
+            ),
         ),
         paragraph_chunker=paragraph_chunker,
         top_k=features.top_k,
         question_embedding_texts=question_embedding_texts,
         groups=features.groups,
+        profile_units=profile_units,
+        profile_top_k=features.profile_top_k,
     )
 
 
@@ -1516,6 +1547,8 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     ),
                     "top_k": analysis.stage3.features.top_k,
                     "groups": list(analysis.stage3.features.groups),
+                    "profile_top_k": analysis.stage3.features.profile_top_k,
+                    "profile_ngram_size": analysis.stage3.features.profile_ngram_size,
                 },
                 "combiner": analysis.stage3.combiner.model_dump(mode="python"),
                 "control_weight": analysis.stage3.control_weight,
@@ -1686,6 +1719,39 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 print(
                     f"        feature groups: {'+'.join(groups)} "
                     f"({stage3['feature_pack'].get('n_features')} features)"
+                )
+            diagnostics = (stage3.get("feature_diagnostics") or {}).get("per_feature") or {}
+            selected = set(stage3["feature_pack"].get("feature_names") or [])
+            if diagnostics and selected:
+                top = sorted(
+                    ((name, entry) for name, entry in diagnostics.items() if name in selected),
+                    key=lambda item: (
+                        item[1].get("within_auc") if item[1].get("within_auc") is not None else -1.0
+                    ),
+                    reverse=True,
+                )[:3]
+                print(
+                    "        best features of the arm by their own within-document AUC: "
+                    + ", ".join(
+                        f"{name} ({_fmt(entry.get('within_auc'), 4)}, "
+                        f"control mean {_fmt(entry.get('control', {}).get('mean'), 4)})"
+                        for name, entry in top
+                    )
+                )
+            length_check = stage3.get("length_check") or {}
+            if length_check:
+                arm_pearson = (length_check.get("arm") or {}).get("overall", {}).get("pearson")
+                reference_pearson = (
+                    (length_check.get("reference") or {}).get("overall", {}).get("pearson")
+                )
+                shift_pearson = (
+                    (length_check.get("rank_shift") or {}).get("overall", {}).get("pearson")
+                )
+                print(
+                    "        length vs control score (Pearson): arm "
+                    f"{_fmt(arm_pearson, 4)}, "
+                    f"cosine {_fmt(reference_pearson, 4)}, "
+                    f"rank shift {_fmt(shift_pearson, 4)}"
                 )
             rotations = stage3.get("rotations") or []
             usage: dict[str, Any] = {}

@@ -54,7 +54,11 @@ from cluster_rag.text_processors.control import (
     rank_percentiles,
     sample_control,
 )
-from cluster_rag.text_processors.features import FeatureEmbedders, PairFeatureExtractor
+from cluster_rag.text_processors.features import (
+    FeatureEmbedders,
+    PairFeatureExtractor,
+    ProfileUnits,
+)
 from fake_embedder import FakeEmbedder
 
 ANALYSIS_CONFIG_EXTRA = """
@@ -1224,6 +1228,76 @@ def test_stage3_learns_a_lexical_signal_the_cosine_cannot_see() -> None:
     assert arm_macro > 0.8
     # the baseline (a hash-based cosine) carries no signal to learn from
     assert arm_macro > stage3["comparison"]["pair_auc"]["macro"]["reference"]
+
+
+def test_stage3_reports_the_feature_diagnostics_and_the_length_check(view) -> None:
+    """The Stage-3.3 reporting: every feature's own numbers and the length check."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    spec = build_preprocess_spec(PreprocessConfig(variant="raw"))
+    baseline = BaselineArm()
+    score_model_arms(
+        view,
+        model_name="fake-model",
+        paragraph_embedder=embedder,
+        question_embedders={"strip_block": embedder},
+        baseline_chunker=FullTextChunker(),
+        question_transform="strip_block",
+        question_block_markers=("Answer choices:", "Notes:"),
+        preprocess_spec=spec,
+        baseline=baseline,
+    )
+    units = ProfileUnits(
+        sentences=build_chunker("units", {"kind": "sentence"}),
+        ngrams=build_chunker("units", {"kind": "ngram", "n_words": 5}),
+    )
+    stage3 = score_stage3_model(
+        view,
+        model_name="fake-model",
+        extractor=PairFeatureExtractor(
+            FeatureEmbedders(
+                paragraph=embedder,
+                question=embedder,
+                chunks=embedder,
+                paragraph_sentences=embedder,
+                question_sentences=embedder,
+                paragraph_ngrams=embedder,
+                question_ngrams=embedder,
+            ),
+            paragraph_chunker=FullTextChunker(),
+            top_k=2,
+            groups=("embedding", "lexical", "chunk_profile"),
+            profile_units=units,
+        ),
+        combiner_factory=lambda: build_combiner("logistic", {"C": 1.0}),
+        reference_similarities=baseline.similarities,
+        control_weight=0.3,
+        permutation_resamples=2,
+        seed=42,
+        bootstrap_resamples=20,
+        bootstrap_seed=1,
+    )
+    # every feature the pack computes gets its own block: the discrimination
+    # number, the control-side counterpart and the length correlation
+    diagnostics = stage3["feature_diagnostics"]["per_feature"]
+    assert set(diagnostics) == set(stage3["feature_pack"]["all_feature_names"])
+    for entry in diagnostics.values():
+        assert "within_auc" in entry
+        assert "pooled_auc" in entry
+        assert "macro_auc" in entry
+        assert set(entry["control"]) == {"mean", "p50", "rank_p50", "top_fifth_share"}
+        assert "overall" in entry["length_correlation"]
+    # the length check: the arm, the cosine and the scale-free rank shift
+    length_check = stage3["length_check"]
+    assert set(length_check) == {"arm", "reference", "rank_shift", "note"}
+    for block in ("arm", "reference", "rank_shift"):
+        assert "overall" in length_check[block]
+    # the out-of-fold scores: one per judged pair and per control cell, in the
+    # order of the model's blocks (they are what a paired per-pair comparison
+    # between two arms of different runs needs)
+    scores = stage3["out_of_fold_scores"]
+    assert len(scores["judged_pairs"]) == len(view.pairs)
+    assert len(scores["control_cells"]) == len(view.control.cells)
+    assert all(0.0 <= value <= 1.0 for value in scores["judged_pairs"])
 
 
 def test_analyze_omct_arms_table_rows_use_the_arms_columns(

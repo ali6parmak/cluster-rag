@@ -354,6 +354,9 @@ def test_analysis_stage3_defaults_and_validation() -> None:
         "question_part",
         "question_type",
     )
+    # the Stage-3.3 chunk profile's own knobs
+    assert stage3.features.profile_top_k == 3
+    assert stage3.features.profile_ngram_size == 5
 
     # the section is optional: without it the Stage-0/1/2 behaviour is untouched
     assert AnalysisConfig().stage3 is None
@@ -385,6 +388,9 @@ def test_analysis_stage3_feature_groups_are_validated() -> None:
     # a shorter selection is the ablation's arm
     selected = FeaturePackConfig.model_validate({"groups": ["embedding", "lexical"]})
     assert selected.groups == ("embedding", "lexical")
+    # the Stage-3.3 chunk profile is a group of its own (opt-in)
+    profile = FeaturePackConfig.model_validate({"groups": ["chunk_profile"]})
+    assert profile.groups == ("chunk_profile",)
     # an unknown group name is a configuration error
     with pytest.raises(ValueError, match="Unknown feature group"):
         FeaturePackConfig.model_validate({"groups": ["embedding", "not_a_group"]})
@@ -394,6 +400,11 @@ def test_analysis_stage3_feature_groups_are_validated() -> None:
     # a repeated group is a configuration error
     with pytest.raises(ValueError, match="must not repeat"):
         FeaturePackConfig.model_validate({"groups": ["lexical", "lexical"]})
+    # the profile's own knobs are validated too
+    with pytest.raises(ValueError, match="profile_top_k"):
+        FeaturePackConfig.model_validate({"profile_top_k": 0})
+    with pytest.raises(ValueError, match="profile_ngram_size"):
+        FeaturePackConfig.model_validate({"profile_ngram_size": 1})
 
 
 def test_analysis_stage3_chunker_params_are_validated() -> None:

@@ -17,7 +17,11 @@ import numpy as np
 import pytest
 
 from cluster_rag.text_processors.base import Combiner, FeatureExtractor, TextPair
-from cluster_rag.text_processors.chunkers import FullTextChunker, build_chunker
+from cluster_rag.text_processors.chunkers import (
+    FullTextChunker,
+    UnitSplitterConfig,
+    build_chunker,
+)
 from cluster_rag.text_processors.combining import (
     COMBINERS,
     HistGbCombinerConfig,
@@ -26,11 +30,15 @@ from cluster_rag.text_processors.combining import (
     combiner_config_class,
 )
 from cluster_rag.text_processors.features import (
+    DEFAULT_FEATURE_GROUPS,
     DEFAULT_STOPWORDS,
     FEATURE_GROUPS,
     FEATURE_NAMES,
+    PROFILE_FEATURE_NAMES,
+    V0_FEATURE_NAMES,
     FeatureEmbedders,
     PairFeatureExtractor,
+    ProfileUnits,
     feature_group,
     split_question_parts,
 )
@@ -46,6 +54,14 @@ QUESTION = (
 )
 
 
+def _profile_units() -> ProfileUnits:
+    """The chunk profile's unit splitters (the sentences and the word pieces)."""
+    return ProfileUnits(
+        sentences=build_chunker("units", {"kind": "sentence"}),
+        ngrams=build_chunker("units", {"kind": "ngram", "n_words": 5}),
+    )
+
+
 def _extractor(
     *,
     dimension: int = 8,
@@ -53,15 +69,27 @@ def _extractor(
     question_embedding_texts: dict[str, str] | None = None,
     chunker=None,
     groups: tuple[str, ...] | None = None,
+    profile_units: ProfileUnits | None = None,
+    profile_top_k: int = 3,
 ) -> PairFeatureExtractor:
     """A feature pack over the fake embedder (no network, no model download)."""
     embedder = FakeEmbedder(model_id="fake-embedder", dimension=dimension)
     return PairFeatureExtractor(
-        FeatureEmbedders(paragraph=embedder, question=embedder, chunks=embedder),
+        FeatureEmbedders(
+            paragraph=embedder,
+            question=embedder,
+            chunks=embedder,
+            paragraph_sentences=embedder,
+            question_sentences=embedder,
+            paragraph_ngrams=embedder,
+            question_ngrams=embedder,
+        ),
         paragraph_chunker=chunker or FullTextChunker(),
         top_k=top_k,
         question_embedding_texts=question_embedding_texts,
         groups=groups,
+        profile_units=profile_units,
+        profile_top_k=profile_top_k,
     )
 
 
@@ -90,12 +118,32 @@ def test_question_parts_cut_a_trailing_notes_block() -> None:
 
 
 def test_feature_pack_produces_the_v0_feature_list() -> None:
-    """The pack's columns are the v0 list; the K-dependent name follows the K."""
+    """The default selection is the v0 list; the K-dependent name follows the K."""
     extractor = _extractor(top_k=3)
-    assert extractor.feature_names == FEATURE_NAMES
+    assert extractor.feature_names == V0_FEATURE_NAMES
     assert len(extractor.feature_names) == 15
     assert "chunk_cosine_top3_mean" in extractor.feature_names
     assert _extractor(top_k=5).feature_names[3] == "chunk_cosine_top5_mean"
+
+
+def test_feature_pack_computes_the_whole_pack() -> None:
+    """The pack computes every feature; the selection is the combiner's view."""
+    extractor = _extractor(profile_units=_profile_units())
+    assert extractor.all_feature_names == FEATURE_NAMES
+    assert len(extractor.all_feature_names) == 25
+    # the whole pack: the v0's 15 features plus the Stage-3.3 profile's 10
+    whole = _extractor(profile_units=_profile_units(), groups=FEATURE_GROUPS)
+    assert whole.feature_names == FEATURE_NAMES
+    assert whole.feature_names[: len(V0_FEATURE_NAMES)] == V0_FEATURE_NAMES
+    assert whole.feature_names[len(V0_FEATURE_NAMES) :] == PROFILE_FEATURE_NAMES
+    # the default selection leaves the profile out (the Stage-3.1 behaviour)
+    assert extractor.feature_names == V0_FEATURE_NAMES
+    assert set(PROFILE_FEATURE_NAMES) <= set(extractor.dropped_feature_names)
+    # the pack's default selection is the config's default selection
+    from cluster_rag.config import FeaturePackConfig
+
+    assert FeaturePackConfig().groups == DEFAULT_FEATURE_GROUPS
+    assert extractor.groups == DEFAULT_FEATURE_GROUPS
 
 
 def test_feature_pack_has_no_length_feature() -> None:
@@ -177,10 +225,11 @@ def test_feature_pack_rejects_a_degenerate_k() -> None:
 
 def test_feature_pack_describes_itself() -> None:
     """The description is the artifact's record of the pack."""
-    described = _extractor().describe()
-    assert described["name"] == "v0"
-    assert described["n_features"] == len(FEATURE_NAMES)
+    described = _extractor(profile_units=_profile_units()).describe()
+    assert described["name"] == "v0+chunk_profile"
+    assert described["n_features"] == len(V0_FEATURE_NAMES)
     assert described["top_k"] == 3
+    assert described["profile_top_k"] == 3
     assert described["stopwords"] == sorted(DEFAULT_STOPWORDS)
     assert "pair-local" in described["note"]
 
@@ -189,31 +238,35 @@ def test_feature_pack_describes_itself() -> None:
 
 
 def test_feature_groups_partition_the_pack() -> None:
-    """Every v0 feature belongs to exactly one group, and the four cover the pack."""
+    """Every feature belongs to exactly one group, and the five cover the pack."""
     assert set(FEATURE_GROUPS) == {
         "embedding",
         "lexical",
         "question_part",
         "question_type",
+        "chunk_profile",
     }
     grouped: dict[str, list[str]] = {group: [] for group in FEATURE_GROUPS}
     for name in FEATURE_NAMES:
         group = feature_group(name)
         assert group is not None, name
         grouped[group].append(name)
-    # the four groups partition the pack: every feature is in exactly one of
+    # the five groups partition the pack: every feature is in exactly one of
     # them and none is left over
     assert sorted(name for names in grouped.values() for name in names) == sorted(FEATURE_NAMES)
     assert len(grouped["embedding"]) == 6
     assert len(grouped["lexical"]) == 3
     assert len(grouped["question_part"]) == 1
     assert len(grouped["question_type"]) == 5
+    assert len(grouped["chunk_profile"]) == 10
     # the groups hold the features the plan's list names
     assert feature_group("cosine_full") == "embedding"
     assert feature_group("chunk_cosine_spread") == "embedding"
     assert feature_group("lex_char_ngram_cosine") == "lexical"
     assert feature_group("qpart_options_coverage") == "question_part"
     assert feature_group("qtype_option_count") == "question_type"
+    assert feature_group("cprof_sent_top1") == "chunk_profile"
+    assert feature_group("cprof_align_lexical") == "chunk_profile"
 
 
 def test_feature_pack_keeps_only_the_requested_groups() -> None:
@@ -224,20 +277,27 @@ def test_feature_pack_keeps_only_the_requested_groups() -> None:
         "lex_paragraph_coverage",
         "lex_char_ngram_cosine",
     )
-    assert len(extractor.dropped_feature_names) == 12
+    assert len(extractor.dropped_feature_names) == 22
     assert "cosine_full" in extractor.dropped_feature_names
     assert "qtype_option_count" in extractor.dropped_feature_names
-    # the default keeps the whole pack
-    assert _extractor().feature_names == FEATURE_NAMES
-    assert _extractor().dropped_feature_names == ()
+    # the default keeps the v0 pack (the Stage-3.1 behaviour)
+    assert _extractor().feature_names == V0_FEATURE_NAMES
+    assert "cprof_sent_top1" in _extractor().dropped_feature_names
 
 
 def test_feature_pack_selection_only_changes_the_columns() -> None:
     """The selected columns are the full pack's columns, value for value."""
     pair = TextPair(paragraph_text=PARAGRAPH, question_text=QUESTION)
-    full = _extractor().extract([pair])[0]
-    for groups in (("embedding",), ("lexical",), ("question_type",), ("embedding", "lexical")):
-        extractor = _extractor(groups=groups)
+    full = _extractor(profile_units=_profile_units()).extract_all([pair])[0]
+    for groups in (
+        ("embedding",),
+        ("lexical",),
+        ("question_type",),
+        ("embedding", "lexical"),
+        ("chunk_profile",),
+        FEATURE_GROUPS,
+    ):
+        extractor = _extractor(profile_units=_profile_units(), groups=groups)
         selected = extractor.extract([pair])[0]
         assert selected.shape == (len(extractor.feature_names),)
         for position, name in enumerate(extractor.feature_names):
@@ -261,6 +321,141 @@ def test_feature_pack_describes_the_group_selection() -> None:
     assert described["n_features"] == 11
     assert "lex_question_coverage" in described["dropped_features"]
     assert "cosine_full" not in described["dropped_features"]
+
+
+# -- the chunk profile (the Stage-3.3 block) ------------------------------------
+
+
+def test_unit_splitter_cuts_sentences_and_word_pieces() -> None:
+    """The two granularities: the sentences and the word pieces inside them."""
+    sentences = build_chunker("units", {"kind": "sentence"})
+    pieces = build_chunker("units", {"kind": "ngram", "n_words": 5})
+    text = "One sentence here. And another one, a bit longer than the first."
+    assert sentences.units(text) == [
+        "One sentence here.",
+        "And another one, a bit longer than the first.",
+    ]
+    # the pieces tile the sentence, so the last one may be shorter
+    assert pieces.units("One two three four five six.") == ["One two three four five", "six."]
+    # a piece never spans a sentence boundary
+    assert all("here. And" not in piece for piece in pieces.units(text))
+    assert sentences.units("") == []
+    assert pieces.units("") == []
+
+
+def test_unit_splitter_rejects_a_degenerate_setting() -> None:
+    """The unit splitter's parameters are validated."""
+    with pytest.raises(ValueError, match="unit kind"):
+        UnitSplitterConfig(kind="paragraph")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="n_words"):
+        UnitSplitterConfig(kind="ngram", n_words=1)
+    with pytest.raises(ValueError, match="min_unit_chars"):
+        UnitSplitterConfig(min_unit_chars=0)
+
+
+def test_unit_splitter_versions_its_parameters() -> None:
+    """Two differently configured splitters never share cached units."""
+    sentences = build_chunker("units", {"kind": "sentence"})
+    pieces = build_chunker("units", {"kind": "ngram", "n_words": 5})
+    other = build_chunker("units", {"kind": "ngram", "n_words": 4})
+    assert sentences.version != pieces.version
+    assert pieces.version != other.version
+    assert sentences.cache_version("raw-v1") != pieces.cache_version("raw-v1")
+    assert sentences.slug == "units-sent"
+    assert pieces.slug == "units-5w"
+
+
+def test_profile_features_are_the_ranked_cross_chunk_cosines() -> None:
+    """The profile's ranks are the sorted cross-chunk cosines, computed by hand."""
+    embedder = FakeEmbedder(model_id="fake-embedder", dimension=8)
+    units = _profile_units()
+    extractor = PairFeatureExtractor(
+        FeatureEmbedders(
+            paragraph=embedder,
+            question=embedder,
+            chunks=embedder,
+            paragraph_sentences=embedder,
+            question_sentences=embedder,
+            paragraph_ngrams=embedder,
+            question_ngrams=embedder,
+        ),
+        paragraph_chunker=FullTextChunker(),
+        groups=("chunk_profile",),
+        profile_units=units,
+    )
+    row = extractor.extract([TextPair(paragraph_text=PARAGRAPH, question_text=QUESTION)])[0]
+    names = extractor.feature_names
+    for granularity, splitter in (("sent", units.sentences), ("ngram", units.ngrams)):
+        paragraph_units = splitter.units(PARAGRAPH)
+        question_units = splitter.units(QUESTION)
+        paragraph_vectors = embedder.encode(paragraph_units, "document")
+        question_vectors = embedder.encode(question_units, "query")
+        expected = sorted(
+            (paragraph_vectors @ question_vectors.T).reshape(-1).tolist(), reverse=True
+        )
+        for rank in range(3):
+            value = row[names.index(f"cprof_{granularity}_top{rank + 1}")]
+            if rank < len(expected):
+                assert value == pytest.approx(expected[rank])
+            else:
+                assert value == 0.0  # the zero padding
+
+
+def test_profile_pads_a_short_block_with_zeros() -> None:
+    """A pair with fewer units than ranks pads the missing ranks with zeros."""
+    extractor = _extractor(
+        profile_units=_profile_units(), groups=("chunk_profile",), profile_top_k=5
+    )
+    row = extractor.extract([TextPair(paragraph_text="One short line.", question_text="A?")])[0]
+    names = extractor.feature_names
+    assert row[names.index("cprof_sent_top2")] == 0.0
+    assert row[names.index("cprof_ngram_top3")] == 0.0
+
+
+def test_profile_needs_the_unit_splitters() -> None:
+    """The chunk_profile group without the unit splitters is a configuration error."""
+    with pytest.raises(ValueError, match="unit splitters"):
+        _extractor(groups=("chunk_profile",))
+
+
+def test_profile_columns_are_zero_without_the_units() -> None:
+    """Without the unit splitters the pack computes the other features only."""
+    extractor = _extractor()
+    row = extractor.extract_all([TextPair(paragraph_text=PARAGRAPH, question_text=QUESTION)])[0]
+    for name in PROFILE_FEATURE_NAMES:
+        assert row[FEATURE_NAMES.index(name)] == 0.0
+
+
+def test_profile_is_pair_local_and_deterministic() -> None:
+    """The profile sees one pair at a time and gives the same row every time."""
+    extractor = _extractor(profile_units=_profile_units(), groups=("chunk_profile",))
+    first = TextPair(paragraph_text=PARAGRAPH, question_text=QUESTION)
+    second = TextPair(paragraph_text="The parliament adopted the budget.", question_text=QUESTION)
+    matrix = extractor.extract([first, second])
+    again = extractor.extract([second, first])
+    assert matrix[0].tolist() == again[1].tolist()
+    assert matrix[1].tolist() == again[0].tolist()
+    # the two paragraphs differ, so the profile is not a constant
+    assert matrix[0].tolist() != matrix[1].tolist()
+
+
+def test_profile_ranks_follow_the_configured_k() -> None:
+    """The profile's number of ranks is the pack's parameter."""
+    extractor = _extractor(
+        profile_units=_profile_units(), groups=("chunk_profile",), profile_top_k=2
+    )
+    assert extractor.feature_names == (
+        "cprof_sent_top1",
+        "cprof_sent_top2",
+        "cprof_ngram_top1",
+        "cprof_ngram_top2",
+        "cprof_align_sent",
+        "cprof_align_ngram",
+        "cprof_align_lexical",
+        "cprof_align_semantic_only",
+    )
+    with pytest.raises(ValueError, match="profile_top_k"):
+        _extractor(profile_top_k=0)
 
 
 def test_logistic_combiner_fits_and_scores() -> None:

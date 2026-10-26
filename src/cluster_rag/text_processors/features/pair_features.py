@@ -1,4 +1,4 @@
-"""Feature pack v0: one row of numbers per (paragraph, question) pair.
+"""Feature pack: one row of numbers per (paragraph, question) pair.
 
 TEXT_PROCESSING_PLAN.md section 3 (Stage 3.1) replaces the hand-written
 scoring rules with a **table of numbers per pair**: the combiner then learns
@@ -7,41 +7,71 @@ length feature, which the reviewer's decision leaves out because length is a
 document proxy on this data — NU's paragraphs are long, AI's are short, so a
 length feature can memorize the document instead of the topic):
 
-===============================  ==================================================
-feature                          what it measures
-===============================  ==================================================
-``cosine_full``                  the full-text cosine (the Stage-0 baseline's score)
-``chunk_cosine_best``            the best paragraph-chunk cosine
-``chunk_cosine_top2_mean``       the mean of the two best chunk cosines
-``chunk_cosine_topK_mean``       the mean of the K best chunk cosines (K = ``top_k``)
-``chunk_cosine_spread``          the standard deviation of the K best chunk cosines
-``chunk_peak_margin``            the best chunk cosine minus the K-best mean
-``lex_question_coverage``        the question stem's soft coverage by the paragraph
-``lex_paragraph_coverage``       the paragraph's soft coverage by the question stem
-``lex_char_ngram_cosine``        the char-3-gram cosine of the two texts
-``qpart_options_coverage``       the answer options' soft coverage by the paragraph
-``qtype_has_options``            1 when the question carries an options block
-``qtype_has_no_data_option``     1 when an option says "no data / n/a"
-``qtype_yes_no``                 1 when the question is a yes/no question
-``qtype_frequency``              1 when the question asks about frequency
-``qtype_option_count``           the number of answer options
-===============================  ==================================================
+=============================  ==================================================
+feature                         what it measures
+=============================  ==================================================
+``cosine_full``                 the full-text cosine (the Stage-0 baseline's score)
+``chunk_cosine_best``           the best paragraph-chunk cosine
+``chunk_cosine_top2_mean``      the mean of the two best chunk cosines
+``chunk_cosine_topK_mean``      the mean of the K best chunk cosines (K = ``top_k``)
+``chunk_cosine_spread``         the standard deviation of the K best chunk cosines
+``chunk_peak_margin``           the best chunk cosine minus the K-best mean
+``lex_question_coverage``       the question stem's soft coverage by the paragraph
+``lex_paragraph_coverage``      the paragraph's soft coverage by the question stem
+``lex_char_ngram_cosine``       the char-3-gram cosine of the two texts
+``qpart_options_coverage``      the answer options' soft coverage by the paragraph
+``qtype_has_options``           1 when the question carries an options block
+``qtype_has_no_data_option``    1 when an option says "no data / n/a"
+``qtype_yes_no``                1 when the question is a yes/no question
+``qtype_frequency``             1 when the question asks about frequency
+``qtype_option_count``          the number of answer options
+=============================  ==================================================
+
+The Stage-3.3 **chunk profile** (the plan's 3.3, exp17/15/16's lineage) adds
+a fifth block. It says **where** the paragraph and the question match, not
+how similar they are on average:
+
+====================================  ==========================================
+feature                                what it measures
+====================================  ==========================================
+``cprof_sent_top1..topK``              the ranked cross-chunk match profile, sentence granularity
+``cprof_ngram_top1..topK``             the ranked cross-chunk match profile, word-piece granularity
+``cprof_align_sent``                   1 when the best alignment is a sentence match
+``cprof_align_ngram``                  1 when the best alignment is a word-piece match
+``cprof_align_lexical``                1 when the two aligned units share a content word
+``cprof_align_semantic_only``          1 when they share none
+====================================  ==========================================
+
+**The profile.** exp17 cuts **both** sides of a pair into small pieces — the
+sentences and the word pieces inside the sentences — computes every
+piece×piece cosine, sorts them and keeps the top ranks. So the profile is
+the *shape* of the local matches: one strong peak (a paragraph that matches
+the question in one place) or several (a paragraph that matches it in many
+places). The alignment kinds say which granularity produced the best match
+and whether it was a lexical match (the two units share a content word) or a
+semantic-only one.
 
 **Pair-local by construction.** The pack sees one pair at a time and derives
 everything from that pair's two texts: no corpus statistic, no question-level
 prior, no document identity, no label. (The Stage-3 leakage rules of the
 plan: 186/294 question numbers are judged in more than one document and 101
 are positive in one document and negative in another, so a question-level
-statistic would leak across the document holdout.)
+statistic would leak across the document holdout.) exp16's ``log(1+df)`` of
+the matched phrase — a statistic of the *labeled corpus* — is therefore **not**
+a feature here; the reviewer's decision (2026-10-26) was to drop it and to
+keep the pair-local alignment kinds instead.
 
 **The question's two parts.** The plan's Stage 1.1b: the answer options are
 scales ("Very often", "Yes"), i.e. a *type* signal, not topical content. The
 pack therefore splits the question into its **stem** (the topical part) and its
 **options** (the type part), uses the stem for the lexical overlap, and turns
-the options into the type one-hots.
+the options into the type one-hots. The profile's question side follows the
+embedding side: the units are cut from the **transformed** question (the
+"Answer choices:" block stripped), so the scale words stay out of the
+cross-chunk matches.
 
 **The feature groups (the CS-6a ablation's unit).** The pack's features fall
-into four **groups**, each one a block of the same kind of signal:
+into five **groups**, each one a block of the same kind of signal:
 
 =====================  =====================================================
 group                  what it holds
@@ -50,24 +80,29 @@ group                  what it holds
 ``lexical``            the soft lexical overlap (both ways) + the char n-grams
 ``question_part``      the answer options' soft coverage
 ``question_type``      the five question-type one-hots
+``chunk_profile``      the ranked cross-chunk profile + the alignment kinds
 =====================  =====================================================
 
 The group of a feature is decided by its **name prefix**, so the
-K-dependent name needs no special case, and the four groups partition the
+K-dependent names need no special case, and the five groups partition the
 pack exactly (a test enforces it). The extractor keeps only the groups it is
 given (``groups``), which is how the plan's feature-group ablation (Stage
 3.1b) measures which block carries the gain: the pack itself never changes,
-only the columns the combiner sees.
+only the columns the combiner sees. The fifth group was added by the Stage-3.3
+change set, so the four earlier groups keep their exact meaning (and their
+runs keep their exact feature sets).
 
 **Where the embeddings come from.** The pack takes the ``Embedder`` **port**
 (``cluster_rag.embed.base``) through :class:`FeatureEmbedders` — the same
 precedent as the semantic chunker: the package never imports a model client,
-the CLI wires the cached backends in. Three embedding sides are needed and each
-one has its own cache-version slot, so the ports are separate:
+the CLI wires the cached backends in. Every embedding side has its own
+cache-version slot, so the ports are separate:
 
 - ``paragraph``: the whole paragraph (the baseline arm's cache slot);
 - ``question``: the whole question (the baseline arm's question slot);
-- ``chunks``: the paragraph's chunks (the chunker's cache slot).
+- ``chunks``: the paragraph's chunks (the chunker's cache slot);
+- ``paragraph_sentences`` / ``question_sentences``: the profile's sentence units;
+- ``paragraph_ngrams`` / ``question_ngrams``: the profile's word-piece units.
 
 Pure core: numpy + the standard library + ``cluster_rag.embed.base`` only.
 """
@@ -84,11 +119,12 @@ import numpy as np
 from cluster_rag.embed.base import Embedder
 from cluster_rag.text_processors.base import Chunker, TextPair
 
-# The v0 feature names, in column order. The K of the top-K features is
-# configurable, so the two K-dependent names are built per instance (see
+# The v0 feature names, in column order (K = 3). The K of the top-K features
+# is configurable, so the two K-dependent names are built per instance (see
 # ``PairFeatureExtractor.feature_names``); the tuple below is the default
-# (K = 3) and is what the artifact records.
-FEATURE_NAMES: tuple[str, ...] = (
+# (K = 3) and is what the artifact records. This is the **Stage-3.1**
+# feature set — the one the CS-6a ablation's arms describe.
+V0_FEATURE_NAMES: tuple[str, ...] = (
     "cosine_full",
     "chunk_cosine_best",
     "chunk_cosine_top2_mean",
@@ -106,19 +142,48 @@ FEATURE_NAMES: tuple[str, ...] = (
     "qtype_option_count",
 )
 
-# The feature groups of the v0 pack (the Stage-3.1b ablation's unit). The
-# group of a feature is decided by its **name prefix**, so the K-dependent
-# name needs no special case; the four groups partition the pack exactly (a
-# test enforces it).
+# The chunk profile's feature names, in column order (the default ranks).
+PROFILE_FEATURE_NAMES: tuple[str, ...] = (
+    "cprof_sent_top1",
+    "cprof_sent_top2",
+    "cprof_sent_top3",
+    "cprof_ngram_top1",
+    "cprof_ngram_top2",
+    "cprof_ngram_top3",
+    "cprof_align_sent",
+    "cprof_align_ngram",
+    "cprof_align_lexical",
+    "cprof_align_semantic_only",
+)
+
+# The pack's full feature list, in column order (the defaults: K = 3 chunk
+# similarities and 3 profile ranks per granularity).
+FEATURE_NAMES: tuple[str, ...] = V0_FEATURE_NAMES + PROFILE_FEATURE_NAMES
+
+# The feature groups of the pack (the Stage-3.1b ablation's unit). The group
+# of a feature is decided by its **name prefix**, so the K-dependent names
+# need no special case; the five groups partition the pack exactly (a test
+# enforces it).
 FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "embedding": ("cosine_full", "chunk_"),
     "lexical": ("lex_",),
     "question_part": ("qpart_",),
     "question_type": ("qtype_",),
+    "chunk_profile": ("cprof_",),
 }
 
 # The group names, in the canonical order.
 FEATURE_GROUPS: tuple[str, ...] = tuple(FEATURE_GROUP_PREFIXES)
+
+# The **default** selection: the v0 pack's four groups (the Stage-3.1
+# behaviour). The Stage-3.3 chunk profile is opt-in, so the default keeps
+# the earlier arms' feature sets exactly; the whole pack is every group.
+DEFAULT_FEATURE_GROUPS: tuple[str, ...] = (
+    "embedding",
+    "lexical",
+    "question_part",
+    "question_type",
+)
 
 
 def feature_group(name: str) -> str | None:
@@ -482,12 +547,12 @@ def _is_frequency(parts: QuestionParts) -> bool:
 class FeatureEmbedders:
     """The embedding sides the feature pack needs (the ``Embedder`` ports).
 
-    The three sides have three different cache-version slots, so they are three
-    ports and not one: the whole paragraph lives in the baseline arm's
-    paragraph slot, the whole question in the baseline arm's question slot
-    (the question transform's version) and the chunks in the chunker's slot.
-    The CLI wires the cached backends in; the pack itself never imports a
-    model client.
+    Every side has its own cache-version slot, so they are separate ports and
+    not one: the whole paragraph lives in the baseline arm's paragraph slot,
+    the whole question in the baseline arm's question slot (the question
+    transform's version), the chunks in the chunker's slot and the profile's
+    four unit sides in their own slots. The CLI wires the cached backends in;
+    the pack itself never imports a model client.
 
     Attributes:
         paragraph: The whole paragraph (encoded with the ``document`` kind).
@@ -496,12 +561,37 @@ class FeatureEmbedders:
         question_chunks: The question's chunks, when the question side is
             chunked too (encoded with the ``query`` kind); ``None`` means the
             question side is whole, which is the plan's Stage-2 verdict.
+        paragraph_sentences: The profile's sentence units of the paragraph
+            side (the ``document`` kind); ``None`` disables the profile.
+        question_sentences: The profile's sentence units of the question side
+            (the ``query`` kind).
+        paragraph_ngrams: The profile's word-piece units of the paragraph
+            side (the ``document`` kind).
+        question_ngrams: The profile's word-piece units of the question side
+            (the ``query`` kind).
     """
 
     paragraph: Embedder
     question: Embedder
     chunks: Embedder
     question_chunks: Embedder | None = None
+    paragraph_sentences: Embedder | None = None
+    question_sentences: Embedder | None = None
+    paragraph_ngrams: Embedder | None = None
+    question_ngrams: Embedder | None = None
+
+
+@dataclass(frozen=True)
+class ProfileUnits:
+    """The chunk profile's unit splitters (the two granularities).
+
+    The same splitters are used on both sides of a pair; only the embedding
+    side differs (the paragraph's units are documents, the question's are
+    queries). The CLI builds them and wires the matching cached backends in.
+    """
+
+    sentences: Chunker
+    ngrams: Chunker
 
 
 @dataclass
@@ -514,8 +604,96 @@ class _TextFacts:
     token_ngrams: list[frozenset[str]]
 
 
+@dataclass(frozen=True)
+class _UnitSide:
+    """One side's profile units: the unit texts and their vectors.
+
+    ``rows`` gives the vector rows of every item's units (the units of an
+    item are consecutive rows, in text order), and ``ranges`` the column
+    range of every item in the *other* side's concatenated vectors.
+    """
+
+    texts: tuple[tuple[str, ...], ...]
+    vectors: np.ndarray
+    rows: tuple[tuple[int, ...], ...]
+    ranges: tuple[tuple[int, int], ...]
+
+
+def _encode_units(
+    embedder: Embedder,
+    chunker: Chunker,
+    texts: Sequence[str],
+    kind: str,
+    dimension: int,
+) -> _UnitSide:
+    """Cut every text into its units and embed them in one batch."""
+    chunk_lists = chunker.segment(list(texts))
+    flat: list[str] = []
+    rows: list[tuple[int, ...]] = []
+    for chunk_list in chunk_lists:
+        start = len(flat)
+        flat.extend(chunk_list)
+        rows.append(tuple(range(start, len(flat))))
+    vectors = (
+        np.asarray(embedder.encode(flat, kind), dtype=np.float32)  # type: ignore[arg-type]
+        if flat
+        else np.zeros((0, dimension), dtype=np.float32)
+    )
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    for chunk_list in chunk_lists:
+        ranges.append((cursor, cursor + len(chunk_list)))
+        cursor += len(chunk_list)
+    return _UnitSide(
+        texts=tuple(tuple(chunk_list) for chunk_list in chunk_lists),
+        vectors=vectors,
+        rows=tuple(rows),
+        ranges=tuple(ranges),
+    )
+
+
+def _unit_rows(vectors: np.ndarray, rows: Sequence[int]) -> np.ndarray:
+    """The rows of the given items (an empty selection gives no rows)."""
+    if not rows:
+        return np.zeros((0, vectors.shape[1]), dtype=np.float32)
+    return vectors[np.asarray(rows, dtype=np.int64)]
+
+
+def _cross_blocks(paragraph_side: _UnitSide, question_side: _UnitSide) -> list[np.ndarray]:
+    """The cross-similarity block of every paragraph against all question units.
+
+    The block of a paragraph is its units' vectors times **all** the question
+    side's unit vectors, so one matrix serves every question of that
+    paragraph: the per-question slice is a column range.
+    """
+    blocks: list[np.ndarray] = []
+    for rows in paragraph_side.rows:
+        blocks.append(_unit_rows(paragraph_side.vectors, rows) @ question_side.vectors.T)
+    return blocks
+
+
+def _ranked_profile(block: np.ndarray, top_k: int) -> tuple[np.ndarray, float, int, int]:
+    """The ranked cross-chunk profile of one block.
+
+    Returns the top values (descending and **zero-padded** when the block
+    holds fewer than ``top_k`` cosines — the lineage's convention), the best
+    value and the indices of the best pair (the paragraph's unit, the
+    question's unit).
+    """
+    if block.size == 0:
+        return np.zeros(top_k, dtype=np.float32), float("-inf"), 0, 0
+    flat = block.reshape(-1)
+    count = min(top_k, flat.size)
+    order = np.argpartition(flat, -count)[-count:]
+    top = np.zeros(top_k, dtype=np.float32)
+    top[:count] = np.sort(flat[order])[::-1]
+    best = int(np.argmax(flat))
+    best_paragraph, best_question = divmod(best, block.shape[1])
+    return top, float(flat[best]), best_paragraph, best_question
+
+
 class PairFeatureExtractor:
-    """The v0 feature pack: a pair in, a row of numbers out.
+    """The feature pack: a pair in, a row of numbers out.
 
     The extractor is **label-free and pair-local**: it derives every feature
     from the pair's own two texts, keeps no corpus-level statistic and never
@@ -535,14 +713,23 @@ class PairFeatureExtractor:
             arm's cosine exactly while the lexical and type features still
             see the question's parts.
         groups: The **feature groups** to keep (the Stage-3.1b ablation's
-            unit). ``None`` keeps every group, i.e. the whole v0 pack. The
-            selected features keep the pack's canonical order, so a group's
-            columns are the same whatever else is selected.
+            unit). ``None`` keeps the default selection — the v0 pack's four
+            groups, i.e. the Stage-3.1 behaviour; the whole pack is an
+            explicit selection. The selected features keep the pack's
+            canonical order, so a group's columns are the same whatever else
+            is selected.
+        profile_units: The chunk profile's unit splitters (the sentences and
+            the word pieces). Needed when the ``chunk_profile`` group is
+            selected; without them the profile's columns stay 0.
+        profile_top_k: How many ranks of the cross-chunk profile are kept per
+            granularity.
         stopwords: The stopwords of the lexical coverage.
 
     Raises:
         ValueError: If ``top_k`` is not positive, if a group name is unknown,
-            if a group is repeated, or if the selection is empty.
+            if a group is repeated, if the selection is empty, if
+            ``profile_top_k`` is not positive, or if the ``chunk_profile``
+            group is selected without the profile's unit splitters.
     """
 
     def __init__(
@@ -553,15 +740,21 @@ class PairFeatureExtractor:
         top_k: int = 3,
         question_embedding_texts: Mapping[str, str] | None = None,
         groups: Sequence[str] | None = None,
+        profile_units: ProfileUnits | None = None,
+        profile_top_k: int = 3,
         stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     ) -> None:
         if top_k < 1:
             raise ValueError(f"top_k must be >= 1, got {top_k}")
+        if profile_top_k < 1:
+            raise ValueError(f"profile_top_k must be >= 1, got {profile_top_k}")
         self.embedders = embedders
         self.paragraph_chunker = paragraph_chunker
         self.top_k = top_k
         self.question_embedding_texts = dict(question_embedding_texts or {})
         self.stopwords = frozenset(stopwords)
+        self.profile_units = profile_units
+        self.profile_top_k = profile_top_k
         self.groups = self._checked_groups(groups)
         self._canonical_names = self._canonical_feature_names()
         self._selected = tuple(
@@ -571,14 +764,23 @@ class PairFeatureExtractor:
         )
         if not self._selected:
             raise ValueError(
-                f"the feature groups {list(self.groups)} select no feature of the v0 pack"
+                f"the feature groups {list(self.groups)} select no feature of the pack"
+            )
+        if "chunk_profile" in self.groups and profile_units is None:
+            raise ValueError(
+                "the chunk_profile group needs the profile's unit splitters (profile_units=...)"
             )
 
     @staticmethod
     def _checked_groups(groups: Sequence[str] | None) -> tuple[str, ...]:
-        """The group selection, checked (known names, no repeats, not empty)."""
+        """The group selection, checked (known names, no repeats, not empty).
+
+        ``None`` keeps the **default** selection — the v0 pack's four groups,
+        i.e. the Stage-3.1 behaviour. The whole pack (every group, the
+        Stage-3.3 chunk profile included) is an explicit selection.
+        """
         if groups is None:
-            return FEATURE_GROUPS
+            return DEFAULT_FEATURE_GROUPS
         selected = tuple(groups)
         if not selected:
             raise ValueError("the feature groups must name at least one group")
@@ -593,7 +795,7 @@ class PairFeatureExtractor:
 
     def _canonical_feature_names(self) -> tuple[str, ...]:
         """The pack's feature names, in column order (the K-dependent ones included)."""
-        return (
+        names = [
             "cosine_full",
             "chunk_cosine_best",
             "chunk_cosine_top2_mean",
@@ -609,12 +811,35 @@ class PairFeatureExtractor:
             "qtype_yes_no",
             "qtype_frequency",
             "qtype_option_count",
+        ]
+        for granularity in ("sent", "ngram"):
+            names.extend(
+                f"cprof_{granularity}_top{rank}" for rank in range(1, self.profile_top_k + 1)
+            )
+        names.extend(
+            (
+                "cprof_align_sent",
+                "cprof_align_ngram",
+                "cprof_align_lexical",
+                "cprof_align_semantic_only",
+            )
         )
+        return tuple(names)
 
     @property
     def feature_names(self) -> tuple[str, ...]:
         """The selected feature names, in column order (the K-dependent ones included)."""
         return tuple(self._canonical_names[index] for index in self._selected)
+
+    @property
+    def all_feature_names(self) -> tuple[str, ...]:
+        """Every feature the pack computes, in column order."""
+        return self._canonical_names
+
+    @property
+    def selected_indices(self) -> tuple[int, ...]:
+        """The column indices of the selected features (in the full matrix)."""
+        return self._selected
 
     @property
     def dropped_feature_names(self) -> tuple[str, ...]:
@@ -626,13 +851,23 @@ class PairFeatureExtractor:
     def describe(self) -> dict[str, Any]:
         """A JSON-friendly description of the pack (recorded in the artifact)."""
         return {
-            "name": "v0",
+            "name": "v0+chunk_profile",
             "n_features": len(self.feature_names),
             "feature_names": list(self.feature_names),
+            "all_feature_names": list(self._canonical_names),
             "groups": list(self.groups),
             "dropped_features": list(self.dropped_feature_names),
             "paragraph_chunker": self.paragraph_chunker.version,
             "top_k": self.top_k,
+            "profile_top_k": self.profile_top_k,
+            "profile_units": (
+                None
+                if self.profile_units is None
+                else {
+                    "sentences": self.profile_units.sentences.version,
+                    "ngrams": self.profile_units.ngrams.version,
+                }
+            ),
             "stopwords": sorted(self.stopwords),
             "embedding_sides": {
                 side: {
@@ -644,6 +879,10 @@ class PairFeatureExtractor:
                     ("question", self.embedders.question),
                     ("chunks", self.embedders.chunks),
                     ("question_chunks", self.embedders.question_chunks),
+                    ("paragraph_sentences", self.embedders.paragraph_sentences),
+                    ("question_sentences", self.embedders.question_sentences),
+                    ("paragraph_ngrams", self.embedders.paragraph_ngrams),
+                    ("question_ngrams", self.embedders.question_ngrams),
                 )
                 if embedder is not None
             },
@@ -653,7 +892,11 @@ class PairFeatureExtractor:
                 "(length is a document proxy on this data; the lengths are "
                 "recorded in the artifact instead). 'groups' is the feature-group "
                 "selection of the Stage-3.1b ablation: the pack computes every "
-                "feature and the combiner sees only the selected groups' columns."
+                "feature and the combiner sees only the selected groups' columns. "
+                "The chunk_profile group is the Stage-3.3 block (exp17's ranked "
+                "cross-chunk match profile and exp16's alignment kinds); exp16's "
+                "corpus-level df was dropped by the reviewer's decision, because "
+                "it would break the pack's pair-locality."
             ),
         }
 
@@ -682,6 +925,15 @@ class PairFeatureExtractor:
     def extract(self, pairs: Sequence[TextPair]) -> np.ndarray:
         """The feature matrix of the pairs, shape ``(n_pairs, n_features)``.
 
+        The columns are the **selected** features (the groups the extractor
+        was given); the pack computes every feature, the combiner sees the
+        selection.
+        """
+        return self.extract_all(pairs)[:, np.asarray(self._selected, dtype=np.int64)]
+
+    def extract_all(self, pairs: Sequence[TextPair]) -> np.ndarray:
+        """The full feature matrix of the pairs (every canonical column).
+
         The embeddings are done in **one batch per side**: the unique
         paragraphs, the unique questions and the unique chunks are encoded
         once each, and every pair's features are derived from them. That is a
@@ -692,10 +944,11 @@ class PairFeatureExtractor:
             pairs: The pairs to featurize (the text only — never a label).
 
         Returns:
-            The float32 feature matrix, one row per pair.
+            The float32 feature matrix, one row per pair, with every
+            canonical column (the selected ones included).
         """
         items = list(pairs)
-        matrix = np.zeros((len(items), len(self.feature_names)), dtype=np.float32)
+        matrix = np.zeros((len(items), len(self._canonical_names)), dtype=np.float32)
         if not items:
             return matrix
 
@@ -737,8 +990,13 @@ class PairFeatureExtractor:
             for parts in question_parts
         ]
 
+        # The chunk profile's units (the sentences and the word pieces), on both
+        # sides. The question side follows the embedding side: the units are
+        # cut from the transformed question (the "Answer choices:" block
+        # stripped), so the scale words stay out of the cross-chunk matches.
+        profile = self._profile_sides(paragraph_texts, embedding_texts, paragraph_vectors.shape[1])
+
         top_k = self.top_k
-        selected = list(self._selected)
         for position, pair in enumerate(items):
             row = paragraph_index[pair.paragraph_text]
             column = question_index[pair.question_text]
@@ -788,9 +1046,114 @@ class PairFeatureExtractor:
             values[12] = 1.0 if _is_yes_no(parts) else 0.0
             values[13] = 1.0 if _is_frequency(parts) else 0.0
             values[14] = float(len(parts.options))
-            # the combiner sees the selected groups' columns only
-            matrix[position] = values[selected]
+
+            # 5. the chunk profile (the Stage-3.3 block)
+            if profile is not None:
+                self._profile_values(values, profile, row, column)
+
+            # every canonical column is written; the combiner sees the
+            # selected groups' columns only (``extract`` slices them)
+            matrix[position] = values
         return matrix
+
+    def _profile_sides(
+        self,
+        paragraph_texts: Sequence[str],
+        question_texts: Sequence[str],
+        dimension: int,
+    ) -> dict[str, Any] | None:
+        """The profile's two sides and their cross-similarity blocks.
+
+        ``None`` when the pack has no unit splitters (the profile's columns
+        then stay 0 — the pack still computes every other feature).
+        """
+        if self.profile_units is None:
+            return None
+        paragraph_sentences = _encode_units(
+            self.embedders.paragraph_sentences,  # type: ignore[arg-type]
+            self.profile_units.sentences,
+            paragraph_texts,
+            "document",
+            dimension,
+        )
+        question_sentences = _encode_units(
+            self.embedders.question_sentences,  # type: ignore[arg-type]
+            self.profile_units.sentences,
+            question_texts,
+            "query",
+            dimension,
+        )
+        paragraph_ngrams = _encode_units(
+            self.embedders.paragraph_ngrams,  # type: ignore[arg-type]
+            self.profile_units.ngrams,
+            paragraph_texts,
+            "document",
+            dimension,
+        )
+        question_ngrams = _encode_units(
+            self.embedders.question_ngrams,  # type: ignore[arg-type]
+            self.profile_units.ngrams,
+            question_texts,
+            "query",
+            dimension,
+        )
+        return {
+            "paragraph_sentences": paragraph_sentences,
+            "question_sentences": question_sentences,
+            "paragraph_ngrams": paragraph_ngrams,
+            "question_ngrams": question_ngrams,
+            "sentence_blocks": _cross_blocks(paragraph_sentences, question_sentences),
+            "ngram_blocks": _cross_blocks(paragraph_ngrams, question_ngrams),
+        }
+
+    def _profile_values(
+        self,
+        values: np.ndarray,
+        profile: dict[str, Any],
+        row: int,
+        column: int,
+    ) -> None:
+        """The profile's columns of one pair (the ranked profile and the kinds).
+
+        The layout of the profile's columns: the sentence granularity's ranks,
+        the word-piece granularity's ranks, then the four alignment kinds.
+        """
+        first = len(V0_FEATURE_NAMES)
+        ranks = self.profile_top_k
+        sentence_side: _UnitSide = profile["question_sentences"]
+        ngram_side: _UnitSide = profile["question_ngrams"]
+        paragraph_sentences: _UnitSide = profile["paragraph_sentences"]
+        paragraph_ngrams: _UnitSide = profile["paragraph_ngrams"]
+
+        sentence_start, sentence_end = sentence_side.ranges[column]
+        ngram_start, ngram_end = ngram_side.ranges[column]
+        sentence_block = profile["sentence_blocks"][row][:, sentence_start:sentence_end]
+        ngram_block = profile["ngram_blocks"][row][:, ngram_start:ngram_end]
+
+        sentence_top, sentence_best, sentence_p, sentence_q = _ranked_profile(sentence_block, ranks)
+        ngram_top, ngram_best, ngram_p, ngram_q = _ranked_profile(ngram_block, ranks)
+
+        values[first : first + ranks] = sentence_top
+        values[first + ranks : first + 2 * ranks] = ngram_top
+
+        # the best alignment over both granularities (a tie goes to the
+        # sentences, so the kind is deterministic)
+        if sentence_best >= ngram_best:
+            values[first + 2 * ranks] = 1.0
+            paragraph_unit = paragraph_sentences.texts[row][sentence_p]
+            question_unit = sentence_side.texts[column][sentence_q]
+        else:
+            values[first + 2 * ranks + 1] = 1.0
+            paragraph_unit = paragraph_ngrams.texts[row][ngram_p]
+            question_unit = ngram_side.texts[column][ngram_q]
+        # the lexicalness: do the two aligned units share a content word?
+        shared = set(content_tokens(paragraph_unit, self.stopwords)) & set(
+            content_tokens(question_unit, self.stopwords)
+        )
+        if shared:
+            values[first + 2 * ranks + 2] = 1.0
+        else:
+            values[first + 2 * ranks + 3] = 1.0
 
 
 def build_feature_extractor(
@@ -800,12 +1163,16 @@ def build_feature_extractor(
     top_k: int = 3,
     question_embedding_texts: Mapping[str, str] | None = None,
     groups: Sequence[str] | None = None,
+    profile_units: ProfileUnits | None = None,
+    profile_top_k: int = 3,
 ) -> PairFeatureExtractor:
-    """Build the v0 feature pack (the config-facing entry point)."""
+    """Build the feature pack (the config-facing entry point)."""
     return PairFeatureExtractor(
         embedders,
         paragraph_chunker=paragraph_chunker,
         top_k=top_k,
         question_embedding_texts=question_embedding_texts,
         groups=groups,
+        profile_units=profile_units,
+        profile_top_k=profile_top_k,
     )

@@ -1911,3 +1911,260 @@ stays in the registry as the second entry (available, not better). Then
 CS-6d (the random-vector floor — the second sanity floor of the plan's
 Stage 3) and CS-6e (the calibration curves, the thresholds per document, and
 the safe-negative margin measured against the control-role floor).
+
+## Stage 3.3 — the chunk-profile features (CS-6c, 2026-10-26)
+
+**The question.** The plan's Stage 3.3: fold the **chunk-profile features**
+into the pack — the features that say *where* the paragraph and the question
+match (which piece of the paragraph aligns with which piece of the question,
+how many times, how peaked), not how similar they are on average. The two
+earlier change sets had narrowed the lever: the Stage-3.1b ablation showed the
+learned arm's gain is the **lexical** block's, and the Stage-3.2 comparison
+showed the **learner** is not the lever either. So the features were the only
+thing left to try.
+
+**The runs.** Nine runs (3 Stage-0 models × 3 group sets,
+`experiments_text_processing/stage3_chunk_profile_sweep.py`, the sweep
+`stage3_chunk_profile`):
+
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-cp-base` — the
+  v0 pack's four groups: the **control**;
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-cp-full` — the
+  v0 pack **plus** the new block;
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-cp-profile` —
+  the new block **alone**.
+
+Each run holds all three rotations (the out-of-fold protocol needs them
+together). The guard holds: all **72** runs reproduce the Stage-0 baseline arm
+field by field (`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**The protocol (unchanged from Stage 3.1).** The same document-level holdout
+(fit on two documents, predict the third; one out-of-fold score matrix), the
+same training data (the fit side's judged pairs plus its unjudged control
+cells as down-weighted presumed negatives, weight 0.3), the same two floors
+(the label-permutation chance floor and the control-role floor, 5 permutations
+per rotation, seed 42) and the same paired statistics against the full-text
+cosine (2,000 bootstrap resamples, seed 42). The combiner is the **logistic
+regression** (CS-6b: the learner is not the lever).
+
+**What was coded.** The new block is the pack's fifth group, `chunk_profile`
+(10 features), and the four existing groups keep their exact meaning — so the
+CS-6a arms still describe the same feature sets.
+
+- The **ranked cross-chunk match profile** (exp17): both sides of a pair are
+  cut into **sentence units** and into **word pieces** (5 words, tiling a
+  sentence), every piece×piece cosine is computed, and the top three ranks of
+  each granularity are kept (`cprof_sent_top1..3`, `cprof_ngram_top1..3`; a
+  missing rank is padded with 0, the lineage's convention). The question's
+  units are cut from the **transformed** question (the "Answer choices:" block
+  stripped), like the pack's other embedding features, so the scale words stay
+  out of the matches.
+- The **alignment kinds** (exp16, with the taxonomy the reviewer chose on
+  2026-10-26): which granularity produced the best alignment
+  (`cprof_align_sent` / `cprof_align_ngram`) and whether the two aligned units
+  share a content word (`cprof_align_lexical` /
+  `cprof_align_semantic_only`).
+- exp16's third feature, `log(1+df)` of the matched phrase **in the labeled
+  corpus**, is **not** in the pack: it is a corpus-level statistic, the pack's
+  contract is pair-local, a fit-side df would need a per-rotation feature
+  matrix, and with ~150 fit-side paragraphs the counts would be 0/1/2. The
+  reviewer's decision was to drop it.
+
+The pack computes every feature and the combiner sees the selection, so the
+diagnostics below cover all 25 columns in every run.
+
+**1. The headline: the within-document AUC of the three arms** (OMCT auxiliary
+data, the reviewed set's 1,520 judged pairs — never a UPR metric). The `base`
+arm is the v0 pack; the reference is the full-text cosine.
+
+| arm | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| the full-text cosine (the reference) | 0.5632 | 0.5238 | 0.5020 |
+| `base` (the v0 pack) | 0.6655 | 0.6723 | 0.6472 |
+| `full` (v0 + the chunk profile) | **0.6722** | **0.6894** | 0.6423 |
+| `profile` (the new block alone) | 0.5613 | 0.5324 | 0.4974 |
+
+The `base` arm reproduces the CS-6a `all` arm **field for field** on every
+number (`comparison`, `permutation_floor`, `out_of_fold`, `training`, `grid`,
+`combiner`); the only differences are the two new blocks, the pack's name and
+note, the `dropped_features` list (the new group's features are in it now)
+and the new embedding sides' cache counters.
+
+**2. The paired comparison between the two arms** — the new
+`tools/compare_stage3_arms.py`, a paired per-pair bootstrap of the
+within-document AUC difference (stratified by document and class, 2,000
+resamples, seed 42) over the arms' per-pair out-of-fold scores, which the
+Stage-3 block now carries:
+
+| comparison | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| `full` − `base` | +0.0066 [−0.0047, +0.0179] | **+0.0172 [+0.0048, +0.0298]** | −0.0049 [−0.0178, +0.0080] |
+| `profile` − the cosine | −0.0019 [−0.0287, +0.0255] | +0.0086 [−0.0248, +0.0420] | −0.0046 [−0.0328, +0.0213] |
+
+The per-rotation paired differences say the same thing (the same held-out
+document, the same pairs, `full` − `base`): +0.0004 / −0.0139 / +0.0175
+(embeddinggemma, NU/AI/CIDH), +0.0158 / +0.0304 / +0.0191 (voyage-4-nano),
++0.0047 / +0.0335 / −0.0217 (arctic2) — **7 of the 9** favour the full arm.
+
+**3. The verdict: the chunk profile is not the lever either.** The block alone
+is **indistinguishable from the full-text cosine** on all three models (every
+interval above includes zero; 4 of the 9 per-rotation comparisons against the
+cosine are positive). In the full pack it buys a **small gain that is
+established on one of the three models only** (voyage-4-nano, +0.0172, the
+interval excluding zero; embeddinggemma's +0.0066 and arctic2's −0.0049 both
+include zero).
+
+**4. The floors: the block brings a label-free signal with it.** The
+within-document floors of the three arms (the chance floor permutes the whole
+label vector, the control-role floor permutes only the judged pairs' labels
+and keeps the control cells' presumed-negative role):
+
+| arm | chance floor (eg / voy / arc) | control-role floor | the arm's excess over it |
+|---|---|---|---|
+| `base` | 0.5054 / 0.4936 / 0.4968 | 0.5788 / 0.5765 / 0.5569 | +0.0868 / +0.0958 / +0.0903 |
+| `full` | **0.5248 / 0.5138 / 0.5313** | 0.5317 / 0.5372 / 0.5232 | +0.1405 / +0.1522 / +0.1191 |
+| `profile` | 0.5324 / 0.5238 / 0.5343 | 0.5010 / 0.4532 / 0.4750 | +0.0603 / +0.0792 / +0.0224 |
+
+The `base` arm's chance floor sits **at chance** (0.494–0.505), as the plan
+requires. The two arms that carry the chunk profile sit **above** it
+(0.514–0.534): with the profile's features, a model that has **no label
+information at all** ranks the reviewed set better than chance. The block
+therefore carries a signal that is not label-driven — the reviewed set is
+rank-selected (the Stage-0.2 classification), and the profile's features pick
+that structure up.
+
+The "excess over the control-role floor" is **not** comparable across arms
+with different feature sets: the floor is itself a property of the arm's
+features (the full arm's control-role floor is *lower* than the base's, 0.53
+against 0.58, so its excess looks bigger). The primary statement is the
+paired within-document AUC difference above; the floors are the diagnostic
+that says how much of an arm's number is label-driven.
+
+**5. The per-feature diagnostics: what each new feature actually measures.**
+The Stage-3 block now carries, for **every** feature the pack computes, its
+own discrimination number (the within-document AUC of the feature used as a
+score), its control-side counterpart (the ordinary cells' level and rank
+position) and its correlation with the paragraph's length. The new block's own
+rows (the `base` arm's artifact, so the numbers are the same everywhere):
+
+| feature | within AUC (eg / voy / arc) | control mean (eg) | length correlation (eg / voy / arc) |
+|---|---|---|---|
+| `cprof_sent_top1` | 0.5642 / 0.5042 / 0.4988 | 0.2352 | +0.189 / +0.114 / +0.199 |
+| `cprof_sent_top2` | 0.5222 / 0.4557 / 0.4770 | 0.1577 | +0.431 / +0.309 / +0.460 |
+| `cprof_sent_top3` | 0.4928 / 0.4632 / 0.4531 | 0.0978 | +0.522 / +0.456 / +0.560 |
+| `cprof_ngram_top1` | 0.4728 / 0.4376 / 0.4830 | 0.3980 | +0.306 / +0.279 / +0.294 |
+| `cprof_ngram_top2` | 0.4550 / 0.4240 / 0.4608 | 0.3523 | +0.399 / +0.350 / +0.386 |
+| `cprof_ngram_top3` | 0.4607 / 0.4262 / 0.4377 | 0.3277 | +0.444 / +0.392 / +0.431 |
+| `cprof_align_sent` | 0.5104 / 0.5085 / 0.5060 | 0.0092 | −0.070 / −0.048 / −0.070 |
+| `cprof_align_ngram` | 0.4896 / 0.4915 / 0.4940 | 0.9908 | +0.070 / +0.048 / +0.070 |
+| `cprof_align_lexical` | 0.4691 / 0.4758 / 0.4762 | 0.2500 | +0.130 / +0.125 / +0.149 |
+| `cprof_align_semantic_only` | 0.5309 / 0.5242 / 0.5238 | 0.7500 | −0.130 / −0.125 / −0.149 |
+
+Three readings.
+
+- The block's best feature is a **"best local match"** signal
+  (`cprof_sent_top1`), and it is *weaker* than what the v0 pack already has:
+  on embeddinggemma 0.5642 against `chunk_cosine_best`'s 0.6049. The profile
+  therefore re-measures the v0's best chunk cosine at a finer granularity
+  without adding anything.
+- The **lower ranks are length proxies**: the deeper the rank, the more the
+  feature travels with the paragraph's length (+0.43 to +0.56 for
+  `cprof_sent_top3`), and the more the value is a "the paragraph has more
+  pieces" signal than a topical one. A length proxy memorizes the document
+  instead of the topic — the plan's leakage rule (ii) — and the v0 pack has
+  no such feature. This is the risk the reviewer flagged, and it is measured
+  here, not assumed.
+- The **alignment kinds are at chance** (0.469–0.531) and their control-side
+  means show how lopsided they are: the ordinary cells' best alignment is a
+  word-piece match 99% of the time (`cprof_align_ngram`'s control mean
+  0.9908) and a sentence match 1% of the time (`cprof_align_sent` 0.0092), so
+  the kind is nearly a constant of the corpus rather than a property of the
+  pair — a fitted model can read it as a document-level prior at best.
+
+**6. The retrieval side: the full arm is a worse retriever.** The positives'
+hit@1 (the true match is the paragraph's own best candidate):
+
+| arm | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| the full-text cosine | 0.1355 | 0.1050 | 0.1050 |
+| `base` | 0.0897 | 0.0821 | 0.0859 |
+| `full` | 0.0802 | 0.0763 | 0.0649 |
+| `profile` | 0.0840 | 0.0916 | 0.0878 |
+
+The Stage-3.1 caveat ("a learned pair ranker is not automatically a better
+retriever") deepens: adding the chunk profile costs another 0.010–0.021 of
+hit@1 on embeddinggemma and arctic2, and the block alone is no better than
+the cosine's neighbourhood. The hard negatives move the other way — the
+`profile` arm's negatives' hit@1 roughly **doubles** (0.0181 / 0.0221 / 0.0211
+against the base's 0.0090 / 0.0110 / 0.0100) and their rank position rises
+(the negatives' rank percentile p50 0.2412 / 0.2109 / 0.2428 against the
+base's 0.3745 / 0.3261 / 0.3779): the block alone is **less safe** for the
+reviewed hard negatives. The full arm pushes them slightly *down* instead
+(0.4156 / 0.3413 / 0.3894) — the one point in the block's favour for the
+track's deliverable.
+
+**7. The control side: no inflation.** The ordinary cells' rank percentile
+moves by ≤ 0.002 for every arm (−0.0085 to +0.0019) and their top-fifth
+share by ≤ 0.013. So no arm's number on the reviewed set is an inflation of
+the ordinary cells.
+
+**8. The length check.** The Stage-0 caveat asks how much of a method's scale
+shift travels with the paragraph's length. The correlation between a control
+cell's paragraph length and its score, for the learned arm and for the cosine
+(the reference), and the same correlation for the **rank shift** (the arm's
+rank percentile minus the cosine's — scale-free, so the two arms compare
+without their different units):
+
+| arm | embeddinggemma | voyage-4-nano | arctic2 |
+|---|---|---|---|
+| the cosine (the reference) | +0.162 | +0.031 | +0.094 |
+| `base` | +0.245 | +0.275 | +0.366 |
+| `full` | +0.205 | +0.212 | +0.282 |
+| `profile` | +0.030 | −0.060 | +0.051 |
+| the rank shift (`full` − the cosine) | −0.010 | −0.019 | −0.025 |
+
+The learned arm's score travels more with the length than the cosine's (the
+lexical block's doing — it is a bag-of-words overlap, and the longer the
+paragraph the more words it can share). Adding the chunk profile **lowers**
+that correlation (0.245 → 0.205, 0.275 → 0.212, 0.366 → 0.282) and the
+length ↔ rank-shift correlation is ≈ 0 for every arm: the profile block does
+not add a length-driven shift, and the arm's own length correlation is not
+what the gain comes from.
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule still
+  ships as the **margin half only**.
+- **Nothing about a corpus with a different vocabulary.** The lexical block
+  is a bag-of-words overlap over 294 questions, and the chunk profile is
+  measured on the same corpus; whether either transfers is open (the plan's
+  §5).
+- **Nothing about a better taxonomy for the alignment kinds.** The taxonomy
+  the reviewer chose (the granularity × the lexicalness) is at chance here;
+  whether another taxonomy (e.g. which *question part* the best alignment
+  lands in) would say something is open, and it would need the question's
+  options inside the profile's question side.
+- **Nothing about the df.** It was dropped, not measured: a fit-side df would
+  need a per-rotation feature matrix, and the counts on ~150 fit-side
+  paragraphs would be 0/1/2.
+
+**The next step (CS-6d).** The Stage-3 **random-vector floor** — the second
+sanity floor of the plan's Stage 3 (the label-permutation one is done): the
+arm fitted on random vectors instead of the model's embeddings, so a "win" can
+be checked against what the *training design* alone buys. Then CS-6e (the
+calibration curves, the thresholds per document, and the safe-negative margin
+measured against the control-role floor).
+
+**A note on the reporting.** Two blocks were added to the Stage-3 artifact
+(this change set): the **per-feature diagnostics** (every feature's own
+discrimination number, control-side counterpart and length correlation) and
+the **length check** (the arm's length ↔ score correlation beside the
+cosine's, and the length ↔ rank-shift correlation — the plan's §5 open item
+about the shift, which needed a second arm in the same run). The Stage-3
+block also gained the arms' **per-pair out-of-fold scores**
+(`out_of_fold_scores`), which is what makes the paired per-pair comparison
+between two arms of different runs possible (the CS-6b open question); the
+new tool `tools/compare_stage3_arms.py` reads them.

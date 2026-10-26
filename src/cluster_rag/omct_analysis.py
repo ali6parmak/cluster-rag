@@ -2368,6 +2368,117 @@ def _stage3_rotation(
     }
 
 
+def _feature_diagnostics(
+    view: DatasetView,
+    *,
+    features: np.ndarray,
+    feature_names: Sequence[str],
+    grid: Stage3Grid,
+    labels: np.ndarray,
+    pair_documents: np.ndarray,
+    control_documents: np.ndarray,
+    control_lengths: np.ndarray,
+) -> dict[str, Any]:
+    """Every feature's own numbers: its discrimination and its control side.
+
+    The Stage-3.3 change set asks for **every new feature's control-side
+    counterpart next to its discrimination number**, so each feature gets:
+
+    - the **discrimination** number: the within-document AUC of the feature
+      *used as a score* (the same statistic the headline is measured with),
+      the pooled AUC and the per-document macro beside it;
+    - the **control-side counterpart**: the ordinary (unjudged) cells' mean
+      and median and their rank percentile inside the paragraph's candidate
+      list — a feature that lifts the ordinary cells shows up here next to
+      one that separates the reviewed set;
+    - the **length correlation**: how much the feature's value travels with
+      the paragraph's length. A feature that is a length proxy would
+      memorize the document instead of the topic (the plan's leakage rule
+      (ii)), so the number is measured, not assumed.
+
+    The features are measured on the **whole grid** (the same-document
+    cells), so the reviewed pairs and the control cells are scored on one
+    scale.
+    """
+    per_feature: dict[str, Any] = {}
+    for index, name in enumerate(feature_names):
+        values = np.asarray(features[:, index], dtype=np.float64)
+        matrix = np.full((len(view.paragraphs), len(view.questions)), np.nan, dtype=np.float64)
+        matrix[grid.rows, grid.columns] = values
+        measured = measure_arm(view, matrix)
+        decomposition = _auc_decomposition(labels, measured.pair_scores, measured.documents)
+        by_document = {
+            stratum["document"]: _safe_auc(
+                labels[pair_documents == stratum["document"]],
+                measured.pair_scores[pair_documents == stratum["document"]],
+            )
+            for stratum in view.strata
+        }
+        per_feature[name] = {
+            "within_auc": decomposition.get("within_group_auc"),
+            "pooled_auc": _safe_auc(labels, measured.pair_scores),
+            "macro_auc": _macro(by_document),
+            "by_document": by_document,
+            "control": {
+                "mean": float(measured.control_scores.mean())
+                if measured.control_scores.size
+                else None,
+                "p50": _quantile(measured.control_scores, 0.5),
+                "rank_p50": _quantile(measured.control_percentiles, 0.5),
+                "top_fifth_share": _top_quintile_share(measured.control_percentiles),
+            },
+            "length_correlation": length_correlation(
+                control_lengths, measured.control_scores, control_documents
+            ),
+        }
+    return {
+        "per_feature": per_feature,
+        "note": (
+            "every feature the pack computes, measured on its own: the "
+            "within-document AUC (the headline's statistic, the feature used "
+            "as a score), the pooled AUC and the per-document macro beside "
+            "it; the control-side counterpart (the ordinary unjudged cells' "
+            "level and rank position); and the correlation between the "
+            "feature and the paragraph's length — the length-proxy check, "
+            "since a length feature would memorize the document instead of "
+            "the topic."
+        ),
+    }
+
+
+def _length_check(
+    *,
+    arm: ArmScores,
+    reference: ArmScores,
+    control_lengths: np.ndarray,
+) -> dict[str, Any]:
+    """The length check: does the arm's score travel with the paragraph's length?
+
+    The Stage-0 caveat says a method's scale shift is partly a **length**
+    effect and partly a **document** effect. The baseline arm's correlation
+    is the reference (it is already recorded per document); the arm's own
+    correlation sits beside it, and the **rank shift** (the arm's control
+    rank percentile minus the baseline's) is correlated with the length as
+    well — the rank shift is scale-free, so it compares the two arms without
+    their different units (a probability against a cosine).
+    """
+    rank_shift = arm.control_percentiles - reference.control_percentiles
+    return {
+        "arm": length_correlation(control_lengths, arm.control_scores, arm.control_documents),
+        "reference": length_correlation(
+            control_lengths, reference.control_scores, reference.control_documents
+        ),
+        "rank_shift": length_correlation(control_lengths, rank_shift, arm.control_documents),
+        "note": (
+            "the correlation between a control cell's paragraph length and its "
+            "score, for the learned arm and for the full-text cosine (the "
+            "reference). The rank-shift block is the same correlation for the "
+            "difference of the two arms' rank percentiles — it is scale-free, "
+            "so it compares the arms without their different units."
+        ),
+    }
+
+
 def _named_coefficients(combiner: Combiner, feature_names: Sequence[str]) -> dict[str, Any]:
     """The fitted coefficients, keyed by the feature name.
 
@@ -2478,11 +2589,14 @@ def score_stage3_model(
         comparison and the permutation floor).
     """
     grid = build_stage3_grid(view)
-    features = extractor.extract(grid.pairs)
-    if features.shape[0] != grid.n_cells:
+    all_features = extractor.extract_all(grid.pairs)
+    if all_features.shape[0] != grid.n_cells:
         raise ValueError(
-            f"the feature pack returned {features.shape[0]} rows for {grid.n_cells} cells"
+            f"the feature pack returned {all_features.shape[0]} rows for {grid.n_cells} cells"
         )
+    # the combiner sees the selected groups' columns; the diagnostics see
+    # every column the pack computes
+    features = all_features[:, np.asarray(extractor.selected_indices, dtype=np.int64)]
 
     pair_rows, pair_columns, labels = _pair_indices(view)
     control_rows, control_columns, control_documents = _control_indices(view)
@@ -2576,10 +2690,48 @@ def score_stage3_model(
         ],
         pair_counts,
     )
+    # The control cells' paragraph lengths (the length check's raw material).
+    control_lengths = np.asarray(
+        [view.paragraph_char_lengths[int(row)] for row in control_rows], dtype=np.float64
+    )
+    arm_measured = measure_arm(view, out_of_fold)
+    reference_measured = measure_arm(view, reference_similarities)
+    diagnostics = _feature_diagnostics(
+        view,
+        features=all_features,
+        feature_names=extractor.all_feature_names,
+        grid=grid,
+        labels=labels,
+        pair_documents=pair_documents,
+        control_documents=control_documents,
+        control_lengths=control_lengths,
+    )
+    length_check = _length_check(
+        arm=arm_measured,
+        reference=reference_measured,
+        control_lengths=control_lengths,
+    )
     return {
         "model": model_name,
         "feature_pack": extractor.describe(),
         "combiner": rotations[0]["combiner"] if rotations else None,
+        "out_of_fold_scores": {
+            "judged_pairs": [
+                float(value)
+                for value in out_of_fold[grid.rows[pair_cells], grid.columns[pair_cells]]
+            ],
+            "control_cells": [
+                float(value)
+                for value in out_of_fold[grid.rows[control_cells], grid.columns[control_cells]]
+            ],
+            "note": (
+                "the arm's out-of-fold score of every judged pair and every "
+                "control cell, in the order of the model's 'judged_pairs' and "
+                "'control_cells' blocks. They are the per-pair scores two arms "
+                "of different runs can be compared on (a paired per-pair "
+                "bootstrap), which the per-rotation AUCs alone cannot give."
+            ),
+        },
         "training": {
             "control_weight": float(control_weight),
             "fit_side": (
@@ -2616,6 +2768,8 @@ def score_stage3_model(
             "hit_at_k": comparison["hit_at_k"],
         },
         "comparison": comparison,
+        "feature_diagnostics": diagnostics,
+        "length_check": length_check,
         "permutation_floor": {
             "n_resamples": int(permutation_resamples),
             "n_measured": len(chance_values),

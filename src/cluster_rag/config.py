@@ -600,14 +600,21 @@ class FeaturePackConfig(BaseModel):
     - ``top_k``: the K of the top-K chunk similarities (the spread and the
       peak margin are measured over the same K best chunk cosines).
     - ``groups``: the **feature groups** to keep (Stage 3.1b's ablation
-      unit). The pack's 15 features fall into four groups — ``embedding``
-      (the full-text cosine and the five chunk features), ``lexical`` (the
-      soft overlap in both ways and the char n-grams), ``question_part``
-      (the answer options' coverage) and ``question_type`` (the five
-      question-type one-hots) — and the four partition the pack exactly.
-      The default keeps every group, i.e. the whole v0 pack; a shorter list
-      is the ablation's arm. An unknown group name fails at config time,
-      before any run.
+      unit). The pack's features fall into five groups — ``embedding`` (the
+      full-text cosine and the five chunk features), ``lexical`` (the soft
+      overlap in both ways and the char n-grams), ``question_part`` (the
+      answer options' coverage), ``question_type`` (the five question-type
+      one-hots) and ``chunk_profile`` (the Stage-3.3 chunk profile: the
+      ranked cross-chunk match profile and the alignment kinds) — and the
+      five partition the pack exactly. The default keeps the **four v0
+      groups**, i.e. the Stage-3.1 behaviour (the fifth group is opt-in, so
+      the earlier runs keep their exact feature sets); a shorter list is the
+      ablation's arm. An unknown group name fails at config time, before any
+      run.
+    - ``profile_top_k``: how many ranks of the chunk profile are kept per
+      granularity (the sentence profile and the word-piece profile).
+    - ``profile_ngram_size``: the nominal size of the profile's word pieces
+      (the pieces tile a sentence, so the last one may be shorter).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -620,6 +627,8 @@ class FeaturePackConfig(BaseModel):
     question_chunker: ChunkerSpec | None = None
     top_k: int = Field(default=3, ge=1)
     groups: tuple[str, ...] = ("embedding", "lexical", "question_part", "question_type")
+    profile_top_k: int = Field(default=3, ge=1)
+    profile_ngram_size: int = Field(default=5, ge=2)
 
     @field_validator("groups")
     @classmethod

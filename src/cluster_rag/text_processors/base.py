@@ -152,14 +152,31 @@ class FeatureExtractor(Protocol):
     (:class:`cluster_rag.embed.base.Embedder`) and embeds the pair's own
     chunks — the package still imports no model client, the CLI wires the
     cached backend in.
+
+    A pack computes **every** feature it knows and hands the caller the
+    selection: ``extract`` returns the selected columns, ``extract_all`` the
+    full matrix and ``selected_indices`` the columns of the former inside
+    the latter. The driver needs both: the combiner sees the selection, the
+    per-feature diagnostics see everything.
     """
 
     @property
     def feature_names(self) -> tuple[str, ...]:
         """Names of the features, in column order."""
 
+    @property
+    def all_feature_names(self) -> tuple[str, ...]:
+        """Names of every feature the pack computes, in column order."""
+
+    @property
+    def selected_indices(self) -> tuple[int, ...]:
+        """The column indices of the selected features (in the full matrix)."""
+
     def extract(self, pairs: Sequence[TextPair]) -> np.ndarray:
         """Feature matrix of shape ``(n_pairs, n_features)``, float32."""
+
+    def extract_all(self, pairs: Sequence[TextPair]) -> np.ndarray:
+        """The full feature matrix (every column), float32."""
 
 
 @runtime_checkable
