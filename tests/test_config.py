@@ -357,6 +357,9 @@ def test_analysis_stage3_defaults_and_validation() -> None:
     # the Stage-3.3 chunk profile's own knobs
     assert stage3.features.profile_top_k == 3
     assert stage3.features.profile_ngram_size == 5
+    # the embedding sides come from the run's model by default (the Stage-3.1
+    # behaviour); the random-vector floor is opt-in
+    assert stage3.embeddings == "model"
 
     # the section is optional: without it the Stage-0/1/2 behaviour is untouched
     assert AnalysisConfig().stage3 is None
@@ -405,6 +408,18 @@ def test_analysis_stage3_feature_groups_are_validated() -> None:
         FeaturePackConfig.model_validate({"profile_top_k": 0})
     with pytest.raises(ValueError, match="profile_ngram_size"):
         FeaturePackConfig.model_validate({"profile_ngram_size": 1})
+
+
+def test_analysis_stage3_embedding_mode_is_validated() -> None:
+    """The random-vector floor's knob fails at config time, before any run."""
+    from cluster_rag.config import Stage3Config
+
+    # the two modes of the feature pack's embedding sides
+    assert Stage3Config.model_validate({"embeddings": "model"}).embeddings == "model"
+    assert Stage3Config.model_validate({"embeddings": "random"}).embeddings == "random"
+    # an unknown mode is a configuration error (it would silently fall back)
+    with pytest.raises(ValueError, match="embeddings"):
+        Stage3Config.model_validate({"embeddings": "noise"})
 
 
 def test_analysis_stage3_chunker_params_are_validated() -> None:

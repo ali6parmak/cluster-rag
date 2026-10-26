@@ -197,6 +197,13 @@ Relaxed for this track only:
     `cluster_rag.embed.base` (a `typing.Protocol` + numpy only) and nothing
     heavier; no `torch`/`sentence-transformers`/`httpx` import anywhere in
     this package (scikit-learn in `combining/` excepted, as above).
+  - The **random-vector floor's** embedder lives one level up, in
+    `src/cluster_rag/embed/random.py` (`RandomEmbedder`, the same `Embedder`
+    port): a seeded random unit vector of the model's dimension per
+    `(kind, text)`, drawn from `sha256(seed | kind | text)`. It is a *model
+    client* in the sense that it replaces one, so it belongs with the
+    backends, not in the track's pure core — and it is **never** wrapped in
+    the disk cache, so the random vectors cannot pollute the model's cache.
 - **Embedding cache: no change to the cache key layout.** The chunking version
   goes into the *existing* version slot —
   `CachedEmbedder(backend, root, preprocessing_version="<chunking-version>")`
@@ -633,7 +640,10 @@ sweeps are the orders.
     length tracks the document (AI median 364 chars vs NU 863), so an
     identity or length feature can memorize the document instead of the topic.
   - *Sanity floors*: a label-permutation baseline and a random-vector
-    baseline, so a "win" can be checked against chance.
+    baseline, so a "win" can be checked against chance. *(Both are measured:
+    the label-permutation floor in CS-5, the random-vector floor in CS-6d —
+    the latter replaces the feature pack's embedding sides with seeded random
+    vectors, so it says what the training design alone buys.)*
   - *Reporting*: calibration curves + thresholds per document; pooled and
     per-document macro; both negative subsets separately.
 - OMCT line stays auxiliary; it informs method choice, never UPR metrics.
@@ -882,6 +892,23 @@ sweeps are the orders.
   the alignment lands in (the stem vs an answer option) say something? It
   would need the question's options inside the profile's question side, so it
   is a different cut of the same machinery, not a new dependency.
+- **The random-vector floor separates the arm's two roles (CS-6d asked;
+  CS-6d answered, 2026-10-26).** With the embedding sides replaced by noise,
+  the v0 pack and the full pack keep their within-document AUC (the floor is
+  indistinguishable from the real arm on five of the six arms, and lands on
+  the Stage-3.1b embedding-free arm's 0.6589), but the positives' hit@1
+  collapses from 0.065–0.092 to 0.027–0.042 (the cosine's: 0.105–0.136). So
+  the **lexical block is the ranking signal** and the **embedding geometry is
+  the retrieval signal** — the learned arm and the cosine are complementary,
+  not competing, and the deliverable's shape follows: retrieve with the
+  cosine, rank with the learned arm, and measure the margin against the
+  **control-role floor** (0.5410–0.5434 for a pack with noise in the
+  embedding slots, 0.5569–0.5788 for the real one). The chunk profile's floor
+  sits at or below chance (0.4733 / 0.4830 / 0.4706), so that block is a
+  re-measurement of the embedding geometry and nothing else. **Open:** the
+  floor is **one draw** (seed 42) — a different seed would move the numbers
+  slightly; and it says nothing about a *different* feature family (the
+  corpus-as-ceiling question stays open).
 
 ## 6. Milestones
 
@@ -1102,10 +1129,37 @@ set):
   slightly worse retriever (the positives' hit@1 0.0802 / 0.0763 / 0.0649
   against the v0 pack's 0.0897 / 0.0821 / 0.0859). The numbers are in the
   track log's Stage-3.3 section; 398 unit tests green.)*
-- [ ] **CS-6d — the Stage-3 random-vector floor.** The second sanity floor
+- [x] **CS-6d — the Stage-3 random-vector floor.** The second sanity floor
   of the plan's Stage 3 (the label-permutation one is done): the arm is
   fitted on random vectors instead of the model's embeddings, so a "win"
   can be checked against what the *training design* alone buys.
+  *(done 2026-10-26: the new `src/cluster_rag/embed/random.py`
+  (`RandomEmbedder` — a seeded random unit vector of the model's dimension
+  per `(kind, text)`, drawn from `sha256(seed | kind | text)`, never
+  written to the embedding cache), the config knob
+  `analysis.stage3.embeddings` (`"model"` — the default, the Stage-3.1
+  behaviour — or `"random"`, validated at config time), and the wiring in
+  `cli.py` (the feature pack's **embedding sides** are replaced; the run's
+  baseline arm keeps the model's embeddings, so the guard still holds). The
+  sweep `experiments_text_processing/stage3_random_floor_sweep.py`: 9 runs
+  (3 models x {`base`, `full`, `profile`}, the Stage-3.3 group sets, so
+  every CS-6c arm gets its floor),
+  `omct-analyze-<model>-stage3-rand-<groupset>`. The guard holds (all 81
+  runs reproduce the Stage-0 baseline arm field by field).
+  **Verdict: the embedding geometry carries no label-driven signal, and it
+  is the retrieval signal besides.** The random floor of the v0 pack and of
+  the full pack is *indistinguishable* from the real arm on five of the six
+  arms (every interval includes zero; on arctic2 the floor is even higher),
+  and it lands on the Stage-3.1b embedding-free arm's 0.6589 — the v0 pack
+  *is* the embedding-free pack. The chunk profile's floor sits at or below
+  chance (0.4733 / 0.4830 / 0.4706), so that block's whole signal is the
+  embedding geometry (the same conclusion the Stage-3.3 paired comparison
+  reached from the other side). The **hit@1** is where the geometry shows:
+  the floor's 0.027–0.042 for the v0 and full packs (0.006–0.015 for the
+  profile block alone) against the real arm's 0.065–0.092 and the cosine's
+  0.105–0.136 — the lexical block is the *ranking* signal, the embedding
+  geometry is the *retrieval* signal. The numbers are in the track log's
+  random-vector floor section; 413 unit tests green.)*
 - [ ] **CS-6e — the Stage-3 reporting.** The calibration curves and the
   thresholds per document, and the safe-negative margin measured against the
   **control-role floor** (the reviewer's decision 2026-10-26: the track's

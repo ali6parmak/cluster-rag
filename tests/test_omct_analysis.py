@@ -266,6 +266,44 @@ analysis:
 """
 
 
+# The Stage-3 random-vector floor (CS-6d): the feature pack's embedding sides
+# are random unit vectors instead of the model's.
+ANALYSIS_STAGE3_RANDOM_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 3
+  stage3:
+    features:
+      paragraph_chunker:
+        name: word_windows
+        params:
+          n_words: 3
+          stride: 2
+      top_k: 2
+    combiner:
+      name: logistic
+      params:
+        C: 1.0
+    control_weight: 0.3
+    permutation_resamples: 3
+    embeddings: random
+"""
+
+
 @pytest.fixture()
 def view(sample_pairs: Path):
     """The model-independent view of the pairwise fixture."""
@@ -1091,6 +1129,95 @@ def test_analyze_omct_stage3_histgb_end_to_end(
 
     out = capsys.readouterr().out
     assert "OMCT analysis (Stage 0): omct-analyze-stage3-histgb" in out
+
+
+def test_analyze_omct_stage3_random_floor_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """The Stage-3 random-vector floor: the pack's embedding sides become noise."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    # the same run with the model's embeddings (the Stage-3.1 behaviour)
+    model_config = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-model",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(model_config)]) == 0
+    model_payload = json.loads(
+        (tmp_path / "results" / "omct-analyze-stage3-model" / "analysis.json").read_text("utf-8")
+    )
+    model_stage3 = model_payload["models"][0]["stage3"]
+    assert model_payload["analysis"]["stage3"]["embeddings"] == "model"
+    assert model_stage3["feature_embeddings"]["mode"] == "model"
+
+    # the same run with the random-vector floor
+    random_config = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-random",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_RANDOM_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(random_config)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "omct-analyze-stage3-random" / "analysis.json").read_text("utf-8")
+    )
+    model = payload["models"][0]
+    stage3 = model["stage3"]
+    # the run's config records the mode, so the artifact says which space the
+    # arm's embedding features live in
+    assert payload["analysis"]["stage3"]["embeddings"] == "random"
+    provenance = stage3["feature_embeddings"]
+    assert provenance["mode"] == "random"
+    assert provenance["seed"] == payload["seed"]
+    assert provenance["dimension"] == 8
+    assert provenance["cached"] is False
+    # the random vectors are never written to the embedding cache
+    sides = stage3["feature_pack"]["embedding_sides"]
+    assert sides
+    assert all(side["cache_hits"] is None for side in sides.values())
+    # the baseline arm keeps the model's embeddings: the guard still holds and
+    # the arm-vs-cosine comparison stays meaningful
+    assert [pair["score"] for pair in model["judged_pairs"]] == [
+        pair["score"] for pair in model_payload["models"][0]["judged_pairs"]
+    ]
+    # ... and the learned arm's own scores do change: its embedding features
+    # are noise now
+    assert (
+        stage3["out_of_fold_scores"]["judged_pairs"]
+        != (model_stage3["out_of_fold_scores"]["judged_pairs"])
+    )
+    # the same harness as every other Stage-3 run: three rotations, two floors
+    assert len(stage3["rotations"]) == 3
+    assert stage3["permutation_floor"]["n_resamples"] == 3
+
+
+def test_analyze_omct_stage3_random_floor_is_reproducible(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """The floor is a function of the seed: the same seed gives the same run."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-random",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_RANDOM_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    path = tmp_path / "results" / "omct-analyze-stage3-random" / "analysis.json"
+    first = json.loads(path.read_text("utf-8"))["models"][0]["stage3"]
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    second = json.loads(path.read_text("utf-8"))["models"][0]["stage3"]
+    assert first["out_of_fold_scores"] == second["out_of_fold_scores"]
+    assert first["rotations_summary"] == second["rotations_summary"]
 
 
 def test_stage3_rotations_hold_out_one_document_at_a_time(view) -> None:

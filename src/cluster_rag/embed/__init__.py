@@ -27,6 +27,7 @@ from cluster_rag.embed.base import (
 )
 from cluster_rag.embed.hf import HFEmbedder
 from cluster_rag.embed.ollama import OllamaEmbedder, normalize_ollama_host
+from cluster_rag.embed.random import RandomEmbedder
 
 __all__ = [
     "CONTENT_PLACEHOLDER",
@@ -36,6 +37,7 @@ __all__ = [
     "EmbedderInfo",
     "HFEmbedder",
     "OllamaEmbedder",
+    "RandomEmbedder",
     "apply_prefix",
     "build_embedder",
     "empty_embeddings",

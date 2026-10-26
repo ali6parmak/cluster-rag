@@ -193,6 +193,35 @@ def test_sweep_file_imports_the_shared_pool_from_another_directory(repo_root: Pa
     assert shared_resolved not in sys.path  # removed again after the load
 
 
+def test_the_random_floor_sweep_resolves_its_grid(monkeypatch) -> None:
+    """The CS-6d grid: 3 models x 3 group sets, the random-vector floor.
+
+    The sweep file is a real artifact of the track, so its grid is a contract:
+    every Stage-3.3 arm gets its random-vector floor, and the floor's knob is
+    on in every cell.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(repo)
+    runs = cli._load_sweep_runs(
+        repo / "experiments_text_processing" / "stage3_random_floor_sweep.py"
+    )
+    assert len(runs) == 9
+    assert sorted(run.label for run in runs) == sorted(
+        f"analyze-{model}-stage3-rand-{group}"
+        for model in ("embeddinggemma", "voyage-4-nano", "arctic2")
+        for group in ("base", "full", "profile")
+    )
+    for run in runs:
+        assert run.command == "analyze-omct"
+        assert run.config.table.sweep_label == "stage3_random_floor"
+        assert run.config.analysis is not None
+        assert run.config.analysis.stage3 is not None
+        # the floor's knob is on, and the combiner is the logistic regression
+        # (CS-6b: the learner is not the lever)
+        assert run.config.analysis.stage3.embeddings == "random"
+        assert run.config.analysis.stage3.combiner.name == "logistic"
+
+
 def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path) -> None:
     """A cell whose command the CLI does not implement aborts, never guesses."""
     (repo_root / "bogus_sweep.py").write_text(

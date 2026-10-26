@@ -2553,6 +2553,7 @@ def score_stage3_model(
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 42,
     hit_ks: Sequence[int] = HIT_KS,
+    feature_embeddings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score the learned pair scorer of one model (the Stage-3 arm).
 
@@ -2583,6 +2584,10 @@ def score_stage3_model(
             statistics.
         bootstrap_seed: The seed of the bootstrap.
         hit_ks: The hit@k grid of the rank report.
+        feature_embeddings: The provenance of the feature pack's **embedding
+            sides** — the run's model (the Stage-3.1 behaviour) or the
+            random-vector floor (CS-6d). It is recorded in the artifact, so a
+            reader knows which space the arm's embedding features live in.
 
     Returns:
         The model's Stage-3 block (the rotations, the out-of-fold summary, the
@@ -2714,6 +2719,7 @@ def score_stage3_model(
     return {
         "model": model_name,
         "feature_pack": extractor.describe(),
+        "feature_embeddings": dict(feature_embeddings or {}),
         "combiner": rotations[0]["combiner"] if rotations else None,
         "out_of_fold_scores": {
             "judged_pairs": [

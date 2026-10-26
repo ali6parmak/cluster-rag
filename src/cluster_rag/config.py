@@ -662,6 +662,16 @@ class Stage3Config(BaseModel):
       fit next to the reviewer-verified labels.
     - ``permutation_resamples``: the number of label permutations of the
       floor check (the shuffled labels must land the AUC at chance).
+    - ``embeddings``: where the feature pack's **embedding sides** get their
+      vectors. ``"model"`` (the default) is the Stage-3.1 behaviour: the run's
+      model, through the disk cache. ``"random"`` is the plan's second sanity
+      floor (Stage 3.3's "random-vector baseline"): the embedding sides are
+      **random unit vectors** of the model's dimension, drawn from the run's
+      seed, so a "win" can be checked against what the *training design* alone
+      buys. The pack's lexical, question-part and question-type features never
+      used an embedding, so they stay real, and the run's baseline arm (the
+      full-text cosine) keeps the model's embeddings. The default is
+      ``"model"``, so every earlier run and artifact keeps its meaning.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -670,6 +680,7 @@ class Stage3Config(BaseModel):
     combiner: CombinerSpec = Field(default_factory=CombinerSpec)
     control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     permutation_resamples: int = Field(default=5, ge=0)
+    embeddings: Literal["model", "random"] = "model"
 
 
 class AnalysisConfig(BaseModel):

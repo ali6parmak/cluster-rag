@@ -56,6 +56,7 @@ from cluster_rag.data import (
 from cluster_rag.dataset_stats import build_dataset_stats, file_sha256
 from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
+from cluster_rag.embed.random import RandomEmbedder
 from cluster_rag.embed_artifact import (
     EmbeddingArtifact,
     LabelEmbeddingArtifact,
@@ -1114,6 +1115,7 @@ def _chunker_with_embedder(
     *,
     threshold: float | None = None,
     base_version: str | None = None,
+    cache: bool = True,
 ) -> tuple[Any, Any]:
     """Build a chunker and the embedder of its chunks.
 
@@ -1127,10 +1129,19 @@ def _chunker_with_embedder(
     ``base_version`` overrides the version slot the chunks are cached under
     (the paragraph side's preprocessing version by default; the question side
     uses the question transform's version).
+
+    ``cache=False`` returns the embedder as it is: the Stage-3 random-vector
+    floor passes its own (uncached) embedder here, so the random vectors never
+    enter the model's embedding cache.
     """
     params = dict(chunker_spec.params)
     if threshold is not None:
         params["threshold"] = threshold
+
+    def _side(version: str) -> Any:
+        """One side's embedder: the cached backend, or the embedder as it is."""
+        return _cached_embedder(embedder, config, version) if cache else embedder
+
     if chunker_spec.name == "semantic":
         atom_params = {"split_clauses": bool(params.get("atom_split_clauses", False))}
         atom_chunker = build_chunker("atoms", atom_params)
@@ -1140,7 +1151,7 @@ def _chunker_with_embedder(
         chunker = build_chunker(
             "semantic",
             params,
-            embedder=_cached_embedder(embedder, config, atom_version),
+            embedder=_side(atom_version),
         )
     else:
         chunker = build_chunker(chunker_spec.name, params)
@@ -1150,7 +1161,7 @@ def _chunker_with_embedder(
         )
     else:
         paragraph_version = chunker.cache_version(base_version)
-    return chunker, _cached_embedder(embedder, config, paragraph_version)
+    return chunker, _side(paragraph_version)
 
 
 def _chunked_side(
@@ -1225,6 +1236,7 @@ def _stage3_extractor(
     *,
     paragraph_embedder: Any,
     question_embedder: Any,
+    feature_embedder: Any | None = None,
 ) -> PairFeatureExtractor:
     """The Stage-3 feature pack, with the cached backends wired in.
 
@@ -1235,15 +1247,23 @@ def _stage3_extractor(
     paragraph slot), the whole question (the baseline arm's question slot),
     the chunks (the chunker's slot) and the Stage-3.3 chunk profile's four
     unit sides (the sentences and the word pieces, on each side).
+
+    ``feature_embedder`` is the **Stage-3 random-vector floor** (CS-6d): when
+    it is given, every embedding side of the pack is that embedder instead of
+    the model's (cached) backend, so the floor replaces the embedding
+    geometry and nothing else. It is never cached, so the random vectors never
+    enter the model's embedding cache.
     """
     features = analysis.stage3.features
+    random_mode = feature_embedder is not None
     paragraph_chunker, chunk_embedder = _chunker_with_embedder(
         config,
-        embedder,
+        feature_embedder if random_mode else embedder,
         features.paragraph_chunker,
         spec,
         analysis.question_transform,
         analysis.question_block_markers,
+        cache=not random_mode,
     )
     question_chunks_embedder = None
     if features.question_chunker is not None:
@@ -1252,12 +1272,13 @@ def _stage3_extractor(
         )
         _, question_chunks_embedder = _chunker_with_embedder(
             config,
-            embedder,
+            feature_embedder if random_mode else embedder,
             features.question_chunker,
             spec,
             analysis.question_transform,
             analysis.question_block_markers,
             base_version=question_version,
+            cache=not random_mode,
         )
     # The chunk profile's units (the sentences and the word pieces). The
     # paragraph side is cached under the preprocessing version, the question
@@ -1282,24 +1303,23 @@ def _stage3_extractor(
             strict=True,
         )
     )
+
+    def _side(version: str) -> Any:
+        """One side's embedder: the cached model backend, or the random one."""
+        if random_mode:
+            return feature_embedder
+        return _cached_embedder(embedder, config, version)
+
     return PairFeatureExtractor(
         FeatureEmbedders(
-            paragraph=paragraph_embedder,
-            question=question_embedder,
+            paragraph=feature_embedder if random_mode else paragraph_embedder,
+            question=feature_embedder if random_mode else question_embedder,
             chunks=chunk_embedder,
             question_chunks=question_chunks_embedder,
-            paragraph_sentences=_cached_embedder(
-                embedder, config, sentence_chunker.cache_version(spec.version)
-            ),
-            question_sentences=_cached_embedder(
-                embedder, config, sentence_chunker.cache_version(question_version)
-            ),
-            paragraph_ngrams=_cached_embedder(
-                embedder, config, ngram_chunker.cache_version(spec.version)
-            ),
-            question_ngrams=_cached_embedder(
-                embedder, config, ngram_chunker.cache_version(question_version)
-            ),
+            paragraph_sentences=_side(sentence_chunker.cache_version(spec.version)),
+            question_sentences=_side(sentence_chunker.cache_version(question_version)),
+            paragraph_ngrams=_side(ngram_chunker.cache_version(spec.version)),
+            question_ngrams=_side(ngram_chunker.cache_version(question_version)),
         ),
         paragraph_chunker=paragraph_chunker,
         top_k=features.top_k,
@@ -1479,6 +1499,25 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         # the document-level holdout. The reference is the baseline arm's
         # full-text cosine on the same held-out documents.
         if analysis.stage3 is not None:
+            # The Stage-3 random-vector floor (CS-6d): the feature pack's
+            # embedding sides are random unit vectors instead of the model's.
+            # The run's baseline arm (the full-text cosine) keeps the model's
+            # embeddings, so the guard still holds and the arm-vs-cosine
+            # comparison stays meaningful.
+            feature_embedder = None
+            embeddings_provenance: dict[str, Any] = {
+                "mode": analysis.stage3.embeddings,
+                "note": (
+                    "the feature pack's embedding sides come from the run's "
+                    "model (through the disk cache)"
+                ),
+            }
+            if analysis.stage3.embeddings == "random":
+                feature_embedder = RandomEmbedder(
+                    dimension=int(embedder.info.dimension),
+                    seed=config.seed,
+                )
+                embeddings_provenance = feature_embedder.provenance()
             extractor = _stage3_extractor(
                 config,
                 embedder,
@@ -1487,6 +1526,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 view,
                 paragraph_embedder=paragraph_embedder,
                 question_embedder=question_embedders[analysis.question_transform],
+                feature_embedder=feature_embedder,
             )
             model_block["stage3"] = score_stage3_model(
                 view,
@@ -1501,6 +1541,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 seed=config.seed,
                 bootstrap_resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
+                feature_embeddings=embeddings_provenance,
             )
         models.append(model_block)
 
@@ -1553,6 +1594,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 "combiner": analysis.stage3.combiner.model_dump(mode="python"),
                 "control_weight": analysis.stage3.control_weight,
                 "permutation_resamples": analysis.stage3.permutation_resamples,
+                "embeddings": analysis.stage3.embeddings,
             }
         ),
         baseline_chunker_name=baseline_chunker.name,

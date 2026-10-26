@@ -2168,3 +2168,213 @@ block also gained the arms' **per-pair out-of-fold scores**
 (`out_of_fold_scores`), which is what makes the paired per-pair comparison
 between two arms of different runs possible (the CS-6b open question); the
 new tool `tools/compare_stage3_arms.py` reads them.
+
+## Stage 3 — the random-vector floor (the plan's second sanity floor) (CS-6d, 2026-10-26)
+
+**The question.** The plan's Stage 3 asks for **two** sanity floors, so that a
+"win" can be checked against chance: the **label-permutation** floor (done in
+CS-5 — the fit side's labels are destroyed) and the **random-vector** floor:
+*the arm is fitted on random vectors instead of the model's embeddings, so a
+"win" can be checked against what the training design alone buys*. Two
+earlier change sets had left the question open: the Stage-3.1b ablation
+measured that the embedding geometry adds no label-driven signal, and the
+Stage-3.3 chunk profile is **entirely** embedding-derived, so the floor is
+also the sharpest statement available about that block.
+
+**What the floor replaces.** The feature pack's **embedding sides** only: the
+full-text cosine, the chunk cosines and the chunk profile's unit embeddings.
+The pack's lexical, question-part and question-type features never used an
+embedding, so they stay real. The run's **baseline arm** (the full-text
+cosine every arm is compared against) keeps the model's embeddings, so the
+track's guard still holds and the arm-vs-cosine comparison stays meaningful.
+
+**The random vectors.** A seeded random unit vector of the **model's
+dimension** per `(kind, text)`: `sha256(seed | kind | text)` seeds a
+`numpy.random.default_rng`, the vector is drawn from `uniform(-1, 1)` and
+L2-normalized. The seed is the run's own `config.seed` (42); the recipe is
+recorded in the artifact (`stage3.feature_embeddings`); the vectors are
+**never** written to the embedding cache, so they cannot pollute the model's
+cache.
+
+**The runs.** Nine runs (3 Stage-0 models x 3 group sets,
+`experiments_text_processing/stage3_random_floor_sweep.py`, the sweep
+`stage3_random_floor`):
+
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-rand-base` — the
+  v0 pack's four groups;
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-rand-full` — the
+  v0 pack **plus** the chunk profile;
+- `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-rand-profile` —
+  the chunk profile **alone**.
+
+The three group sets are the Stage-3.3 ones, so every CS-6c arm gets its
+random-vector floor. The protocol is unchanged from Stage 3.1: the same
+document-level holdout (three rotations, one out-of-fold score matrix), the
+same training data (the fit side's judged pairs plus its unjudged control
+cells as down-weighted presumed negatives, weight 0.3), the same two floors
+(the label-permutation chance floor and the control-role floor, 5
+permutations per rotation, seed 42), the same paired statistics against the
+full-text cosine (2,000 bootstrap resamples, seed 42) and the same combiner
+(the logistic regression — the learner is not the lever, CS-6b). The guard
+holds: all **81** runs reproduce the Stage-0 baseline arm field by field
+(`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**1. The headline: the within-document AUC, the real arm beside its
+random-vector floor** (OMCT auxiliary data, the reviewed set's 1,520 judged
+pairs — never a UPR metric). The CI is the paired per-pair bootstrap of the
+two arms' out-of-fold scores (`tools/compare_stage3_arms.py`, stratified by
+document and class, 2,000 resamples, seed 42):
+
+| group set | model | the real arm | the random floor | Δ (real − random) | the paired 95% CI |
+|---|---|---|---|---|---|
+| `base` | embeddinggemma | 0.6655 | 0.6568 | +0.0088 | [−0.0362, +0.0203] |
+| `base` | voyage-4-nano | 0.6723 | 0.6588 | +0.0135 | [−0.0392, +0.0117] |
+| `base` | arctic2 | 0.6472 | 0.6565 | −0.0093 | [−0.0120, +0.0319] |
+| `full` | embeddinggemma | 0.6722 | 0.6617 | +0.0105 | [−0.0383, +0.0174] |
+| `full` | voyage-4-nano | 0.6894 | 0.6630 | +0.0264 | [−0.0519, −0.0011] |
+| `full` | arctic2 | 0.6423 | 0.6596 | −0.0173 | [−0.0063, +0.0416] |
+| `profile` | embeddinggemma | 0.5613 | 0.4733 | +0.0880 | [−0.1331, −0.0445] |
+| `profile` | voyage-4-nano | 0.5324 | 0.4830 | +0.0494 | [−0.0901, −0.0077] |
+| `profile` | arctic2 | 0.4974 | 0.4706 | +0.0268 | [−0.0730, +0.0203] |
+
+(The full-text cosine, the reference: 0.5632 / 0.5238 / 0.5020.)
+
+**2. The verdict on the v0 pack and on the full pack: the embedding geometry
+adds nothing to the ranking.** The random floor is **indistinguishable** from
+the real arm on five of the six arms — all three `base` arms and `full` on
+embeddinggemma and arctic2; every one of those five intervals includes zero.
+On arctic2 the random floor is even *higher* than the real arm on both group
+sets (+0.0093 and +0.0173, both including zero). The sixth (voyage-4-nano's
+`full`) is the only arm where the real arm is significantly ahead
+(+0.0264 [−0.0519, −0.0011]) — and that is the arm the Stage-3.3 chunk
+profile was already established on.
+
+The random floor's `base` arms give 0.6568 / 0.6588 / 0.6565 — within 0.0023
+of each other across the three models, the built-in check the Stage-3.1b
+ablation used for its embedding-free arms (0.6589 on all three models; the
+small spread is the random vectors' dimension, which differs per model). And
+they land **on** that arm: with noise in the embedding slots, the v0 pack
+*is* the embedding-free pack.
+
+**3. The verdict on the chunk profile: the block's whole signal is the
+embedding geometry — and it was never the lever.** The random floor of the
+profile block alone sits **at or below chance**: 0.4733 / 0.4830 / 0.4706
+(the arm's own chance floor: 0.5067 / 0.5182 / 0.5011). The real block is
+significantly ahead of its own floor on two of the three models
+(embeddinggemma +0.0880 [−0.1331, −0.0445], voyage-4-nano +0.0494
+[−0.0901, −0.0077]; arctic2's +0.0268 [−0.0730, +0.0203] includes zero). So
+the block is a re-measurement of the embedding geometry and nothing else —
+which is the same conclusion the Stage-3.3 paired comparison reached from the
+other side (the real block was already indistinguishable from the plain
+cosine). Two independent routes, one verdict: **the chunk profile is not the
+lever.**
+
+**4. The floors: the embedding features carry the training design's prior,
+not label-driven signal.** The within-document floors (the chance floor
+permutes the whole label vector, the control-role floor permutes only the
+judged pairs' labels and keeps the control cells' presumed-negative role):
+
+| arm | the real arm: chance / control-role | the random floor: chance / control-role |
+|---|---|---|
+| `base` (eg / voy / arc) | 0.5054 / 0.4936 / 0.4968 — 0.5788 / 0.5765 / 0.5569 | 0.4877 / 0.4856 / 0.4885 — 0.5434 / 0.5410 / 0.5431 |
+| `full` (eg / voy / arc) | 0.5248 / 0.5138 / 0.5313 — 0.5317 / 0.5372 / 0.5232 | 0.5005 / 0.5103 / 0.4945 — 0.5402 / 0.5409 / 0.5395 |
+| `profile` (eg / voy / arc) | 0.5324 / 0.5238 / 0.5343 — 0.5010 / 0.4532 / 0.4750 | 0.5067 / 0.5182 / 0.5011 — 0.4355 / 0.4361 / 0.4357 |
+
+The random arms' chance floors sit at chance, as the plan requires. The
+**excess over the control-role floor** — the label-driven part, the yardstick
+the track's deliverable is measured against:
+
+| arm | the real arm | the random floor |
+|---|---|---|
+| `base` (eg / voy / arc) | +0.0868 / +0.0958 / +0.0903 | +0.1133 / +0.1177 / +0.1134 |
+| `full` | +0.1405 / +0.1522 / +0.1191 | +0.1215 / +0.1221 / +0.1201 |
+| `profile` | +0.0603 / +0.0792 / +0.0224 | +0.0378 / +0.0470 / +0.0349 |
+
+The v0 pack's **label-driven part does not grow with the embedding
+geometry**: the real arm's excess is +0.0868 / +0.0958 / +0.0903 and the
+random floor's is +0.1133 / +0.1177 / +0.1134 — with noise in the embedding
+slots the label-driven part is if anything *larger*. What the embedding
+features add is the opposite: the real `base` arm's control-role floor is
+**higher** than the random floor's (0.5569–0.5788 against 0.5410–0.5434), so
+part of the real arm's number is the **training design's own prior** picked
+up through the embedding features — the reviewed set is rank-selected
+(the Stage-0.2 classification), and the embedding geometry picks that
+structure up. That is the sharpest form of the Stage-3.1b ablation's
+finding, now measured with a floor instead of a column removal: the
+embedding features carry the benchmark's *construction*, not its labels.
+
+(The excess is not comparable *across* arms with different feature sets — the
+floor is itself a property of the arm's features. The primary statement is
+the paired difference in §1.)
+
+**5. The hit@1: the embedding geometry is the retrieval signal, the lexical
+block is the ranking signal.** The positives' hit@1 (how often the pair's
+question is the paragraph's best candidate):
+
+| arm | the real arm (eg / voy / arc) | the random floor | the full-text cosine |
+|---|---|---|---|
+| `base` | 0.0897 / 0.0821 / 0.0859 | 0.0401 / 0.0420 / 0.0382 | 0.1355 / 0.1050 / 0.1050 |
+| `full` | 0.0802 / 0.0763 / 0.0649 | 0.0363 / 0.0382 / 0.0267 | " |
+| `profile` | 0.0840 / 0.0916 / 0.0878 | 0.0076 / 0.0057 / 0.0153 | " |
+
+The random floor's hit@1 collapses to 0.027–0.042 for the v0 pack and the
+full pack, and to 0.006–0.015 for the profile block alone — the level of (or
+below) the Stage-3.1b embedding-free arms (the `no-embed` arm's 0.0344 and
+the `lex-only` arm's 0.0324 on embeddinggemma). So the two roles separate
+cleanly:
+
+- the **lexical** block is what makes the learned arm a better *pair ranker*
+  than the cosine (it survives the floor: the random floor's `base` arm is
+  still 0.657 against the cosine's 0.563 on embeddinggemma);
+- the **embedding geometry** is what makes anything a *retriever* at all
+  (the floor's hit@1 is a third of the cosine's), and the cosine is still
+  the better retriever than the learned arm.
+
+**6. The per-feature check: the floor replaced exactly the embedding sides.**
+The nine artifacts carry the per-feature diagnostics for every column the
+pack computes. In the random runs, the **nine non-embedding features are
+bit-identical** to the real runs — `lex_question_coverage` 0.6147,
+`lex_paragraph_coverage` 0.3653, `lex_char_ngram_cosine` 0.4460,
+`qpart_options_coverage` 0.4952 and the five question-type one-hots (0.4494–
+0.5767), the same numbers in all three models, as they must be: they do not
+use an embedding. The embedding features' own within-document AUC collapses to
+chance (`cosine_full` 0.5632 → 0.4906, `chunk_cosine_best` 0.6049 → 0.5267
+on embeddinggemma), and the profile's features do the same
+(`cprof_sent_top1` 0.5642 → 0.4712). That is the internal proof that the
+floor is a like-for-like replacement and nothing more.
+
+**7. The control side: no inflation.** The random arms' control rank
+percentile sits at chance (p50 0.5021–0.5115) — as it must, since the random
+vectors carry no signal — and the real arms' beside it (0.4938–0.5062).
+
+**What this run does not say.**
+
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice only.
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track), so the track's safe-negative rule still
+  ships as the **margin half only**.
+- **Nothing about "the" null.** The floor is **one draw** (seed 42): a
+  different seed would give a slightly different number. The five `base` /
+  `full` arms' intervals are wide enough that the conclusion does not rest on
+  the draw, but a single seed is a single draw.
+- **Nothing about a better feature family.** The floor says the *embedding
+  geometry* carries no label-driven signal on this benchmark; it does not say
+  that no feature could (the plan's §5 question about the corpus as the
+  ceiling stays open).
+- **Nothing about a corpus with a different vocabulary.** Same caveat as
+  Stage 3.3: the lexical block is a bag-of-words overlap over 294 questions.
+
+**The next step (CS-6e).** The Stage-3 **reporting**: the calibration curves,
+the thresholds per document, and the safe-negative margin measured against
+the **control-role floor** (the reviewer's decision: the track's durable
+deliverable is measured against that floor, not against the plain cosine; the
+rule still ships as the margin half only). The floor measured here says what
+that margin has to beat: 0.5410–0.5434 for a pack with noise in the embedding
+slots, 0.5569–0.5788 for the real one.
+
+**A note on the reporting.** The Stage-3 artifact gained one block in this
+change set: `stage3.feature_embeddings` — the provenance of the pack's
+embedding sides (the mode, the seed, the dimension and the draw rule), so a
+reader knows which space an arm's embedding features live in. The run-level
+config echo carries the mode as well (`analysis.stage3.embeddings`).

@@ -55,6 +55,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend
     │   │   ├── ollama.py        # Ollama /api/embed backend
+    │   │   ├── random.py        # seeded random vectors (the track's Stage-3 floor)
     │   │   └── cache.py
     │   ├── index.py             # ExampleIndex, LabelIndex
     │   ├── retrieve/            # knn.py, prototypes.py, zeroshot.py, fusion.py, threshold.py
