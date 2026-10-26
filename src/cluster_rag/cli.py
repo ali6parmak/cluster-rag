@@ -159,6 +159,7 @@ from cluster_rag.upr_analysis import (
     chunked_arm_scores,
     chunks_block,
     encode_chunks,
+    encode_late_chunks,
     fusion_components,
     symmetric_arm_scores,
 )
@@ -3216,6 +3217,36 @@ def _upr_label_texts(setup: EvalSetup) -> list[str]:
     return [template.replace("{label}", label) for label in setup.labels]
 
 
+def _upr_family_context(
+    config: AppConfig,
+    setup: EvalSetup,
+    label_embedding_run_id: str,
+) -> PredictorContext:
+    """A predictor context with a **different** zero-shot label artifact.
+
+    The label-side transform (the bare label name vs the config template) is a
+    config choice of the *label* side, so a family may point at its own prior
+    label run. The artifact is loaded and validated exactly like the run's own
+    (the same model, the same dimension, the same label space).
+    """
+    if setup.artifact is None:
+        raise ValueError("the family's label run needs the primary embedding run")
+    label_artifact = load_label_embedding_artifact(
+        config.paths.results,
+        label_embedding_run_id,
+        labels=setup.labels,
+        source_sha256=setup.source_sha256,
+        model_id=setup.artifact.meta["embedder"]["model_id"],
+        dimension=setup.artifact.meta["embedder"]["dimension"],
+    )
+    return PredictorContext(
+        labels=setup.context.labels,
+        train_records=setup.context.train_records,
+        train_document_vectors=setup.context.train_document_vectors,
+        label_vectors=label_artifact.vectors,
+    )
+
+
 def _upr_chunked_arms(
     config: AppConfig,
     setup: EvalSetup,
@@ -3260,7 +3291,56 @@ def _upr_chunked_arms(
         chunker, chunk_embedder = _upr_chunker(
             config, embedder, family.chunker, spec.version, threshold=threshold
         )
-        text_side = encode_chunks(chunk_embedder, chunker, texts, "query")
+        if family.late_pooling is not None:
+            text_side, pooling_reports = encode_late_chunks(
+                embedder,
+                chunker,
+                texts,
+                "query",
+                pooling=family.late_pooling,
+                reference_vectors=setup.query_vectors,
+            )
+            family_meta_late = {
+                "late_pooling": family.late_pooling,
+                "token_coverage_mean": float(
+                    np.mean([report["token_coverage"] for report in pooling_reports])
+                )
+                if pooling_reports
+                else 0.0,
+                "n_chunks_without_token": sum(
+                    report["n_chunks_without_token"] for report in pooling_reports
+                ),
+                "pooling_consistency": {
+                    "cosine_with_the_model_embedding_mean": float(
+                        np.mean(
+                            [
+                                report["cosine_with_the_model_embedding"]
+                                for report in pooling_reports
+                                if "cosine_with_the_model_embedding" in report
+                            ]
+                        )
+                    )
+                    if any(
+                        "cosine_with_the_model_embedding" in report for report in pooling_reports
+                    )
+                    else None,
+                    "note": (
+                        "the cosine between the text's pooled token vector and the "
+                        "model's own embedding of the same text: the check that the "
+                        "token-level path lives in the model's own space"
+                    ),
+                },
+                "note": (
+                    "the late chunking: the text is embedded once at the token level "
+                    "and the chunks are pooled out of its tokens. It needs a backend "
+                    "that returns token-level embeddings (HF only), so the arm is "
+                    "within-model: the early-chunked arm of the same run is its "
+                    "reference"
+                ),
+            }
+        else:
+            text_side = encode_chunks(chunk_embedder, chunker, texts, "query")
+            family_meta_late = None
         label_side = None
         if family.label_chunker is not None:
             label_chunker, label_embedder = _upr_chunker(
@@ -3269,11 +3349,17 @@ def _upr_chunked_arms(
             label_side = encode_chunks(
                 label_embedder, label_chunker, _upr_label_texts(setup), "label"
             )
+        # The family's own label vectors (the label-side transform: the bare
+        # name vs the config template is a *config* choice, and this knob lets
+        # one run compare the two variants side by side).
+        family_context = setup.context
+        if family.label_embedding_run_id:
+            family_context = _upr_family_context(config, setup, family.label_embedding_run_id)
         # The family's own whole-text score: the second input of the
         # local+global blend (exp06). It is the *same geometry* as the arm's
         # chunk-level scores, so the blend mixes two scales of one signal.
         family_predictor = build_predictor(
-            family.predictor, family.params, setup.context, seed=config.seed
+            family.predictor, family.params, family_context, seed=config.seed
         )
         family_global = (
             np.asarray(
@@ -3294,6 +3380,8 @@ def _upr_chunked_arms(
             "chunks_per_text": chunks_block(text_side.chunks_per_text()),
             "semantic_threshold": threshold,
             "semantic_selection": semantic_selection,
+            "label_embedding_run_id": family.label_embedding_run_id,
+            "late": family_meta_late,
             "whole_text_agrees_with_reference": (
                 bool(np.allclose(family_global, setup.scores))
                 if family_global is not None

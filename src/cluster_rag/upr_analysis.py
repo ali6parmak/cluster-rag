@@ -59,7 +59,7 @@ from cluster_rag.text_processors.aggregation import (
     aggregate_chunk_similarities,
     parse_aggregation,
 )
-from cluster_rag.text_processors.base import Chunker
+from cluster_rag.text_processors.base import Chunker, SpanChunker
 from cluster_rag.text_processors.upr_diagnostics import (
     cell_rank_percentiles,
     distribution,
@@ -544,6 +544,99 @@ def symmetric_arm_scores(
 def arm_name(family: str, aggregation: Aggregation) -> str:
     """The arm's name: the family (which names its chunker) and the rule."""
     return f"{family}_{aggregation.slug}"
+
+
+def encode_late_chunks(
+    embedder: Any,
+    chunker: Chunker,
+    texts: Sequence[str],
+    kind: str,
+    *,
+    pooling: str = "mean",
+    reference_vectors: np.ndarray | None = None,
+) -> tuple[ChunkedSide, list[dict[str, Any]]]:
+    """Encode a side with the **late chunking**: the text once, the tokens pooled.
+
+    The text is embedded **once** at the token level and every chunk's vector
+    is pooled out of the tokens that fall in its character span, so every
+    chunk carries the text's context.
+
+    The two capabilities this path needs are **probed, never assumed**: the
+    embedder must be able to return token-level embeddings (the HF backend
+    can; Ollama's ``/api/embed`` cannot) and the chunker must be able to say
+    where its chunks are.
+
+    Args:
+        embedder: The embedder (a port: the CLI wires the cached backend in).
+        chunker: The chunker.
+        texts: The texts to chunk.
+        kind: The encode kind (``"query"`` for the text side).
+        pooling: The pooling rule (``"mean"`` = the model's own formula,
+            ``"norm"`` = the per-token-normalized variant).
+        reference_vectors: The model's **own** text embeddings (the pipeline's
+            query vectors), when they are known. The consistency check then
+            reports the cosine between the text's pooled token vector and the
+            model's own embedding of the same text — the check that the
+            token-level path lives in the model's own space.
+
+    Returns:
+        The encoded side and the per-text pooling reports.
+
+    Raises:
+        ValueError: If the embedder has no token-level capability, the
+            chunker has no character spans, or a chunk has no token.
+    """
+    from cluster_rag.embed.base import token_capability
+    from cluster_rag.text_processors.late_chunking import (
+        pool_chunk_vectors,
+        pool_document_vector,
+        pooling_report,
+    )
+
+    capability = token_capability(embedder)
+    if capability is None:
+        raise ValueError(
+            "the late-chunked arm needs token-level embeddings; this backend "
+            "cannot return them (Ollama's /api/embed returns one vector per "
+            "text and nothing else), so the arm is HF-only"
+        )
+    if not isinstance(chunker, SpanChunker):
+        raise ValueError(
+            f"the late-chunked arm needs the chunker's character spans; the chunker "
+            f"{getattr(chunker, 'name', chunker)!r} does not provide them"
+        )
+    text_list = list(texts)
+    token_embeddings = capability.encode_tokens(text_list, kind)  # type: ignore[arg-type]
+    span_lists = chunker.segment_spans(text_list)
+    chunk_lists: list[tuple[str, ...]] = []
+    pooled_rows: list[np.ndarray] = []
+    reports: list[dict[str, Any]] = []
+    consistencies: list[float] = []
+    for position, (text, tokens, spans) in enumerate(
+        zip(text_list, token_embeddings, span_lists, strict=True)
+    ):
+        chunk_lists.append(tuple(text[start:end] for start, end in spans))
+        pooled_rows.append(pool_chunk_vectors(tokens, spans, pooling=pooling))
+        report = pooling_report(tokens, spans)
+        if reference_vectors is not None and position < len(reference_vectors):
+            own = np.asarray(reference_vectors[position], dtype=np.float64)
+            norm = float(np.linalg.norm(own))
+            if norm > 0:
+                pooled = pool_document_vector(tokens)
+                report["cosine_with_the_model_embedding"] = float(
+                    np.dot(pooled.astype(np.float64), own / norm)
+                )
+                consistencies.append(report["cosine_with_the_model_embedding"])
+        reports.append(report)
+    vectors = (
+        np.concatenate(pooled_rows, axis=0) if pooled_rows else np.zeros((0, 0), dtype=np.float32)
+    )
+    side = ChunkedSide(chunk_lists=tuple(chunk_lists), vectors=vectors)
+    if consistencies:
+        mean_cosine = float(np.mean(consistencies))
+        for report in reports:
+            report["pooling_consistency_mean"] = mean_cosine
+    return side, reports
 
 
 def fusion_components(

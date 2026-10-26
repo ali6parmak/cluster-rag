@@ -1972,6 +1972,28 @@ The **pre-registered expectations** (written down before the runs):
   and rank shift beside it).
   *Exit:* every arm measured and logged, including the ones expected to be
   nulls.
+  *(done 2026-10-26: two runs. `upr-analyze-extras` (the champion's
+  geometry): the **chunk header** in both modes (the inner chunker: the
+  atoms) and the **label-side transform** (the bare name vs the config
+  template, each family pointing at its own prior label run, so the two
+  variants sit in one run). `upr-analyze-late`: the **late chunking** on
+  `voyage-4-nano` — the arm is **HF-only**, so the comparison is
+  **within-model** (the late arm against the early-chunked arm of the same
+  run), with the token path's consistency check in the artifact (the cosine
+  between the text's pooled token vector and the model's own embedding:
+  0.9468). **Verdicts:** the **header does not ship on UPR either** (a null
+  to negative: -0.0030 to -0.0091, the `mean` rule significant; the only
+  positive arm is the local+global blend, a wash); the **template wins
+  decisively** over the bare label name (the name variant -0.1527 to -0.1748
+  of micro-F1 against the champion, the template -0.1102 to -0.1345 — so the
+  label's sentence is a better query than the label's bare noun, where OMCT
+  found the effect model-dependent); the **model's own pooling formula wins
+  again** (the late `mean` beats the late `norm` by +0.0114 of micro-F1 and
+  +0.0183 of nDCG@5, as on OMCT), the late chunking gains on the **ranking**
+  side (the nDCG@5 +0.0075, the shortlist R@50 0.8374 against the early
+  arm's 0.8158, and +0.06 of shortlist recall in the long-text tail) but not
+  on the decision side, and none of its intervals excludes zero. The numbers
+  are in the track log's CS-8c section.)*
 - [ ] **CS-8d — the feature pack (UPR variant) + the logistic combiner + the
   floors.** The UPR pack: the global cosine, the best-chunk cosine, the mean
   of the 2 and of the K=3 best chunk cosines, their spread and the peak

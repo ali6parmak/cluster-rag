@@ -3530,3 +3530,113 @@ silently use a different scoring path.
 **The next step.** CS-8c: the text-side extras (the chunk header, the late
 chunking — HF-only, so the within-model comparison — and the label-side
 transform), each measured against this ladder's arms.
+
+## CS-8c — the text-side extras and the label-side transform (2026-10-26)
+
+Two runs, both on the UPR val split, both against the same discipline as
+CS-8b (the **paired** bootstrap over the val texts, pooled and per length
+bucket, beside the background's level and rank shift):
+
+- `upr-analyze-extras` — the **chunk header** (both modes) and the **label-side
+  transform** (the bare label name vs the config template), on the champion's
+  geometry (embeddinggemma). The guard holds: the reference arm reproduces
+  `upr-eval-fusionc-embeddinggemma-k10-c1` field by field.
+- `upr-analyze-late` — the **late chunking** (the text embedded once, its
+  token-level embeddings pooled per chunk), on `voyage-4-nano` — the arm is
+  **HF-only** (Ollama's `/api/embed` cannot return token-level embeddings), so
+  the comparison is **within-model**: the late-chunked arm against the
+  early-chunked arm of the same run, with the voyage champion as the
+  reference. The guard holds against
+  `upr-eval-fusionc-voyage-4-nano-k10-c1` (the voyage reference: micro-F1
+  0.5395, the shortlist R@50 0.8193).
+
+### The chunk header: it does not ship on UPR either
+
+The header is the text's own first sentence, prepended to every chunk (the
+inner chunker: the atoms, the CS-8b ladder's best chunker on UPR).
+
+| arm | Δ micro-F1 (paired) | 95% interval |
+|---|---|---|
+| `header_atoms_others_max` | -0.0030 | [-0.0114, +0.0053] |
+| `header_atoms_others_mean` | **-0.0091** | [-0.0168, -0.0015] |
+| `header_atoms_others_local_global:0.75:max` | +0.0015 | [-0.0053, +0.0076] |
+| `header_atoms_all_max` | -0.0061 | [-0.0146, +0.0030] |
+| `header_atoms_all_mean` | -0.0068 | [-0.0150, +0.0015] |
+
+The header is a **null to negative** on UPR, exactly as on OMCT (where it
+cost -0.0315 of within-document AUC): the only positive arm is the
+local+global blend, which mixes the chunked score with the whole-text score
+and is a wash. The two modes differ by at most 0.0037. The header's
+hypothesis (the chunk geometry carries no label-driven ranking signal) holds
+on a second corpus.
+
+### The label-side transform: the template wins, decisively
+
+The label text is either the **bare name** ("Detention") or the config
+**template** ("This recommendation is about Detention.") — the UPR analogue of
+OMCT's free `keep` vs `strip_block` comparison. Both variants are in the same
+run (each family points at its own prior label run), in the pair-scoring
+family where the label side carries the whole signal:
+
+| label text | micro-F1 | Δ vs the champion (paired) | 95% interval | shortlist R@50 |
+|---|---|---|---|---|
+| the `about` template (the champion) | 0.4134-0.4377 | -0.1102 to -0.1345 | (all exclude zero) | 0.8655-0.8703 |
+| the bare name | 0.3731-0.3951 | **-0.1527 to -0.1748** | (all exclude zero) | 0.8533-0.8612 |
+
+The **template is clearly better** than the bare name (-0.05 to -0.06 of
+micro-F1 between the two variants, and +0.012 to +0.017 of shortlist
+recall). On OMCT the same question was model-dependent ("the unstripped
+question helped one model and hurt two"); on UPR there is one answer: the
+label's *sentence* is a better query than the label's bare noun — the
+template's context tells the model what kind of text it is looking for.
+
+### The late chunking: the model's own pooling formula wins again, but the effect is small
+
+The late chunking embeds the text **once** and pools its token-level
+embeddings per chunk. The consistency check is in the artifact: the cosine
+between the text's pooled token vector and the model's own embedding of the
+same text is **0.9468** (the token coverage 1.0, no chunk without a token),
+so the token-level path lives in the model's own space.
+
+| arm (voyage-4-nano) | Δ micro-F1 | 95% interval | Δ nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|
+| the early-chunked arm (`words25_max`) | +0.0023 | [-0.0046, +0.0091] | +0.0016 | 0.8158 |
+| the late chunking, the model's formula (`mean`) | +0.0038 | [-0.0068, +0.0137] | **+0.0075** | **0.8374** |
+| the late chunking, per-token-normalized (`norm`) | **-0.0076** | [-0.0215, +0.0046] | **-0.0108** | 0.7934 |
+
+**The model's own pooling formula beats the per-token-normalized variant**
+again (on OMCT: +0.0260 of within-document AUC; here: +0.0114 of micro-F1
+and +0.0183 of nDCG@5 between the two poolings), and the late chunking
+beats the early one on the **ranking** side (the nDCG@5 and the shortlist
+recall) but not on the decision side — and none of the intervals excludes
+zero. In the **long-text tail** (300+ characters) the late chunking's
+shortlist recall is 0.9133 against the early arm's 0.8533 (+0.06), which is
+where its mechanism (the document's context in every chunk) should bite.
+
+The late arm's score **level** is not comparable with the early arm's (the
+background's mean shifts by -0.14: a pooled token vector is not the model's
+sentence embedding, it is the average of the text's tokens). The ranking
+metrics (the nDCG@5, the shortlist recall) are the scale-free ones, and they
+are the ones to read.
+
+**What this run does not say.**
+
+- **Nothing about the feature pack, the combiner or the floors** (CS-8d /
+  CS-8e): no learned scorer is involved here.
+- **Nothing about the calibration** (CS-8f) and nothing about the decision
+  models on UPR (CS-9).
+- **Nothing about `test`** — only val was touched.
+- **The late chunking is one model.** It is HF-only, so only
+  `voyage-4-nano` is measured; the champion (`embeddinggemma`, Ollama) cannot
+  run the arm at all. The within-model comparison is against the voyage
+  champion, not against the champion of the pipeline.
+- **The header was measured on one inner chunker** (the atoms). The
+  OMCT-style "the header on the word windows" variant is not re-run here: the
+  two chunkers' effects on UPR are already measured in CS-8b, and the header
+  was negative on both of them there.
+
+**The next step.** CS-8d: the UPR feature pack (the global and chunk
+cosines, the lexical overlap, the char n-grams, the description coverage, the
+chunk profile), the logistic combiner fitted on train, and the three floors —
+the track's most interesting UPR question, whether the **lexical** block's
+gain (OMCT's finding) transfers to a 68-label human-rights vocabulary.

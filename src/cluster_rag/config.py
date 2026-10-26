@@ -1148,6 +1148,19 @@ class UprArmConfig(BaseModel):
             null-check, and the degeneracy is recorded in the artifact.
         label_aggregation: The label side's folding rule (the maximum, as on
             OMCT: a label keeps its best chunk).
+        label_embedding_run_id: A **prior zero-shot label run** for this
+            family (``None`` = the run's own ``eval.label_embedding_run_id``).
+            It is the UPR analogue of OMCT's free question transform: the
+            label-side text (the bare name vs the config template) is a
+            *config* choice, and this knob lets one run compare the two
+            variants side by side.
+        late_pooling: The late chunking's pooling rule (``"mean"`` = the
+            model's own ``Normalize(mean(tokens))`` formula, ``"norm"`` = the
+            per-token-normalized variant). ``None`` = the arm is not
+            late-chunked. The late chunking is **HF-only** (Ollama's
+            ``/api/embed`` cannot return token-level embeddings), so the
+            comparison is within-model, against the early-chunked arm of the
+            same run.
         semantic_threshold: The semantic chunker's boundary threshold. The
             threshold is **selected on the fit side** (the train split); the
             selected value and the per-fold numbers go into the artifact.
@@ -1162,6 +1175,8 @@ class UprArmConfig(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     label_chunker: ChunkerSpec | None = None
     label_aggregation: str = "max"
+    label_embedding_run_id: str | None = None
+    late_pooling: Literal["mean", "norm"] | None = None
     semantic_threshold: float | None = None
 
     @field_validator("aggregations", "label_aggregation")
