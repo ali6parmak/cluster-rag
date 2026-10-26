@@ -3594,6 +3594,32 @@ def _upr_label_catalog(config: AppConfig) -> dict[str, LabelEntry]:
     return catalog
 
 
+def _upr_bucket_masks(view: UprView) -> dict[str, np.ndarray]:
+    """The label buckets' column masks (the calibration's per-bucket view)."""
+    masks: dict[str, np.ndarray] = {}
+    for bucket, members in view.labels_by_bucket.items():
+        columns = np.asarray(
+            [view.labels.index(label) for label in members],
+            dtype=np.int64,
+        )
+        mask = np.zeros(view.n_labels, dtype=bool)
+        mask[columns] = True
+        masks[bucket] = mask
+    return masks
+
+
+def _upr_length_masks(view: UprView) -> dict[str, np.ndarray]:
+    """The text-length buckets' row masks (the calibration's per-length view)."""
+    masks: dict[str, np.ndarray] = {}
+    for index, name in enumerate(view.length_bucket_names):
+        mask = np.zeros(view.n_texts, dtype=bool)
+        for position, bucket in enumerate(view.length_bucket_index):
+            if bucket == index:
+                mask[position] = True
+        masks[name] = mask
+    return masks
+
+
 def _upr_learned_arms(
     config: AppConfig,
     setup: EvalSetup,
@@ -3703,6 +3729,9 @@ def _upr_learned_arms(
         random_extractor=random_extractor,
         seed=seed,
         arm_name=f"learned_{learned.combiner.name}",
+        reporting=learned.reporting.model_dump(),
+        bucket_masks=_upr_bucket_masks(view),
+        length_masks=_upr_length_masks(view),
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
     arms: dict[str, dict[str, Any]] = {}

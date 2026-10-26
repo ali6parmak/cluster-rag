@@ -187,6 +187,9 @@ def score_upr_learned_arms(
     random_extractor: UprFeatureExtractor | None = None,
     seed: int = 42,
     arm_name: str = LEARNED_ARM,
+    reporting: Mapping[str, Any] | None = None,
+    bucket_masks: Mapping[str, np.ndarray] | None = None,
+    length_masks: Mapping[str, np.ndarray] | None = None,
 ) -> UprLearningResult:
     """Fit the learned arm on train and score it (and its floors) on val.
 
@@ -207,6 +210,12 @@ def score_upr_learned_arms(
             (the random-vector floor). ``None`` disables that floor.
         seed: The seed of the permutations and of the random draw.
         arm_name: The arm's name (the artifact's key).
+        reporting: The reporting block's settings (``None`` computes none, so
+            every earlier run's artifact keeps its exact content).
+        bucket_masks: The label buckets' column masks (the calibration's
+            per-bucket view).
+        length_masks: The text-length buckets' row masks (the calibration's
+            per-length-bucket view).
 
     Returns:
         The :class:`UprLearningResult` (the arms' score matrices and the
@@ -223,7 +232,6 @@ def score_upr_learned_arms(
         eval_features.shape[0], eval_features.shape[1]
     )
     scores: dict[str, np.ndarray] = {arm_name: arm_scores}
-
     rng = np.random.default_rng(seed)
     floors: dict[str, Any] = {}
 
@@ -357,7 +365,140 @@ def score_upr_learned_arms(
         "permutation_resamples": int(permutation_resamples),
         "seed": int(seed),
     }
+    # The reporting blocks (CS-8f): the calibration and the decision-rule
+    # comparison of the arm. The threshold is chosen on the fit side, so the
+    # fit side's scores are needed here.
+    if reporting and reporting.get("enabled"):
+        train_scores = np.asarray(combiner.score(train_rows), dtype=np.float64).reshape(
+            train_features.shape[0], train_features.shape[1]
+        )
+        meta["reporting"] = _reporting_block(
+            scores=arm_scores,
+            train_scores=train_scores,
+            gold=np.asarray(eval_gold, dtype=bool),
+            train_gold=np.asarray(train_gold, dtype=bool),
+            decision=decision,
+            bins=int(reporting.get("bins", 10)),
+            threshold_quantiles=int(reporting.get("threshold_quantiles", 99)),
+            bucket_masks=dict(bucket_masks or {}),
+            length_masks=dict(length_masks or {}),
+        )
     return UprLearningResult(scores=scores, meta=meta)
+
+
+def _reporting_block(
+    *,
+    scores: np.ndarray,
+    train_scores: np.ndarray,
+    gold: np.ndarray,
+    train_gold: np.ndarray,
+    decision: Mapping[str, Any],
+    bins: int,
+    threshold_quantiles: int,
+    bucket_masks: Mapping[str, np.ndarray],
+    length_masks: Mapping[str, np.ndarray],
+) -> dict[str, Any]:
+    """The reporting blocks of one arm (CS-8f).
+
+    Two blocks:
+
+    - the **calibration**: the reliability diagram of the arm's probability
+      against the gold cells, pooled and per label bucket (a column mask) and
+      per text-length bucket (a row mask);
+    - the **decision-rule comparison**: the three rules on the same arm. The
+      threshold rules' cut is chosen on the **fit side** (the train split) by
+      the Youden separation, so the evaluated split never picks it.
+    """
+    from cluster_rag.text_processors.calibration import (
+        reliability_diagram,
+        threshold_candidates,
+        youden_curve,
+    )
+
+    truth = np.asarray(gold, dtype=bool)
+    fit_truth = np.asarray(train_gold, dtype=bool)
+    calibration: dict[str, Any] = {
+        "pooled": reliability_diagram(
+            scores.reshape(-1), truth.reshape(-1).astype(int), n_bins=bins
+        ),
+        "per_label_bucket": {
+            name: reliability_diagram(
+                scores[:, mask].reshape(-1),
+                truth[:, mask].reshape(-1).astype(int),
+                n_bins=bins,
+            )
+            for name, mask in bucket_masks.items()
+        },
+        "per_length_bucket": {
+            name: reliability_diagram(
+                scores[mask].reshape(-1),
+                truth[mask].reshape(-1).astype(int),
+                n_bins=bins,
+            )
+            for name, mask in length_masks.items()
+        },
+        "note": (
+            "the reliability diagram of the arm's probability against the gold "
+            "cells: the expected calibration error, the Brier score and the "
+            "per-bin records. The per-label-bucket view restricts the columns, "
+            "the per-length-bucket view the rows."
+        ),
+    }
+
+    # the fit side's threshold (the Youden separation on the train split)
+    fit_scores = train_scores.reshape(-1)
+    fit_labels = fit_truth.reshape(-1)
+    candidates = threshold_candidates(fit_scores, n_quantiles=threshold_quantiles)
+    curve = youden_curve(
+        fit_scores,
+        positives=fit_labels,
+        negatives=~fit_labels,
+        candidates=candidates,
+    )
+    best = max(curve, key=lambda entry: entry["value"])
+    threshold = float(best["threshold"])
+    k = decision.get("k")
+    rules: dict[str, Any] = {}
+    for rule, parameters in (
+        ("top_k", {"k": k}),
+        ("score_threshold", {"threshold": threshold}),
+        ("top_k_min_score", {"k": k, "min_score": threshold}),
+    ):
+        predicted = apply_decision_rule(scores, rule=rule, **parameters)
+        metrics = decision_f1_metrics(predicted, truth)
+        rules[rule] = {
+            "parameters": parameters,
+            "micro_f1": float(metrics["micro_f1"]),
+            "macro_f1": float(metrics["macro_f1"]),
+            "sample_f1": float(metrics["sample_f1"]),
+            "coverage": float(metrics["n_predicted_cells"])
+            / float(max(1, metrics["n_gold_cells"])),
+            "n_predicted_cells": int(metrics["n_predicted_cells"]),
+            "n_gold_cells": int(metrics["n_gold_cells"]),
+        }
+    return {
+        "calibration": calibration,
+        "decision_rules": {
+            "rules": rules,
+            "threshold": {
+                "value": threshold,
+                "criterion": "youden (TPR - FPR) on the fit side (the train split)",
+                "fit_side_tpr": best["tpr"],
+                "fit_side_fpr": best["fpr"],
+                "fit_side_value": best["value"],
+                "n_candidates": int(len(candidates)),
+                "note": (
+                    "the threshold is chosen on the fit side only, so the "
+                    "evaluated split never picks the operating point"
+                ),
+            },
+            "note": (
+                "the three decision rules on the same arm: the top-k (the run's "
+                "k), the score threshold (the fit side's cut) and the top-k with "
+                "the same cut as a floor"
+            ),
+        },
+    }
 
 
 def _feature_diagnostics(

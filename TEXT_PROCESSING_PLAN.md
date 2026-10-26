@@ -2138,7 +2138,7 @@ The **pre-registered expectations** (written down before the runs):
   the track has measured on UPR — but it still does not beat the champion at
   the decision view. The numbers are in the track log's CS-8e section; 545
   unit tests green.)*
-- [ ] **CS-8f — the reporting blocks.** The **calibration** block (ECE, Brier,
+- [x] **CS-8f — the reporting blocks.** The **calibration** block (ECE, Brier,
   the reliability diagram, pooled and per bucket) and the **decision-rule
   comparison** (`top_k`, `score_threshold`, `top_k_min_score`) on the best
   arm. The **paired-F1 bootstrap** (a paired bootstrap over the val texts of
@@ -2149,6 +2149,31 @@ The **pre-registered expectations** (written down before the runs):
   assumption:* the reviewer decides whether the function is added.
   *Exit:* the reporting blocks in the artifact and in the table, and the
   paired intervals where they were approved.
+  *(done 2026-10-26: the config section `upr_analysis.learned.reporting` (the
+  bins, the threshold's quantile grid; **off** by default, so the earlier
+  runs' artifacts keep their exact content), the reporting block in the driver
+  (the **calibration** — the reliability diagram, the expected calibration
+  error and the Brier score, pooled and per label bucket and per
+  text-length bucket — and the **decision-rule comparison** over `top_k`,
+  `score_threshold` and `top_k_min_score`, the threshold rules' cut chosen on
+  the **fit side** by the Youden separation, so the evaluated split never
+  picks the operating point), and two runs
+  `upr-analyze-learned-report-{histgb,logistic}` on the CS-8e grid's best arm
+  (the boosted combiner on the full pack) and the logistic on the same pack.
+  The guard holds for all seventeen UPR runs. **Verdicts:** the learned arm's
+  probability is a **probability** — the pooled ECE **0.0323** (the booster)
+  and 0.0436 (the logistic), against the OMCT learned arm's 0.175-0.189 — and
+  the booster is better calibrated than the logistic, the second way in which
+  the learner matters on UPR. The calibration is best on the **unseen** labels
+  (the ECE 0.012) and worst on the **long texts** (0.0517/0.0705), the
+  bucket the CS-8b ladder found the champion's weakest. The **best operating
+  point is a budget rule**: `top_k_min_score` (the top-2 with the fit side's
+  cut as a floor) beats the plain `top_k` on both learners (0.4945 against
+  0.4818 for the booster, 0.4800 against 0.4704 for the logistic), while the
+  **pure threshold rule is much worse** (0.2465/0.1773) because the
+  probabilities are compressed toward the 2.9% base rate — the same
+  compression the CS-7b decision arm showed on OMCT. The numbers are in the
+  track log's CS-8f section; 547 unit tests green.)*
 - [ ] **CS-9 — the decision models on UPR (a measurement, not a pipeline
   component).** `tev1` and `laya` through the existing `Decider` port and the
   `/v1/systemone` client, with the existing disk cache and the track's LLM

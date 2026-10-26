@@ -257,3 +257,14 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 17.735 |
 | upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | learned_histgb | learned | atoms | n/a | 0.4293 | 0.4200 | 0.4159 | 0.956 | 0.2385 | 0.6860 | 0.5644 | 0.8697 | 0.2950 | 0.6966 | 0.0294 | 0.5000 | 0.0684 | -0.4842 | 0.0000 | 1.95 | 660 | 17.735 |
 | upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | learned_histgb_random | learned | atoms | n/a | 0.0372 | 0.0317 | 0.0355 | 1.000 | 0.0312 | 0.1485 | 0.0573 | 0.7321 | 0.0152 | 0.1502 | 0.4706 | 0.5000 | 0.0819 | -0.4707 | 0.0000 | 1.95 | 660 | 17.735 |
+
+## UPR — upr_learned_reporting
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-learned-report-histgb | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 90.667 |
+| upr-analyze-learned-report-histgb | 2026-10-26 | val | learned_histgb | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 90.667 |
+| upr-analyze-learned-report-histgb | 2026-10-26 | val | learned_histgb_random | learned | atoms | n/a | 0.4043 | 0.3808 | 0.3952 | 1.000 | 0.2133 | 0.6196 | 0.5173 | 0.8894 | 0.2706 | 0.6212 | 0.0441 | 0.5000 | 0.0548 | -0.4979 | 0.0000 | 1.95 | 660 | 90.667 |
+| upr-analyze-learned-report-logistic | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 7.142 |
+| upr-analyze-learned-report-logistic | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4704 | 0.4846 | 0.4578 | 0.985 | 0.2530 | 0.7081 | 0.6074 | 0.8721 | 0.3117 | 0.7271 | 0.0294 | 0.5000 | 0.0629 | -0.4897 | 0.0000 | 1.95 | 660 | 7.142 |
+| upr-analyze-learned-report-logistic | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.3815 | 0.3834 | 0.3708 | 0.941 | 0.2106 | 0.6047 | 0.4946 | 0.8712 | 0.2454 | 0.6128 | 0.0441 | 0.5000 | 0.0674 | -0.4852 | 0.0000 | 1.95 | 660 | 7.142 |

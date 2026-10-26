@@ -1253,6 +1253,37 @@ class UprLearnedFloorsConfig(BaseModel):
     random_seed: int = Field(default=42)
 
 
+class UprLearnedReportingConfig(BaseModel):
+    """The UPR learned arm's reporting (CS-8f).
+
+    The two blocks the plan asks for:
+
+    - the **calibration**: the reliability diagram of the arm's probability
+      (the expected calibration error, the Brier score and the per-bin
+      records), pooled and per **label bucket** and per **text-length
+      bucket**;
+    - the **decision-rule comparison**: the three decision rules (``top_k``,
+      ``score_threshold`` and ``top_k_min_score``) on the same arm. The
+      threshold rules' cut is chosen on the **fit side** (the train split) by
+      the Youden separation, so the evaluated split never picks it.
+
+    Attributes:
+        enabled: Whether the run computes the reporting blocks at all. The
+            default is ``False``, so every earlier run's artifact keeps its
+            exact content.
+        bins: The number of the reliability diagram's bins (equal width over
+            ``[0, 1]``).
+        threshold_quantiles: How many quantiles of the fit side's scores form
+            the threshold's candidate grid.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    bins: int = Field(default=10, ge=2, le=50)
+    threshold_quantiles: int = Field(default=99, ge=3, le=999)
+
+
 class UprLearnedConfig(BaseModel):
     """The UPR learned arm (CS-8d): the feature pack, the combiner, the floors.
 
@@ -1279,6 +1310,8 @@ class UprLearnedConfig(BaseModel):
         control_weight: The training weight of the non-gold cells (presumed
             negatives whose true positive rate is unmeasured).
         floors: The three sanity floors.
+        reporting: The reporting blocks (the calibration and the decision-rule
+            comparison); off by default.
         seed: The seed of the floors' permutations and of the random-vector
             draw. ``None`` uses the run's seed.
     """
@@ -1296,6 +1329,7 @@ class UprLearnedConfig(BaseModel):
     combiner: CombinerSpec = Field(default_factory=CombinerSpec)
     control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     floors: UprLearnedFloorsConfig = Field(default_factory=UprLearnedFloorsConfig)
+    reporting: UprLearnedReportingConfig = Field(default_factory=UprLearnedReportingConfig)
     seed: int | None = None
 
     @field_validator("groups")

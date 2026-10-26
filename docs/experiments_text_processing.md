@@ -3945,3 +3945,82 @@ booster too (0.0122-0.0274).
 the Brier score, the reliability diagram, pooled and per bucket) and the
 decision-rule comparison (`top_k`, `score_threshold`, `top_k_min_score`) on
 the best arm.
+
+## CS-8f — the reporting blocks: the calibration and the decision rules (2026-10-26)
+
+**Two runs**, both on the UPR **val** split, both on the CS-8e grid's **best
+arm** (the gradient-boosted combiner on the full pack — the best decision-view
+number and the best shortlist recall the track has measured on UPR), with the
+**logistic** on the same pack as the second run so the two learners'
+calibration can be read side by side:
+
+- `upr-analyze-learned-report-histgb`
+- `upr-analyze-learned-report-logistic`
+
+The guard holds for all seventeen UPR runs. The threshold rules' cut is
+chosen on the **fit side** (the train split) by the **Youden** separation
+(positives against the non-gold cells — on UPR the negative class is the
+ordinary cells, so this is the "floor gap" analogue of the OMCT reporting,
+not OMCT's "youden against the hard negatives"), so the evaluated split never
+picks the operating point.
+
+### The calibration: the learned arm's probability is a probability
+
+| arm | the pooled ECE | the Brier | the per-bucket ECE (head / torso / tail / unseen) | the per-length ECE (0-99 / 100-199 / 200-299 / 300+) |
+|---|---|---|---|---|
+| the boosted combiner | **0.0323** | **0.0239** | 0.0259 / 0.0417 / 0.0407 / **0.0121** | 0.0263 / 0.0315 / 0.0389 / **0.0517** |
+| the logistic regression | 0.0436 | 0.0275 | 0.0274 / 0.0568 / 0.0577 / **0.0118** | 0.0338 / 0.0416 / 0.0578 / **0.0705** |
+
+The learned arm's probability is **well calibrated** — the pooled ECE 0.0323
+(the booster) and 0.0436 (the logistic) against the OMCT learned arm's
+0.175-0.189 and its per-document macro of 0.327-0.349. The calibration is
+best on the **unseen** labels (the ECE 0.012) and worst on the **long texts**
+(0.0517/0.0705), i.e. the long texts are where the arm's probability is
+least trustworthy — the same bucket the CS-8b ladder found the champion's
+weakest.
+
+**And the booster is better calibrated than the logistic** (0.0323 against
+0.0436) — the opposite of the usual expectation, and the second way in which
+the learner matters on UPR (the first is the decision view, CS-8e).
+
+### The decision rules: a budget rule still wins
+
+| rule | the booster's micro-F1 | the logistic's micro-F1 | the booster's coverage (the predicted/gold cells) |
+|---|---|---|---|
+| `top_k` (k=2, the run's rule) | 0.4818 | 0.4704 | 1.006 (1,320 cells) |
+| `score_threshold` (the fit side's cut, 0.0924 / 0.0868) | 0.2465 | 0.1773 | 4.621 / 7.046 (6,063 / 9,245 cells) |
+| `top_k_min_score` (the top-2 with the fit side's cut as a floor) | **0.4945** | **0.4800** | 0.936 / 0.941 (1,228 / 1,234 cells) |
+
+**The best operating point is the top-k with the fit side's cut as a floor**:
+it keeps the top-2 budget and drops the cells whose probability is below the
+fit side's threshold, and it beats the plain top-k on both learners (+0.0127
+for the booster, +0.0096 for the logistic). The **pure threshold rule is much
+worse** (0.2465 / 0.1773): the probabilities are **compressed** toward the
+base rate (the grid's positive rate is 2.9%), so a fixed cut predicts 4.6-7.0
+times the gold cells. The same compression the CS-7b decision-model arm
+showed on OMCT ("the model is calibrated but its probabilities are
+compressed, so a fitted threshold is still needed") — here the fitted
+threshold is useful only as a **floor** under a budget rule, not as the rule
+itself.
+
+**What this change set does not say.**
+
+- **Nothing about the decision models on UPR** (CS-9) and nothing about
+  `test` — only val was touched.
+- **The calibration is measured on the evaluated split**, so it is a
+  diagnostic of the arm, not a fit-side quantity; the threshold *is* fit-side.
+- **The two learners' arms live in two runs**, so the calibration comparison
+  is the two numbers side by side (the same protocol the CS-6b/6c arms used:
+  each arm against the shared reference arm).
+- **The reliability diagram's bins are equal width over [0, 1]** (10 bins),
+  and the ECE is the count-weighted mean absolute gap between the mean
+  predicted probability and the observed rate in each bin.
+
+**The next step.** CS-9: the decision models on UPR — a **measurement**, not
+a pipeline component: `tev1` and `laya` through the existing `Decider` port
+and the `/v1/systemone` client, the UPR-native question type ("is this text
+about <label>?") with the `noul`/`choice` types and both prompt shapes, the
+synthetic competence control beside every arm, the grid arm and the
+safe-negative rule in its three forms with the label-blind counterpart beside
+them, and the shortlist rerank. **CS-10 (the LLM stage) waits for the
+reviewer's explicit OK** — it is not started.

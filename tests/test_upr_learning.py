@@ -431,3 +431,55 @@ def test_the_floors_section_carries_the_three_floors() -> None:
     floors = UprLearnedFloorsConfig()
     assert floors.chance and floors.control_role and floors.random_vectors
     assert floors.permutation_resamples == 5
+
+
+# --- the reporting blocks (CS-8f) ---
+
+
+def test_the_reporting_block_carries_the_calibration_and_the_rules() -> None:
+    """The reporting block has the calibration and the three decision rules."""
+    extractor = _extractor()
+    train_gold = np.asarray([[True, False], [False, True]])
+    eval_gold = np.asarray([[True, False]])
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=train_gold,
+        eval_texts=["eval one"],
+        eval_gold=eval_gold,
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        reporting={"enabled": True, "bins": 5, "threshold_quantiles": 9},
+        bucket_masks={"all": np.asarray([True, True])},
+        length_masks={"all": np.asarray([True])},
+    )
+    reporting = result.meta["reporting"]
+    assert reporting["calibration"]["pooled"]["n"] == 2
+    assert reporting["calibration"]["per_label_bucket"]["all"]["n"] == 2
+    assert reporting["calibration"]["per_length_bucket"]["all"]["n"] == 2
+    rules = reporting["decision_rules"]["rules"]
+    assert set(rules) == {"top_k", "score_threshold", "top_k_min_score"}
+    # the threshold comes from the fit side, never from the evaluated split
+    assert reporting["decision_rules"]["threshold"]["value"] is not None
+    assert reporting["decision_rules"]["threshold"]["n_candidates"] > 0
+
+
+def test_the_reporting_block_is_absent_by_default() -> None:
+    """The earlier runs' artifacts keep their exact content."""
+    extractor = _extractor()
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=np.asarray([[True, False], [False, True]]),
+        eval_texts=["eval one"],
+        eval_gold=np.asarray([[True, False]]),
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+    )
+    assert "reporting" not in result.meta
