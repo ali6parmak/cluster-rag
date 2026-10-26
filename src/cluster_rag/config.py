@@ -651,6 +651,42 @@ class FeaturePackConfig(BaseModel):
         return value
 
 
+class Stage3ReportingConfig(BaseModel):
+    """The settings of the Stage-3 **reporting** (CS-6e).
+
+    The plan's Stage-3 discipline asks for *"calibration curves + thresholds
+    per document; pooled and per-document macro; both negative subsets
+    separately"*, and CS-6e adds the **safe-negative margin** measured
+    against the **control-role floor** (the track's durable deliverable).
+
+    - ``enabled``: whether the run computes the reporting blocks at all. The
+      default is ``False``, so every earlier run's artifact keeps its exact
+      content (the same precedent as the ``embeddings`` knob below); the
+      CS-6e sweep turns it on.
+    - ``bins``: the number of the reliability diagram's bins (equal width over
+      ``[0, 1]``).
+    - ``threshold_criterion``: the **fit-side** criterion of the per-document
+      threshold. ``"floor_gap"`` measures the separation between the verified
+      positives and the unjudged control cells (the rule's target negative
+      class); ``"youden"`` measures it between the verified positives and the
+      reviewer-verified hard negatives (the reviewed set's own ground truth).
+      Both are Youden separations (``TPR - FPR``) on the fit side; the
+      threshold is then applied to the held-out document.
+    - ``threshold_quantiles``: how many quantiles of the fit side's scores
+      form the threshold's candidate grid.
+    - ``margin_quantiles``: how many quantiles of the fit side's margins form
+      the margin rule's candidate grid.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    bins: int = Field(default=10, ge=2, le=50)
+    threshold_criterion: Literal["floor_gap", "youden"] = "floor_gap"
+    threshold_quantiles: int = Field(default=99, ge=3, le=999)
+    margin_quantiles: int = Field(default=49, ge=3, le=999)
+
+
 class Stage3Config(BaseModel):
     """The settings of the track's learned pair scorer (Stage 3.1).
 
@@ -672,6 +708,9 @@ class Stage3Config(BaseModel):
       used an embedding, so they stay real, and the run's baseline arm (the
       full-text cosine) keeps the model's embeddings. The default is
       ``"model"``, so every earlier run and artifact keeps its meaning.
+    - ``reporting``: the settings of the Stage-3 reporting (CS-6e). The
+      default is **off**, so the earlier runs' artifacts keep their exact
+      content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -681,6 +720,7 @@ class Stage3Config(BaseModel):
     control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     permutation_resamples: int = Field(default=5, ge=0)
     embeddings: Literal["model", "random"] = "model"
+    reporting: Stage3ReportingConfig = Field(default_factory=Stage3ReportingConfig)
 
 
 class AnalysisConfig(BaseModel):

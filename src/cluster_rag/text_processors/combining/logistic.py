@@ -104,11 +104,12 @@ class LogisticCombiner:
         self._model: LogisticRegression | None = None
         self._scaler: StandardScaler | None = None
         self._classes: np.ndarray = np.asarray([], dtype=np.int64)
+        self._degenerate = False
 
     @property
     def is_fitted(self) -> bool:
         """Whether the combiner has been fitted."""
-        return self._model is not None
+        return self._model is not None or self._degenerate
 
     def fit(
         self,
@@ -153,6 +154,15 @@ class LogisticCombiner:
         else:
             self._scaler = None
             scaled = matrix
+        if np.unique(targets).size < 2:
+            # A degenerate fit (one class only): the regression cannot be
+            # fitted, so every row gets the same score. The gradient-boosted
+            # combiner behaves the same way, and the Stage-3 reporting's inner
+            # cross-fit needs it: one document's rows can carry a single class.
+            self._model = None
+            self._degenerate = True
+            self._classes = np.unique(targets)
+            return self
         model = LogisticRegression(
             C=self.config.C,
             max_iter=self.config.max_iter,
@@ -162,6 +172,7 @@ class LogisticCombiner:
         )
         model.fit(scaled, targets, sample_weight=weights)
         self._model = model
+        self._degenerate = False
         self._classes = model.classes_
         return self
 
@@ -177,14 +188,14 @@ class LogisticCombiner:
         Raises:
             ValueError: If the combiner is not fitted.
         """
-        if self._model is None:
+        if self._model is None and not self._degenerate:
             raise ValueError("the combiner is not fitted")
         matrix = np.asarray(features, dtype=np.float64)
         if matrix.ndim != 2:
             raise ValueError(f"the feature matrix must be 2-D, got shape {matrix.shape}")
         if self._scaler is not None:
             matrix = self._scaler.transform(matrix)
-        if self._classes.size < 2:
+        if self._degenerate or self._classes.size < 2:
             # A degenerate fit (one class only): every row gets the same score.
             return np.zeros(matrix.shape[0], dtype=np.float32)
         probabilities = self._model.predict_proba(matrix)
@@ -193,11 +204,16 @@ class LogisticCombiner:
     def coefficients(self) -> dict[str, float]:
         """The fitted coefficients, keyed by the feature index.
 
+        A degenerate fit (one class only) has no coefficients: the empty
+        mapping says so.
+
         Raises:
             ValueError: If the combiner is not fitted.
         """
-        if self._model is None:
+        if self._model is None and not self._degenerate:
             raise ValueError("the combiner is not fitted")
+        if self._model is None:
+            return {}
         values = self._model.coef_[0]
         return {str(index): float(value) for index, value in enumerate(values)}
 

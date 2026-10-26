@@ -603,6 +603,23 @@ def test_histgb_combiner_rejects_bad_input() -> None:
         combiner.fit(np.zeros((2, 1), dtype=np.float32), [0, 1], [1.0])
 
 
+def test_logistic_combiner_survives_a_one_class_fit() -> None:
+    """A degenerate fit (one class only) scores every row the same.
+
+    The Stage-3 reporting's inner cross-fit needs it: one document's rows
+    can carry a single class, and the gradient-boosted combiner behaves the
+    same way.
+    """
+    combiner = build_combiner("logistic", {})
+    combiner.fit(np.zeros((4, 1), dtype=np.float32), [1, 1, 1, 1])
+    scores = combiner.score(np.zeros((3, 1), dtype=np.float32))
+    assert scores.shape == (3,)
+    assert set(scores.tolist()) == {0.0}
+    # a degenerate fit has no coefficients, and says so
+    assert combiner.coefficients() == {}
+    assert combiner.describe()["fitted"] is True
+
+
 def test_histgb_combiner_survives_a_one_class_fit() -> None:
     """A degenerate fit (one class) scores every row the same."""
     combiner = build_combiner("histgb", {})

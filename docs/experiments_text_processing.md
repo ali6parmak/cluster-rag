@@ -2378,3 +2378,215 @@ change set: `stage3.feature_embeddings` — the provenance of the pack's
 embedding sides (the mode, the seed, the dimension and the draw rule), so a
 reader knows which space an arm's embedding features live in. The run-level
 config echo carries the mode as well (`analysis.stage3.embeddings`).
+
+## Stage 3 — the reporting: the calibration, the thresholds and the safe-negative margin (CS-6e, 2026-10-26)
+
+**The question.** The plan's Stage 3 carries a *reporting* discipline —
+"calibration curves + thresholds per document; pooled and per-document macro;
+both negative subsets separately" — and the track's named deliverable
+(plan §8) is *"a measured 'which unjudged pairs are safe negatives' rule"*.
+CS-6e measures both: the reliability diagram of the learned arm's
+probability, the **per-document threshold** (chosen on the fit side, applied
+to the held-out document), and the **safe-negative margin** measured against
+the **control-role floor** (the reviewer's decision of 2026-10-26: the
+deliverable is measured against that floor, not against the plain cosine;
+the rule still ships as the **margin half only**).
+
+**What was run.** Twelve runs (`experiments_text_processing/stage3_reporting_sweep.py`,
+the sweep `stage3_reporting`): 3 Stage-0 models x 2 feature-group sets
+(`base` = the v0 pack's four groups, `full` = the v0 pack plus the chunk
+profile) x 2 **fit-side criteria** of the per-document threshold
+(`floor_gap`, `youden`) —
+`omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-stage3-report-{base,full}-{floor_gap,youden}`.
+
+Nothing else changed: the same document-level holdout (three rotations, one
+out-of-fold score matrix), the same training data (the fit side's judged
+pairs plus its unjudged control cells as down-weighted presumed negatives),
+the same two floors, the same combiner. The guard holds: all **93** runs
+reproduce the Stage-0 baseline arm field by field
+(`tools/verify_analysis_baseline.py "omct-analyze-*"`).
+
+**One new discipline: the fit side's own rows are scored by an *inner*
+cross-fit.** The threshold and the margin are **fit-side choices**, and the
+fit side's rows have to be scored by *some* model. The out-of-fold matrix
+would have done it with a leak: the model that scored a fit-side document
+was trained on the holdout. So the fit side's rows are scored one level in —
+the same document-level holdout, applied to the two fit-side documents — and
+every fit-side number (the threshold's criterion, the margin's criterion) is
+computed on those. No model that saw the holdout produced a number the
+holdout is judged on.
+
+**1. The calibration: the arm's probability is not a probability, and the
+cosine's calibration map is worse.** The expected calibration error (the
+count-weighted mean gap between the predicted probability and the observed
+positive rate, over ten equal-width bins) and the Brier score, for the
+learned arm's own probability and for the full-text cosine put on a
+probability scale by a **fit-side** calibration map (a logistic regression
+on the cosine as its single feature):
+
+| arm | the arm's ECE (pooled / per-document macro) | the arm's Brier | the cosine's ECE (pooled) | the cosine's Brier |
+|---|---|---|---|---|
+| embeddinggemma `base` | 0.1806 / 0.3327 | 0.2589 | 0.2132 | 0.2776 |
+| embeddinggemma `full` | 0.1749 / 0.3274 | 0.2601 | 0.2132 | 0.2776 |
+| voyage-4-nano `base` | 0.1875 / 0.3344 | 0.2641 | 0.2097 | 0.2777 |
+| voyage-4-nano `full` | 0.1891 / 0.3278 | 0.2637 | 0.2097 | 0.2777 |
+| arctic2 `base` | 0.1875 / 0.3488 | 0.2650 | 0.2226 | 0.2783 |
+| arctic2 `full` | 0.1816 / 0.3413 | 0.2640 | 0.2226 | 0.2783 |
+
+Three things to read here.
+
+- **The arm is miscalibrated everywhere.** An ECE of 0.18–0.19 (pooled) and
+  0.33–0.35 (per document) means the arm's probabilities are off by roughly
+  a third of the scale. A threshold on this probability is a threshold on a
+  number that does not mean "probability".
+- **The cosine's own calibration map is *worse* than the arm** (ECE 0.210–0.223
+  against 0.175–0.189; the Brier 0.278 against 0.259–0.265). Putting the
+  geometry on a probability scale does not make it a probability.
+- **The pooled ECE flatters both arms** (0.18 pooled against a 0.33 macro).
+  The pooled diagram mixes the three documents' calibrations, so a reader who
+  only looks at the pooled number sees a better-calibrated model than exists.
+  This is the reviewer's own caveat, measured: a single global cut over the
+  out-of-fold matrix is **not** like-for-like. The miscalibration is worst on
+  one document in every run — the per-document ECEs are 0.20–0.24 for two
+  documents and **0.52–0.62** for the third (the AI document: 99 pairs, 80%
+  positive), where the arm says ~0.5 where the observed rate is ~0.8.
+
+**2. The per-document threshold: the `floor_gap` criterion transfers, the
+`youden` criterion does not.** The threshold is chosen on the **fit side**
+(the other two documents) and applied to the held-out one. The two criteria
+differ in the negative class the false-positive rate is measured on:
+`floor_gap` measures it on the **unjudged control cells** (the rule's target
+class) and `youden` on the **reviewer-verified hard negatives** (the reviewed
+set's own ground truth).
+
+| arm | the macro recall of the per-document thresholds (`floor_gap`) | (`youden`) | the pooled out-of-fold recall (`floor_gap` / `youden`) |
+|---|---|---|---|
+| embeddinggemma `base` | 0.4720 | 0.3738 | 0.4084 / 0.4599 |
+| embeddinggemma `full` | 0.4769 | 0.4103 | 0.5477 / 0.5878 |
+| voyage-4-nano `base` | 0.4666 | 0.2457 | 0.3435 / 0.2176 |
+| voyage-4-nano `full` | 0.6247 | 0.3843 | 0.6813 / 0.3550 |
+| arctic2 `base` | 0.3159 | 0.0443 | 0.2767 / 0.0267 |
+| arctic2 `full` | 0.3872 | 0.1122 | 0.3302 / 0.0782 |
+
+The **`floor_gap` criterion wins on 6 of 6 arms** on the like-for-like
+statistic (the per-document macro recall of the holdout's operating point).
+The `youden` criterion is the one that looks principled — it separates the
+positives from the *ground-truth* hard negatives — and it is the one that
+fails: the hard negatives sit **above** the positives (the label anomaly the
+track designed around from the start), so a threshold that separates the
+positives from them lands far too high for the positives. On arctic2 the
+holdout's recall at the `youden` threshold is 0.02–0.06. The rule for the
+track's deliverable is therefore the **control-side** criterion, not the
+reviewed-set one.
+
+**The per-document choice does not transfer everywhere.** For the NU
+document (845 pairs, a 25% positive rate — the lowest base rate) the
+fit-side threshold is much higher than for the other two, and the holdout's
+recall at it is 0.02–0.29 at a precision of 0.87–1.00: the fit side's choice
+for that document is *not* transferable, the same failure the Stage-2
+semantic threshold showed. The pooled out-of-fold cut is reported beside the
+per-document ones and is **not** like-for-like (three calibrations in one
+matrix); the per-document thresholds are the ones to read.
+
+**3. The safe-negative margin rule: the reach is measured, and the quality
+signal is blind.** The rule is a **margin rule**, never an absolute cut (the
+track's rule: the hard negatives sit above the positives' 95th percentile, so
+no absolute cut separates them, and a margin is measured *inside* a
+paragraph's own candidate list, so a document's score level never enters it).
+A cell is a **safe negative** when it sits at least the chosen margin below
+its own paragraph's best candidate; the margin is chosen on the fit side by
+the rule's own criterion (the coverage over the fit side's unjudged cells
+minus the harm on the fit side's verified positives) and applied to the
+held-out document.
+
+Three variants, measured on the **whole 42,947-cell unjudged grid** (not
+only the 4,000-cell control sample) with the **harm** on the 524 verified
+positives — the only ground-truth number the rule can be judged on:
+
+| rule | the reach over the unjudged grid | the harm on the verified positives | the control-role floor's harm **at the same reach** |
+|---|---|---|---|
+| the cosine's margin (the geometry) | 0.7763–0.8286 | 0.3130–0.3378 | — (not a fitted model: no floor) |
+| the arm's margin (the ranking) | 0.5895–0.6539 | 0.2615–0.4008 | 0.2489–0.3060 |
+| **both margins** (retrieve with the cosine, rank with the arm) | **0.4999–0.5950** | **0.1088–0.1927** | **0.1286–0.1788** |
+
+(embeddinggemma / voyage-4-nano / arctic2, the `base` and the `full` group
+sets; the numbers are the ranges over the six arms. The floor's number is
+read off the **floor's own curve of the same rule** at the real arm's reach,
+per document, then averaged over the three documents.)
+
+**The two-part rule is the best of the three**: it reaches 50–60% of the
+unjudged space (21,741–25,555 cells of the 42,947) while discarding
+11–19% of the verified positives, where the geometry alone reaches much
+further (78–83%) at a much higher cost (31–34%) and the arm's margin alone
+reaches 59–65% at 26–40%. This is CS-6d's "retrieve with the cosine, rank
+with the learned arm" in the shape of a rule.
+
+**And the verdict on its quality: the measurement cannot establish it.** At
+the same reach, the **control-role floor** — the model fitted with the
+judged pairs' labels permuted, which knows nothing about the labels — is as
+good as the real arm: the floor's harm at the real arm's reach is
+0.1286–0.1788 against the real arm's 0.1088–0.1927, and the real arm is
+better on 0–3 of the three documents per arm (voyage-4-nano's `full` arm is
+the only one where it is better on all three). The arm-margin variant is
+worse: the floor matches or beats it on 4 of the 6 arms.
+
+The reason is the benchmark's construction, and it is the same artefact the
+Stage-0.2 classification found: the reviewed set is **rank-selected** (the
+pairs a model put on top, which a human reviewed), so the verified positives
+sit near the top of their paragraph's candidate list **whatever model
+produces the scores**. A margin rule protects the cells near the top, so it
+protects the positives — even a label-blind one. The harm on the verified
+positives therefore measures the *construction* of the reviewed set, not the
+rule's topical quality, and it cannot tell a good rule from a bad one.
+
+**So the durable deliverable ships with the claim it can carry.** The rule's
+**reach** is measured (50–60% of the unjudged grid), its **cost on the known
+positives** is measured (11–19% of them), and its **precision on the unjudged
+cells is unmeasured** — the unjudged cells' true positive rate stays
+unmeasured, no human labelling in this track, and the floor comparison says
+the one available proxy is blind. The rule ships as the **margin half only**:
+a recipe that says which unjudged cells can be *provisionally* treated as
+negatives, with a stated reach and a stated cost, and **no precision claim**.
+
+**What this run does not say.**
+
+- **Nothing about the unjudged cells' positive rate.** It stays unmeasured
+  (no human labelling in this track). The rule ships as the margin half
+  only; no spot-check sheet is proposed.
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice and characterize the deliverable, they are never a UPR
+  metric.
+- **Nothing about the rule's precision on the unjudged cells** — the reach
+  and the cost on the known positives are all that is measured, and the floor
+  comparison says the cost is not evidence of topical quality.
+- **Nothing about a different corpus.** Same caveat as Stage 3.3: the
+  lexical block is a bag-of-words overlap over 294 questions, and the
+  margins are measured inside one document's candidate list.
+- **Nothing about a second seed.** The floor is five permutation draws per
+  rotation (their mean is reported), and the margin's fit-side choice is one
+  grid of quantiles.
+- **Nothing about a different feature family** (the corpus-as-ceiling
+  question of §5 stays open).
+
+**The next step.** The track's Stage 3 is now measured end to end: the arm's
+quality (CS-5/CS-6a/CS-6b/CS-6c/CS-6d), the reporting (this change set) and
+the deliverable's measurement. What remains open is the track's §8 question
+— *how the recipe is used downstream* (PLAN's Phase 6 reranker slot and
+Phase 9 fine-tuning pairs) — and the one thing the track cannot measure
+without human labelling: whether the unjudged cells the rule clears really
+are negatives. Stage 4 (the LLM experiments) and the UPR port are the
+reviewer's call.
+
+**A note on the reporting.** The Stage-3 artifact gained three blocks in this
+change set (`stage3.reporting`): `calibration` (the reliability diagram of
+the arm's probability and of the cosine's fit-side calibration map, pooled
+and per document, with the bin counts, the ECE and the Brier score),
+`thresholds` (each document's fit-side choice, its holdout's operating point,
+and the pooled out-of-fold cut beside them) and `safe_negative` (the three
+rule variants, the reach over the unjudged grid, the harm on the verified
+positives, the control-role floor's counterpart and the explicit statement
+that the unjudged cells' true positive rate is unmeasured). The reporting is
+**opt-in** (`analysis.stage3.reporting.enabled`, the default `false`), so
+every earlier run's artifact keeps its exact content: re-running the
+Stage-3.3 sweep reproduces its numbers field for field (verified — only the
+config echo carries the new key).

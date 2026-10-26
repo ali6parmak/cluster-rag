@@ -194,6 +194,45 @@ analysis:
 """
 
 
+ANALYSIS_STAGE3_REPORTING_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  bootstrap:
+    resamples: 20
+    seed: 3
+  stage3:
+    features:
+      paragraph_chunker:
+        name: word_windows
+        params:
+          n_words: 3
+          stride: 2
+      top_k: 2
+    combiner:
+      name: logistic
+      params:
+        C: 1.0
+    control_weight: 0.3
+    permutation_resamples: 3
+    reporting:
+      enabled: true
+      bins: 4
+      threshold_criterion: floor_gap
+"""
+
+
 ANALYSIS_STAGE3_GROUPS_CONFIG_EXTRA = """
 analysis:
   embedders:
@@ -1129,6 +1168,152 @@ def test_analyze_omct_stage3_histgb_end_to_end(
 
     out = capsys.readouterr().out
     assert "OMCT analysis (Stage 0): omct-analyze-stage3-histgb" in out
+
+
+def test_analyze_omct_stage3_reporting_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """The Stage-3 reporting: the calibration, the thresholds and the margin rule."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-reporting",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_REPORTING_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-analyze-stage3-reporting"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    stage3 = payload["models"][0]["stage3"]
+    # the run's config records the reporting's settings
+    reporting_config = payload["analysis"]["stage3"]["reporting"]
+    assert reporting_config["enabled"] is True
+    assert reporting_config["bins"] == 4
+    assert reporting_config["threshold_criterion"] == "floor_gap"
+
+    reporting = stage3["reporting"]
+    assert set(reporting) == {"calibration", "thresholds", "safe_negative"}
+
+    # the calibration: the arm's probability and the cosine's fit-side map,
+    # pooled and per document, with the bin counts
+    calibration = reporting["calibration"]
+    for key in ("arm", "cosine"):
+        block = calibration[key]
+        assert block["pooled"]["n"] == 6
+        assert block["pooled"]["n_bins"] == 4
+        assert len(block["pooled"]["bins"]) == 4
+        assert sum(bin_["n"] for bin_ in block["pooled"]["bins"]) == 6
+        assert set(block["by_document"]) == {"Doc A", "Doc B", "Doc C"}
+        for document, diagram in block["by_document"].items():
+            # the fixture's judged pairs per document: 2, 3 and 1
+            assert diagram["n"] == {"Doc A": 2, "Doc B": 3, "Doc C": 1}[document]
+            assert sum(bin_["n"] for bin_ in diagram["bins"]) == diagram["n"]
+        assert block["macro_ece"] is not None
+    # the cosine's map is a fit-side logistic on the cosine as its single feature
+    assert calibration["cosine"]["map"]["feature"] == "cosine_full"
+
+    # the thresholds: one per document, chosen on the fit side, applied to the
+    # holdout, with the pooled out-of-fold operating point beside them
+    thresholds = reporting["thresholds"]
+    assert thresholds["criterion"] == "floor_gap"
+    assert set(thresholds["per_document"]) == {"Doc A", "Doc B", "Doc C"}
+    for block in thresholds["per_document"].values():
+        assert "threshold" in block["fit_side"]
+        assert block["fit_side"]["n_candidates"] > 0
+        operating = block["holdout"]["operating_point"]
+        if operating is not None:
+            assert operating["n"] == (
+                operating["tp"] + operating["fn"] + operating["fp"] + operating["tn"]
+            )
+    assert thresholds["out_of_fold"]["median_threshold"] is not None
+    assert thresholds["out_of_fold"]["operating_point_at_median"]["n"] == 6
+
+    # the safe-negative rule: the three variants, the coverage over the
+    # unjudged grid and the harm on the verified positives
+    safe_negative = reporting["safe_negative"]
+    assert set(safe_negative["variants"]) == {"cosine_margin", "arm_margin", "both_margins"}
+    assert "UNMEASURED" in safe_negative["unmeasured"]
+    for _name, block in safe_negative["variants"].items():
+        pooled = block["pooled"]
+        assert pooled["n_unjudged_cells"] == 3
+        assert pooled["n_unjudged_cleared"] <= 3
+        assert 0.0 <= (pooled["coverage"] or 0.0) <= 1.0
+        assert 0.0 <= (pooled["harm"] or 0.0) <= 1.0
+        assert set(block["per_document"]) == {"Doc A", "Doc B", "Doc C"}
+    # the control-role floor's counterpart of the arm-margin rule: the draws
+    # of the two rotations whose fit side has unjudged cells to reach for
+    # (the fixture's third document has none, so its rotation has no rule)
+    floor = safe_negative["variants"]["arm_margin"]["floor_arm"]
+    assert floor["n_draws"] == 6
+    assert floor["harm_at_matched_coverage"]["coverage"] is not None
+
+    out = capsys.readouterr().out
+    assert "calibration" in out
+    assert "safe-negative rule" in out
+
+
+def test_analyze_omct_stage3_reporting_is_off_by_default(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """The reporting is opt-in, so the earlier runs' artifacts keep their content."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-no-reporting",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "omct-analyze-stage3-no-reporting" / "analysis.json").read_text(
+            "utf-8"
+        )
+    )
+    stage3 = payload["models"][0]["stage3"]
+    assert payload["analysis"]["stage3"]["reporting"]["enabled"] is False
+    # no reporting block: the earlier runs' artifacts keep their exact content
+    assert "reporting" not in stage3
+    for rotation in stage3["rotations"]:
+        assert "reporting" not in rotation
+
+
+def test_analyze_omct_stage3_reporting_is_reproducible(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """The same seed gives the same reporting numbers."""
+    monkeypatch.setattr(
+        cli,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    config_file = write_config(
+        sample_pairs,
+        run_id="analyze-stage3-reporting",
+        data_external=sample_pairs,
+        extra=ANALYSIS_STAGE3_REPORTING_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    first = json.loads(
+        (tmp_path / "results" / "omct-analyze-stage3-reporting" / "analysis.json").read_text(
+            "utf-8"
+        )
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    second = json.loads(
+        (tmp_path / "results" / "omct-analyze-stage3-reporting" / "analysis.json").read_text(
+            "utf-8"
+        )
+    )
+    assert first["models"][0]["stage3"]["reporting"] == second["models"][0]["stage3"]["reporting"]
 
 
 def test_analyze_omct_stage3_random_floor_end_to_end(

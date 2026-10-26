@@ -51,6 +51,9 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
     │   ├── experiment_table.py  # markdown comparison tables (upserted rows)
     │   ├── text_processors/     # text-processing track: chunkers, features, combiners (pure)
+    │   │   ├── aggregation.py   # the chunk-level aggregation rules (Stage 1.1a)
+    │   │   ├── calibration.py   # the Stage-3 reporting's pure core: calibration, thresholds, margins
+    │   │   ├── control.py       # the same-document grid + the seeded control sample (subset B)
     │   ├── embed/
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend

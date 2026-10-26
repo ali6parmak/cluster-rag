@@ -73,6 +73,7 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
+    ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS,
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
@@ -92,6 +93,7 @@ from cluster_rag.omct_analysis import (
     BASELINE_CHUNKER,
     BaselineArm,
     ChunkedSide,
+    ReportingSpec,
     build_analysis_report,
     build_dataset_view,
     score_model_arms,
@@ -112,7 +114,7 @@ from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
-from cluster_rag.text_processors.combining import build_combiner
+from cluster_rag.text_processors.combining import COMBINER_LOGISTIC, build_combiner
 from cluster_rag.text_processors.features import (
     FeatureEmbedders,
     PairFeatureExtractor,
@@ -1330,6 +1332,48 @@ def _stage3_extractor(
     )
 
 
+def _stage3_reporting_table_values(stage3: dict[str, Any]) -> dict[str, Any]:
+    """The reporting's table cells: the calibration, the threshold and the rule.
+
+    The rule's cells are the **two-part** variant (the cosine's margin *and*
+    the arm's margin below their paragraph's best candidate — CS-6d's
+    "retrieve with the cosine, rank with the learned arm") and the
+    control-role floor's harm at the same reach: the rule's own numbers
+    against the floor, in the rule's own units.
+    """
+    reporting = stage3.get("reporting") or {}
+    calibration = reporting.get("calibration") or {}
+    arm_calibration = calibration.get("arm") or {}
+    cosine_calibration = calibration.get("cosine") or {}
+    thresholds = reporting.get("thresholds") or {}
+    per_document = thresholds.get("per_document") or {}
+    recalls = [
+        ((block.get("holdout") or {}).get("operating_point") or {}).get("recall")
+        for block in per_document.values()
+    ]
+    usable = [value for value in recalls if value is not None]
+    macro_recall = sum(usable) / len(usable) if usable else None
+    out_of_fold = thresholds.get("out_of_fold") or {}
+    median_operating = out_of_fold.get("operating_point_at_median") or {}
+    variants = (reporting.get("safe_negative") or {}).get("variants") or {}
+    rule = variants.get("both_margins") or {}
+    pooled = rule.get("pooled") or {}
+    floor = rule.get("floor_arm") or {}
+    matched = floor.get("harm_at_matched_coverage") or {}
+    return {
+        "ece_arm": _fmt((arm_calibration.get("pooled") or {}).get("ece"), 4),
+        "ece_arm_macro": _fmt(arm_calibration.get("macro_ece"), 4),
+        "ece_cos": _fmt((cosine_calibration.get("pooled") or {}).get("ece"), 4),
+        "brier_arm": _fmt((arm_calibration.get("pooled") or {}).get("brier"), 4),
+        "thr_criterion": thresholds.get("criterion"),
+        "thr_macro_recall": _fmt(macro_recall, 4),
+        "thr_oof_recall": _fmt(median_operating.get("recall"), 4),
+        "rule_cov": _fmt(pooled.get("coverage"), 4),
+        "rule_harm": _fmt(pooled.get("harm"), 4),
+        "rule_floor_harm": _fmt(matched.get("harm"), 4),
+    }
+
+
 def _stage3_table_row(
     model: dict[str, Any],
     *,
@@ -1351,7 +1395,7 @@ def _stage3_table_row(
     feature_pack = stage3["feature_pack"]
     floors = stage3["permutation_floor"]
     hit_at_k = comparison["hit_at_k"]
-    return {
+    row = {
         "run_id": run_id,
         "date": date.today().isoformat(),
         "backend": info["backend"],
@@ -1390,6 +1434,9 @@ def _stage3_table_row(
         "n_docs": n_docs,
         "seconds": seconds,
     }
+    if stage3.get("reporting"):
+        row.update(_stage3_reporting_table_values(stage3))
+    return row
 
 
 def _cmd_analyze_omct(config: AppConfig) -> int:
@@ -1542,6 +1589,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 bootstrap_resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
                 feature_embeddings=embeddings_provenance,
+                # The cosine's calibration map (CS-6e): a logistic regression
+                # on the cosine as its single feature, fitted on the fit side
+                # only. It is always the logistic regression, whatever the
+                # arm's own combiner is: the map is a calibration, not a model.
+                calibration_map_factory=lambda: build_combiner(
+                    COMBINER_LOGISTIC, {"C": 1.0, "max_iter": 1000, "standardize": True}
+                ),
+                reporting=ReportingSpec(
+                    enabled=analysis.stage3.reporting.enabled,
+                    bins=analysis.stage3.reporting.bins,
+                    threshold_criterion=analysis.stage3.reporting.threshold_criterion,
+                    threshold_quantiles=analysis.stage3.reporting.threshold_quantiles,
+                    margin_quantiles=analysis.stage3.reporting.margin_quantiles,
+                ),
             )
         models.append(model_block)
 
@@ -1595,6 +1656,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 "control_weight": analysis.stage3.control_weight,
                 "permutation_resamples": analysis.stage3.permutation_resamples,
                 "embeddings": analysis.stage3.embeddings,
+                "reporting": analysis.stage3.reporting.model_dump(mode="python"),
             }
         ),
         baseline_chunker_name=baseline_chunker.name,
@@ -1672,8 +1734,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 )
             )
     has_arms = any(model.get("arms") for model in models)
+    has_reporting = any((model.get("stage3") or {}).get("reporting") for model in models)
     if has_stage3:
-        columns = ANALYZE_OMCT_STAGE3_COLUMNS
+        columns = (
+            ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS if has_reporting else ANALYZE_OMCT_STAGE3_COLUMNS
+        )
         key_columns = ANALYZE_OMCT_STAGE3_KEY_COLUMNS
     elif has_arms:
         columns = ANALYZE_OMCT_ARMS_COLUMNS
@@ -1795,6 +1860,52 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     f"cosine {_fmt(reference_pearson, 4)}, "
                     f"rank shift {_fmt(shift_pearson, 4)}"
                 )
+            reporting = stage3.get("reporting") or {}
+            if reporting:
+                calibration = reporting.get("calibration") or {}
+                arm_calibration = calibration.get("arm") or {}
+                cosine_calibration = calibration.get("cosine") or {}
+                print(
+                    "        calibration (the reliability diagram's expected "
+                    "calibration error): arm "
+                    f"{_fmt((arm_calibration.get('pooled') or {}).get('ece'), 4)} "
+                    f"(per-document macro {_fmt(arm_calibration.get('macro_ece'), 4)}), "
+                    f"cosine {_fmt((cosine_calibration.get('pooled') or {}).get('ece'), 4)} "
+                    f"(per-document macro {_fmt(cosine_calibration.get('macro_ece'), 4)}); "
+                    "the Brier scores "
+                    f"{_fmt((arm_calibration.get('pooled') or {}).get('brier'), 4)} / "
+                    f"{_fmt((cosine_calibration.get('pooled') or {}).get('brier'), 4)}"
+                )
+                thresholds = reporting.get("thresholds") or {}
+                for document, block in (thresholds.get("per_document") or {}).items():
+                    operating = (block.get("holdout") or {}).get("operating_point") or {}
+                    print(
+                        f"        threshold ({thresholds.get('criterion')}) for "
+                        f"{document[:40]}: {_fmt(block.get('fit_side', {}).get('threshold'), 4)} "
+                        f"(the holdout's recall {_fmt(operating.get('recall'), 4)}, "
+                        f"precision {_fmt(operating.get('precision'), 4)})"
+                    )
+                out_of_fold = thresholds.get("out_of_fold") or {}
+                median_operating = out_of_fold.get("operating_point_at_median") or {}
+                print(
+                    "        the pooled out-of-fold cut (mixes three calibrations, "
+                    f"not like-for-like): median threshold "
+                    f"{_fmt(out_of_fold.get('median_threshold'), 4)}, recall "
+                    f"{_fmt(median_operating.get('recall'), 4)}"
+                )
+                safe_negative = reporting.get("safe_negative") or {}
+                for variant, block in (safe_negative.get("variants") or {}).items():
+                    pooled = block.get("pooled") or {}
+                    floor = block.get("floor_arm") or {}
+                    print(
+                        f"        safe-negative rule [{variant}]: the unjudged grid's "
+                        f"coverage {_fmt(pooled.get('coverage'), 4)} "
+                        f"({pooled.get('n_unjudged_cleared')} of "
+                        f"{pooled.get('n_unjudged_cells')}), "
+                        f"the verified positives' harm {_fmt(pooled.get('harm'), 4)}; "
+                        "the control-role floor's harm at the same coverage "
+                        f"{_fmt((floor.get('harm_at_matched_coverage') or {}).get('harm'), 4)}"
+                    )
             rotations = stage3.get("rotations") or []
             usage: dict[str, Any] = {}
             if rotations:

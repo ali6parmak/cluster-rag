@@ -645,7 +645,11 @@ sweeps are the orders.
     the latter replaces the feature pack's embedding sides with seeded random
     vectors, so it says what the training design alone buys.)*
   - *Reporting*: calibration curves + thresholds per document; pooled and
-    per-document macro; both negative subsets separately.
+    per-document macro; both negative subsets separately. *(done 2026-10-26,
+    CS-6e: the three blocks land in the Stage-3 artifact
+    (`stage3.reporting`) and in the track's table columns; the reporting is
+    opt-in — `analysis.stage3.reporting.enabled` — so the earlier runs'
+    artifacts keep their exact content.)*
 - OMCT line stays auxiliary; it informs method choice, never UPR metrics.
 
 ### Stage 4 — LLM experiments (rule suspension lives here)
@@ -909,6 +913,53 @@ sweeps are the orders.
   floor is **one draw** (seed 42) — a different seed would move the numbers
   slightly; and it says nothing about a *different* feature family (the
   corpus-as-ceiling question stays open).
+- **The deliverable's reach is measured, but its quality signal is blind
+  (CS-6e, 2026-10-26).** The **two-part margin rule** (the cosine's margin
+  *and* the arm's margin below their paragraph's best candidate) reaches
+  50–60% of the 42,947-cell unjudged grid at a harm of 11–19% of the 524
+  verified positives — the best of the three variants. But at the **same
+  reach** the **control-role floor** (the model fitted with the judged pairs'
+  labels permuted) discards just as few of the verified positives
+  (0.129–0.179 against the real arm's 0.109–0.193; the real arm is better on
+  0–3 of the three documents per arm). The reason is the reviewed set's
+  **rank-selected construction**: its positives sit near the top of their
+  paragraph's candidate list whatever model produces the scores, so a margin
+  rule protects them even when the model knows nothing about the labels.
+  **Open:** the harm on the verified positives — the only ground-truth number
+  the rule can be judged on — therefore measures the benchmark's
+  construction, not the rule's topical quality. Is there **any** measurable
+  proxy for the unjudged cells' positive rate that is *not* the reviewed
+  set's rank structure (a leave-one-paragraph-out construction? a
+  perturbation test? a synthetic null with the same coverage?), or does the
+  deliverable have to ship with a reach claim and no quality claim at all?
+  The reviewer ruled out human labelling (2026-10-23), so the spot-check
+  half stays out.
+- **The threshold's criterion matters, and the principled one fails
+  (CS-6e, 2026-10-26).** The per-document threshold chosen on the fit side
+  transfers on 6 of 6 arms with the **`floor_gap`** criterion (the verified
+  positives against the *unjudged control cells*) and not with the
+  **`youden`** criterion (the verified positives against the *reviewer-verified
+  hard negatives*): the hard negatives sit above the positives, so their
+  threshold lands far too high (arctic2's holdout recall 0.02–0.06). **Open:**
+  the NU document (the lowest base rate) does not take the fit side's
+  threshold at all (the holdout's recall 0.02–0.29 at a precision of
+  0.87–1.00) — the same non-transferability the Stage-2 semantic threshold
+  showed. Is a *per-paragraph* or a *rank-based* operating point (no
+  absolute cut at all) the shape that transfers? The track's rules forbid
+  absolute cuts, so a threshold is already the compromise.
+- **The arm's probability is not a probability (CS-6e, 2026-10-26).** The
+  expected calibration error is 0.175–0.189 pooled and 0.327–0.349 per
+  document (the Brier score 0.259–0.265), and the full-text cosine put on a
+  probability scale by a fit-side calibration map is **worse** (ECE
+  0.210–0.223, the Brier 0.278). The miscalibration is worst on the AI
+  document (the per-document ECE 0.52–0.62, an 80%-positive stratum), and
+  the **pooled** ECE flatters every arm (0.18 against a 0.33 macro) because
+  the pooled diagram mixes three calibrations. **Open:** does the harm
+  change if the rule works on the **rank** (the margin) rather than on the
+  probability? It already does — the margin rule never reads the
+  probability's absolute level — so the calibration's role in the shipped
+  rule is nil, and the calibration block is a *diagnostic* of the arm, not
+  part of the deliverable.
 
 ## 6. Milestones
 
@@ -1160,11 +1211,58 @@ set):
   0.105–0.136 — the lexical block is the *ranking* signal, the embedding
   geometry is the *retrieval* signal. The numbers are in the track log's
   random-vector floor section; 413 unit tests green.)*
-- [ ] **CS-6e — the Stage-3 reporting.** The calibration curves and the
+- [x] **CS-6e — the Stage-3 reporting.** The calibration curves and the
   thresholds per document, and the safe-negative margin measured against the
   **control-role floor** (the reviewer's decision 2026-10-26: the track's
   durable deliverable is measured against that floor, not against the plain
   cosine; the rule still ships as the margin half only).
+  *(done 2026-10-26: the plan's Stage-3 reporting discipline, measured and
+  shipped as three new artifact blocks (`stage3.reporting`): the
+  **calibration** (the reliability diagram of the learned arm's probability
+  and of the full-text cosine put on a probability scale by a **fit-side**
+  calibration map, pooled and per document, with the bin counts, the
+  expected calibration error and the Brier score), the **thresholds** (each
+  document's operating point, chosen on the **fit side** and applied to the
+  held-out one, with the pooled out-of-fold cut beside it and flagged as
+  *not* like-for-like) and the **safe-negative margin** (a margin rule, never
+  an absolute cut: a cell is a safe negative when it sits at least the
+  chosen margin below its own paragraph's best candidate; the reach over the
+  **whole 42,947-cell unjudged grid**, the harm on the 524 verified
+  positives, the **control-role floor's** counterpart and the explicit
+  statement that the unjudged cells' true positive rate is unmeasured). The
+  fit side's own rows are scored by an **inner** document-level cross-fit, so
+  no model that saw the holdout produced a number the holdout is judged on.
+  The new pure module `text_processors/calibration.py` (numpy only: the
+  reliability diagram, the ECE, the Brier score, the operating point, the
+  fit-side threshold and margin choices, the margin and the rule's counts);
+  the config knob `analysis.stage3.reporting` (the default `false`, so every
+  earlier run's artifact keeps its exact content — the same precedent as
+  CS-6d's `embeddings` knob); the sweep
+  `experiments_text_processing/stage3_reporting_sweep.py`: 12 runs (3 models
+  x 2 group sets x 2 fit-side criteria),
+  `omct-analyze-<model>-stage3-report-<groupset>-<criterion>`. The guard
+  holds (all 93 runs reproduce the Stage-0 baseline arm field by field).
+  **Verdict: the reach is measured, the quality signal is blind.** The
+  **two-part rule** (the cosine's margin *and* the arm's margin — CS-6d's
+  "retrieve with the cosine, rank with the learned arm") is the best of the
+  three variants: it reaches 50–60% of the unjudged grid at a harm of
+  11–19% of the verified positives, where the geometry alone reaches 78–83%
+  at 31–34% and the arm's margin alone 59–65% at 26–40%. But at the **same
+  reach** the **control-role floor** (the model fitted with the judged
+  labels permuted) discards just as few of the verified positives (0.129–0.179
+  against the real arm's 0.109–0.193; the real arm is better on 0–3 of the
+  three documents per arm), so the only ground-truth number the rule can be
+  judged on measures the reviewed set's **rank-selected construction**, not
+  the rule's topical quality. The calibration is bad everywhere (the arm's
+  ECE 0.175–0.189 pooled / 0.327–0.349 per-document macro, the cosine's
+  calibration map worse: 0.210–0.223; the pooled ECE flatters both). The
+  threshold's **`floor_gap` criterion** (positives vs. the ordinary cells)
+  transfers on 6 of 6 arms, the `youden` criterion (positives vs. the
+  reviewer-verified hard negatives) does not — the hard negatives sit above
+  the positives, so their threshold lands far too high (arctic2's holdout
+  recall 0.02–0.06). The deliverable therefore ships with a **reach** claim
+  and a **cost** claim and **no precision claim**; the numbers are in the
+  track log's reporting section; 433 unit tests green.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 
@@ -1178,3 +1276,22 @@ verified hard ones plus a 44k-cell unreviewed space with no recipe for mining
 it safely; a measured "which unjudged pairs are safe negatives" rule (e.g.
 similarity margin + a reviewer-confirmed spot-check) is the most valuable
 thing this track hands back to the main plan.
+
+**What the track has measured about that rule (CS-6e, 2026-10-26).** The
+rule ships as the **margin half only** (no human labelling in this track):
+a cell of the same-document grid is a *provisionally* safe negative when it
+sits at least the chosen margin below **its own paragraph's best candidate**
+— a margin rule, never an absolute cut. The best-measured shape is the
+**two-part** rule (the cosine's margin *and* the learned arm's margin, i.e.
+CS-6d's "retrieve with the cosine, rank with the learned arm"): it reaches
+**50–60% of the 42,947-cell unjudged grid** at a measured cost of **11–19% of
+the 524 verified positives**. What the track **cannot** claim is a precision:
+the unjudged cells' true positive rate is unmeasured, and the only
+ground-truth proxy — the harm on the verified positives — is **reproduced by
+the control-role floor** (a model fitted with the judged labels permuted),
+because the reviewed set is rank-selected and its positives sit near the top
+of their paragraph's candidate list whatever model scores them. So the
+recipe that leaves the track is: *a stated reach, a stated cost, and no
+precision claim.* PLAN Phase 6 and Phase 9 may use it to **provisionally**
+label unjudged cells as negatives — and must treat the labels as
+provisional, exactly as the track treats the control cells.

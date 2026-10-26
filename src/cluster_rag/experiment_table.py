@@ -389,6 +389,26 @@ ANALYZE_OMCT_STAGE3_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_STAGE3_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model")
 
+# The Stage-3 **reporting** (CS-6e) adds its own columns to the Stage-3
+# shape: the calibration's errors, the per-document threshold's operating
+# point and the safe-negative rule's reach. The rule's columns are the
+# **two-part** variant (the cosine's margin *and* the arm's margin) and the
+# control-role floor's harm at the same reach; the track log carries all
+# three variants side by side.
+ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS: tuple[str, ...] = (
+    *ANALYZE_OMCT_STAGE3_COLUMNS,
+    "ece_arm",
+    "ece_arm_macro",
+    "ece_cos",
+    "brier_arm",
+    "thr_criterion",
+    "thr_macro_recall",
+    "thr_oof_recall",
+    "rule_cov",
+    "rule_harm",
+    "rule_floor_harm",
+)
+
 
 def _cell(value: Any) -> str:
     """Render one table cell; ``None``/missing/empty becomes "n/a"."""
