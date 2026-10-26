@@ -204,6 +204,21 @@ Relaxed for this track only:
     client* in the sense that it replaces one, so it belongs with the
     backends, not in the track's pure core — and it is **never** wrapped in
     the disk cache, so the random vectors cannot pollute the model's cache.
+  - The **decision models** (Ollama's new model type: a *state* (the text to
+    judge) plus up to 64 typed *questions* — `noul` (true/false), `choice`
+    (pick from a list), `score` (a rubric) — answered with **probabilities**
+    in one forward pass; no decoder, no generation) are a **model client**
+    like the embedder: they live at the edge, in
+    `src/cluster_rag/decision/`, and never inside a pure core. The port is a
+    `Decider` (a state + a question spec -> the answers with their
+    probabilities), the client is the `/v1/systemone` caller (the endpoint is
+    **not** in the Ollama CLI or its Python/JS libraries, so it is a raw HTTP
+    call), and the **cache** is keyed by (model id, digest, prompt version,
+    the state, the question spec) — the track's LLM hygiene, unchanged: a
+    pinned model **and digest**, a recorded prompt version, cached calls, no
+    re-judging on a re-run, and no temperature (there is no sampling). The
+    pure side (the question specs, the arm's construction, the measurement)
+    lives in `text_processors/` like every other pure piece.
 - **Embedding cache: no change to the cache key layout.** The chunking version
   goes into the *existing* version slot —
   `CachedEmbedder(backend, root, preprocessing_version="<chunking-version>")`
@@ -211,6 +226,9 @@ Relaxed for this track only:
   (model, prefix, chunking-version, sha1(chunk)) exactly as intended, while
   the warm cache for the 14 pool models stays valid. Adding a new key
   component would invalidate that cache for no gain.
+- **The decision models' cache is a separate cache** (its own root under
+  `cache/`), keyed as above: it must never mix with the embedding cache (a
+  decision answer is not a vector).
 - Run-id grammar: unchanged `<dataset>-<command>-<detail>`; commands added per
   stage (below).
 
@@ -504,6 +522,37 @@ sweeps are the orders.
   max-over-k inflation is reported as the control's mean shift beside the
   chunks-per-text: it grows with the chunk count (+0.054 at 9.4 chunks per
   paragraph against +0.008 at 1.8).)*
+- [ ] **2.6 The chunk header: the paragraph's own first sentence, prepended to
+  every chunk.** The classic "contextual chunk header" idea, in the one form
+  that is legal on this data: the header is the paragraph's **own first
+  sentence** (pair-local, label-free, no document identity, and it keeps one
+  embedding per text — so the embedding cache stays at ~500 vectors per model
+  instead of the ~175,000 a question-stem header would need). The other
+  headings are ruled out by the track's leakage rules: the **document title**
+  is document identity (rule ii) and the **question number** is a corpus
+  statistic (rule i — 186/294 questions are judged in more than one document,
+  101 with conflicting labels).
+  *Pre-registered hypothesis:* the chunk geometry carries no label-driven
+  **ranking** signal (CS-6d's random-vector floor), so the expected
+  within-document AUC gain is ≈ 0; the plausible payoff is the **retrieval**
+  side (the positives' hit@1, today 0.105–0.136 for the cosine). The arm runs
+  in the existing harness on **all three** Stage-0 models, paired against the
+  no-header arm of the same run.
+- [ ] **2.7 Late chunking: the document embedded once, the chunks pooled out
+  of it.** Instead of embedding each chunk separately, embed the whole
+  document and pool its **token-level** embeddings per chunk, so every chunk
+  carries the document's context. Two costs to state up front: (a) it needs
+  **token-level** embeddings, which the `Embedder` port does not expose and
+  which Ollama's `/api/embed` **cannot** return → the arm is **HF-only**
+  (embeddinggemma and arctic2 drop out), so the comparison is
+  **within-model** (late-chunked voyage-4-nano against early-chunked
+  voyage-4-nano, same cells, same seeds) and not against the other two
+  models' numbers; (b) it needs the chunker's **character spans** (today the
+  `Chunker` port returns strings) so the tokens can be pooled per chunk, plus
+  a graceful "not available for this backend" path.
+  *Pre-registered hypothesis:* the same one as 2.6 (the retrieval side, not
+  the ranking side) — and with the decision models' retrieval as the ceiling
+  if Stage 3.5 pays off.
 - Exit: a ranked, artifact-backed statement of which segmentation+aggregation
   wins where — with paired CIs, per-document breakdown, and both negative
   subsets — or "no chunking beats full text" (an honest result too).
@@ -515,6 +564,12 @@ sweeps are the orders.
   the *question* side hurts on all three; the effect does not transfer across
   embedders (voyage-4-nano gains nothing), and the largest **pooled** gain in
   the ladder is a cross-document level effect, not a ranking gain.)*
+  *(2.6 and 2.7 are the ladder's two open rungs: the chunk header and the
+  late-chunked geometry. Both are *retrieval*-side experiments by the
+  pre-registered hypothesis above, and both run **after** Stage 3.5: if the
+  decision models work, the embedding axis's remaining job is cheap retrieval
+  at scale, and these two rungs are then measured against the decision
+  model's hit@1 as the ceiling.)*
 
 ### Stage 3 — Learned pair scorer (the "get crazy" slot)
 
@@ -651,6 +706,90 @@ sweeps are the orders.
     opt-in — `analysis.stage3.reporting.enabled` — so the earlier runs'
     artifacts keep their exact content.)*
 - OMCT line stays auxiliary; it informs method choice, never UPR metrics.
+
+### Stage 3.5 — The decision models (a probe, then a decider)
+
+*Why this stage exists (2026-10-26, the reviewer's proposal).* The track's
+deliverable is a **decision** — "is this unjudged cell safe to call a
+negative?" — and the track built a **ranker** and had to invent a threshold
+to turn it into one. That threshold is the track's weakest link: it does not
+transfer to the document with the lowest base rate (CS-6e), and the harm it
+produces on the verified positives is **reproduced by a label-blind model**
+(the control-role floor), so it cannot validate the rule. A **decision
+model** — Ollama's new model type: a *state* (the text to judge) plus typed
+*questions* (`noul` / `choice` / `score`), answered with **probabilities** in
+one forward pass, no decoder and no generation — attacks both problems at
+once:
+
+- it is **calibrated by construction** (laya: trained with RLCD against
+  strictly proper scoring rules, in-task ECE 0.060; tev1's card says
+  calibration is **untested**, so tev1's probabilities must be calibrated by
+  us), so the rule gets a **fixed** operating point and the threshold's
+  transfer problem disappears;
+- it is **independent** of the reviewed set's rank-selection (the pairs were
+  chosen by exp18's model, so every embedder's score on that set may be
+  measuring the selection, not the labels), so it is the one probe that can
+  say whether the **labels** are learnable at all.
+
+The two models are **named per experiment** (never "a local model"), pinned
+by id **and digest**, and every call is cached with its prompt version
+(§2's hygiene). Both are already local: `tev1:latest` (Together AI, a
+Qwen3.5-4B fine-tune, digest `7954dce2…`) and `laya:latest` (Convai
+Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
+
+- [ ] **3.5.1 The probe: is the reviewed set learnable at all?** The decision
+  models score the **1,520 judged pairs** (a `noul` question: "is the
+  paragraph about the same topic as the question?"), and the artifact carries
+  the same measurement blocks the other arms use (the pair AUC pooled and
+  per document, the **within-document** AUC, the rank percentiles, the
+  control side, the **calibration** curve / ECE / Brier score) so the numbers
+  sit next to the embedding arms' in the same table. Two design elements are
+  **not** optional:
+  - a **declared prompt grid** (the state's shape: the pair in one state vs.
+    the paragraph as the state with the question in the instructions — the
+    latter allows 64 questions per call and is ~3× cheaper; and the question
+    type: `noul` vs. a two-option `choice`, because the docs warn that `noul`
+    can get "stuck on no"), each variant logged with its prompt version;
+  - a **synthetic competence control** (constructed positive pairs — a
+    paragraph and a question sharing a distinctive phrase — and unrelated
+    negatives), because a chance-level result on the reviewed set is
+    otherwise ambiguous: *the data is at the ceiling* or *the model is the
+    wrong shape*. The control separates the two.
+  *The decision tree this probe produces:* **well above chance** → the labels
+  are topically separable, the track's "the benchmark is construction-
+  dominated" conclusion is wrong or overstated, and the deliverable gets a
+  real quality claim; **at chance with the control passing** → the reviewed
+  set is at the ceiling, the deliverable's precision is *provably*
+  unmeasurable on this data, and Stage 4 (the LLM experiments) should be
+  skipped; **at chance with the control failing** → the wrong tool (the
+  MS MARCO cross-encoders in the HF cache are the next try).
+- [ ] **3.5.2 The decision arm on the grid + the rule's decider.** The decision
+  model scores the **whole same-document grid** (44,467 cells), so it becomes
+  an *arm* of `analyze-omct` (the hit@k, the rank percentiles, the control
+  side, the de-shifted AUC — all the existing blocks, unchanged) and the
+  **safe-negative rule's** ranking signal becomes the decision model's
+  probability with a **fixed** cut (0.5, and the fit-side-threshold
+  comparison beside it). The deliverable's headline numbers then carry a
+  *label-driven* scorer behind them, and the control-role floor comparison
+  (the permuted-label model) says how much of the rule's quality is the
+  training design's prior. The unjudged cells' true positive rate stays
+  **unmeasured** — the rule still ships as the margin half only.
+- [ ] **3.5.3 The shortlist rerank (PLAN Phase 6's shape).** The cosine's
+  top-K candidates per paragraph are re-decided by the decision model; the
+  metric is the positives' **hit@1 / hit@K** (today 0.105–0.136 for the
+  cosine, 0.065–0.092 for the learned arm — a lot of headroom) and the
+  artifact is the Phase-6 evidence PLAN's cross-encoder slot needs. The
+  decision models are *not* trained on OMCT, so nothing leaks (leakage rule
+  (i) is about *fitted* question-level priors; a frozen model's question
+  text carries no OMCT label). **If anyone fine-tunes a decision model on
+  OMCT, rule (i) bites hard** (101 questions are positive in one document and
+  negative in another) — that boundary is written into the plan.
+- Exit: a measured answer to "does an independent, calibrated scorer beat
+  the reviewed set's floor?", with the decision model's numbers sitting next
+  to the embedding arms' in the same artifact and the same table, and the
+  deliverable's rule re-measured with a label-driven scorer behind it — or an
+  explicit, artifact-backed statement that the reviewed set is at the ceiling
+  and the deliverable's precision is unmeasurable on this data.
 
 ### Stage 4 — LLM experiments (rule suspension lives here)
 
@@ -960,6 +1099,35 @@ sweeps are the orders.
   probability's absolute level — so the calibration's role in the shipped
   rule is nil, and the calibration block is a *diagnostic* of the arm, not
   part of the deliverable.
+- **Is the reviewed set at the ceiling, or were the embedders the
+  limitation? (Stage 3.5, 2026-10-26.)** Every embedder sits at chance on
+  the reviewed set (AUC 0.468 / 0.500 / 0.537) and the reviewed set was
+  **rank-selected** (exp18's model chose which pairs got reviewed), so those
+  numbers may be measuring the selection rather than the labels. The
+  decision models are the first **independent** rankers on this benchmark, so
+  their number is the one that can settle it. **Open:** if they also sit at
+  chance (with the synthetic competence control passing), the reviewed set is
+  at the ceiling and the deliverable's precision is *provably* unmeasurable
+  here — is the honest close-out then "this benchmark cannot validate a
+  rule", and should the track's remaining effort move to the UPR side
+  (Stage 5) instead of to more OMCT methods?
+- **The decision models' calibration on OMCT is unmeasured (Stage 3.5).**
+  laya is trained for calibrated probabilities (RLCD, strictly proper scoring
+  rules, in-task ECE 0.060) and tev1's card says calibration is **untested**;
+  a first smoke test (one verified positive vs. one verified hard negative)
+  gave tev1 0.455 / 0.040 and laya 0.262 / 0.155 — the right direction, but
+  a one-pair anecdote. **Open:** which of the two is the better *decider* on
+  the grid, and does either keep its calibration on this corpus (the ECE and
+  the reliability diagram are already the harness's reporting)? And if a
+  decision model's probability is calibrated enough to take a **fixed** 0.5
+  cut, does the rule's harm on the verified positives stop being reproduced
+  by the control-role floor?
+- **Late chunking is not portable to the Ollama backends (Stage 2.7).** It
+  needs token-level embeddings, which `/api/embed` cannot return, so the arm
+  is HF-only and its comparison is **within-model**. **Open:** is the
+  document-level context worth a within-model-only result, or should the
+  chunk header (Stage 2.6, which keeps all three models) be the only new
+  chunking rung?
 
 ## 6. Milestones
 
@@ -968,6 +1136,9 @@ sweeps are the orders.
   2026-10-26, CS-4: chunk the paragraph, keep the peak, never chunk the
   question — and the pooled AUC is the wrong headline on this benchmark.)*
 - T3: stage 3 (learned scorer) → the reranker-slot evidence for PLAN Phase 6.
+- T3.5: stage 3.5 (the decision models) → is the reviewed set learnable at
+  all, and can a calibrated independent decider carry the deliverable?
+  *(proposed 2026-10-26; the reviewer's call on tev1 + laya.)*
 - T4: stage 4-5 as reviewer-approved extensions.
 
 ## 7. First execution change sets
@@ -1263,6 +1434,47 @@ set):
   recall 0.02–0.06). The deliverable therefore ships with a **reach** claim
   and a **cost** claim and **no precision claim**; the numbers are in the
   track log's reporting section; 433 unit tests green.)*
+- [ ] **CS-7a — the decision-model client + the probe (Stage 3.5.1).** The
+  `Decider` port, the `/v1/systemone` client, the decision cache and the
+  probe command; the synthetic competence control; the declared prompt grid.
+  **Explain-first (schema):** a new config section
+  `analysis.decision` with `models` (each: `name`, `model_id`, `digest`
+  (pinned; the run fails on a mismatch), `state` (`pair` | `paragraph`),
+  `question_type` (`noul` | `choice`), `instructions`, `criteria`),
+  `scope` (`judged` | `grid`), `competence_control: bool` and
+  `prompt_version`; a new command `decide-omct` writing
+  `results/<run_id>/decisions.json` (the per-pair probabilities, the
+  competence control, the measurement blocks, the provenance: the model id,
+  the digest, the prompt version, the cache's hit/miss counters). Runs:
+  `omct-decide-<model>-<variant>` (2 models x the prompt grid). The track's
+  hygiene: no relabelling (a decision model only *scores*), the model and
+  digest pinned, the prompt version recorded, the calls cached (no re-judging
+  on a re-run), and the **leakage boundary written down** (a frozen,
+  zero-shot model carries no OMCT label; a *fine-tuned* one would break
+  leakage rule (i)).
+- [ ] **CS-7b — the decision arm on the grid + the rule's decider (Stage
+  3.5.2).** The decision model's scores over the whole same-document grid as
+  an **arm** of `analyze-omct` (the hit@k, the rank percentiles, the control
+  side, the de-shifted AUC — the existing blocks, unchanged) and the
+  safe-negative rule re-measured with the decision model's probability as the
+  ranking signal and a **fixed** cut (0.5) beside the fit-side-threshold
+  comparison; the control-role floor's counterpart beside both.
+- [ ] **CS-7c — the shortlist rerank (Stage 3.5.3).** The cosine's top-K
+  candidates re-decided by the decision model; the positives' hit@1 / hit@K
+  against the cosine's and the learned arm's; the artifact is PLAN's Phase-6
+  evidence.
+- [ ] **CS-7d — the chunk header (Stage 2.6).** The paragraph's own first
+  sentence prepended to every chunk (the pack's option, so the embedding
+  cache stays at one vector per text); the arm in the existing harness on all
+  three Stage-0 models, paired against the no-header arm; the
+  pre-registered hypothesis (the **retrieval** side, not the ranking side).
+- [ ] **CS-7e — late chunking (Stage 2.7).** The token-level embedding port
+  (a new optional capability of the `Embedder` port, implemented by the HF
+  backend only), the chunker's **character spans** (a new method on the
+  `Chunker` port), the pooling of the parent's token embeddings per chunk, the
+  graceful "not available for this backend" path, and the **within-model**
+  arm (late-chunked voyage-4-nano against early-chunked voyage-4-nano, same
+  cells, same seeds).
 
 ## 8. The durable deliverable (named, so it is not lost)
 
@@ -1295,3 +1507,15 @@ recipe that leaves the track is: *a stated reach, a stated cost, and no
 precision claim.* PLAN Phase 6 and Phase 9 may use it to **provisionally**
 label unjudged cells as negatives — and must treat the labels as
 provisional, exactly as the track treats the control cells.
+
+**What would change that (Stage 3.5, proposed 2026-10-26).** Two things
+would turn the deliverable from a *reach* claim into a *quality* claim, and
+both are measured by the decision-model stage: (1) a decision model that is
+**calibrated on this corpus** takes a **fixed** operating point, so the
+rule's threshold stops being a fitted, non-transferable parameter; (2) a
+decision model that is **independent of exp18's ranking** (which is how the
+reviewed set was selected) makes the harm on the verified positives a
+*label-driven* number instead of a measurement of the benchmark's
+construction — which is exactly what the control-role floor comparison
+refused to certify in CS-6e. If neither holds, the deliverable's claim
+stands as it is, and the track says so explicitly.
