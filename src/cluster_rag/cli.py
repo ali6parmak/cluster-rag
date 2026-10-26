@@ -3622,17 +3622,39 @@ def _upr_learned_arms(
     chunker, chunk_embedder = _upr_chunker(config, embedder, learned.chunker, spec.version)
     text_embedder = _cached_embedder(embedder, config, spec.version)
     label_embedder = _cached_embedder(embedder, config, spec.version)
+    # The chunk profile's units (the sentences and the word pieces) on the text
+    # side; the label side is one unit (the CS-8b verdict: the UPR labels are
+    # 1-3 words, so the label side is the identity).
+    profile_units = None
+    sentence_embedder = None
+    ngram_embedder = None
+    if "chunk_profile" in learned.groups:
+        sentence_chunker = build_chunker("units", {"kind": "sentence"})
+        ngram_chunker = build_chunker(
+            "units", {"kind": "ngram", "n_words": learned.profile_ngram_size}
+        )
+        profile_units = ProfileUnits(sentences=sentence_chunker, ngrams=ngram_chunker)
+        sentence_embedder = _cached_embedder(
+            embedder, config, sentence_chunker.cache_version(spec.version)
+        )
+        ngram_embedder = _cached_embedder(
+            embedder, config, ngram_chunker.cache_version(spec.version)
+        )
     extractor = UprFeatureExtractor(
         UprFeatureEmbedders(
             text=text_embedder,
             chunks=chunk_embedder,
             labels=label_embedder,
+            text_sentences=sentence_embedder,
+            text_ngrams=ngram_embedder,
         ),
         labels=labels,
         text_chunker=chunker,
         top_k=learned.top_k,
         groups=learned.groups,
         catalog_available=bool(catalog),
+        profile_units=profile_units,
+        profile_top_k=learned.profile_top_k,
     )
     # The random-vector floor: the pack's embedding sides are seeded random
     # unit vectors of the model's dimension (never written to the cache).
@@ -3650,12 +3672,16 @@ def _upr_learned_arms(
                 text=random_embedder,
                 chunks=random_embedder,
                 labels=random_embedder,
+                text_sentences=random_embedder,
+                text_ngrams=random_embedder,
             ),
             labels=labels,
             text_chunker=chunker,
             top_k=learned.top_k,
             groups=learned.groups,
             catalog_available=bool(catalog),
+            profile_units=profile_units,
+            profile_top_k=learned.profile_top_k,
         )
 
     train_texts = [record.text for record in setup.train_records]

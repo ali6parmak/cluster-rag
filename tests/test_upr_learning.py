@@ -30,6 +30,7 @@ from cluster_rag.config import (
 from cluster_rag.embed.random import RandomEmbedder
 from cluster_rag.label_catalog import LabelEntry, load_label_catalog
 from cluster_rag.text_processors.chunkers import build_chunker
+from cluster_rag.text_processors.features.pair_features import ProfileUnits
 from cluster_rag.text_processors.features.upr_features import (
     CATALOG_GROUPS,
     DEFAULT_UPR_FEATURE_GROUPS,
@@ -39,6 +40,7 @@ from cluster_rag.text_processors.features.upr_features import (
     UprLabel,
     upr_feature_group,
 )
+from cluster_rag.text_processors.upr_diagnostics import feature_diagnostics
 from cluster_rag.upr_learning import score_upr_learned_arms
 from fake_embedder import FakeEmbedder
 
@@ -161,6 +163,104 @@ def test_the_pack_describes_the_catalog_gap() -> None:
     described = _extractor().describe()
     assert described["label_catalog"]["available"] is False
     assert set(described["label_catalog"]["groups_not_selected"]) == set(CATALOG_GROUPS)
+
+
+# --- the chunk profile (the CS-8e group) ---
+
+
+def _profile_extractor() -> UprFeatureExtractor:
+    """A pack with the chunk profile's group selected."""
+    backend = FakeEmbedder(dimension=8)
+    units = ProfileUnits(
+        sentences=build_chunker("units", {"kind": "sentence"}),
+        ngrams=build_chunker("units", {"kind": "ngram", "n_words": 5}),
+    )
+    return UprFeatureExtractor(
+        UprFeatureEmbedders(
+            text=backend,
+            chunks=backend,
+            labels=backend,
+            text_sentences=backend,
+            text_ngrams=backend,
+        ),
+        labels=LABELS,
+        text_chunker=build_chunker("atoms", {"split_clauses": True}),
+        top_k=3,
+        groups=("chunk_profile",),
+        profile_units=units,
+        profile_top_k=3,
+    )
+
+
+def test_the_chunk_profile_needs_the_unit_splitters() -> None:
+    """The profile's group without the unit splitters is a config-time error."""
+    with pytest.raises(ValueError, match="unit splitters"):
+        _extractor(groups=("chunk_profile",))
+
+
+def test_the_chunk_profile_computes_its_ten_columns() -> None:
+    """The profile's ranks (two granularities) and the four alignment kinds."""
+    extractor = _profile_extractor()
+    assert extractor.feature_names == (
+        "cprof_sent_top1",
+        "cprof_sent_top2",
+        "cprof_sent_top3",
+        "cprof_ngram_top1",
+        "cprof_ngram_top2",
+        "cprof_ngram_top3",
+        "cprof_align_sent",
+        "cprof_align_ngram",
+        "cprof_align_lexical",
+        "cprof_align_semantic_only",
+    )
+    cube = extractor.extract(["Ratify the convention. Ensure housing for all families."])
+    assert cube.shape == (1, 2, 10)
+    # the alignment kinds are one-hot: exactly one granularity and one
+    # lexicalness per cell
+    for column in range(2):
+        assert cube[0, column, 6] + cube[0, column, 7] == pytest.approx(1.0)
+        assert cube[0, column, 8] + cube[0, column, 9] == pytest.approx(1.0)
+
+
+def test_the_chunk_profile_ranks_are_the_sorted_unit_similarities() -> None:
+    """The top-1 rank is the block's maximum and the ranks are decreasing."""
+    extractor = _profile_extractor()
+    cube = extractor.extract(["Ratify the convention. Ensure housing for all families."])
+    assert cube[0, 0, 0] >= cube[0, 0, 1] - 1e-6
+    assert cube[0, 0, 3] >= cube[0, 0, 4] - 1e-6
+
+
+# --- the per-feature diagnostics ---
+
+
+def test_the_feature_diagnostics_rank_and_separate() -> None:
+    """A hand-computed case: the AUC, the separation and the length correlation."""
+    features = np.asarray(
+        [[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]],
+        dtype=np.float32,
+    )
+    gold = np.asarray([[True, False, True]])
+    block = feature_diagnostics(features, gold, [10], ("good", "bad"))
+    good = block["features"]["good"]
+    bad = block["features"]["bad"]
+    # the "good" feature is high on the gold cells and low on the background
+    # one, so it separates the two sides; the "bad" one is high on the
+    # background cell and low on one gold cell, so it is anti-correlated
+    # (the hand-computed AUC: the ranks are 1, 2.5, 2.5)
+    assert good["auc"] == pytest.approx(1.0)
+    assert bad["auc"] == pytest.approx(0.25)
+    assert good["gold_mean"] == pytest.approx(1.0)
+    assert good["background_mean"] == pytest.approx(0.0)
+    assert good["n_gold_cells"] == 2
+    assert good["n_background_cells"] == 1
+
+
+def test_the_feature_diagnostics_report_the_length_correlation() -> None:
+    """A length proxy is visible: the feature's correlation with the length."""
+    features = np.asarray([[[1.0]], [[2.0]], [[3.0]]], dtype=np.float32)
+    gold = np.asarray([[True], [False], [False]])
+    block = feature_diagnostics(features, gold, [1, 2, 3], ("lengthish",))
+    assert block["features"]["lengthish"]["length_correlation"] == pytest.approx(1.0)
 
 
 # --- the label catalog (the edge) ---

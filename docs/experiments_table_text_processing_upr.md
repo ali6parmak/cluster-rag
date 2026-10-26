@@ -215,3 +215,45 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | upr-analyze-learned | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 5.452 |
 | upr-analyze-learned | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4749 | 0.4842 | 0.4622 | 0.971 | 0.2542 | 0.7066 | 0.6070 | 0.8692 | 0.3064 | 0.7226 | 0.0294 | 0.5000 | 0.0645 | -0.4882 | 0.0000 | 1.95 | 660 | 5.452 |
 | upr-analyze-learned | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.3837 | 0.3875 | 0.3739 | 0.941 | 0.2106 | 0.6033 | 0.4990 | 0.8723 | 0.2492 | 0.6098 | 0.0441 | 0.5000 | 0.0679 | -0.4847 | 0.0000 | 1.95 | 660 | 5.452 |
+
+## UPR — upr_learned_profile
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-learned-cp-base | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 5.79 |
+| upr-analyze-learned-cp-base | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4749 | 0.4842 | 0.4622 | 0.971 | 0.2542 | 0.7066 | 0.6070 | 0.8692 | 0.3064 | 0.7226 | 0.0294 | 0.5000 | 0.0645 | -0.4882 | 0.0000 | 1.95 | 660 | 5.79 |
+| upr-analyze-learned-cp-base | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.3837 | 0.3875 | 0.3739 | 0.941 | 0.2106 | 0.6033 | 0.4990 | 0.8723 | 0.2492 | 0.6098 | 0.0441 | 0.5000 | 0.0679 | -0.4847 | 0.0000 | 1.95 | 660 | 5.79 |
+| upr-analyze-learned-cp-full | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 8.175 |
+| upr-analyze-learned-cp-full | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4704 | 0.4846 | 0.4578 | 0.985 | 0.2530 | 0.7081 | 0.6074 | 0.8721 | 0.3117 | 0.7271 | 0.0294 | 0.5000 | 0.0629 | -0.4897 | 0.0000 | 1.95 | 660 | 8.175 |
+| upr-analyze-learned-cp-full | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.3815 | 0.3834 | 0.3708 | 0.941 | 0.2106 | 0.6047 | 0.4946 | 0.8712 | 0.2454 | 0.6128 | 0.0441 | 0.5000 | 0.0674 | -0.4852 | 0.0000 | 1.95 | 660 | 8.175 |
+| upr-analyze-learned-cp-profile | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 6.396 |
+| upr-analyze-learned-cp-profile | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4726 | 0.4960 | 0.4568 | 0.985 | 0.2564 | 0.7138 | 0.6122 | 0.8734 | 0.3178 | 0.7294 | 0.0294 | 0.5000 | 0.0690 | -0.4836 | 0.0000 | 1.95 | 660 | 6.396 |
+| upr-analyze-learned-cp-profile | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.1421 | 0.1434 | 0.1347 | 1.000 | 0.0985 | 0.3091 | 0.2028 | 0.8253 | 0.0869 | 0.3102 | 0.3529 | 0.5000 | 0.0817 | -0.4709 | 0.0000 | 1.95 | 660 | 6.396 |
+
+## UPR — upr_learned_ablation
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-learned-abl-embed | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 5.535 |
+| upr-analyze-learned-abl-embed | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4460 | 0.4479 | 0.4319 | 0.941 | 0.2509 | 0.7101 | 0.5878 | 0.8639 | 0.3026 | 0.7264 | 0.0294 | 0.5000 | 0.0739 | -0.4787 | 0.0000 | 1.95 | 660 | 5.535 |
+| upr-analyze-learned-abl-embed | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.0258 | 0.0226 | 0.0227 | 1.000 | 0.0270 | 0.1467 | 0.0470 | 0.7405 | 0.0114 | 0.1433 | 0.4853 | 0.5000 | 0.0854 | -0.4672 | 0.0000 | 1.95 | 660 | 5.535 |
+| upr-analyze-learned-abl-lex | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 1.96 |
+| upr-analyze-learned-abl-lex | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.3837 | 0.3904 | 0.3736 | 0.941 | 0.2091 | 0.5995 | 0.4985 | 0.8673 | 0.2515 | 0.6075 | 0.0441 | 0.5000 | 0.0676 | -0.4851 | 0.0000 | 1.95 | 660 | 1.96 |
+| upr-analyze-learned-abl-noembed | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 4.518 |
+| upr-analyze-learned-abl-noembed | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4749 | 0.4902 | 0.4618 | 0.985 | 0.2539 | 0.7066 | 0.6070 | 0.8746 | 0.3102 | 0.7256 | 0.0294 | 0.5000 | 0.0627 | -0.4900 | 0.0000 | 1.95 | 660 | 4.518 |
+| upr-analyze-learned-abl-nolex | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 6.804 |
+| upr-analyze-learned-abl-nolex | 2026-10-26 | val | learned_logistic | learned | atoms | n/a | 0.4726 | 0.4967 | 0.4564 | 0.985 | 0.2579 | 0.7168 | 0.6148 | 0.8734 | 0.3178 | 0.7348 | 0.0294 | 0.5000 | 0.0692 | -0.4834 | 0.0000 | 1.95 | 660 | 6.804 |
+| upr-analyze-learned-abl-nolex | 2026-10-26 | val | learned_logistic_random | learned | atoms | n/a | 0.1459 | 0.1449 | 0.1371 | 1.000 | 0.0945 | 0.3105 | 0.2028 | 0.8187 | 0.0930 | 0.3087 | 0.3676 | 0.5000 | 0.0820 | -0.4706 | 0.0000 | 1.95 | 660 | 6.804 |
+
+## UPR — upr_learned_histgb
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-learned-histgb-full | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 76.287 |
+| upr-analyze-learned-histgb-full | 2026-10-26 | val | learned_histgb | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 76.287 |
+| upr-analyze-learned-histgb-full | 2026-10-26 | val | learned_histgb_random | learned | atoms | n/a | 0.4043 | 0.3808 | 0.3952 | 1.000 | 0.2133 | 0.6196 | 0.5173 | 0.8894 | 0.2706 | 0.6212 | 0.0441 | 0.5000 | 0.0548 | -0.4979 | 0.0000 | 1.95 | 660 | 76.287 |
+| upr-analyze-learned-histgb-lex-only | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 7.668 |
+| upr-analyze-learned-histgb-lex-only | 2026-10-26 | val | learned_histgb | learned | atoms | n/a | 0.4043 | 0.3868 | 0.3940 | 0.956 | 0.2164 | 0.6163 | 0.5281 | 0.8991 | 0.2812 | 0.6273 | 0.0441 | 0.5000 | 0.0566 | -0.4961 | 0.0000 | 1.95 | 660 | 7.668 |
+| upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 17.735 |
+| upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | learned_histgb | learned | atoms | n/a | 0.4293 | 0.4200 | 0.4159 | 0.956 | 0.2385 | 0.6860 | 0.5644 | 0.8697 | 0.2950 | 0.6966 | 0.0294 | 0.5000 | 0.0684 | -0.4842 | 0.0000 | 1.95 | 660 | 17.735 |
+| upr-analyze-learned-histgb-embed-only | 2026-10-26 | val | learned_histgb_random | learned | atoms | n/a | 0.0372 | 0.0317 | 0.0355 | 1.000 | 0.0312 | 0.1485 | 0.0573 | 0.7321 | 0.0152 | 0.1502 | 0.4706 | 0.5000 | 0.0819 | -0.4707 | 0.0000 | 1.95 | 660 | 17.735 |

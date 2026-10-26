@@ -323,3 +323,130 @@ def length_buckets(lengths: Sequence[int], edges: Sequence[int]) -> list[int]:
         return [-1] * len(lengths)
     ordered = sorted(int(edge) for edge in edges)
     return [sum(1 for edge in ordered if int(length) >= edge) for length in lengths]
+
+
+def _pearson(left: np.ndarray, right: np.ndarray) -> float | None:
+    """The Pearson correlation of two vectors (``None`` when it is undefined)."""
+    if left.size < 2 or right.size < 2:
+        return None
+    left_centered = left - left.mean()
+    right_centered = right - right.mean()
+    denominator = float(
+        np.sqrt(np.sum(left_centered**2) * np.sum(right_centered**2)),
+    )
+    if denominator <= 0.0:
+        return None
+    return float(np.sum(left_centered * right_centered) / denominator)
+
+
+def _rank_auc(scores: np.ndarray, truth: np.ndarray) -> float | None:
+    """The AUC of a score against a binary truth (the rank-based definition).
+
+    Ties get their average rank, so a constant feature's AUC is exactly 0.5.
+    """
+    positives = int(truth.sum())
+    negatives = int(truth.size - positives)
+    if positives == 0 or negatives == 0:
+        return None
+    order = np.argsort(scores, kind="stable")
+    ranks = np.empty(scores.size, dtype=np.float64)
+    ranks[order] = np.arange(1, scores.size + 1, dtype=np.float64)
+    # the average ranks of the tied groups
+    sorted_scores = scores[order]
+    start = 0
+    for index in range(1, sorted_scores.size + 1):
+        if index == sorted_scores.size or sorted_scores[index] != sorted_scores[start]:
+            if index - start > 1:
+                average = (start + 1 + index) / 2.0
+                ranks[order[start:index]] = average
+            start = index
+    positive_rank_sum = float(ranks[truth].sum())
+    return float((positive_rank_sum - positives * (positives + 1) / 2.0) / (positives * negatives))
+
+
+def feature_diagnostics(
+    features: np.ndarray,
+    gold: np.ndarray,
+    lengths: Sequence[int],
+    feature_names: Sequence[str],
+) -> dict[str, Any]:
+    """Every feature's own ranking quality, its background side and its length.
+
+    The CS-6c precedent, adapted to the UPR grid: for every feature the block
+    says
+
+    - the **ranking quality**: the feature's own AUC against the gold cells
+      (the feature used as a score, on its own) on the evaluated split and on
+      the fit side;
+    - the **background-side counterpart**: the gold cells' mean against the
+      background's mean, and the standardized separation between them (the
+      level counterpart of the AUC, the "does the feature separate the two
+      sides" question);
+    - the **length correlation**: the correlation between the feature's value
+      and the text's length (a length proxy is visible here — the plan's
+      leakage rule (ii) says such a feature must not enter the model, so it
+      is measured, not fed).
+
+    Args:
+        features: The feature cube of the evaluated split
+            (``(n_texts, n_labels, n_features)``).
+        gold: The bool gold matrix of the same shape.
+        lengths: The texts' lengths (one per row).
+        feature_names: The feature names, in column order.
+
+    Returns:
+        A dict with one block per feature and the count of the cells.
+    """
+    cube = np.asarray(features, dtype=np.float64)
+    truth = np.asarray(gold, dtype=bool)
+    if cube.ndim != 3:
+        raise ValueError(f"features must be a 3-d cube, got shape {cube.shape}")
+    if truth.shape != cube.shape[:2]:
+        raise ValueError(f"gold must have shape {cube.shape[:2]}, got {truth.shape}")
+    n_texts, n_labels, n_features = cube.shape
+    if len(feature_names) != n_features:
+        raise ValueError(f"the feature names must be {n_features} long, got {len(feature_names)}")
+    text_lengths = np.asarray(list(lengths), dtype=np.float64)
+    if text_lengths.size != n_texts:
+        raise ValueError(
+            f"the lengths must have one entry per text ({n_texts}), got {text_lengths.size}"
+        )
+    # the length axis broadcast over the labels (one length per row)
+    length_axis = np.repeat(text_lengths[:, None], n_labels, axis=1).reshape(-1)
+    flat = cube.reshape(-1, n_features)
+    flat_truth = truth.reshape(-1)
+    background = ~flat_truth
+    blocks: dict[str, Any] = {}
+    for index, name in enumerate(feature_names):
+        column = flat[:, index]
+        gold_values = column[flat_truth]
+        background_values = column[background]
+        gold_mean = float(gold_values.mean()) if gold_values.size else None
+        background_mean = float(background_values.mean()) if background_values.size else None
+        background_std = float(background_values.std()) if background_values.size else None
+        separation = None
+        if gold_mean is not None and background_mean is not None and background_std:
+            separation = (gold_mean - background_mean) / background_std
+        blocks[name] = {
+            "auc": _rank_auc(column, flat_truth),
+            "gold_mean": gold_mean,
+            "background_mean": background_mean,
+            "background_std": background_std,
+            "separation": separation,
+            "length_correlation": _pearson(column, length_axis),
+            "n_gold_cells": int(flat_truth.sum()),
+            "n_background_cells": int(background.sum()),
+        }
+    return {
+        "n_cells": int(flat_truth.size),
+        "n_texts": n_texts,
+        "n_labels": n_labels,
+        "features": blocks,
+        "note": (
+            "every feature's own ranking quality (the AUC of the feature used "
+            "as a score), its background-side counterpart (the gold cells' mean "
+            "against the background's, and the standardized separation) and its "
+            "length correlation (a length proxy is visible here: the plan's "
+            "leakage rule (ii) keeps such a feature out of the model)."
+        ),
+    }

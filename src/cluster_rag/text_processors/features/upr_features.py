@@ -74,6 +74,7 @@ from cluster_rag.embed.base import Embedder
 from cluster_rag.text_processors.base import Chunker
 from cluster_rag.text_processors.features.pair_features import (
     DEFAULT_STOPWORDS,
+    ProfileUnits,
     char_cosine,
     char_ngrams,
     content_tokens,
@@ -88,6 +89,7 @@ UPR_FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "lexical": ("lex_",),
     "label_part": ("labelpart_",),
     "label_type": ("labeltype_",),
+    "chunk_profile": ("cprof_",),
 }
 
 # The group names, in the canonical order.
@@ -109,6 +111,21 @@ DEFAULT_UPR_TOP_K = 3
 # and the label-type one-hots.
 DESCRIPTION_FEATURE_PREFIX = "labelpart_description_coverage"
 LABEL_TYPE_FEATURE_PREFIX = "labeltype_"
+
+# The chunk profile's feature names (the CS-8e group): the ranked cross-unit
+# match profile at the two granularities and the alignment kinds.
+PROFILE_FEATURE_NAMES: tuple[str, ...] = (
+    "cprof_sent_top1",
+    "cprof_sent_top2",
+    "cprof_sent_top3",
+    "cprof_ngram_top1",
+    "cprof_ngram_top2",
+    "cprof_ngram_top3",
+    "cprof_align_sent",
+    "cprof_align_ngram",
+    "cprof_align_lexical",
+    "cprof_align_semantic_only",
+)
 
 
 def upr_feature_group(name: str) -> str | None:
@@ -166,7 +183,10 @@ class UprFeatureEmbedders:
     - ``chunks``: the text's chunks (the ``query`` kind, the chunker's own
       cache slot);
     - ``labels``: the label texts (the ``label`` kind — the zero-shot label
-      vectors' own slot).
+      vectors' own slot);
+    - ``text_sentences`` / ``text_ngrams``: the text's **profile units** (the
+      ``query`` kind, the chunk profile group's own slots). ``None`` disables
+      the chunk-profile group.
 
     The CLI wires the cached backends in; the random-vector floor swaps them
     for the seeded :class:`~cluster_rag.embed.random.RandomEmbedder`.
@@ -175,6 +195,8 @@ class UprFeatureEmbedders:
     text: Embedder
     chunks: Embedder
     labels: Embedder
+    text_sentences: Embedder | None = None
+    text_ngrams: Embedder | None = None
 
 
 @dataclass
@@ -240,6 +262,8 @@ class UprFeatureExtractor:
         top_k: int = DEFAULT_UPR_TOP_K,
         groups: Sequence[str] | None = None,
         catalog_available: bool = False,
+        profile_units: ProfileUnits | None = None,
+        profile_top_k: int = 3,
         stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     ) -> None:
         if not labels:
@@ -248,12 +272,16 @@ class UprFeatureExtractor:
             raise ValueError(f"top_k must be >= 1, got {top_k}")
         if top_k == 2:
             raise ValueError("top_k=2 would duplicate the top-2 mean column: use 1 or a value >= 3")
+        if profile_top_k < 1:
+            raise ValueError(f"profile_top_k must be >= 1, got {profile_top_k}")
         self.embedders = embedders
         self.labels = tuple(labels)
         self.text_chunker = text_chunker
         self.top_k = top_k
         self.stopwords = frozenset(stopwords)
         self.catalog_available = bool(catalog_available)
+        self.profile_units = profile_units
+        self.profile_top_k = profile_top_k
         self.groups = self._checked_groups(groups)
         gated = [group for group in CATALOG_GROUPS if group in self.groups]
         if gated and not self.catalog_available:
@@ -261,6 +289,10 @@ class UprFeatureExtractor:
                 f"the feature group(s) {gated} need a label catalog (a name / "
                 "description / parent per label, paths.label_catalog): the repo "
                 "has none, so the pack runs without them"
+            )
+        if "chunk_profile" in self.groups and profile_units is None:
+            raise ValueError(
+                "the chunk_profile group needs the profile's unit splitters (profile_units=...)"
             )
         self._canonical_names = self._canonical_feature_names()
         self._selected = tuple(
@@ -311,6 +343,25 @@ class UprFeatureExtractor:
             names.append(DESCRIPTION_FEATURE_PREFIX)
         if "label_type" in self.groups:
             names.extend(f"{LABEL_TYPE_FEATURE_PREFIX}{parent}" for parent in self._parent_names())
+        if "chunk_profile" in self.groups:
+            names.extend(self._profile_feature_names())
+        return tuple(names)
+
+    def _profile_feature_names(self) -> tuple[str, ...]:
+        """The chunk profile's feature names (the K-dependent ones included)."""
+        names: list[str] = []
+        for granularity in ("sent", "ngram"):
+            names.extend(
+                f"cprof_{granularity}_top{rank}" for rank in range(1, self.profile_top_k + 1)
+            )
+        names.extend(
+            (
+                "cprof_align_sent",
+                "cprof_align_ngram",
+                "cprof_align_lexical",
+                "cprof_align_semantic_only",
+            )
+        )
         return tuple(names)
 
     def _parent_names(self) -> tuple[str, ...]:
@@ -381,7 +432,31 @@ class UprFeatureExtractor:
                     ("text", self.embedders.text),
                     ("chunks", self.embedders.chunks),
                     ("labels", self.embedders.labels),
+                    ("text_sentences", self.embedders.text_sentences),
+                    ("text_ngrams", self.embedders.text_ngrams),
                 )
+            },
+            "profile": {
+                "enabled": "chunk_profile" in self.groups,
+                "profile_top_k": self.profile_top_k,
+                "units": (
+                    None
+                    if self.profile_units is None
+                    else {
+                        "sentences": self.profile_units.sentences.version,
+                        "ngrams": self.profile_units.ngrams.version,
+                    }
+                ),
+                "note": (
+                    "the chunk profile: the text is cut into its sentence units "
+                    "and its word pieces, and every unit's cosine against the "
+                    "label is ranked. The LABEL side is one unit (the UPR labels "
+                    "are 1-3 words, so the label side is the identity — the "
+                    "CS-8b verdict), so the profile says how well the label "
+                    "matches the text's finest units. The alignment kinds say "
+                    "which granularity produced the best match and whether the "
+                    "aligned unit and the label's name share a content word."
+                ),
             },
             "note": (
                 "the pack is label-free and cell-local: no corpus statistic, no "
@@ -499,6 +574,9 @@ class UprFeatureExtractor:
             if "label_type" in self.groups
             else {}
         )
+        # The chunk profile's units (the sentences and the word pieces) on the
+        # text side; the label side is one unit (the label's own vector).
+        profile = self._profile_sides(items, label_vectors, text_vectors.shape[1])
 
         top_k = self.top_k
         for position, text in enumerate(items):
@@ -536,7 +614,149 @@ class UprFeatureExtractor:
                 for column, label in enumerate(self.labels):
                     if label.parent is not None and label.parent in type_index:
                         values[column, type_index[label.parent]] = 1.0
+            # 6. the chunk profile (the CS-8e group)
+            if profile is not None:
+                self._profile_values(values, profile, position)
         return matrix
+
+    def _profile_sides(
+        self,
+        texts: Sequence[str],
+        label_vectors: np.ndarray,
+        dimension: int,
+    ) -> dict[str, Any] | None:
+        """The profile's two unit sides and their cross-similarity blocks.
+
+        ``None`` when the pack has no unit splitters (the profile's columns
+        then stay 0 — the pack still computes every other feature).
+        """
+        if self.profile_units is None:
+            return None
+        sentence_texts, sentence_vectors = self._encode_units(
+            self.embedders.text_sentences,  # type: ignore[arg-type]
+            self.profile_units.sentences,
+            texts,
+            "query",
+            dimension,
+        )
+        ngram_texts, ngram_vectors = self._encode_units(
+            self.embedders.text_ngrams,  # type: ignore[arg-type]
+            self.profile_units.ngrams,
+            texts,
+            "query",
+            dimension,
+        )
+        return {
+            "sentence_texts": sentence_texts,
+            "ngram_texts": ngram_texts,
+            "sentence_blocks": [units @ label_vectors.T for units in sentence_vectors],
+            "ngram_blocks": [units @ label_vectors.T for units in ngram_vectors],
+        }
+
+    def _encode_units(
+        self,
+        embedder: Embedder,
+        chunker: Chunker,
+        texts: Sequence[str],
+        kind: str,
+        dimension: int,
+    ) -> tuple[list[tuple[str, ...]], list[np.ndarray]]:
+        """Cut every text into its units and embed them in one batch.
+
+        Returns:
+            The units' texts and their vectors, one entry per text.
+        """
+        chunk_lists = chunker.segment(list(texts))
+        flat: list[str] = []
+        rows: list[tuple[int, ...]] = []
+        for chunk_list in chunk_lists:
+            start = len(flat)
+            flat.extend(chunk_list)
+            rows.append(tuple(range(start, len(flat))))
+        vectors = (
+            np.asarray(embedder.encode(flat, kind), dtype=np.float32)  # type: ignore[arg-type]
+            if flat
+            else np.zeros((0, dimension), dtype=np.float32)
+        )
+        unit_texts = [tuple(chunk_list) for chunk_list in chunk_lists]
+        unit_vectors = [
+            vectors[np.asarray(row, dtype=np.int64)]
+            if row
+            else np.zeros((0, dimension), dtype=np.float32)
+            for row in rows
+        ]
+        return unit_texts, unit_vectors
+
+    @staticmethod
+    def _ranked_rows(sorted_block: np.ndarray, ranks: int) -> np.ndarray:
+        """The top ranks of a sorted block, one row per label (zero-padded).
+
+        The block is ``(n_units, n_labels)`` (the units down, the labels
+        across); the result is its transpose, so a text with fewer units than
+        the rank count is zero-padded (the OMCT pack's convention).
+        """
+        n_labels = sorted_block.shape[1]
+        out = np.zeros((n_labels, ranks), dtype=np.float64)
+        take = min(ranks, sorted_block.shape[0])
+        if take:
+            out[:, :take] = sorted_block[:take].T
+        return out
+
+    def _profile_values(
+        self,
+        values: np.ndarray,
+        profile: dict[str, Any],
+        position: int,
+    ) -> None:
+        """The profile's columns of one text (the ranked profile and the kinds).
+
+        The layout of the profile's columns: the sentence granularity's ranks,
+        the word-piece granularity's ranks, then the four alignment kinds.
+        """
+        first = len(self._canonical_names) - len(self._profile_feature_names())
+        ranks = self.profile_top_k
+        sentence_texts: list[tuple[str, ...]] = profile["sentence_texts"]
+        ngram_texts: list[tuple[str, ...]] = profile["ngram_texts"]
+        sentence_block = profile["sentence_blocks"][position]
+        ngram_block = profile["ngram_blocks"][position]
+        if sentence_block.size == 0 and ngram_block.size == 0:
+            return
+        sentence_sorted = np.sort(sentence_block, axis=0)[::-1]
+        ngram_sorted = np.sort(ngram_block, axis=0)[::-1]
+        values[:, first : first + ranks] = self._ranked_rows(sentence_sorted, ranks)
+        values[:, first + ranks : first + 2 * ranks] = self._ranked_rows(ngram_sorted, ranks)
+
+        # the best alignment over both granularities (a tie goes to the
+        # sentences, so the kind is deterministic)
+        empty = np.full(values.shape[0], -np.inf)
+        sentence_best = sentence_sorted[0] if sentence_sorted.size else empty
+        ngram_best = ngram_sorted[0] if ngram_sorted.size else empty
+        sentence_index = np.argmax(sentence_block, axis=0) if sentence_block.size else None
+        ngram_index = np.argmax(ngram_block, axis=0) if ngram_block.size else None
+        for column in range(values.shape[0]):
+            if sentence_best[column] >= ngram_best[column]:
+                values[column, first + 2 * ranks] = 1.0
+                unit = (
+                    sentence_texts[position][int(sentence_index[column])]
+                    if sentence_index is not None
+                    else ""
+                )
+            else:
+                values[column, first + 2 * ranks + 1] = 1.0
+                unit = (
+                    ngram_texts[position][int(ngram_index[column])]
+                    if ngram_index is not None
+                    else ""
+                )
+            # the lexicalness: does the aligned unit share a content word with
+            # the label's name?
+            shared = set(content_tokens(unit, self.stopwords)) & set(
+                content_tokens(self.labels[column].name, self.stopwords)
+            )
+            if shared:
+                values[column, first + 2 * ranks + 2] = 1.0
+            else:
+                values[column, first + 2 * ranks + 3] = 1.0
 
 
 def _token_ngrams(token: str, size: int = 3) -> frozenset[str]:

@@ -3802,3 +3802,146 @@ gradient-boosted combiner behind the same port, the chunk-profile block as the
 pack's fifth group, the feature-group ablation (the groups are a config knob)
 and the per-feature diagnostics — with the **lexical** block's transfer as the
 headline question, which this change set has answered.
+
+## CS-8e — the chunk profile, the feature-group ablation and the boosted combiner (2026-10-26)
+
+**Ten runs**, all on the UPR **val** split, all in the same harness as CS-8d
+(the whole-text reference arm in the same run, so the pairing is by
+construction; the guard holds for all fifteen UPR runs).
+
+- `upr-analyze-learned-cp-{base,full,profile}` — the **chunk profile** as the
+  pack's fifth group (the same three arms as OMCT's CS-6c: the base pack, the
+  full pack, the profile alone).
+- `upr-analyze-learned-abl-{embed,lex,noembed,nolex}` — the **feature-group
+  ablation** (the groups are a config knob: the pack never changes, only the
+  columns the combiner sees).
+- `upr-analyze-learned-histgb-{full,lex-only,embed-only}` — the
+  **gradient-boosted combiner** (sklearn's `HistGradientBoostingClassifier`,
+  the pinned defaults, no grid) behind the same port.
+
+The `cp-base` run reproduces the CS-8d run's numbers exactly (micro-F1
+0.4749, the shortlist R@50 0.8692) — the two sweeps' cross-check.
+
+### The ablation: the lexical block does **not** carry the gain here
+
+| arm (the group set) | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | the random-vector floor |
+|---|---|---|---|---|---|
+| the reference arm (the whole-text champion) | **0.5479** | 0.5006 | **0.6725** | 0.7423 | — |
+| `base` (embedding + lexical) | 0.4749 | 0.4842 | 0.6070 | 0.8692 | 0.3837 |
+| `full` (embedding + lexical + profile) | 0.4704 | 0.4846 | 0.6074 | 0.8721 | 0.3815 |
+| `profile` alone (the chunk profile) | 0.4726 | 0.4960 | 0.6122 | **0.8734** | 0.1421 |
+| `embed` (the embedding block alone) | 0.4460 | 0.4479 | 0.5878 | 0.8639 | 0.0258 |
+| `lex` (the lexical block alone) | 0.3837 | 0.3904 | 0.4985 | 0.8673 | — (the pack *is* the floor) |
+| `noembed` (lexical + profile) | 0.4749 | 0.4902 | 0.6070 | 0.8746 | — |
+| `nolex` (embedding + profile) | 0.4726 | 0.4967 | 0.6148 | 0.8734 | 0.1459 |
+
+**The pre-registered question — "does the lexical signal transfer?" — is
+answered: it transfers, but it is *not* the dominant block on this
+vocabulary.** On OMCT the lexical block was the signal (the embedding block
+alone was at its own floor). On UPR the ranking is the other way round: the
+**embedding block alone** (0.4460) is *above* the **lexical block alone**
+(0.3837), and the lexical block adds **+0.0289** on top of the embedding
+block (0.4460 → 0.4749). The lexical block's own contribution to the pack is
+what the random-vector floor measures: the base pack loses 0.0912 of micro-F1
+when the embedding sides are replaced with noise (0.4749 → 0.3837) — so the
+lexical features carry 81% of the pack's number, but the pack's number is
+below the champion's in any case.
+
+**The chunk profile is not the lever** (the OMCT verdict transfers): in the
+full pack it costs **-0.0045** of micro-F1 (0.4749 → 0.4704, a wash), and its
+random-vector floor (0.1421 against the real arm's 0.4726) says its signal
+*is* the embedding geometry re-measured at a finer granularity. The profile
+*alone* is a good arm (0.4726, the best shortlist of the pack family at
+0.8734) — but `nolex` (the embedding block + the profile) gives **exactly**
+the profile's numbers (0.4726), i.e. the embedding block adds nothing on top
+of the profile: the two are the same signal measured twice.
+
+**The per-feature diagnostics** (the CS-6c precedent, on the UPR grid: every
+feature's own AUC against the gold cells, its background-side counterpart and
+its length correlation — the `cp-full` artifact) say the same thing from the
+feature level:
+
+| feature | its own AUC (val) | the gold's mean vs the background's | the length correlation |
+|---|---|---|---|
+| `cprof_ngram_top1` | 0.7927 | 0.3950 vs 0.2909 | +0.259 |
+| `chunk_cosine_best` | 0.7884 | 0.3379 vs 0.2348 | +0.197 |
+| `chunk_cosine_top2_mean` | 0.7835 | 0.3049 vs 0.2181 | +0.113 |
+| `cosine_full` | 0.7818 | 0.2988 vs 0.2030 | -0.110 |
+| `cprof_sent_top1` | 0.7812 | 0.2993 vs 0.2035 | -0.103 |
+| `lex_label_coverage` | 0.7566 | 0.5159 vs 0.2085 | +0.274 |
+| `lex_char_ngram_cosine` | 0.7484 | 0.1994 vs 0.0911 | +0.096 |
+| `lex_text_coverage` | 0.7174 | 0.1084 vs 0.0480 | -0.007 |
+| `cprof_align_lexical` | 0.7177 | 0.5404 vs 0.1050 | +0.065 |
+| `cprof_ngram_top2` | 0.7222 | 0.2942 vs 0.2370 | **+0.451** |
+| `cprof_ngram_top3` | 0.6621 | 0.2311 vs 0.1897 | **+0.605** |
+| `chunk_cosine_spread` | 0.6005 | 0.0384 vs 0.0202 | +0.371 |
+| `chunk_peak_margin` | 0.5994 | 0.0434 vs 0.0223 | +0.393 |
+| `cprof_sent_top2` / `cprof_sent_top3` | 0.5010 / 0.5008 | ~0 | +0.130 / +0.058 |
+| `cprof_align_sent` / `cprof_align_ngram` | 0.5144 / 0.4856 | ~0 | -0.206 / +0.206 |
+| `cprof_align_semantic_only` | 0.2823 | 0.4596 vs 0.8950 | -0.065 |
+
+Three readings:
+
+1. **The profile's rank columns re-measure the embedding geometry** (the
+   top-1 ranks are within 0.01 of the chunk cosines) and its **lower ranks
+   are length proxies** (the correlation grows from +0.259 at the top-1 rank
+   to **+0.605** at the top-3 rank) — the CS-6c finding, reproduced on UPR.
+2. **The profile's second sentence is at chance** (0.5010): UPR's texts have
+   one or two sentences, so the second and third sentence ranks carry
+   nothing. The profile's *granularity* kinds (`align_sent` 0.5144,
+   `align_ngram` 0.4856) are at chance too.
+3. **The profile's one new signal is lexical**: `cprof_align_lexical` (the
+   aligned unit shares a content word with the label's name) reaches
+   **0.7177**, and its complement `cprof_align_semantic_only` 0.2823. That is
+   the *lexical block re-measured at the unit level* — which is why the
+   profile adds nothing to the pack that already has it.
+
+### The boosted combiner: on UPR the learner *does* matter (a little)
+
+| arm (the group set) | the logistic's micro-F1 | the booster's micro-F1 | the logistic's R@50 | the booster's R@50 |
+|---|---|---|---|---|
+| `full` (embedding + lexical + profile) | 0.4704 | **0.4818** | 0.8721 | **0.8909** |
+| `lex` (the lexical block alone) | 0.3837 | **0.4043** | 0.8673 | **0.8991** |
+| `embed` (the embedding block alone) | **0.4460** | 0.4293 | 0.8639 | 0.8697 |
+
+On OMCT the booster was *below* the logistic on 8 of the 9 arms ("the learner
+is not the lever"); on UPR it is **above** on the two packs that carry the
+lexical block (+0.0114 and +0.0206 of micro-F1) and below on the
+embedding-only arm (-0.0167). So the OMCT verdict **does not transfer** — but
+the booster still does not beat the champion at the decision view (0.4818 vs
+0.5479; the paired interval against the reference arm: -0.0661 [-0.0924,
+-0.0390]).
+
+**The booster's shortlist recall is the best the track has measured on UPR**
+(0.8909-0.8991 against the champion's 0.7423 and the logistic's 0.8692-0.8746)
+— the shortlist side, which is where PLAN's Phase-6 reranker slot lives.
+
+**And the booster's chance floor is tight** (micro-F1 0.0388-0.0616 against
+the logistic's 0.0540-0.3465): a tree ensemble fitted on a *random* 2.7%
+target does not find the feature space's dominant axis the way a linear model
+does — so the CS-8d finding ("the chance floor is a distribution, because the
+feature space has a dominant topical axis") is a property of the **linear**
+learner, not of the pack. The control-role floor stays at chance for the
+booster too (0.0122-0.0274).
+
+**What this change set does not say.**
+
+- **Nothing about the calibration or the decision-rule comparison** (CS-8f).
+- **Nothing about the decision models on UPR** (CS-9) and nothing about
+  `test` — only val was touched.
+- **The booster's arms are three group sets**, not the whole ladder: the
+  OMCT precedent (`all`, `lex-only`, `embed-only`) with UPR's group names.
+- **The two learners' arms live in different runs**, so they are compared
+  through their own paired intervals against the shared reference arm (the
+  whole-text champion) and not through a paired per-pair bootstrap between the
+  two runs (the OMCT track's `tools/compare_stage3_arms.py` reads the
+  out-of-fold scores; the UPR driver does not write them, so the UPR
+  comparison is the per-arm number beside the shared reference).
+- **The per-feature diagnostics are on the evaluated split and the fit side**,
+  and they say what a feature is worth *alone*; they do not say what the
+  combiner used it for (the combiner's coefficients are in the artifact).
+
+**The next step.** CS-8f: the reporting blocks — the calibration (the ECE,
+the Brier score, the reliability diagram, pooled and per bucket) and the
+decision-rule comparison (`top_k`, `score_threshold`, `top_k_min_score`) on
+the best arm.

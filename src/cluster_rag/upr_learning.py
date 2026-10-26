@@ -324,6 +324,15 @@ def score_upr_learned_arms(
         "pack": extractor.describe(),
         "combiner": _describe_combiner(combiner),
         "coefficients": _named_coefficients(combiner, extractor.feature_names),
+        "feature_diagnostics": _feature_diagnostics(
+            train_features=train_features,
+            train_gold=np.asarray(train_gold, dtype=bool),
+            train_texts=train_texts,
+            eval_features=eval_features,
+            eval_gold=np.asarray(eval_gold, dtype=bool),
+            eval_texts=eval_texts,
+            feature_names=extractor.feature_names,
+        ),
         "training": {
             "fit_side": "train",
             "evaluation": "the evaluated split (val)",
@@ -349,6 +358,48 @@ def score_upr_learned_arms(
         "seed": int(seed),
     }
     return UprLearningResult(scores=scores, meta=meta)
+
+
+def _feature_diagnostics(
+    *,
+    train_features: np.ndarray,
+    train_gold: np.ndarray,
+    train_texts: Sequence[str],
+    eval_features: np.ndarray,
+    eval_gold: np.ndarray,
+    eval_texts: Sequence[str],
+    feature_names: Sequence[str],
+) -> dict[str, Any]:
+    """The per-feature diagnostics of the evaluated and the fit side.
+
+    The CS-6c precedent, adapted to the UPR grid: every feature's own ranking
+    quality, its background-side counterpart and its length correlation. The
+    evaluated split's block is the headline; the fit side's AUC is reported
+    beside it (a feature that only works on the fit side is a fit-side
+    artefact).
+    """
+    from cluster_rag.text_processors.upr_diagnostics import feature_diagnostics
+
+    evaluated = feature_diagnostics(
+        eval_features,
+        eval_gold,
+        [len(text) for text in eval_texts],
+        feature_names,
+    )
+    fitted = feature_diagnostics(
+        train_features,
+        train_gold,
+        [len(text) for text in train_texts],
+        feature_names,
+    )
+    for name, block in evaluated["features"].items():
+        block["auc_train"] = fitted["features"][name]["auc"]
+    evaluated["fit_side"] = {
+        "n_cells": fitted["n_cells"],
+        "n_texts": fitted["n_texts"],
+        "note": "the fit side's own numbers (the AUC of every feature there)",
+    }
+    return evaluated
 
 
 def _describe_combiner(combiner: Combiner) -> dict[str, Any]:

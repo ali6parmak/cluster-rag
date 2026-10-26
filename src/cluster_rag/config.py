@@ -1271,6 +1271,9 @@ class UprLearnedConfig(BaseModel):
         top_k: The K of the top-K chunk similarities.
         chunker: The chunker whose chunks the pack's chunk-level features are
             measured on (the text side only).
+        profile_top_k: How many ranks of the chunk profile are kept per
+            granularity (the sentence profile and the word-piece profile).
+        profile_ngram_size: The nominal size of the profile's word pieces.
         combiner: The learned scorer (the logistic regression by default; the
             gradient-boosted one is a config choice).
         control_weight: The training weight of the non-gold cells (presumed
@@ -1288,6 +1291,8 @@ class UprLearnedConfig(BaseModel):
     chunker: ChunkerSpec = Field(
         default_factory=lambda: ChunkerSpec(name="atoms", params={"split_clauses": True})
     )
+    profile_top_k: int = Field(default=3, ge=1)
+    profile_ngram_size: int = Field(default=5, ge=2)
     combiner: CombinerSpec = Field(default_factory=CombinerSpec)
     control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     floors: UprLearnedFloorsConfig = Field(default_factory=UprLearnedFloorsConfig)

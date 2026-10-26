@@ -2097,7 +2097,7 @@ The **pre-registered expectations** (written down before the runs):
   catalog (`paths.label_catalog: null`), so the run packs the two
   catalog-free groups only. The numbers are in the track log's CS-8d
   section; 540 unit tests green.)*
-- [ ] **CS-8e — the two "not the lever" checks and the ablation, re-run on
+- [x] **CS-8e — the two "not the lever" checks and the ablation, re-run on
   UPR.** The **gradient-boosted combiner** (`HistGradientBoostingClassifier`,
   the pinned defaults, no grid) behind the same port, with the feature-group
   selection as the knob; the **chunk-profile block** as the pack's fifth group
@@ -2108,6 +2108,36 @@ The **pre-registered expectations** (written down before the runs):
   length correlation).
   *Exit:* the two OMCT verdicts ("the learner is not the lever", "the chunk
   profile is not the lever") re-measured on UPR, and the ablation's answer.
+  *(done 2026-10-26: the chunk profile as the pack's fifth group (the text cut
+  into its sentence units and its word pieces, the label side one unit — the
+  CS-8b verdict — with the profile's ranks and the four alignment kinds), the
+  per-feature diagnostics (every feature's own AUC, its background-side
+  counterpart and its length correlation, the CS-6c precedent on the UPR
+  grid), and ten runs: `upr-analyze-learned-cp-{base,full,profile}`,
+  `upr-analyze-learned-abl-{embed,lex,noembed,nolex}` and
+  `upr-analyze-learned-histgb-{full,lex-only,embed-only}` (the booster is
+  sklearn's `HistGradientBoostingClassifier` with the pinned defaults, no
+  grid — the registry entry already existed). The guard holds for all fifteen
+  UPR runs, and the `cp-base` run reproduces the CS-8d run's numbers exactly.
+  **Verdicts:** the **chunk profile is not the lever** (the OMCT verdict
+  transfers): it costs -0.0045 of micro-F1 in the full pack, its random-vector
+  floor (0.1421 against the real arm's 0.4726) says its signal is the
+  embedding geometry re-measured, its lower ranks are **length proxies** (the
+  length correlation grows from +0.259 to +0.605 with the rank's depth) and
+  its second sentence is at chance (UPR's texts have one or two sentences);
+  the profile's one new signal is **lexical** (the alignment kind
+  `cprof_align_lexical` reaches 0.7177), which the lexical block already
+  carries. The **ablation's answer**: the lexical block transfers but it is
+  **not** the dominant block on this vocabulary (the opposite of OMCT) — the
+  embedding block alone reaches 0.4460 against the lexical block's 0.3837,
+  and the lexical block adds +0.0289 on top of the embedding block. And the
+  **learner does matter a little on UPR** (the opposite of OMCT's "the learner
+  is not the lever"): the booster is above the logistic on the two packs that
+  carry the lexical block (+0.0114 and +0.0206 of micro-F1) and below on the
+  embedding-only arm, and its shortlist recall (0.8909-0.8991) is the best
+  the track has measured on UPR — but it still does not beat the champion at
+  the decision view. The numbers are in the track log's CS-8e section; 545
+  unit tests green.)*
 - [ ] **CS-8f — the reporting blocks.** The **calibration** block (ECE, Brier,
   the reliability diagram, pooled and per bucket) and the **decision-rule
   comparison** (`top_k`, `score_threshold`, `top_k_min_score`) on the best
