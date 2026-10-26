@@ -4024,3 +4024,145 @@ synthetic competence control beside every arm, the grid arm and the
 safe-negative rule in its three forms with the label-blind counterpart beside
 them, and the shortlist rerank. **CS-10 (the LLM stage) waits for the
 reviewer's explicit OK** — it is not started.
+
+## CS-9 — the decision models on UPR (a measurement) (2026-10-26)
+
+**The runs.** Five, all on the UPR **val** split, through the existing
+`Decider` port and the `/v1/systemone` client (the model id **and** digest
+pinned, the prompt version recorded, the calls cached — a re-run of the sweep
+reproduces every number exactly from the cache, in 0.3 s per run):
+
+| run | model | shape / type | texts | cells | calls |
+|---|---|---|---|---|---|
+| `upr-decide-tev1-paragraph-noul` | tev1 | paragraph / noul | 150 | 10,200 | 300 + 300 |
+| `upr-decide-tev1-paragraph-choice` | tev1 | paragraph / choice | 150 | 10,200 | 300 + 300 |
+| `upr-decide-laya-paragraph-noul` | laya | paragraph / noul | 150 | 10,200 | 602 + 602 |
+| `upr-decide-laya-paragraph-choice` | laya | paragraph / choice | 150 | 10,200 | 602 + 602 |
+| `upr-decide-tev1-pair-choice` | tev1 | pair / choice | 20 | 1,360 | 1,360 + 1,360 |
+
+**The scope, and the deviation from the plan's wording (the reviewer's call).**
+The plan's CS-9 lists the **grid arm** (the whole (text x label) grid), the
+safe-negative rule in its three forms and the shortlist rerank. The cost of
+the full grid is now **measured**, and it is the reason for the deviation: the
+`paragraph` shape is ~2 calls per text (~1,320 calls per model for the val
+grid), and the `pair` shape is **one call per (text, label) cell** — the
+pair-shape arm made 1,360 calls for 20 texts, i.e. **68 calls per text**
+against the paragraph shape's 2, so the full val grid in that shape is ~44,880
+calls per arm per model. This change set therefore measures a **seeded sample**
+(150 of the 660 val texts for the paragraph shape, 20 for the pair shape), and
+**the full grid, the safe-negative rule and the shortlist rerank are left for a
+follow-up (CS-9b)** with that cost in front of it. The sample is the same
+texts for every arm (so the arms are paired), and the artifact carries the
+**pipeline's own scoring of the same cells** (the champion's scores restricted
+to the sample's texts), so every probe number has its reference beside it on
+the same texts.
+
+### The headline (val, the sample's 150 texts; the champion on the same texts)
+
+| scorer | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | hit@1 | the gold's rank p50 |
+|---|---|---|---|---|---|---|
+| **the reference arm (the whole-text champion)** | 0.5415 | 0.4966 | 0.6565 | 0.7322 | 0.3510 | 0.0147 |
+| **tev1, paragraph / noul** | **0.5482** | **0.5713** | **0.7055** | **0.9978** | 0.3344 | 0.0147 |
+| tev1, paragraph / choice | 0.5349 | 0.5638 | 0.6861 | 0.9978 | 0.3278 | 0.0147 |
+| laya, paragraph / noul | 0.2226 | 0.2087 | 0.3376 | 0.9956 | 0.1457 | 0.1029 |
+| laya, paragraph / choice | 0.1960 | 0.1815 | 0.2810 | 0.9728 | 0.1060 | 0.1324 |
+| the label-blind counterpart (tev1, noul) | **0.0365** | — | 0.0789 | 0.7778 | 0.0199 | — |
+
+**tev1 beats the champion on the decision view (+0.0067 of micro-F1) and on
+the ranking view (+0.0490 of nDCG@5), and it is a near-perfect *candidate
+generator*: the shortlist recall@50 is 0.9978 against the champion's 0.7322 —
+the decision model puts the gold label in the text's top-50 of 68 labels
+almost always, where the champion's kNN and prototype terms lose 27 points of
+gold cells.** That is the most Phase-6-relevant number the track has measured
+on UPR.
+
+**The label-blind counterpart is at chance** (the micro-F1 0.0365 against the
+random top-2 expectation of ~0.029, the nDCG@5 0.0789), so the decision
+model's quality is **label-driven**: it is not a construction artefact of UPR's
+label space. (The same yardstick on OMCT is what turned the safe-negative
+rule's cost into a quality claim, CS-7b.)
+
+**The competence control passes decisively** (the AUC 0.9816 for tev1's `noul`
+arm, 0.9896 for its `choice` arm, 0.9008 / 0.8840 for laya's), so a
+chance-level reading is never the ambiguity here: the models are the right
+shape.
+
+**laya is much weaker than tev1** (the micro-F1 0.2226 / 0.1960 against
+tev1's 0.5482 / 0.5349) — the same ordering as on OMCT (CS-7a). But laya's
+**shortlist** is nearly as good (0.9956 / 0.9728): it ranks the gold label
+inside the top-50 but rarely at the top (the hit@1 0.1457 / 0.1060 against
+tev1's 0.3344), so its loss is a *top-1* loss, not a *ranking* loss.
+
+**The prompt grid, on UPR: the `noul` type beats the `choice` type for tev1**
+(the micro-F1 0.5482 against 0.5349) — the **opposite** of OMCT, where the
+`choice` won (CS-7a). The `choice` type is however **better calibrated**
+(the ECE 0.1553 against 0.1971, the Brier 0.0735 against 0.0933). For laya
+the `choice` type is worse on every count (the micro-F1 0.1960, the ECE
+**0.3994**, the Brier 0.2436).
+
+### The unseen labels: the decision model finds what the champion cannot
+
+| bucket | the champion's micro-F1 / coverage / nDCG@5 | tev1 (noul) | the label-blind counterpart |
+|---|---|---|---|
+| head | 0.6903 / 1.000 / 0.9831 | 0.6271 / 1.000 / 0.8981 | 0.1425 / 1.000 / 0.2977 |
+| torso | 0.4713 / 0.958 / 0.8505 | 0.5000 / 0.958 / 0.8195 | 0.0213 / 1.000 / 0.1397 |
+| tail | 0.5882 / 0.769 / 0.9330 | 0.5333 / 1.000 / 0.9385 | 0.0308 / 1.000 / 0.2357 |
+| **unseen** | **0.0000 / 0.000 / 0.6046** | **0.4706 / 1.000 / 0.8737** | 0.1090 / 1.000 / 0.4456 |
+
+**The decision model discovers the eight label-holdout labels** (the unseen
+bucket: the micro-F1 0.4706 against the champion's 0.0000, the coverage 1.000
+against 0.000, the nDCG@5 0.8737 against 0.6046) — and the label-blind
+counterpart does not (0.1090), so the discovery is the model's own reading
+of the text, not a construction artefact. This is the strongest UPR argument
+for a decision model in the loop: the champion's geometry **cannot** suggest
+a label it has never seen (the CS-8a verdict), and neither can the CS-8d
+feature pack without its lexical block — but a decision model can, because it
+reads the *text* against the *label's name*.
+
+The decision model is *worse* on the head bucket (0.6271 against the
+champion's 0.6903) and better on the torso and the unseen ones: the two
+scorers are complementary, and the champion's head labels (the frequent ones)
+are exactly the ones the kNN and prototype terms get right.
+
+### The probability compression (measured, not assumed)
+
+| arm | the gold cells' mean probability | the background's | the gold above 0.5 | the background above 0.5 | the ECE |
+|---|---|---|---|---|---|
+| tev1, noul | 0.7578 | 0.2105 | 0.8675 | 0.1430 | 0.1971 |
+| tev1, choice | 0.7371 | 0.1681 | 0.8510 | 0.1116 | 0.1553 |
+| laya, noul | 0.4852 | 0.1813 | 0.5232 | 0.1053 | 0.1607 |
+| laya, choice | 0.7241 | **0.4200** | 0.8543 | **0.3716** | 0.3994 |
+
+**tev1 is not compressed** (the gold cells' mean 0.7578, 87% of them above
+0.5) — the opposite of the CS-7b decision arm on OMCT (the positives' mean
+0.41, "the model is calibrated but its probabilities are compressed"). So on
+UPR a **fixed 0.5 cut is a meaningful operating point** for tev1, which the
+OMCT stage could not say. **laya is the compressed one** (its `noul` arm's
+gold mean 0.4852, 52% above 0.5) and its `choice` arm is compressed the other
+way (it says "yes" too often: 37% of the background cells are above 0.5),
+which is why its calibration is the worst of the four (the ECE 0.3994).
+
+**What this change set does not say.**
+
+- **Nothing about the full grid, the safe-negative rule or the shortlist
+  rerank** (CS-9b): the cost of the grid is measured and stated above, and
+  the rule needs the grid.
+- **Nothing about `test`** — only val was touched.
+- **The sample's numbers are the sample's**: 150 texts (302 gold cells) for
+  the paragraph shape and 20 texts (40 gold cells) for the pair shape, so the
+  pair shape's numbers are indicative only (its job here is the shape's
+  **cost**: 68 calls per text against 2).
+- **The decision models are frozen and zero-shot**: they carry no UPR label,
+  so nothing leaks; and a decision model only *scores* — it never relabels,
+  curates or corrects the data.
+- **The non-gold labels' true positive rate is unmeasured**, so these numbers
+  are a reach and a cost, never a precision claim. The label-blind
+  counterpart is the yardstick that says how much of the cost is the model's
+  own label-blind signal, and the competence control says the model is the
+  right shape.
+
+**The next step.** CS-9b: the full-grid arm, the safe-negative rule in its
+three forms (the fixed 0.5 cut, the fit-side threshold, the margin rule) with
+the label-blind counterpart beside them, and the shortlist rerank — the
+numbers the Phase-6 slot needs. **CS-10 (the LLM stage) still waits for the
+reviewer's explicit OK.**

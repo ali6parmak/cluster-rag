@@ -90,6 +90,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_UPR_KEY_COLUMNS,
     DECIDE_OMCT_COLUMNS,
     DECIDE_OMCT_KEY_COLUMNS,
+    DECIDE_UPR_COLUMNS,
+    DECIDE_UPR_KEY_COLUMNS,
     EMBED_COLUMNS,
     EMBED_KEY_COLUMNS,
     EVALUATE_COLUMNS,
@@ -145,6 +147,7 @@ from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import aggregate_chunk_similarities, parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
 from cluster_rag.text_processors.combining import COMBINER_LOGISTIC, build_combiner
+from cluster_rag.text_processors.decision.upr_probe import measure_upr_arm
 from cluster_rag.text_processors.features import (
     FeatureEmbedders,
     PairFeatureExtractor,
@@ -168,6 +171,13 @@ from cluster_rag.upr_analysis import (
     encode_late_chunks,
     fusion_components,
     symmetric_arm_scores,
+)
+from cluster_rag.upr_decision import (
+    UprDecisionSample,
+    build_upr_decision_report,
+    run_upr_competence_control,
+    run_upr_decision_arm,
+    sample_texts,
 )
 from cluster_rag.upr_learning import score_upr_learned_arms
 
@@ -367,6 +377,31 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     analyze_upr.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with eval: and upr_analysis: sections (or "
+        "sweep-resolved configs; experiment values live in "
+        "experiments_text_processing/*.py sweeps).",
+    )
+
+    decide_upr = subparsers.add_parser(
+        "decide-upr",
+        help="Text-processing track: the UPR decision-model probe (decide-upr).",
+        description=(
+            "The text-processing track's UPR decision probe "
+            "(TEXT_PROCESSING_PLAN.md, CS-9): the decision models answer the "
+            "UPR-native question ('is this text about <label>?') per label, and "
+            "the probe measures what their probability buys — the decision view "
+            "and the ranking view, the gold side and the background side, the "
+            "calibration and the probability compression — with the synthetic "
+            "competence control and the label-blind counterpart beside every "
+            "arm. The models are measurement instruments: they never enter the "
+            "pipeline. Writes results/<run_id>/decisions.json; the row goes to "
+            "the track's own UPR table."
+        ),
+    )
+    decide_upr.add_argument(
         "--config",
         type=Path,
         required=True,
@@ -2405,6 +2440,27 @@ def build_decider(model_config: Any, config: AppConfig) -> Any:
     return CachedDecider(client, config.paths.cache, prompt_version=prompt_version)
 
 
+def build_upr_decider(model_config: Any, config: AppConfig) -> Any:
+    """Build the UPR probe's decision model client (the CLI's wiring seam).
+
+    The same raw ``POST /v1/systemone`` caller as the OMCT probe (the
+    endpoint is in neither the Ollama CLI nor its Python/JS libraries): it
+    checks the pinned digest against the server's and **fails the run** on a
+    mismatch, and the decision models' own disk cache wraps it (its own root
+    under ``cache/``, never the embedding cache), so a re-run is reproducible
+    and never re-judges a cell.
+    """
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    decision = config.upr_analysis.decision if config.upr_analysis else None
+    client = SystemOneDecider(
+        model_config,
+        host=decision.host if decision else "",
+        timeout=decision.timeout if decision else 600.0,
+    )
+    prompt_version = decision.prompt_version if decision else "v1"
+    return CachedDecider(client, config.paths.cache, prompt_version=prompt_version)
+
+
 def _decide_omct_row(
     model_block: dict[str, Any],
     *,
@@ -2634,6 +2690,301 @@ def _cmd_decide_omct(config: AppConfig) -> int:
         )
     print(f"Report written to {results_dir / 'decisions.json'}")
     return 0
+
+
+def _cmd_decide_upr(config: AppConfig) -> int:
+    """Run decide-upr: the track's UPR decision-model probe (CS-9).
+
+    The decision models are **measurement instruments** on the UPR side: they
+    answer the UPR-native question ("is this text about *<label>*?") per
+    label, and the probe measures what their probability buys. They never
+    enter the pipeline.
+
+    Writes ``results/<run_id>/{config.yaml, decisions.json}``: the sample, the
+    arms' measurement blocks (the decision view, the ranking view, the gold
+    side, the background side, the calibration and the probability
+    compression), the **label-blind counterpart** beside every arm, the
+    synthetic competence control and the provenance (the model id, the pinned
+    digest, the prompt version, the cache's counters) — per arm.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.upr_analysis is None:
+        raise ValueError(
+            "the upr_analysis: section (the decision models and the prompt grid) "
+            "is required for the `decide-upr` command"
+        )
+    decision = config.upr_analysis.decision
+    if not decision.models:
+        raise ValueError(
+            "the upr_analysis.decision: section carries no model: the `decide-upr` "
+            "command needs at least one pinned decision model"
+        )
+    if config.eval is None:
+        raise ValueError(
+            "the eval: section (the decision rule) is required for the `decide-upr` command"
+        )
+    setup = _prepare_evaluation(config, config.eval.split)
+    view = build_upr_view(
+        setup.records,
+        setup.labels,
+        setup.buckets,
+        config.upr_analysis.length_buckets,
+    )
+    if decision.scope == "sample":
+        sample = sample_texts(view, size=decision.sample_size, seed=decision.seed)
+    else:
+        sample = UprDecisionSample(
+            texts=tuple(record.text for record in setup.records),
+            labels=tuple(setup.labels),
+            gold=view.gold,
+            rows=tuple(range(view.n_texts)),
+        )
+
+    arms: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    # The pipeline's own scoring of the **same** cells (the champion's scores
+    # restricted to the sample's texts), so every probe number has its
+    # reference beside it on the same texts.
+    sample_rows = np.asarray(sample.rows, dtype=np.int64)
+    bucket_masks = _upr_bucket_masks(view)
+    reference_block = None
+    if sample_rows.size:
+        reference_block = measure_upr_arm(
+            np.asarray(setup.scores, dtype=np.float64)[sample_rows],
+            sample.gold,
+            decision=eval_decision(config),
+            ks=config.eval.metrics.ks,
+            shortlist_ms=config.eval.metrics.shortlist_ms,
+            bins=decision.bins,
+            bucket_masks=bucket_masks,
+        )
+    for model_config in decision.models:
+        decider = build_upr_decider(model_config, config)
+        arm = DecisionArm(
+            name=model_config.name,
+            state=model_config.state,
+            question_type=model_config.question_type,
+            instructions=model_config.instructions,
+            options=model_config.options,
+            criteria=model_config.criteria,
+            positive_option=model_config.positive_option,
+            max_input_tokens=model_config.max_input_tokens,
+        )
+        block = run_upr_decision_arm(
+            sample,
+            decider,
+            arm,
+            decision=eval_decision(config),
+            ks=config.eval.metrics.ks,
+            shortlist_ms=config.eval.metrics.shortlist_ms,
+            max_questions_per_call=decision.max_questions_per_call,
+            bins=decision.bins,
+            bucket_masks=bucket_masks,
+        )
+        info = decider.info
+        block["model"] = {
+            "name": model_config.name,
+            "model_id": info.model_id,
+            "digest": info.digest,
+            "backend": info.backend,
+            "host": info.host,
+            "prompt_version": decision.prompt_version,
+            "extra": info.extra,
+        }
+        block["cache"] = {
+            "hits": getattr(decider, "cache_hits", 0),
+            "misses": getattr(decider, "cache_misses", 0),
+            "stored": getattr(decider, "n_stored", 0),
+        }
+        block["usage"] = dict(getattr(decider, "usage", {}))
+        if decision.competence_control:
+            block["competence_control"] = run_upr_competence_control(
+                sample,
+                decider,
+                arm,
+                n_pairs=decision.competence_pairs,
+                max_questions_per_call=decision.max_questions_per_call,
+                bins=decision.bins,
+            )
+        if decision.mismatched_control:
+            blind = run_upr_decision_arm(
+                sample,
+                decider,
+                arm,
+                decision=eval_decision(config),
+                ks=config.eval.metrics.ks,
+                shortlist_ms=config.eval.metrics.shortlist_ms,
+                max_questions_per_call=decision.max_questions_per_call,
+                bins=decision.bins,
+                mismatched=True,
+                bucket_masks=bucket_masks,
+            )
+            block["label_blind_counterpart"] = blind
+        arms[model_config.name] = block
+        seconds = round(time.perf_counter() - started, 3)
+        rows.extend(
+            _decide_upr_rows(
+                block,
+                blind=None,
+                run_id=run_id,
+                split=setup.split,
+                scope=decision.scope,
+                n_texts=sample.n_texts,
+                seconds=seconds,
+            )
+        )
+        if decision.mismatched_control:
+            rows.extend(
+                _decide_upr_rows(
+                    block,
+                    blind=block["label_blind_counterpart"],
+                    run_id=run_id,
+                    split=setup.split,
+                    scope=decision.scope,
+                    n_texts=sample.n_texts,
+                    seconds=seconds,
+                )
+            )
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    payload = build_upr_decision_report(
+        sample,
+        arms,
+        run_id=run_id,
+        split=setup.split,
+        source=str(config.paths.data_raw),
+        source_sha256=setup.source_sha256,
+        scope=decision.scope,
+        seed=decision.seed,
+        config_block={
+            "scope": decision.scope,
+            "sample_size": decision.sample_size,
+            "seed": decision.seed,
+            "prompt_version": decision.prompt_version,
+            "competence_control": decision.competence_control,
+            "competence_pairs": decision.competence_pairs,
+            "mismatched_control": decision.mismatched_control,
+            "bins": decision.bins,
+            "max_questions_per_call": decision.max_questions_per_call,
+            "models": [model.model_dump() for model in decision.models],
+            "decision_rule": eval_decision(config),
+            "reference_arm": {
+                "predictor": setup.predictor.describe(),
+                "note": (
+                    "the pipeline's own scoring of the probe's cells (the "
+                    "champion's scores restricted to the sample's texts), so "
+                    "every probe number has its reference beside it on the "
+                    "same texts"
+                ),
+            },
+            "notes": [
+                "the decision models are frozen and zero-shot: they carry no "
+                "UPR label, so nothing leaks into the fit side.",
+                "a decision model only scores: it never relabels, curates or corrects the data.",
+                "the non-gold labels' true positive rate is unmeasured, so "
+                "these numbers are a reach and a cost, never a precision "
+                "claim; the label-blind counterpart is the yardstick that "
+                "says how much of the cost is the model's own label-blind "
+                "signal.",
+            ],
+        },
+        reference=reference_block,
+        total_seconds=round(time.perf_counter() - started, 3),
+    )
+    (results_dir / "decisions.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    _append_command_rows(
+        config,
+        "decide-upr",
+        columns=DECIDE_UPR_COLUMNS,
+        key_columns=DECIDE_UPR_KEY_COLUMNS,
+        rows=rows,
+    )
+
+    print(f"UPR decision probe (CS-9): {run_id}")
+    print(
+        f"  scope: {decision.scope}; {sample.n_texts} texts, {sample.n_labels} labels, "
+        f"{sample.n_cells} cells ({int(sample.gold.sum())} gold)"
+    )
+    for name, block in arms.items():
+        measurement = block["measurement"]
+        print(
+            f"  [{name}] {block['model']['model_id']} "
+            f"(digest {block['model']['digest'][:12]}, {block['state']}/"
+            f"{block['question_type']}): micro-F1 "
+            f"{_fmt(measurement['decision']['micro_f1'], 4)}, nDCG@5 "
+            f"{_fmt(measurement['ranking'].get('ndcg@5'), 4)}, shortlist R@50 "
+            f"{_fmt(measurement['ranking'].get('shortlist_recall@50'), 4)}"
+        )
+        print(
+            f"      calibration: ECE {_fmt(measurement['calibration']['ece'], 4)}, the "
+            f"Brier {_fmt(measurement['calibration']['brier'], 4)}; the compression: the "
+            f"gold's mean probability {_fmt(measurement['compression']['gold_mean'], 4)} "
+            f"against the background's {_fmt(measurement['compression']['background_mean'], 4)}"
+        )
+    print(f"Report written to {results_dir / 'decisions.json'}")
+    return 0
+
+
+def _decide_upr_rows(
+    block: dict[str, Any],
+    *,
+    blind: dict[str, Any] | None,
+    run_id: str,
+    split: str,
+    scope: str,
+    n_texts: int,
+    seconds: float,
+) -> list[dict[str, Any]]:
+    """The table rows of one arm (the arm itself and its label-blind counterpart)."""
+    rows: list[dict[str, Any]] = []
+    pairs = [(block, False)]
+    if blind is not None:
+        pairs.append((blind, True))
+    for source, label_blind in pairs:
+        measurement = source["measurement"]
+        decision = measurement["decision"]
+        ranking = measurement["ranking"]
+        compression = measurement["compression"]
+        competence = (source.get("competence_control") or {}).get("measurement") or {}
+        rows.append(
+            {
+                "run_id": run_id,
+                "date": date.today().isoformat(),
+                "split": split,
+                "model": source.get("arm", ""),
+                "model_version": (source.get("model") or {}).get("model_id"),
+                "state": source.get("state"),
+                "question_type": source.get("question_type"),
+                "scope": scope,
+                "label_blind": "yes" if label_blind else "no",
+                "micro-F1": _fmt(decision["micro_f1"], 4),
+                "macro-F1": _fmt(decision["macro_f1"], 4),
+                "sample-F1": _fmt(decision["sample_f1"], 4),
+                "coverage": _fmt(decision["coverage"], 3),
+                "nDCG@5": _fmt(ranking.get("ndcg@5"), 4),
+                "shortlist R@50": _fmt(ranking.get("shortlist_recall@50"), 4),
+                "hit@1": _fmt(measurement["gold"].get("hit@1"), 4),
+                "gold_rank_p50": _fmt(measurement["gold"].get("rank_p50"), 4),
+                "bg_mean": _fmt(measurement["background"].get("mean"), 4),
+                "bg_rank_p50": _fmt(measurement["background"].get("rank_p50"), 4),
+                "ece": _fmt(measurement["calibration"].get("ece"), 4),
+                "brier": _fmt(measurement["calibration"].get("brier"), 4),
+                "gold_prob_mean": _fmt(compression.get("gold_mean"), 4),
+                "bg_prob_mean": _fmt(compression.get("background_mean"), 4),
+                "comp_auc": _fmt(competence.get("pair_auc"), 4),
+                "n_texts": n_texts,
+                "n_cells": source.get("n_cells", ""),
+                "n_calls": source.get("n_calls_planned", ""),
+                "seconds": seconds,
+            }
+        )
+    return rows
 
 
 @dataclass(frozen=True)
@@ -4281,6 +4632,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_decide_omct(run.config)
         elif run.command == "analyze-upr":  # the text-processing track's UPR side
             code = _cmd_analyze_upr(run.config)
+        elif run.command == "decide-upr":  # the track's UPR decision probe (CS-9)
+            code = _cmd_decide_upr(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
@@ -4331,6 +4684,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_decide_omct(config)
         if args.command == "analyze-upr":
             return _cmd_analyze_upr(config)
+        if args.command == "decide-upr":
+            return _cmd_decide_upr(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

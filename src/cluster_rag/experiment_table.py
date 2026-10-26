@@ -67,6 +67,7 @@ COMMAND_TARGETS: dict[str, TableTarget] = {
     "analyze-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "decide-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "analyze-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
+    "decide-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
 }
 
 
@@ -447,6 +448,51 @@ DECIDE_OMCT_COLUMNS: tuple[str, ...] = (
     "seconds",
 )
 DECIDE_OMCT_KEY_COLUMNS: tuple[str, ...] = ("run_id", "model", "state", "question_type")
+
+# The text-processing track's **UPR decision probe** (`decide-upr`, CS-9): one
+# row per arm of a run. The decision view and the ranking view come first,
+# then the background side (the non-gold labels' score level and rank
+# position) and the **label-blind counterpart's** numbers beside them (the
+# yardstick that says how much of the arm's cost is its own label-blind
+# signal), then the calibration and the **probability compression** (the gold
+# cells' mean probability against the background's).
+DECIDE_UPR_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "model",
+    "model_version",
+    "state",
+    "question_type",
+    "scope",
+    "label_blind",
+    "micro-F1",
+    "macro-F1",
+    "sample-F1",
+    "coverage",
+    "nDCG@5",
+    "shortlist R@50",
+    "hit@1",
+    "gold_rank_p50",
+    "bg_mean",
+    "bg_rank_p50",
+    "ece",
+    "brier",
+    "gold_prob_mean",
+    "bg_prob_mean",
+    "comp_auc",
+    "n_texts",
+    "n_cells",
+    "n_calls",
+    "seconds",
+)
+DECIDE_UPR_KEY_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "model",
+    "state",
+    "question_type",
+    "label_blind",
+)
 
 # The text-processing track's UPR table (the `analyze-upr` command): one row
 # per arm of a run. The **decision view** (the F1s and the coverage) comes

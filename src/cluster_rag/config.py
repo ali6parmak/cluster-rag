@@ -1253,6 +1253,59 @@ class UprLearnedFloorsConfig(BaseModel):
     random_seed: int = Field(default=42)
 
 
+class UprDecisionConfig(BaseModel):
+    """The UPR decision probe's settings (the track's CS-9).
+
+    The decision models are **measurement instruments** on the UPR side: they
+    answer "is this text about *<label>*?" per label, and the probe measures
+    what their probability buys. They never enter the pipeline.
+
+    Attributes:
+        models: The models to probe (each with its pinned id **and** digest,
+            its state shape and its question type — the same
+            :class:`DecisionModelConfig` the OMCT probe uses).
+        scope: ``"sample"`` (a seeded sample of the evaluated split's texts)
+            or ``"grid"`` (every text of the split). The grid scope is
+            expensive: the ``paragraph`` shape is ~2 calls per text and the
+            ``pair`` shape one call per (text, label) cell, so the full val
+            grid is ~1,300 calls per model for the former and ~44,900 for the
+            latter.
+        sample_size: How many texts the sample scope takes.
+        seed: The seed of the sample (the same texts for every arm, so the
+            arms are paired).
+        competence_control: Whether the synthetic competence control runs
+            beside every arm.
+        competence_pairs: How many positive/negative pairs the competence
+            control builds.
+        prompt_version: The prompt's version (part of the decision cache's
+            key).
+        host: The Ollama host (the empty value uses ``OLLAMA_HOST`` or the
+            default).
+        timeout: The call timeout in seconds.
+        max_questions_per_call: How many questions one call may carry (the
+            API's limit is 64).
+        bins: The number of the reliability diagram's bins.
+        mismatched_control: Whether the **label-blind counterpart** runs beside
+            every arm (the yardstick that turns the cost into a quality
+            claim).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    models: tuple[DecisionModelConfig, ...] = ()
+    scope: Literal["sample", "grid"] = "sample"
+    sample_size: int = Field(default=150, ge=1)
+    seed: int = 42
+    competence_control: bool = True
+    competence_pairs: int = Field(default=50, ge=0)
+    prompt_version: str = "v1"
+    host: str = ""
+    timeout: float = 600.0
+    max_questions_per_call: int = Field(default=64, ge=1, le=64)
+    bins: int = Field(default=10, ge=2, le=50)
+    mismatched_control: bool = True
+
+
 class UprLearnedReportingConfig(BaseModel):
     """The UPR learned arm's reporting (CS-8f).
 
@@ -1392,6 +1445,8 @@ class UprAnalysisConfig(BaseModel):
         learned: The **learned arm** (CS-8d): the feature pack, the combiner
             and the three floors. Off by default, so every earlier run's
             artifact keeps its exact content.
+        decision: The **decision probe** (CS-9): the models, the prompt grid
+            and the scope. Off by default (no models = no probe).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1405,6 +1460,7 @@ class UprAnalysisConfig(BaseModel):
     semantic_criterion: Literal["micro_f1", "ndcg"] = "micro_f1"
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
     learned: UprLearnedConfig = Field(default_factory=UprLearnedConfig)
+    decision: UprDecisionConfig = Field(default_factory=UprDecisionConfig)
 
     @field_validator("length_buckets")
     @classmethod

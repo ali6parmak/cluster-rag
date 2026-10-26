@@ -1,0 +1,298 @@
+"""The UPR decision probe's driver (``decide-upr``).
+
+`TEXT_PROCESSING_PLAN.md` section 7.1 (CS-9) puts the **decision models** on
+the UPR data as a **measurement**, not a pipeline component: a decision model
+(Ollama's model *type*: a state plus typed questions, answered with
+probabilities in one forward pass) answers the UPR-native question **"is this
+text about *<label>*?"** per label, and the probe measures what its
+probability buys.
+
+The driver orchestrates:
+
+- the model-independent part (the UPR view: the texts, the label space and the
+  gold matrix) — built by :mod:`cluster_rag.upr_analysis`;
+- the pure core (the question text, the cells, the **label-blind
+  counterpart** and the measurement) — in
+  :mod:`cluster_rag.text_processors.decision.upr_probe`, on top of the OMCT
+  probe's shape-agnostic pieces (the call plan, the ``DecisionCell`` and the
+  synthetic **competence control**);
+- the model client (the ``/v1/systemone`` caller behind the
+  :class:`~cluster_rag.decision.base.Decider` port) — wired in by the CLI.
+
+**The scope.** The probe measures a **seeded sample** of the evaluated split's
+texts by default (``upr_analysis.decision.scope: sample``): the full val grid
+is ~44,880 cells, and the decision models cost one call per ~64 cells in the
+``paragraph`` shape (so ~1,320 calls per model) and one call per cell in the
+``pair`` shape (~44,880 calls). The sample keeps the probe inside a sane
+budget; the full grid is the ``grid`` scope, and the artifact records which
+scope produced the numbers.
+
+**The honesty rule.** The non-gold labels' true positive rate is unmeasured,
+so nothing here is a precision claim: the probe measures a *reach* and a
+*cost*, and the **label-blind counterpart** is the yardstick that says how
+much of the cost is the model's own label-blind signal.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+from cluster_rag.decision.base import Decider
+from cluster_rag.omct_decision import DecisionArm, score_cells
+from cluster_rag.text_processors.decision.probe import (
+    GROUP_COMPETENCE,
+    build_competence_cells,
+    measure_competence_control,
+)
+from cluster_rag.text_processors.decision.upr_probe import (
+    build_upr_cells,
+    measure_upr_arm,
+    score_matrix,
+)
+from cluster_rag.upr_analysis import UprView
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class UprDecisionSample:
+    """The probe's sample: the texts, the label space and the gold matrix.
+
+    The sample is a **seeded** draw of the evaluated split's texts (the same
+    texts for every arm, so the arms are paired), and the gold matrix is the
+    sample's own (the cells outside it are not scored at all).
+    """
+
+    texts: tuple[str, ...]
+    labels: tuple[str, ...]
+    gold: np.ndarray
+    rows: tuple[int, ...]
+
+    @property
+    def n_texts(self) -> int:
+        """The number of sampled texts."""
+        return len(self.texts)
+
+    @property
+    def n_labels(self) -> int:
+        """The size of the label space."""
+        return len(self.labels)
+
+    @property
+    def n_cells(self) -> int:
+        """The number of scored cells (the texts x the labels)."""
+        return self.n_texts * self.n_labels
+
+
+def sample_texts(
+    view: UprView,
+    *,
+    size: int,
+    seed: int,
+) -> UprDecisionSample:
+    """The probe's sample: a seeded draw of the split's texts.
+
+    Args:
+        view: The evaluated split's view.
+        size: How many texts to take (the whole split when it is larger).
+        seed: The seed of the draw (the same texts for every arm).
+
+    Returns:
+        The :class:`UprDecisionSample` of the probe.
+    """
+    n_texts = view.n_texts
+    take = min(int(size), n_texts)
+    generator = np.random.default_rng(seed)
+    rows = tuple(sorted(int(row) for row in generator.permutation(n_texts)[:take]))
+    texts = tuple(view.records[row].text for row in rows)
+    gold = view.gold[np.asarray(rows, dtype=np.int64)] if rows else np.zeros((0, 0), dtype=bool)
+    return UprDecisionSample(
+        texts=texts,
+        labels=tuple(view.labels),
+        gold=gold,
+        rows=rows,
+    )
+
+
+def run_upr_decision_arm(
+    sample: UprDecisionSample,
+    decider: Decider,
+    arm: DecisionArm,
+    *,
+    decision: Mapping[str, Any],
+    ks: Sequence[int],
+    shortlist_ms: Sequence[int],
+    max_questions_per_call: int = 64,
+    bins: int = 10,
+    mismatched: bool = False,
+    bucket_masks: Mapping[str, np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Run one arm: score the sample's cells and measure them.
+
+    Args:
+        sample: The probe's sample.
+        decider: The decision model (the port; the CLI wires the client in).
+        arm: The arm's prompt (the state shape, the question type, the task).
+        decision: The decision rule (the ``eval.decision`` mapping).
+        ks: The ranking metrics' k values.
+        shortlist_ms: The shortlist recall's m values.
+        max_questions_per_call: How many questions one call may carry.
+        bins: The number of the reliability diagram's bins.
+        mismatched: Whether the cells are the **label-blind counterpart**.
+        bucket_masks: The label buckets' column masks (the per-bucket view).
+
+    Returns:
+        The arm's block: the measurement, the call plan's cost and the
+        truncation report.
+    """
+    cells = build_upr_cells(
+        sample.texts,
+        sample.labels,
+        sample.gold,
+        mismatched=mismatched,
+    )
+    probabilities, truncated, n_calls = score_cells(
+        decider,
+        cells,
+        arm,
+        max_questions_per_call=max_questions_per_call,
+    )
+    matrix = score_matrix(cells, probabilities)
+    measurement = measure_upr_arm(
+        matrix,
+        sample.gold,
+        decision=decision,
+        ks=ks,
+        shortlist_ms=shortlist_ms,
+        bins=bins,
+        bucket_masks=bucket_masks,
+    )
+    return {
+        "arm": arm.name,
+        "state": arm.state,
+        "question_type": arm.question_type,
+        "instructions": arm.instructions,
+        "options": list(arm.options),
+        "criteria": dict(arm.criteria),
+        "positive_option": arm.positive_option,
+        "max_input_tokens": arm.max_input_tokens,
+        "label_blind": mismatched,
+        "n_cells": len(cells),
+        "n_calls_planned": n_calls,
+        "truncation": {
+            "n_cells": len(cells),
+            "n_truncated": int(sum(truncated)),
+            "share": (sum(truncated) / len(cells)) if cells else None,
+            "note": (
+                "the cells whose text was cut to fit the model's input budget "
+                "(the question and the instructions are never cut): a shortened "
+                "input is never silent"
+            ),
+        },
+        "measurement": measurement,
+    }
+
+
+def run_upr_competence_control(
+    sample: UprDecisionSample,
+    decider: Decider,
+    arm: DecisionArm,
+    *,
+    n_pairs: int,
+    max_questions_per_call: int = 64,
+    bins: int = 10,
+) -> dict[str, Any]:
+    """The **synthetic competence control** of the UPR probe.
+
+    The control holds two cells per text with the *same* question template and
+    the *same* text: the positive quotes a distinctive phrase **of that text**
+    (so the pair shares a phrase) and the negative quotes a phrase of a
+    *different* text (so it shares none). A model that can detect a shared
+    phrase at all separates the two — which is what tells "the data is at the
+    ceiling" from "the model is the wrong shape".
+    """
+    cells = build_competence_cells(list(sample.texts), n_pairs=n_pairs, document="competence")
+    if not cells:
+        return {"n_pairs": 0, "note": "no competence cell could be built"}
+    probabilities, truncated, n_calls = score_cells(
+        decider,
+        cells,
+        arm,
+        max_questions_per_call=max_questions_per_call,
+    )
+    measurement = measure_competence_control(cells, probabilities)
+    return {
+        "n_pairs": len(cells) // 2,
+        "n_cells": len(cells),
+        "n_calls_planned": n_calls,
+        "n_truncated": int(sum(truncated)),
+        "group": GROUP_COMPETENCE,
+        "measurement": measurement,
+    }
+
+
+def build_upr_decision_report(
+    sample: UprDecisionSample,
+    arms: Mapping[str, dict[str, Any]],
+    *,
+    run_id: str,
+    split: str,
+    source: str,
+    source_sha256: str,
+    scope: str,
+    seed: int,
+    config_block: Mapping[str, Any],
+    reference: Mapping[str, Any] | None = None,
+    total_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Assemble the probe's artifact.
+
+    Args:
+        sample: The probe's sample.
+        arms: The arms' blocks, keyed by the arm's name.
+        run_id: The run's id.
+        split: The evaluated split (``val``).
+        source: The dataset path.
+        source_sha256: The dataset's sha256.
+        scope: The scope (``sample`` or ``grid``).
+        seed: The sample's seed.
+        config_block: The probe's configuration (the provenance).
+        reference: The pipeline's own scoring of the probe's cells (the
+            champion's numbers on the same texts); ``None`` when it was not
+            measured.
+        total_seconds: The run's wall time.
+
+    Returns:
+        The JSON-serializable artifact.
+    """
+    return {
+        "run_id": run_id,
+        "command": "decide-upr",
+        "split": split,
+        "source": source,
+        "source_sha256": source_sha256,
+        "sample": {
+            "scope": scope,
+            "seed": int(seed),
+            "n_texts": sample.n_texts,
+            "n_labels": sample.n_labels,
+            "n_cells": sample.n_cells,
+            "n_gold_cells": int(sample.gold.sum()),
+            "n_background_cells": int((~sample.gold).sum()),
+            "rows": list(sample.rows),
+            "note": (
+                "the probe's sample: a seeded draw of the evaluated split's "
+                "texts, the same texts for every arm (so the arms are paired). "
+                "The grid scope takes every text of the split."
+            ),
+        },
+        "config": dict(config_block),
+        "reference_arm": dict(reference) if reference else None,
+        "arms": dict(arms),
+        "total_seconds": total_seconds,
+    }

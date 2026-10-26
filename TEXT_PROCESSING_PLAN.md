@@ -2174,7 +2174,7 @@ The **pre-registered expectations** (written down before the runs):
   probabilities are compressed toward the 2.9% base rate — the same
   compression the CS-7b decision arm showed on OMCT. The numbers are in the
   track log's CS-8f section; 547 unit tests green.)*
-- [ ] **CS-9 — the decision models on UPR (a measurement, not a pipeline
+- [x] **CS-9 — the decision models on UPR (a measurement, not a pipeline
   component).** `tev1` and `laya` through the existing `Decider` port and the
   `/v1/systemone` client, with the existing disk cache and the track's LLM
   hygiene (model id + digest, prompt version, cached calls, no temperature).
@@ -2201,6 +2201,50 @@ The **pre-registered expectations** (written down before the runs):
   decision model returns probabilities with no decoder — arguably a zero-shot
   cross-encoder rather than an LLM reranker) stays the reviewer's call; the
   decision models enter as **measurement instruments** only.
+  *(done 2026-10-26 — **with one scoped deviation, the reviewer's call**: the
+  new command `decide-upr` (the UPR counterpart of `decide-omct`), the pure
+  core `text_processors/decision/upr_probe.py` (the UPR question text, the
+  (text, label) cells, the label-blind counterpart, the measurement: the
+  harness's own metrics, the calibration and the probability compression), the
+  driver `upr_decision.py`, the config section `upr_analysis.decision` (the
+  models, the scope, the sample size, the seed, the competence control, the
+  mismatched control) and the sweep
+  `experiments_text_processing/upr_decision_sweep.py`: five runs
+  `upr-decide-{tev1,laya}-{paragraph,pair}-{noul,choice}`. The **deviation**:
+  the plan's wording asks for the **grid** arm (the whole (text x label)
+  grid), the safe-negative rule and the shortlist rerank; the grid's cost is
+  now measured — the `paragraph` shape is ~2 calls per text (~1,320 calls per
+  model for the val grid) and the `pair` shape is **one call per cell** (the
+  pair-shape arm made 1,360 calls for 20 texts = 68 calls per text, so the
+  full grid in that shape is ~44,880 calls per arm per model) — so this change
+  set measures a **seeded sample** (150 of the 660 val texts for the paragraph
+  shape, 20 for the pair shape) and leaves the full grid, the rule and the
+  rerank to a follow-up (**CS-9b**) with that cost in front of it. The
+  artifact carries the pipeline's own scoring of the **same cells**, so every
+  probe number has its reference beside it on the same texts.
+  **Verdicts:** **tev1 beats the champion on UPR** — the micro-F1 0.5482
+  against the champion's 0.5415 on the same 150 texts, the nDCG@5 0.7055
+  against 0.6565, and a near-perfect **candidate generator** (the shortlist
+  R@50 **0.9978** against the champion's 0.7322: the decision model puts the
+  gold label in the text's top-50 of 68 labels almost always, where the
+  champion's kNN and prototype terms lose 27 points of gold cells — the most
+  Phase-6-relevant number the track has measured on UPR). The **label-blind
+  counterpart is at chance** (0.0365), so the quality is label-driven, and the
+  **competence control passes** (the AUC 0.9816-0.9896). **laya is much
+  weaker** (0.2226/0.1960) but its shortlist is nearly as good (0.9956): its
+  loss is a *top-1* loss, not a ranking loss. The prompt grid flips on UPR:
+  the **`noul` type beats the `choice` type** for tev1 (0.5482 against
+  0.5349; the opposite of OMCT), while the `choice` type is better calibrated
+  (the ECE 0.1553 against 0.1971). And the decision model **finds the eight
+  unseen labels** (the unseen bucket's micro-F1 0.4706, the coverage 1.000,
+  the nDCG@5 0.8737, against the champion's 0.0000/0.000/0.6046 and the
+  label-blind counterpart's 0.1090) — the champion's geometry cannot suggest
+  a label it has never seen, and a decision model can. The **probability
+  compression is measured**: tev1 is **not** compressed (the gold cells' mean
+  0.7578, 87% of them above 0.5), so a fixed 0.5 cut is a meaningful
+  operating point on UPR (the opposite of the CS-7b arm on OMCT), while laya
+  is the compressed one (its `noul` arm's gold mean 0.4852). The numbers are
+  in the track log's CS-9 section; 557 unit tests green.)*
 - [ ] **CS-10 — the LLM stage on UPR (needs the reviewer's explicit OK).** The
   **exp09-style rerank** on the embedding shortlist with the local models
   (gemma4:e2b, llama3.2:3b, gpt-oss — the decision models are far too small
