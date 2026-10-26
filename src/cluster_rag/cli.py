@@ -1640,6 +1640,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         # The chunked arms: one fixed chunker, or one side per point of the
         # swept grid (the semantic threshold of Stage 2.3).
         chunked_side = None
+        header_side = None
         swept_sides: list[ChunkedSide] = []
         if aggregations:
             if analysis.semantic_thresholds:
@@ -1662,6 +1663,19 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     analysis.question_transform,
                     analysis.question_block_markers,
                 )
+            if analysis.header_chunker is not None:
+                # The chunk header (Stage 2.6): a second chunked side whose
+                # chunks carry the paragraph's own first sentence, so the
+                # header is measured against the no-header arm of this run.
+                header_side = _chunked_side(
+                    config,
+                    embedder,
+                    analysis.header_chunker,
+                    None,
+                    spec,
+                    analysis.question_transform,
+                    analysis.question_block_markers,
+                )
         baseline = BaselineArm()
         model_block = score_model_arms(
             view,
@@ -1673,6 +1687,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             question_block_markers=analysis.question_block_markers,
             preprocess_spec=spec,
             chunked_side=chunked_side,
+            header_side=header_side,
             swept_sides=swept_sides,
             aggregations=aggregations,
             semantic_selection=analysis.semantic_selection,

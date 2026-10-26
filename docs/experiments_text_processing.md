@@ -2970,3 +2970,106 @@ than the embedding arms: the decision model's arm (the within-document AUC
 0.7701) and the shortlist rerank (the positives' hit@1 0.1565) are the
 numbers a new segmentation rung has to beat, not the cosine's 0.5020-0.5632
 and 0.1050-0.1355.
+
+## Stage 2.6 — the chunk header (CS-7d, 2026-10-26)
+
+**The question.** The plan's Stage 2.6 is the classic "contextual chunk
+header" idea in the one form that is legal on this data: the header is the
+paragraph's **own first sentence** — pair-local, label-free, no document
+identity, and it keeps one embedding per chunked text (a *question-stem*
+header would need one embedding per (chunk, question) pair: ~175,000 instead
+of ~500 per model). The other headings are ruled out by the track's leakage
+rules: the document title is document identity (rule ii) and the question
+number is a corpus statistic (rule i).
+
+**What was run.** Six runs
+(`experiments_text_processing/stage26_header_sweep.py`, the sweep
+`stage26_header`): 3 Stage-0 models x 2 header modes, with the Stage-2
+verdict's paragraph-side window (25 words, stride 12) and two aggregation
+rules (`max`, `peak:3:0.05`) — each run carrying the **no-header arm of the
+same run** beside the header arm, so the header is measured against the
+no-header arm **paired by construction** (the same cells, the same candidate
+lists). The comparison is the repo tool
+`tools/compare_arms_in_run.py` (the paired bootstrap of the AUC difference
+between two arms of one run, read from the artifact).
+
+The two modes are both measured (the reviewer's rule: measure the
+alternatives rather than picking one): `others` prepends the header to every
+chunk **except the first** (the first chunk already starts with the header's
+text, so prefixing it would only duplicate it) and `all` prepends it to every
+chunk (the literal reading; the first chunk then carries its first sentence
+twice).
+
+**1. The ranking side: the header is not neutral, it is negative.** The
+within-document AUC, the header arm against the no-header arm of the same run
+(the paired bootstrap, 2,000 resamples, seed 42):
+
+| model | mode | the no-header arm | the header arm | the paired difference (95% CI) |
+|---|---|---|---|---|
+| embeddinggemma | others | 0.6049 | 0.5734 | **-0.0315** [-0.0431, -0.0204] |
+| embeddinggemma | all | 0.6049 | 0.5749 | **-0.0300** [-0.0416, -0.0191] |
+| voyage-4-nano | others | 0.5084 | 0.5130 | +0.0045 [-0.0059, +0.0149] |
+| voyage-4-nano | all | 0.5084 | 0.5148 | +0.0064 [-0.0046, +0.0170] |
+| arctic2 | others | 0.5311 | 0.5225 | -0.0087 [-0.0199, +0.0025] |
+| arctic2 | all | 0.5311 | 0.5242 | -0.0069 [-0.0187, +0.0046] |
+
+The pre-registered hypothesis said the ranking gain would be ≈ 0 (the chunk
+geometry carries no label-driven ranking signal, CS-6d's random-vector
+floor). It is ≈ 0 on two models and **negative** on the third: on
+embeddinggemma the header's own sentence *dilutes* the chunk's content, and
+the loss is significant (both intervals exclude zero). The `peak` arm tells
+the same story (embeddinggemma -0.0313 / -0.0300).
+
+**2. The retrieval side: the payoff does not materialize.** The positives'
+**hit@1** (the pre-registered hypothesis's target):
+
+| model | mode | the no-header arm | the header arm | the paired counts (the header only / the no-header only) |
+|---|---|---|---|---|
+| embeddinggemma | others | 0.1374 | 0.1336 | 14 / 16 |
+| embeddinggemma | all | 0.1374 | 0.1336 | 16 / 18 |
+| voyage-4-nano | others | 0.0916 | 0.0954 | 12 / 10 |
+| voyage-4-nano | all | 0.0916 | **0.1011** | 13 / 8 |
+| arctic2 | others | 0.1011 | 0.1031 | 7 / 6 |
+| arctic2 | all | 0.1011 | 0.1031 | 9 / 8 |
+
+The best arm (voyage-4-nano, the `all` mode) gains **+0.0095** of hit@1 —
+real but marginal, and *below* the arm it started from on the other models
+(the embedding arms' own numbers: 0.0916-0.1374). For scale: the decision
+model's own hit@1 is **0.1317** and the shortlist rerank's **0.1565**
+(CS-7b/CS-7c). So the header's retrieval gain does not reach the systems
+that do not need a segmentation change at all.
+
+**3. The two modes are the same.** `others` and `all` differ by at most
+0.0015 of within-document AUC and by one hit@1 count — so the header's
+*content* is what matters (or rather: neither the context nor the
+duplication changes the ranking). The default (`others`) is kept: it does
+not duplicate the header's text in the first chunk.
+
+**The verdict: the chunk header does not ship.** It is not neutral (it is
+significantly negative on one of the three models) and its retrieval payoff
+(+0.0095 at best) is an order of magnitude below what the decision models
+deliver. With CS-7a–CS-7c in hand, the track's yardstick for a segmentation
+change is no longer the cosine's 0.5020–0.5632 within-document AUC and its
+0.1050–0.1355 hit@1, but the **decision arm's 0.7701** and the **rerank's
+0.1565** — and the header reaches neither.
+
+**What this run does not say.**
+
+- **Nothing about a question-stem header.** The plan rules it out on the
+  leakage rules (rule i) *and* on the cost (~175,000 embeddings per model);
+  it was not measured.
+- **Nothing about the header's effect on the decision models.** The decision
+  models read the raw text, so a chunking change cannot touch them (the
+  header is an embedding-side lever by construction).
+- **Nothing about other segmentations.** The header is one rung: the late
+  chunking (Stage 2.7) is the other, and it is a *geometry* change, not a
+  text change.
+- **Nothing about UPR.** OMCT is auxiliary data; these numbers annotate
+  method choice, they are never a UPR metric.
+
+**The next step.** CS-7e (Stage 2.7): the **late chunking** — the document
+embedded once and the token-level embeddings pooled per chunk, so every chunk
+carries the document's context. It is HF-only (Ollama's `/api/embed`
+cannot return token-level embeddings), so the comparison is **within-model**
+(late-chunked voyage-4-nano against early-chunked voyage-4-nano, the same
+cells, the same seeds).

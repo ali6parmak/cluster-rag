@@ -961,6 +961,11 @@ class AnalysisConfig(BaseModel):
     - ``semantic_selection``: the fit-side criterion of that choice —
       ``auc`` (the reviewed set's AUC on the fit side) or ``floor_gap`` (the
       verified positives' mean minus the control's mean, on the fit side).
+    - ``header_chunker``: the chunk **header** arm (Stage 2.6): a second
+      chunked side whose chunks carry the paragraph's own first sentence (the
+      one legal header on this data). It runs beside the plain chunked arms,
+      so the header is measured against the no-header arm **in the same run**
+      (the pairing is by construction).
     - ``stage3``: the settings of the **learned** pair scorer (Stage 3.1):
       the feature pack's options, the combiner and the control's training
       weight. ``None`` (the default) means the run scores the Stage-0/1/2
@@ -980,6 +985,7 @@ class AnalysisConfig(BaseModel):
     question_block_markers: tuple[str, ...] = ("Answer choices:", "Notes:")
     chunker: ChunkerSpec = Field(default_factory=ChunkerSpec)
     question_chunker: ChunkerSpec | None = None
+    header_chunker: ChunkerSpec | None = None
     aggregations: tuple[str, ...] = ()
     question_transforms: tuple[str, ...] = ()
     semantic_thresholds: tuple[float, ...] = ()
@@ -1040,6 +1046,11 @@ class AnalysisConfig(BaseModel):
                 "analysis.aggregations need a chunker that splits a text; "
                 "'full_text' has one chunk per text (its arms would be the "
                 "baseline arm)"
+            )
+        if self.header_chunker is not None and not self.aggregations:
+            raise ValueError(
+                "analysis.header_chunker needs aggregation rules: the header's "
+                "chunks are folded into one pair score by an arm's rule"
             )
         if self.question_chunker is not None and not self.aggregations:
             raise ValueError(

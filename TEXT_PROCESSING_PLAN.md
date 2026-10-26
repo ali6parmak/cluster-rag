@@ -544,7 +544,7 @@ sweeps are the orders.
   max-over-k inflation is reported as the control's mean shift beside the
   chunks-per-text: it grows with the chunk count (+0.054 at 9.4 chunks per
   paragraph against +0.008 at 1.8).)*
-- [ ] **2.6 The chunk header: the paragraph's own first sentence, prepended to
+- [x] **2.6 The chunk header: the paragraph's own first sentence, prepended to
   every chunk.** The classic "contextual chunk header" idea, in the one form
   that is legal on this data: the header is the paragraph's **own first
   sentence** (pair-local, label-free, no document identity, and it keeps one
@@ -560,6 +560,22 @@ sweeps are the orders.
   side (the positives' hit@1, today 0.105–0.136 for the cosine). The arm runs
   in the existing harness on **all three** Stage-0 models, paired against the
   no-header arm of the same run.
+  *(done 2026-10-26, CS-7d: the new chunker `header` (the text's own first
+  sentence, in two modes — `others`, the header on every chunk but the first,
+  and `all`, the literal reading), the config knob
+  `analysis.header_chunker` (a second chunked side beside the plain one, so
+  the header is measured against the no-header arm **in the same run**), the
+  repo tool `tools/compare_arms_in_run.py` (the paired comparison of two arms
+  of one run), and 6 runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-header-{others,all}`.
+  **Verdict: the header does not ship.** The ranking side is not neutral but
+  **negative**: the within-document AUC falls by **-0.0315** on embeddinggemma
+  (the 95% interval excludes zero) and is a wash on the other two models. The
+  retrieval payoff — the hypothesis's target — is at most **+0.0095** of
+  hit@1 (voyage-4-nano, the `all` mode) and a wash elsewhere, i.e. far below
+  the decision model's own 0.1317 and the shortlist rerank's 0.1565. The two
+  modes differ by at most 0.0015 of AUC. The numbers are in the track log's
+  Stage-2.6 section.)*
 - [ ] **2.7 Late chunking: the document embedded once, the chunks pooled out
   of it.** Instead of embedding each chunk separately, embed the whole
   document and pool its **token-level** embeddings per chunk, so every chunk
@@ -1698,11 +1714,24 @@ set):
   the hybrid is the best retriever on the reviewed set, at ~90 decision calls
   instead of the grid's 1,805. The numbers are in the track log's
   Stage-3.5.3 section.)*
-- [ ] **CS-7d — the chunk header (Stage 2.6).** The paragraph's own first
+- [x] **CS-7d — the chunk header (Stage 2.6).** The paragraph's own first
   sentence prepended to every chunk (the pack's option, so the embedding
   cache stays at one vector per text); the arm in the existing harness on all
   three Stage-0 models, paired against the no-header arm; the
   pre-registered hypothesis (the **retrieval** side, not the ranking side).
+  *(done 2026-10-26: the new chunker `header` (the text's own first sentence
+  prefixed to the inner chunker's chunks; two modes — `others` (every chunk
+  but the first) and `all` (every chunk)), the config knob
+  `analysis.header_chunker` (a second chunked side beside the plain one, so
+  the header arm and the no-header arm share the run and the pairing), the
+  tool `tools/compare_arms_in_run.py` (the paired arm-vs-arm comparison of
+  one run), and 6 runs
+  `omct-analyze-{embeddinggemma,voyage-4-nano,arctic2}-header-{others,all}`.
+  **Verdict: the header does not ship** — the ranking side is *negative* on
+  embeddinggemma (the within-document AUC -0.0315, the interval excluding
+  zero) and a wash elsewhere, and the retrieval payoff is at most +0.0095 of
+  hit@1 (voyage-4-nano, `all`), far below the decision model's 0.1317 and the
+  rerank's 0.1565. The numbers are in the track log's Stage-2.6 section.)*
 - [ ] **CS-7e — late chunking (Stage 2.7).** The token-level embedding port
   (a new optional capability of the `Embedder` port, implemented by the HF
   backend only), the chunker's **character spans** (a new method on the

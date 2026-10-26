@@ -1732,6 +1732,7 @@ def score_model_arms(
     question_block_markers: Sequence[str],
     preprocess_spec: PreprocessSpec,
     chunked_side: ChunkedSide | None = None,
+    header_side: ChunkedSide | None = None,
     swept_sides: Sequence[ChunkedSide] = (),
     aggregations: Sequence[Aggregation] = (),
     semantic_selection: str = SEMANTIC_CRITERION_AUC,
@@ -1761,6 +1762,10 @@ def score_model_arms(
         preprocess_spec: The paragraph side's preprocess spec.
         chunked_side: The chunked paragraph side (and, for the symmetric
             variants, the chunked question side).
+        header_side: An optional **second** chunked side whose chunks carry the
+            paragraph's own first sentence (the Stage-2.6 chunk header). Its
+            arms run beside the plain chunked arms, so the header is measured
+            against the no-header arm in the same run.
         swept_sides: One chunked side per point of a swept grid (the semantic
             threshold); the arms are then cross-fitted per document.
         aggregations: The aggregation rules the chunked arms fold with.
@@ -1877,6 +1882,28 @@ def score_model_arms(
         )
         arms.update(chunked_arms)
         arm_similarities.update(chunked_similarities)
+
+    if header_side is not None:
+        # The chunk header (Stage 2.6): the same aggregation rules over the
+        # headered chunks, so the header is measured against the no-header arm
+        # of the same run (the pairing is by construction).
+        if not aggregations:
+            raise ValueError("The header arms need aggregation rules")
+        header_arms, header_similarities = _fixed_variant_arms(
+            view,
+            side=header_side,
+            aggregations=aggregations,
+            paragraph_texts=paragraph_texts,
+            question_texts=question_texts_by_transform[question_transform],
+            baseline_question_side=baseline_question_side,
+            baseline_similarities=baseline_similarities,
+            question_transform=question_transform,
+            question_block_markers=question_block_markers,
+            preprocess_spec=preprocess_spec,
+            hit_ks=hit_ks,
+        )
+        arms.update(header_arms)
+        arm_similarities.update(header_similarities)
 
     for arm_name, similarities in arm_similarities.items():
         comparisons[arm_name] = compare_arms(
