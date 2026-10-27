@@ -182,6 +182,7 @@ from cluster_rag.upr_decision import (
     build_upr_decision_report,
     run_upr_competence_control,
     run_upr_decision_arm,
+    run_upr_listwise_stage,
     run_upr_rule_stage,
     sample_texts,
     upr_per_text_block,
@@ -2878,6 +2879,101 @@ def _cmd_decide_upr(config: AppConfig) -> int:
             )
             blind_block["per_text"] = _per_text(blind_matrix)
             block["label_blind_counterpart"] = blind_block
+        if decision.listwise.enabled:
+            # The **listwise** second stage (CS-12): one choice question per
+            # text over the round-1 top-N candidates. The label-blind
+            # counterpart presents the *shifted* labels (the wrong pairing,
+            # the same pipeline).
+            descriptions = {
+                name: entry.description
+                for name, entry in _upr_label_catalog(config).items()
+                if entry.description
+            }
+            n_labels = len(setup.labels)
+            shifted = [setup.labels[(column + 1) % n_labels] for column in range(n_labels)]
+            listwise_block, listwise_matrix = run_upr_listwise_stage(
+                sample,
+                decider,
+                round_one=arm_matrix,
+                option_labels=list(setup.labels),
+                descriptions=descriptions,
+                criteria_source=decision.listwise.criteria,
+                n_candidates=decision.listwise.candidates,
+                task=decision.listwise.instructions,
+                question_text=decision.listwise.question_text,
+                max_input_tokens=model_config.max_input_tokens,
+                decision=eval_decision(config),
+                ks=config.eval.metrics.ks,
+                shortlist_ms=config.eval.metrics.shortlist_ms,
+                bucket_masks=bucket_masks,
+            )
+            block["listwise"] = {
+                key: value for key, value in listwise_block.items() if key != "measurement"
+            }
+            listwise_arm = {
+                "arm": f"{model_config.name}-listwise",
+                "state": arm.state,
+                "question_type": "choice",
+                "instructions": decision.listwise.instructions,
+                "options": decision.listwise.candidates,
+                "criteria": decision.listwise.criteria,
+                "positive_option": None,
+                "max_input_tokens": model_config.max_input_tokens,
+                "label_blind": False,
+                "n_cells": sample.n_cells,
+                "n_calls_planned": listwise_block["n_calls_planned"],
+                "model": {
+                    "name": f"{model_config.name}-listwise",
+                    "model_id": info.model_id,
+                    "digest": info.digest,
+                    "backend": info.backend,
+                    "host": info.host,
+                    "prompt_version": decision.listwise.prompt_version,
+                    "extra": info.extra,
+                },
+                "cache": {
+                    "hits": getattr(decider, "cache_hits", 0),
+                    "misses": getattr(decider, "cache_misses", 0),
+                    "stored": getattr(decider, "n_stored", 0),
+                },
+                "usage": dict(getattr(decider, "usage", {})),
+                "measurement": listwise_block["measurement"],
+            }
+            listwise_arm["per_text"] = _per_text(listwise_matrix)
+            listwise_blind = None
+            if blind_matrix is not None:
+                blind_listwise_block, blind_listwise_matrix = run_upr_listwise_stage(
+                    sample,
+                    decider,
+                    round_one=blind_matrix,
+                    option_labels=shifted,
+                    descriptions=descriptions,
+                    criteria_source=decision.listwise.criteria,
+                    n_candidates=decision.listwise.candidates,
+                    task=decision.listwise.instructions,
+                    question_text=decision.listwise.question_text,
+                    max_input_tokens=model_config.max_input_tokens,
+                    decision=eval_decision(config),
+                    ks=config.eval.metrics.ks,
+                    shortlist_ms=config.eval.metrics.shortlist_ms,
+                    bucket_masks=bucket_masks,
+                )
+                listwise_blind = {
+                    **listwise_arm,
+                    "arm": f"{model_config.name}-listwise-label-blind",
+                    "label_blind": True,
+                    "n_calls_planned": blind_listwise_block["n_calls_planned"],
+                    "measurement": blind_listwise_block["measurement"],
+                }
+                listwise_blind["per_text"] = _per_text(blind_listwise_matrix)
+                block["listwise"]["label_blind_counterpart"] = {
+                    key: value
+                    for key, value in blind_listwise_block.items()
+                    if key != "measurement"
+                }
+            arms[f"{model_config.name}-listwise"] = listwise_arm
+            if listwise_blind is not None:
+                arms[f"{model_config.name}-listwise-label-blind"] = listwise_blind
         if decision.rule.enabled:
             block.update(
                 run_upr_rule_stage(

@@ -49,6 +49,12 @@ from cluster_rag.text_processors.decision.probe import (
     build_competence_cells,
     measure_competence_control,
 )
+from cluster_rag.text_processors.decision.upr_listwise import (
+    fuse_rankings,
+    generic_criteria,
+    plan_listwise_calls,
+    top_candidates,
+)
 from cluster_rag.text_processors.decision.upr_probe import (
     build_upr_cells,
     measure_upr_arm,
@@ -241,6 +247,120 @@ def run_upr_decision_arm(
         "measurement": measurement,
     }
     return block, matrix
+
+
+def run_upr_listwise_stage(
+    sample: UprDecisionSample,
+    decider: Decider,
+    *,
+    round_one: np.ndarray,
+    option_labels: Sequence[str],
+    descriptions: Mapping[str, str] | None,
+    criteria_source: str,
+    n_candidates: int,
+    task: str,
+    question_text: str,
+    max_input_tokens: int | None,
+    decision: Mapping[str, Any],
+    ks: Sequence[int],
+    shortlist_ms: Sequence[int],
+    bucket_masks: Mapping[str, np.ndarray] | None = None,
+) -> tuple[dict[str, Any], np.ndarray]:
+    """The **listwise** second stage: one choice question per text (CS-12).
+
+    The stage is a second round on top of the pointwise arm: the round-1
+    scores give the **candidates** (the top-N labels per text) and the second
+    round asks the model to **order** them ("which of these N topics is the
+    text about?"). The arm's final ranking is the **rank fusion** (the
+    round-2 order over the candidates, then the round-1 order for the rest),
+    and its score matrix is the negative final rank.
+
+    Args:
+        sample: The probe's sample (the texts and the gold matrix).
+        decider: The decision model (the port; the CLI wires the client in).
+        round_one: The round-1 score matrix (the pointwise arm's).
+        option_labels: The label name to **present** for every column (the
+            label-blind counterpart presents the shifted one).
+        descriptions: The catalog's descriptions (the ``criteria`` source);
+            ``None`` when the catalog is absent.
+        criteria_source: ``"catalog"`` or ``"name"`` (the control variant).
+        n_candidates: How many candidates the second round offers.
+        task: The listwise task instruction.
+        question_text: The listwise question's wording.
+        max_input_tokens: The model's input budget.
+        decision: The decision rule (the ``eval.decision`` mapping).
+        ks: The ranking metrics' k values.
+        shortlist_ms: The shortlist recall's m values.
+        bucket_masks: The label buckets' column masks (the per-bucket view).
+
+    Returns:
+        The stage's block (the measurement, the call plan's cost and the
+        candidates' report) and the fused score matrix.
+    """
+    candidates = top_candidates(round_one, n_candidates)
+    option_sets: list[tuple[str, ...]] = []
+    criteria_sets: list[dict[str, str]] = []
+    for columns in candidates:
+        options = tuple(option_labels[column] for column in columns)
+        option_sets.append(options)
+        criteria: dict[str, str] = {}
+        for option in options:
+            if criteria_source == "catalog" and descriptions:
+                criteria[option] = descriptions.get(option) or generic_criteria(option)
+            else:
+                criteria[option] = generic_criteria(option)
+        criteria_sets.append(criteria)
+    calls = plan_listwise_calls(
+        sample.texts,
+        option_sets,
+        criteria_sets,
+        task=task,
+        question_text=question_text,
+        max_input_tokens=max_input_tokens,
+    )
+    round_two = np.full(np.asarray(round_one).shape, np.nan, dtype=np.float64)
+    truncated = 0
+    for call in calls:
+        index = call.cell_indexes[0]
+        answers = decider.decide(
+            call.state, dict(zip(call.question_names, call.specs, strict=True))
+        )
+        answer = answers.get(call.question_names[0])
+        if answer is None:
+            raise RuntimeError(f"the listwise call returned no answer for the text {index}")
+        probabilities = answer.probabilities
+        for column, option in zip(candidates[index], option_sets[index], strict=True):
+            if option in probabilities:
+                round_two[index, column] = float(probabilities[option])
+        truncated += int(len(call.state.get("paragraph", "")) < len(sample.texts[index]))
+    fused = fuse_rankings(round_one, round_two)
+    measurement = measure_upr_arm(
+        fused,
+        sample.gold,
+        decision=decision,
+        ks=ks,
+        shortlist_ms=shortlist_ms,
+        bucket_masks=bucket_masks,
+        probability_scores=False,
+    )
+    block = {
+        "candidates": n_candidates,
+        "criteria_source": criteria_source,
+        "question_text": question_text,
+        "instructions": task,
+        "n_calls_planned": len(calls),
+        "n_truncated": truncated,
+        "measurement": measurement,
+        "note": (
+            "the listwise second stage: the round-1 top-N candidates per text "
+            "are offered to the model in ONE choice question, and the arm's "
+            "ranking is the fusion of the round-2 order (over the candidates) "
+            "and the round-1 order (for the rest). The score matrix is the "
+            "negative final rank, so the calibration and the probability "
+            "compression are not applicable."
+        ),
+    }
+    return block, fused
 
 
 def upr_per_text_block(

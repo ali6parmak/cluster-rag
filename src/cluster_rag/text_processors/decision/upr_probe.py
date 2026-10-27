@@ -174,6 +174,7 @@ def measure_upr_arm(
     shortlist_ms: Sequence[int] = (20, 50, 100),
     bins: int = 10,
     bucket_masks: Mapping[str, np.ndarray] | None = None,
+    probability_scores: bool = True,
 ) -> dict[str, Any]:
     """One arm's measurement on the UPR grid (the harness's own metrics).
 
@@ -186,6 +187,11 @@ def measure_upr_arm(
         bins: The number of the reliability diagram's bins.
         bucket_masks: The label buckets' column masks (the per-bucket view:
             head / torso / tail / unseen).
+        probability_scores: Whether the arm's scores are **probabilities**.
+            The listwise arm's scores are ranks (a within-text distribution
+            over 20 options is not a per-cell probability), so its
+            calibration and its probability compression are reported as **not
+            applicable** instead of being computed.
 
     Returns:
         The measurement block: the decision view, the ranking view, the gold
@@ -212,9 +218,19 @@ def measure_upr_arm(
     gold_percentiles = percentiles[truth]
     background_percentiles = percentiles[~truth]
     hits = gold_hit_at_k(matrix, truth, (1, 10))
-    calibration = reliability_diagram(
-        matrix.reshape(-1), truth.reshape(-1).astype(int), n_bins=bins
-    )
+    if probability_scores:
+        calibration = reliability_diagram(
+            matrix.reshape(-1), truth.reshape(-1).astype(int), n_bins=bins
+        )
+        compression = probability_compression(matrix, truth)
+    else:
+        note = (
+            "not applicable: the arm's scores are ranks, not probabilities (the "
+            "listwise arm's round-2 answer is a within-text distribution over its "
+            "options)"
+        )
+        calibration = {"applicable": False, "note": note}
+        compression = {"applicable": False, "note": note}
     block: dict[str, Any] = {
         "decision": {
             "rule": decision["rule"],
@@ -251,13 +267,17 @@ def measure_upr_arm(
             ),
             "top_fifth_share": top_fifth_share(background_percentiles),
         },
-        "calibration": {
-            "ece": calibration["ece"],
-            "brier": calibration["brier"],
-            "n_bins": calibration["n_bins"],
-            "bins": calibration["bins"],
-        },
-        "compression": probability_compression(matrix, truth),
+        "calibration": (
+            {
+                "ece": calibration["ece"],
+                "brier": calibration["brier"],
+                "n_bins": calibration["n_bins"],
+                "bins": calibration["bins"],
+            }
+            if probability_scores
+            else calibration
+        ),
+        "compression": compression,
     }
     if bucket_masks:
         block["per_bucket"] = {

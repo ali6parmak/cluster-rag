@@ -2529,7 +2529,7 @@ main-plan Phase 4 matter).
   falsification fires. The **parent one-hots** are nearly empty on their own
   (the AUC 0.4705-0.5433). The numbers are in the track log's CS-11
   section; 582 unit tests green.)*
-- [ ] **CS-12 — the listwise second decision stage (P1).** A **second round**
+- [x] **CS-12 — the listwise second decision stage (P1).** A **second round**
   on top of the pointwise arm: round 1 is the existing 68 pointwise `noul`
   questions per text (unchanged, and **free** — the decision cache already
   holds them from CS-9b), and round 2 is **one** call per text asking "which
@@ -2583,6 +2583,31 @@ main-plan Phase 4 matter).
   *Exit:* both arms are measured on the full val grid with the paired
   interval against CS-9b's pointwise arm, the per-bucket view and the
   label-blind counterpart; the log carries the numbers and the verdict.
+  *(done 2026-10-27: the new pure module
+  `text_processors/decision/upr_listwise.py` (the second round's question
+  spec, the call plan that counts the options **and** the criteria in the
+  input budget, the candidates and the rank fusion), the driver's listwise
+  stage, the config section `upr_analysis.decision.listwise` (off by
+  default), the measurement's `probability_scores` flag (the calibration and
+  the compression are reported as **not applicable** for a rank-based arm),
+  the sweep `experiments_text_processing/upr_listwise_sweep.py` and 2 runs
+  `upr-decide-tev1-paragraph-noul-listwise{,-nodesc}` (the whole val grid;
+  660 calls per arm; 0 truncated cells). The 20-option shape was
+  **smoke-tested on 3 texts first**, as the plan required: the server accepts
+  it. **Verdict: the listwise stage does not ship** — the pre-registered
+  falsification fires on both clauses: the listwise arm's micro-F1 does not
+  beat the pointwise arm's (0.5205 against 0.5502, the paired difference
+  −0.0296 [−0.0535, −0.0038]) and its unseen bucket falls by 0.0609
+  [−0.1106, −0.0078]. The mechanism is not inert — the **first** pick
+  improves (the hit@1 0.3613 against 0.3483) while the second degrades —
+  and the **descriptions make it worse** than the name-only control
+  (−0.0296 against −0.0175). The order of the reviewer's hypothesis,
+  restated by the measurement: the model's **explicit** ordering (a 20-way
+  choice) is **worse** than its **implicit** one (the 68 probabilities'
+  order), so the decision model is an excellent candidate generator (the
+  shortlist R@50 0.9987 against the champion's 0.7423) and should not be
+  asked to order. The label-blind counterpart is at chance (0.0433). The
+  numbers are in the track log's CS-12 section.)*
 - [ ] **CS-13 — the decision probability as a feature in the UPR pack (P2).**
   One more column in the pack's `(n_texts, n_labels, n_features)` cube: the
   decision model's probability for the (text, label) cell. The pack stays a

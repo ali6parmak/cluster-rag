@@ -4407,6 +4407,93 @@ true positive rate is unmeasured); nothing about the `laya` arms or the
 `pair` shape at full-val scale (they stay at their CS-9 samples, and the
 exclusion is the reviewer's to reverse).
 
+## CS-12 — the listwise second decision stage (2026-10-27)
+
+**The runs.** Two, both on the UPR **val** split's **whole grid** (660 texts x
+68 labels = 44,880 cells), beside the pointwise arm they build on:
+
+| run | the second round's criteria |
+|---|---|
+| `upr-decide-tev1-paragraph-noul-listwise` | the CS-11 catalog's **descriptions** (the main arm) |
+| `upr-decide-tev1-paragraph-noul-listwise-nodesc` | the label's **own name** (the control: it isolates the *listwise mechanism* from the *descriptions*) |
+
+**The mechanism.** Round 1 is the existing 68 pointwise `noul` questions per
+text (unchanged, and **free**: the calls are CS-9b's cache hits). Round 2 is
+**one** call per text asking "which of these 20 topics is the text about?",
+the 20 options being the round-1 top-20. The arm's ranking is a **rank
+fusion** (the round-2 order over the candidates, then the round-1 order for
+the rest) — parameter-free, so nothing is fitted on val — and its score
+matrix is the negative final rank (so the calibration and the probability
+compression are reported as **not applicable**, as the plan says).
+
+**The feasibility check came first**: a 20-option `choice` had never been
+exercised against the server, so the shape was smoke-tested on **3 texts**
+(`tools/smoke_upr_listwise.py`): the server accepts it, the per-option
+probabilities come back, and **no** call was truncated (the planner counts the
+options *and* the criteria in the input budget — the plan's requirement). The
+real runs: **0 truncated cells** out of 660, 1,320 calls per arm (the real
+one and its label-blind counterpart).
+
+### The numbers (val, the whole grid)
+
+| arm | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | hit@1 | unseen micro-F1 |
+|---|---|---|---|---|---|---|
+| the pointwise arm (the reference) | **0.5502** | 0.5609 | 0.7247 | 0.9987 | 0.3483 | **0.5267** |
+| the listwise (the descriptions) | 0.5205 | 0.5368 | 0.7272 | 0.9987 | **0.3613** | 0.4659 |
+| the listwise (the names, the control) | 0.5327 | — | 0.7373 | 0.9987 | — | 0.5195 |
+| the label-blind counterpart (the descriptions) | 0.0433 | 0.0349 | 0.0792 | 0.7850 | 0.0168 | 0.0263 |
+
+### The paired differences against the pointwise arm (the text is the resampling unit)
+
+| scope | the listwise (the descriptions): micro-F1 | the listwise (the names): micro-F1 |
+|---|---|---|
+| **pooled** | **−0.0296** [−0.0535, −0.0038] | −0.0175 [−0.0386, +0.0054] |
+| pooled nDCG@5 | +0.0025 [−0.0206, +0.0270] | +0.0126 [−0.0088, +0.0348] |
+| head | −0.0260 [−0.0606, +0.0099] | −0.0196 [−0.0513, +0.0144] |
+| torso | −0.0368 [−0.0846, +0.0107] | −0.0108 [−0.0519, +0.0320] |
+| tail | +0.0441 [−0.0309, +0.1172] | −0.0483 [−0.1040, +0.0107] |
+| **unseen** | **−0.0609** [−0.1106, −0.0078] | −0.0072 [−0.0559, +0.0460] |
+
+**Verdict — the listwise stage does not ship.** The pre-registered
+falsification **fires on both clauses**: the listwise arm's micro-F1 does
+**not** beat the pointwise arm's (it is 0.0296 *lower*, with the interval
+excluding zero) and its **unseen** bucket falls by 0.0609 [−0.1106, −0.0078].
+The mechanism is not inert — the top-2 changes on most texts (the
+diagnostic the plan asked for) — it is *harmful*. Two things in the numbers
+say why, and they are worth the next session's attention:
+
+- **the first pick improves and the second pick does not.** The listwise's
+  **hit@1** is 0.3613 against the pointwise arm's 0.3483 (**+0.0130**): the
+  explicit choice finds the gold label more often *first*. But the *second*
+  pick degrades enough to lose the top-2 decision view (and the unseen
+  bucket's). So the listwise is a better *first* guess and a worse *pair*.
+- **the descriptions make it worse, not better.** The control (the same
+  mechanism with the label's **name** as the criterion) is the milder arm:
+  the pooled difference −0.0175 (the interval includes zero) against the
+  descriptions' −0.0296, and the unseen −0.0072 against −0.0609. So the
+  catalog's descriptions, which help the pack (CS-11), *hurt* the listwise
+  question: a 20-way choice with 20 long descriptions is a harder question
+  for the model than a 20-way choice with 20 short ones.
+
+**The order of the reviewer's hypothesis, restated by the measurement.** The
+hypothesis was "the decision model is excellent at *finding* the candidates
+and much weaker at *ordering* them". What the measurement says is sharper:
+the model's **explicit** ordering (a 20-way choice) is **worse** than its
+**implicit** one (the 68 independent probabilities' order) — the pointwise
+arm's top-2 is the better pair. So on UPR the decision model is a very good
+candidate generator (the shortlist R@50 0.9987 against the champion's
+0.7423) and should not be asked to do the ordering. The listwise's
+label-blind counterpart is at chance (0.0433), so its quality is
+label-driven — the shape works, the mechanism just does not help.
+
+**What this change set does not say.** Nothing about `test` (only val was
+touched); nothing about a *smaller* candidate list (the 20 was the plan's
+pre-registered number — a shorter list is a different question and would need
+its own pre-registration); nothing about a *decoding* change (the round-2
+answer's per-option probabilities are used as they are). The 20-option
+question's cost (1,320 calls per arm) is the price of a negative result, and
+the arm's calls are cached, so a re-read is free.
+
 the union candidate generator, as a number (2026-10-27)
 
 **The run.** One: `upr-decide-tev1-paragraph-noul-grid-union` (the whole val

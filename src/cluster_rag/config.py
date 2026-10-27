@@ -1322,6 +1322,50 @@ class UprDecisionRuleConfig(BaseModel):
         return value
 
 
+class UprListwiseConfig(BaseModel):
+    """The **listwise** second decision stage (the track's CS-12).
+
+    A second round on top of the pointwise arm: **one** call per text asking
+    "which of these N topics is the text about?", the options being the
+    round-1 top-N labels. The hypothesis: the decision model is good at
+    **finding** the candidates and weak at **ordering** them, and the ordering
+    is where the pipeline's ``top_k k=2`` lives.
+
+    Attributes:
+        enabled: Whether the run computes the listwise stage at all. The
+            default is ``False``, so the earlier runs' artifacts keep their
+            exact content.
+        candidates: How many round-1 candidates the second round offers.
+        criteria: The wording of each option: ``"catalog"`` (the CS-11
+            catalog's description) or ``"name"`` (the label's own name — the
+            control that isolates the *listwise mechanism* from the
+            *descriptions*).
+        question_text: The question's wording.
+        instructions: The task instruction (the question's placement is the
+            shape's business, so the task must not repeat the question).
+        prompt_version: The listwise prompt's version (part of the decision
+            cache's key, so the second round's calls never collide with the
+            pointwise ones).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    candidates: int = Field(default=20, ge=2, le=26)
+    criteria: Literal["catalog", "name"] = "catalog"
+    question_text: str = "Which of these topics is the text about?"
+    instructions: str = "Pick the topic that the text is about."
+    prompt_version: str = "v2"
+
+    @field_validator("question_text", "instructions")
+    @classmethod
+    def _wording_is_present(cls, value: str) -> str:
+        """Reject an empty wording (the call would carry no question)."""
+        if not value.strip():
+            raise ValueError("the listwise question's wording must not be empty")
+        return value
+
+
 class UprDecisionConfig(BaseModel):
     """The UPR decision probe's settings (the track's CS-9).
 
@@ -1360,6 +1404,8 @@ class UprDecisionConfig(BaseModel):
         rule: The **safe-negative rule** and the **shortlist rerank**
             (CS-9b). Off by default, so the CS-9 runs' artifacts keep their
             exact content.
+        listwise: The **listwise** second stage (CS-12). Off by default, so
+            the earlier runs' artifacts keep their exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1377,6 +1423,7 @@ class UprDecisionConfig(BaseModel):
     bins: int = Field(default=10, ge=2, le=50)
     mismatched_control: bool = True
     rule: UprDecisionRuleConfig = Field(default_factory=UprDecisionRuleConfig)
+    listwise: UprListwiseConfig = Field(default_factory=UprListwiseConfig)
 
 
 class UprLearnedReportingConfig(BaseModel):

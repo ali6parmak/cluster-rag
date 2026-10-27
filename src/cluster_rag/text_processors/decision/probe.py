@@ -335,7 +335,7 @@ def estimate_tokens(text: str) -> int:
     return int(len(text) / CHARS_PER_TOKEN) + 1
 
 
-def _truncate_to_budget(text: str, budget_chars: int) -> str:
+def truncate_to_budget(text: str, budget_chars: int) -> str:
     """Cut a text to the given number of characters (never below empty)."""
     if budget_chars <= 0:
         return ""
@@ -408,7 +408,7 @@ def plan_calls(
                 fixed = len(rendered) + (
                     len(cell.question_text) if state_shape == STATE_PAIR else 0
                 )
-                paragraph = _truncate_to_budget(paragraph, int(budget - fixed))
+                paragraph = truncate_to_budget(paragraph, int(budget - fixed))
             spec = build_question_spec(question_type, rendered, options=options, criteria=criteria)
             calls.append(
                 DecisionCall(
@@ -494,7 +494,7 @@ def _paragraph_call(
     if max_input_tokens is not None:
         budget = max_input_tokens * CHARS_PER_TOKEN
         fixed = sum(len(spec.instructions) for spec in specs)
-        paragraph = _truncate_to_budget(paragraph, int(budget - fixed))
+        paragraph = truncate_to_budget(paragraph, int(budget - fixed))
     return DecisionCall(
         state={"paragraph": paragraph},
         cell_indexes=tuple(chunk),
