@@ -1475,6 +1475,39 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   labels") is a **per-label** claim, and the diagnostics are pooled per
   feature. **Open:** a per-label, per-feature breakdown (the description
   coverage against the name coverage, per label) would settle it.
+- **The reranker's ordering against the pack's (CS-15/CS-16, 2026-10-27).**
+  The pre-registration fixes the comparison (the same candidate set, two
+  orderings; the pack + the decision probability as the incumbent), but the
+  **shape** of the winner is not decided in advance: a reranker is a
+  *reordering* of a candidate set (its candidate set is someone else's), while
+  the pack is a *learned scorer* over the whole grid (its own candidate set is
+  implicit in the combiner's weights). **Open:** if the reranker wins the
+  mechanism claim but not the pipeline claim, is the right pipeline shape
+  "generate with the decision model, rank with the reranker" (the reranker
+  alone) or "generate with the decision model, rank with the pack, and let
+  the reranker break the ties" (the pack and the reranker fused)? The second
+  is a *fusion* rule with a fitted weight, so it is a **new thing to fit** and
+  it needs its own pre-registration; it is not in CS-15/CS-16.
+- **The held-out labels and the reranker (CS-15/CS-16, 2026-10-27).** The
+  champion cannot suggest the eight held-out labels at all (its unseen
+  bucket is 0.0000) because its geometry never saw them; the decision model
+  can (0.5267) and the pack + the decision probability can (0.5697). A
+  reranker reading the label's **description** has a third way in. **Open:**
+  the reranker's unseen bucket is bounded by the *candidate set's* unseen
+  coverage (a reranker cannot enlarge a set), so the question is whether the
+  decision model's candidate set already contains the held-out labels often
+  enough — and whether the reranker's ordering puts them first when it does.
+  The runs measure the set's unseen coverage and the reranked unseen bucket
+  side by side; the *ceiling* of the unseen bucket is stated, not assumed.
+- **The fine-tuning's training target (CS-17, 2026-10-27).** The track holds
+  the three ingredients (the OMCT hard negatives, the UPR safe-negative hard
+  negatives, the decision model's 99.87%-recall candidate set as the positive
+  mining source), but the **target** is undecided: a pairwise cross-encoder
+  (the two cross-encoders' own objective) against a listwise one (the
+  listwise model's shape, and the CS-12 lesson that an explicit choice is
+  *worse* than an implicit order). **Open:** which target, and does the
+  mined positive set (the candidate set) teach the ordering or only the
+  presence?
 
 ## 6. Milestones
 
@@ -2771,6 +2804,244 @@ main-plan Phase 4 matter).
   bucket (0.2540) is half the decision model's (0.5267), because the
   champion's per-text z-scores are more spread out and the z-max is biased
   toward its scale. The numbers are in the track log's CS-14 section.)*
+
+- [ ] **CS-15 — the zero-shot rerankers on UPR, as a *scorer* (the candidate
+  set fixed, the ordering changed).** The three HF rerankers, measured as
+  **reorderings of a candidate set** (never as a new candidate generator):
+  the client (a new edge package `src/cluster_rag/rerank/`: the port, the HF
+  client, its own disk cache), the pure core
+  (`text_processors/rerank/upr_rerank.py`: the candidate sets, the label-blind
+  counterpart, the rank fusion, the ceiling, the measurement), the new CLI
+  command `rerank-upr`, the config section `upr_analysis.rerank`, the sweep
+  `experiments_text_processing/upr_rerank_sweep.py` and the feasibility tool
+  `tools/smoke_upr_rerank.py`. The mechanism, the falsification, the cost and
+  the leakage check are in **§7.1.3** (the reviewer's decisions of
+  2026-10-27), which this change set executes. The runs: 9 (the three models
+  x the three candidate sets), each answering one question.
+  *Exit:* every arm's measurement (the decision view, the ranking view, the
+  per-bucket view, the gold side), the candidate set's **ceiling** beside the
+  incumbent's own numbers, the **label-blind counterpart** beside every arm,
+  the **paired** differences over the texts, the **cost** block (the pairs per
+  text, the pairs per second, the wall time per 660 texts, the peak GPU
+  memory) and the log carries the numbers and the verdict.
+- [ ] **CS-16 — the reranker's score as a **pack feature** (the CS-13
+  precedent).** The reranker's score per (text, label) cell becomes one more
+  column of the UPR pack's cube, in **two shapes**: the **full grid** (68
+  pairs per text, no fill value needed) and the **candidate-restricted**
+  feature (the decision model's top-10, 10 pairs per text, with the
+  **pre-registered fill value**: the row's minimum scored value). The pack
+  stays a pure core (the matrix is scored at the edge and passed in), the
+  combiner is the boosted one (CS-13's), the fit side is **train** only, and
+  the **label-blind counterpart** runs beside every arm. The mechanism, the
+  falsification, the cost and the leakage check are in §7.1.3. The runs:
+  `upr-analyze-learned-rerank-<model>-{full,restricted}` (+ their two
+  label-blind counterparts) against the re-run control.
+  *Exit:* the augmented pack's numbers against the control's with the paired
+  intervals, the per-bucket view (the unseen bucket is the one the champion
+  cannot reach at all), the three floors, the cost block and the log's
+  verdict on the "scorer vs. feature" question.
+- [ ] **CS-17 — the *fine-tuned* cross-encoder (PLAN Phase 6's second step;
+  acknowledged, NOT scheduled here).** The zero-shot measurement of CS-15 /
+  CS-16 is the cheap first step; the destination is a **trained** reranker,
+  and the track now holds all three of its ingredients: the characterized OMCT
+  benchmark (the 996 verified hard negatives), the UPR hard negatives from the
+  safe-negative rule (CS-9b), and the decision model's 99.87%-recall candidate
+  set as the positive mining source. What is missing is a **reviewer's OK**
+  (a training run is a new artifact class: a fine-tuning script, a training
+  split of its own, and the label-holdout discipline applied to the training
+  data) and a decision on the training target (pairwise vs. listwise). The
+  checkbox stays open and unticked: the round that measures it is not this
+  one.
+
+### 7.1.3 The reviewer's decisions of 2026-10-27 (the reranker round: CS-15, CS-16)
+
+*Recorded **before** any run, so the pre-registration is auditable. The
+round's question: **can a ranking model beat the ordering we already have,
+and what does it cost?***
+
+**0. What the three models actually are (the round's premise, corrected by
+the model cards on 2026-10-27).** The round was proposed with
+`jina-reranker-v3` described as a "ColBERT-style late-interaction,
+multi-vector" model. It is not. Its card says: *"a novel last but not late
+interaction architecture. Unlike ColBERT's separate encoding with multi-vector
+matching, this model performs causal self-attention between query and
+documents within the same context window, extracting contextual embeddings
+from the last token of each document"* — a **listwise** reranker on
+Qwen3-0.6B that takes **one query and up to 64 documents per forward pass**.
+Three consequences, and they change the design:
+
+| model | shape | one forward pass per | the card's score |
+|---|---|---|---|
+| `jinaai/jina-reranker-v2-base-multilingual` (278M) | cross-encoder | one **(query, document) pair** | a sigmoid on the classification logit |
+| `nvidia/llama-nemotron-rerank-1b-v2` (1B) | cross-encoder | one **(query, document) pair** | the raw relevance logit |
+| `jinaai/jina-reranker-v3` (0.6B) | **listwise** | one **(query, up to 64 documents)** | the relevance score of each document |
+
+So: (i) **none of the three is a multi-vector scorer**, so the 2026-10-22
+trim's "multi-vector/late-interaction scoring" clause does not bind this
+round at all — the trim's *other* clause (the methods inventory's "exp19:
+cross-encoder reranker — our PLAN Phase 6 slot; not this track's core →
+deferred") is the one this round acts on; (ii) a reranker's **cost is two
+shapes**, not one: the per-pair cross-encoder and the per-call listwise
+model, and the listwise model is the **cheap one per text** (one call for a
+whole candidate set) and the **expensive one per pair**; (iii) the three are
+not comparable with each other, only **with themselves on the same candidate
+set**.
+
+**1. Where the work lives (the reviewer's question (a)).** **Both places, with
+a strict division of labour.** PLAN.md's Phase 6 already asks for exactly
+this ("Cross-encoder reranker on (text, label name/description) pairs.
+Zero-shot first, then fine-tuned on the auxiliary pairwise data" plus
+"Compare against fusion alone: quality gain vs latency and cost", exiting on
+"enabled only if it improves val F1 / P@k by a meaningful margin"), so **the
+slot is PLAN's**. But the *measurement* can only be done in the track: the
+track owns the UPR harness, the candidate sets, the paired-comparison tool,
+the floors, the per-bucket view and the cost accounting. So: **CS-15/CS-16
+are track change sets that produce PLAN's Phase 6 evidence**, and the track's
+log ends with a note for PLAN (as the track's §2 requires: "a track result
+adopted downstream gets a note in the relevant PLAN phase"). The **code** is
+not in the track's pure core either: the model client is a new **edge**
+package `src/cluster_rag/rerank/` — the package AGENTS.md's target layout
+already reserves for the main plan's Phase 6 (`rerank/cross_encoder.py,
+llm.py`) — while the track's pure core gets only the pure parts (the
+candidate sets, the fusion, the measurement). The 2026-10-22 trim is
+**not** reopened: this round adds no multi-vector scoring, no union
+shortlist, no new decision channel, and no pipeline component.
+
+**2. The candidate set fixes the ceiling (the reviewer's instruction, kept
+in the mechanism).** A reranker can **reorder** a set, never enlarge it. So
+the candidate set is the experiment's independent variable, and the
+**decision model's** candidates (or the union's) are the ones fed to the
+rerankers; the champion's shortlist is measured only as the **control** that
+shows the ceiling's dependence on the set. The three sets and their ceilings
+(the numbers are the artifacts' own; the two aggregations are named because
+they differ):
+
+| the candidate set fed to the reranker | the row-mean recall@10 (the ranking view) | the cell-level hit@10 (the gold cells' share) | the ceiling a **perfect** reordering could reach (micro-F1) | the incumbent ordering of the same set |
+|---|---|---|---|---|
+| the champion's top-10 | 0.7126 | *measured in the run* | ~0.71 | the champion (0.5479) |
+| the **decision model's** top-10 | 0.8845 | 0.8788 | ~0.88 | the decision model (0.5502) |
+| the **union's** top-10 | 0.9120 | 0.9276 | ~0.91 | the union (0.5843) |
+
+The ceiling's formula is the reviewer's, unchanged: the perfect reordering
+puts the gold label first, so `TP = (the gold cells inside the set)`, the
+top-2 rule predicts 1,320 cells, so `FP = 1,320 − TP` and `FN = 1,312 − TP`.
+**Which aggregation is used is pre-registered: the cell-level share** (the
+artifact's `gold.hit@k`), because the decision view's micro-F1 is a
+cell-level statistic and the ceiling arithmetic must be on the same footing;
+the row-mean recall@10 is reported beside it, never mixed with it. (The two
+differ by up to 1.6 points: the decision model's 0.8845 row-mean against its
+0.8788 cell-level, the union's 0.9120 against its 0.9276.)
+
+**3. "The same candidate set, two orderings" (the reviewer's instruction, and
+the CS-9b lesson).** Every comparison holds the candidate set **fixed** and
+changes **only** the ordering. The reordering is parameter-free: the
+candidates are ordered by the reranker's score, and the cells outside the set
+keep the incumbent's own order below them (the CS-12 listwise arm's rank
+fusion, reused). The incumbent is therefore **the ordering that produced the
+set** — the decision model's own probabilities, the union's own z-max, the
+champion's own scores — and the comparison is **paired over the texts** (the
+per-text (tp, fp, fn) counts and the per-text nDCG, 2,000 resamples, seed 42).
+The head-to-head numbers the arms are read against are the track's best:
+the **pack + the decision probability** (micro-F1 **0.5965**, hit@1 0.3758)
+and the **union's** ranking view (nDCG@5 **0.7693**) — never the champion
+alone. The CS-9b mistake (a *weaker* ranker re-ordering the champion's
+shortlist, blamed for the result) is avoided by construction: the *same set*,
+the *same metric*, the *same texts* on both sides.
+
+**4. The work order: the **scorer** first, then the **feature** (the
+reviewer's question (b), and the CS-13 precedent).** The CS-13 measurement is
+the reason: the decision probability as a **stand-alone scorer** was worth
++0.0023 of micro-F1 over the champion, and the *same* probability as a **pack
+feature** was worth **+0.1147**. So CS-15 measures the reranker as a scorer
+(a reordering of a candidate set, 10 pairs per text) and CS-16 measures it as
+a feature (a column of the pack's cube, 68 pairs per text in the full-grid
+shape). The **fill value** of the cheap, candidate-restricted feature shape is
+**pre-registered here**: the **row's minimum scored value** (so the
+candidates always outrank the cells outside the set, and no separation is
+manufactured by the fill). A constant fill (0.0) is **not** used: it makes
+the feature's absolute level arbitrary and lets the combiner's fitted weight
+manufacture the separation the reranker did not produce.
+
+**5. The label side and the order (pre-registered).** The label's **document**
+is the **catalog's description** (`catalogs/upr_labels.jsonl`, frozen before
+the runs, label-side knowledge exactly like the zero-shot label vectors); the
+**name-only** variant is the cheap ablation. The **order** of the pair is
+pre-registered as **the text first, the label second** (the pipeline's
+retrieval framing: the text is the user's query, the labels are the documents
+to retrieve) — and it is the only framing the listwise model's API admits
+(one query, many documents). The **reverse** order (the label as the query,
+the text as the passage: the orientation the two cross-encoders' training
+distribution suggests) is **measured**, not assumed: it is the order-ablation
+arm of the decision-set run, where it is possible. Both orders are in the
+artifact, so the choice is a measurement and not a belief.
+
+**6. The cost bar (PLAN's Phase 6 exit criterion: "quality gain vs latency
+and cost").** The bar is stated **in advance**: the reranker's **wall time
+for the 660 val texts must not exceed the decision model's** — the bar is
+1,320 calls at the measured ~100 calls/min, i.e. **~13 minutes for the val
+split** (the CS-9b cost note) — and the **peak GPU memory** must be reported
+(16 GB available). A quality gain that costs more than the model it would sit
+beside is not "enabled": the run reports the pairs per text, the pairs per
+second, the wall time per 660 texts and the peak memory for every arm, and
+the **ship** criterion below adds the quality margin. The indicative
+throughputs measured on this machine before the runs (a scratch benchmark, not
+a harness number): the 278M cross-encoder ~1,485 pairs/s and 0.6 GB of peak
+VRAM, the 1B cross-encoder ~467 pairs/s and 2.5 GB, the listwise model
+0.265 s per 10-document call and 0.539 s per 64-document call and 1.3 GB.
+
+**7. The pre-registered falsification (the ship / null criteria), in
+advance.** For the **scorer** form (CS-15), against the **decision model's
+top-10** as the primary candidate set and the **union's** top-10 as the
+second:
+
+- **Ship (the mechanism claim).** The reranker's reordering of the set beats
+  **the incumbent ordering of the same set** on the **decision view**
+  (micro-F1) with a **paired** 95% interval **excluding zero** in the
+  positive direction, **and** on the **ranking view** (nDCG@5) with a paired
+  interval excluding zero, **and** the **label-blind counterpart** (the same
+  reranker, the shifted pairing — the yardstick) shows **no** such gain.
+- **Null.** The paired interval includes zero on either view, or the
+  label-blind counterpart shows a comparable gain (a construction artefact).
+- **The pipeline claim** (a *different*, stronger bar, and it is the
+  reviewer's slot decision, not the track's): the reranked arm's micro-F1
+  must beat the **pack + the decision probability** (0.5965) with a paired
+  interval excluding zero, and by at least **+0.02** ("a meaningful margin",
+  PLAN's Phase 6 wording, with the number fixed in advance).
+- For the **feature** form (CS-16), against the **control** (the same pack
+  and combiner **without** the reranker's column): the augmented pack's
+  micro-F1 must beat the control's with a paired interval excluding zero,
+  the **unseen bucket must not fall below** the control's, the augmented
+  pack's own **control-role floor** must stay at chance, and the
+  **label-blind** arm must not beat the real one. The ship criterion adds the
+  same +0.02 margin and the cost bar.
+
+**8. The dependencies this round needs (AGENTS.md §3's explain-first).** Two,
+both recorded here: (i) **`einops`** — the jina-reranker-v2 card's own
+instruction ("install transformers and einops"); its custom modelling code
+imports it, and without it the model does not load. It is a pure-Python
+library (no model download, no network, no I/O) and it goes into the core
+dependencies with a comment, like `httpx` and `peft`. (ii) A **one-function
+compatibility shim** for `transformers` 5.x: the jina-reranker-v2 custom
+modelling code (pinned at revision `9cfeff2d`) imports
+`create_position_ids_from_input_ids` from
+`transformers.models.xlm_roberta.modeling_xlm_roberta`, which transformers 5
+removed. The client installs the transformers-4.x implementation of that one
+helper before the dynamic module is loaded. **A transformers downgrade is
+explicitly rejected**: the repo's embedding artifacts were produced with
+transformers 5.19, so a downgrade would change the embeddings and break the
+UPR guard (`tools/verify_upr_baseline.py`) — the guard is the track's
+contract. The shim is contained in the edge client, is documented, and is
+covered by a test.
+
+**9. The prize one step further out (acknowledged, not scheduled).** The
+**fine-tuned** cross-encoder is PLAN Phase 6's second step, and the track now
+holds all three of its ingredients: the characterized OMCT benchmark (the 996
+verified hard negatives), the UPR hard negatives from the safe-negative rule
+(CS-9b), and the decision model's 99.87%-recall candidate set as the positive
+mining source. The zero-shot measurement of CS-15/CS-16 is the cheap first
+step, **not** the destination: CS-17 names the fine-tuning change set and
+leaves it open, because it needs the reviewer's OK on the training target and
+on a training split of its own.
 
 ## 8. The durable deliverable (named, so it is not lost)
 
