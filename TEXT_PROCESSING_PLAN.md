@@ -1430,6 +1430,51 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   (the catalog CS-8d lacks) do better? This is the strongest UPR argument for
   a label-side catalog, and it bears on PLAN's zero-shot route to the
   held-out labels.
+  *(CS-8d's question is **answered** by CS-11 and CS-13: the catalog exists
+  now, and the decision probability — which reads the text against the
+  label's **name** — transfers to the held-out labels even better (the
+  unseen bucket 0.5697 against the pack's 0.4469, CS-13).)*
+- **The decision model's ordering is the weak point, and the shortlist's
+  recall is the ceiling (CS-9b / CS-12, 2026-10-27).** The decision model is
+  a near-perfect **candidate generator** on UPR (the shortlist R@50 0.9987
+  against the champion's 0.7423) and a **weak ranker**: its own top-1
+  (0.3483) is below the champion's (0.3666), the champion's top-10 holds
+  only 74.6% of the gold cells (so even a perfect reranker of that shortlist
+  would reach 74.6%), and an **explicit** 20-way choice (CS-12's listwise
+  stage) is *worse* than the implicit order of the 68 probabilities. **Open
+  for PLAN's Phase-6 slot:** a reranker worth having has to be fed the
+  *decision model's* candidates (or the union's — CS-14's recall@10 0.9120),
+  and it has to be a **trained** ranker, not a zero-shot decision model. The
+  slot decision is the reviewer's.
+- **The UPR pack + the decision probability beats the champion at the
+  decision view (CS-13, 2026-10-27) — at a stated cost.** The augmented
+  pack's micro-F1 0.5965 against the champion's 0.5479, and the unseen
+  bucket 0.5697 against 0.0000, with the fit side never seeing the held-out
+  labels (0 positives of 3,087) and the label-blind counterpart's arm
+  reaching only 0.4977. **Open:** the cost is the decision model in the loop
+  (2 calls per text; 1,320 calls for the val split, ~3,352 for the fit side)
+  — is that a price the pipeline should pay, and is the *feature* the right
+  shape (the model's probability as a column) or should the pipeline ask the
+  model directly? And the one **test shot** for an adopted config is still
+  owed.
+- **The union's decision view has a scale artefact (CS-14, 2026-10-27).** The
+  per-row z-max is a *candidate generator's* number (the recall@10 0.9120
+  against the decision model's 0.8845 and the champion's 0.7126, with the
+  blind control at 0.6947) and not a scorer's: the union's pooled micro-F1
+  (0.5843) is the track's best UPR number, but its unseen bucket (0.2540) is
+  half the decision model's (0.5267) because the champion's z-scores are
+  more spread out and the max is biased toward its scale. **Open:** a union of
+  two *calibrated* scores (not two z-scored ones) would keep the recall and
+  fix the decision view — is it worth measuring, or is the union's number
+  enough as it stands?
+- **The catalog's per-label structure is not measured (CS-11, 2026-10-27).**
+  The description channel's pooled per-feature AUC (0.7067 against the
+  name's 0.7566) says the name is the stronger channel *pooled*, and the
+  pack's decision view says the two are complementary — but the scratch's
+  claim ("the description beats the name where the name is weak — the generic
+  labels") is a **per-label** claim, and the diagnostics are pooled per
+  feature. **Open:** a per-label, per-feature breakdown (the description
+  coverage against the name coverage, per label) would settle it.
 
 ## 6. Milestones
 
