@@ -22,6 +22,8 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── pyproject.toml
     ├── configs/                 # the single base config (paths, defaults)
     │   └── base.yaml            # experiments live in experiments/*.py sweeps, authored in Python
+    ├── catalogs/                # committed label catalogs (name / description / parent)
+    │   └── upr_labels.jsonl     # the text-processing track's CS-11 catalog (+ its meta file)
     ├── data/                    # gitignored
     │   ├── raw/                 # original JSONL (read-only)
     │   ├── external/            # auxiliary datasets from collaborators (see PLAN §2)
