@@ -1457,6 +1457,55 @@ class UprLearnedReportingConfig(BaseModel):
     threshold_quantiles: int = Field(default=99, ge=3, le=999)
 
 
+class UprDecisionFeatureConfig(BaseModel):
+    """The decision probability as a **pack feature** (the track's CS-13).
+
+    The decision model's probability for the (text, label) cell becomes one
+    more column of the pack's ``(n_texts, n_labels, n_features)`` cube. The
+    pack does not call the model (the model is a client, and the package is a
+    pure core): the CLI scores the cells at the edge and passes the matrix
+    in, so the feature is **cell-local** by construction — no corpus
+    statistic, no document identity, no length.
+
+    Attributes:
+        enabled: Whether the run computes the feature at all. The default is
+            ``False``, so the earlier runs' artifacts keep their exact
+            content.
+        model: The decision model (pinned by id **and** digest, like every
+            other decision model in the track).
+        prompt_version: The prompt's version (part of the decision cache's
+            key).
+        host: The Ollama host (the empty value uses ``OLLAMA_HOST`` or the
+            default).
+        timeout: The call timeout in seconds.
+        max_questions_per_call: How many questions one call may carry.
+        label_blind: Whether the feature is the **label-blind counterpart's**
+            probability (the wrong pairing, the same model and the same
+            cost) — the yardstick that says how much of the feature's
+            contribution is the model's own label-blind signal.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: DecisionModelConfig | None = None
+    prompt_version: str = "v1"
+    host: str = ""
+    timeout: float = 600.0
+    max_questions_per_call: int = Field(default=64, ge=1, le=64)
+    label_blind: bool = False
+
+    @model_validator(mode="after")
+    def _model_is_required(self) -> UprDecisionFeatureConfig:
+        """An enabled feature needs a pinned model."""
+        if self.enabled and self.model is None:
+            raise ValueError(
+                "upr_analysis.learned.decision_feature is enabled but carries no "
+                "model: the feature needs a pinned decision model (id and digest)"
+            )
+        return self
+
+
 class UprBackoffConfig(BaseModel):
     """The **sibling-max backoff** on the UPR pack (the track's CS-11).
 
@@ -1524,6 +1573,8 @@ class UprLearnedConfig(BaseModel):
             comparison); off by default.
         backoff: The **sibling-max backoff** (the catalog's parent channel);
             off by default.
+        decision_feature: The **decision probability** as a pack feature
+            (CS-13); off by default.
         seed: The seed of the floors' permutations and of the random-vector
             draw. ``None`` uses the run's seed.
     """
@@ -1543,6 +1594,7 @@ class UprLearnedConfig(BaseModel):
     floors: UprLearnedFloorsConfig = Field(default_factory=UprLearnedFloorsConfig)
     reporting: UprLearnedReportingConfig = Field(default_factory=UprLearnedReportingConfig)
     backoff: UprBackoffConfig = Field(default_factory=UprBackoffConfig)
+    decision_feature: UprDecisionFeatureConfig = Field(default_factory=UprDecisionFeatureConfig)
     seed: int | None = None
 
     @field_validator("groups")

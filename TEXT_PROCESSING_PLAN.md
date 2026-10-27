@@ -2608,7 +2608,7 @@ main-plan Phase 4 matter).
   shortlist R@50 0.9987 against the champion's 0.7423) and should not be
   asked to order. The label-blind counterpart is at chance (0.0433). The
   numbers are in the track log's CS-12 section.)*
-- [ ] **CS-13 — the decision probability as a feature in the UPR pack (P2).**
+- [x] **CS-13 — the decision probability as a feature in the UPR pack (P2).**
   One more column in the pack's `(n_texts, n_labels, n_features)` cube: the
   decision model's probability for the (text, label) cell. The pack stays a
   pure core (the matrix is passed in; the model is called at the edge), and
@@ -2634,10 +2634,10 @@ main-plan Phase 4 matter).
   says the gain is label-driven; and the arm with the **label-blind**
   decision feature (the same pack, the wrong pairing) must not beat the real
   arm.
-  *Cost:* **zero new decision calls** — the train and val decision
-  probabilities are computed and cached by CS-9b (the rule's fit side needs
-  them) and are read from the cache here. (CS-13's *own* cost, if it had to
-  pay for them, would have been 3,352 train calls per arm.)
+  *Cost:* 3,352 new decision calls — the **label-blind** counterpart's fit
+  side (the train grid, 3,352 calls). Everything else is a cache hit: the
+  train and val probabilities of the real arm are CS-9b's (the rule's fit
+  side needs them) and the blind val side is CS-9b's too.
   *Leakage:* the feature is cell-local and label-blind in the fit sense (the
   model is frozen and carries no UPR label); the fit side is **train** only;
   the eight unseen labels' absence from the fit side is the *hypothesis*, not
@@ -2647,13 +2647,43 @@ main-plan Phase 4 matter).
   `upr-analyze-learned-dec-logistic` (the pack + the decision feature),
   `upr-analyze-learned-dec-blind-histgb` and
   `upr-analyze-learned-dec-blind-logistic` (the same, with the label-blind
-  decision feature), against the controls `upr-analyze-learned-report-histgb`
-  and `upr-analyze-learned-report-logistic` (the same pack and combiner
-  without the feature).
+  decision feature), against the control `upr-analyze-learned-cat-control`
+  (the same pack and combiner without the feature, re-run in the CS-11 sweep
+  so the cross-run paired comparison has both sides' per-text blocks; it
+  reproduces the CS-8f artifact's metrics exactly).
   *Exit:* the four arms are measured with the per-bucket view, the three
   floors, the calibration and the paired intervals against the controls; the
   log carries the numbers and the verdict (including the "the weight
   transferred / it did not" answer).
+  *(done 2026-10-27: the pack's new **decision** feature group (the decision
+  probability as one more column of the cube — the model is called at the
+  edge and the matrix is passed in, so the feature is cell-local by
+  construction), the config section `upr_analysis.learned.decision_feature`
+  (off by default; the model pinned by id and digest), the driver's scoring
+  of the fit side and the evaluated side, the sweep
+  `experiments_text_processing/upr_learned_decision_sweep.py` and 4 runs
+  (`upr-analyze-learned-dec-{histgb,logistic}` and their two label-blind
+  counterparts). **Verdict: the hypothesis is confirmed, and it is the
+  track's largest UPR result.** The augmented pack's pooled micro-F1 is
+  **0.5965** (the boosted combiner) against the control's 0.4818 — the
+  paired difference **+0.1147** [+0.0964, +0.1349] — and its **unseen**
+  bucket **0.5697** against 0.4469 (+0.1228 [+0.0763, +0.1718]): the fit side
+  has **zero** positives for the eight held-out labels, so the weight
+  **transfers** (the decision probability is computed from the label's name,
+  identically for a held-out label). Every pre-registered clause holds: the
+  unseen bucket is not below the control's, the paired intervals exclude
+  zero, the augmented pack's own **control-role floor** stays at chance
+  (0.0120), and the **label-blind** counterpart's arm reaches only 0.4977
+  (+0.0160 over the control) — so **93% of the feature's contribution is
+  the model's label reading**. The **random-vector floor** keeps 0.5798: the
+  decision probability carries the ranking and the embedding geometry
+  contributes almost nothing (0.5965 against 0.5798). The augmented arm's
+  micro-F1 (0.5965) is above the champion's (0.5479) — the first UPR number
+  the track has measured that beats the main pipeline's whole-text scorer at
+  the decision view, and it does so while **finding the eight held-out
+  labels** (the unseen bucket 0.5697 against the champion's 0.0000). The
+  price is stated: the decision model in the loop (2 calls per text). The
+  numbers are in the track log's CS-13 section.)*
 - [ ] **CS-14 — the union candidate generator as a number (P4).** The
   **measurement** of the union — the per-row **z-max** of the champion's and
   the decision model's scores (the row = the text, the z-score over the 68

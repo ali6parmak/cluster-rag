@@ -4549,3 +4549,156 @@ artefact stated beside it.
 measurement); nothing about a z-normalization other than the per-row one
 (the per-text z-score is a choice, and a different one would move the
 numbers — the recall curve is the robust part, the decision view is not).
+
+## CS-13 — the decision probability as a feature in the UPR pack (2026-10-27)
+
+**The runs.** Four, all on the UPR **val** split, the pack fitted on **train**
+(the main pipeline's protocol) and the guard green for every run:
+
+| run | the feature | the combiner |
+|---|---|---|
+| `upr-analyze-learned-dec-histgb` | the decision probability (the real pairing) | the gradient-boosted combiner |
+| `upr-analyze-learned-dec-logistic` | the decision probability (the real pairing) | the logistic combiner |
+| `upr-analyze-learned-dec-blind-histgb` | the decision probability of the **label-blind counterpart** | the gradient-boosted combiner |
+| `upr-analyze-learned-dec-blind-logistic` | the decision probability of the **label-blind counterpart** | the logistic combiner |
+
+The control is `upr-analyze-learned-cat-control` (the same pack, the same
+combiner, **without** the feature). The feature is the decision model's
+probability for the (text, label) cell — **cell-local** by construction (the
+pack never calls the model: the CLI scores the cells at the edge and passes
+the matrix in), with no corpus statistic, no document identity and no length.
+
+**The cost:** the train and val probabilities are **CS-9b's cache hits**
+(the rule's fit side needs them anyway), so the only new calls are the
+label-blind counterpart's **fit side** (3,352 calls) — the blind val side and
+both real sides were already paid for.
+
+### The headline (val; the learned arm; the control is the same pack without the feature)
+
+| arm | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | **unseen** micro-F1 | unseen nDCG@5 |
+|---|---|---|---|---|---|---|
+| the champion (the whole-text reference arm) | 0.5479 | 0.5006 | 0.6725 | 0.7423 | **0.0000** | 0.6575 |
+| the control (the learned arm) | 0.4818 | 0.4652 | 0.6137 | 0.8909 | 0.4469 | 0.6641 |
+| **+ the decision probability (the booster)** | **0.5965** | **0.5839** | **0.7567** | 0.9856 | **0.5697** | 0.7923 |
+| + the decision probability (the logistic) | 0.5760 | 0.5837 | 0.7407 | 0.9992 | 0.5485 | 0.8352 |
+| + the **label-blind** probability (the booster) | 0.4977 | — | 0.6380 | 0.8869 | 0.4738 | 0.6646 |
+| + the **label-blind** probability (the logistic) | 0.4719 | — | 0.6034 | 0.8723 | 0.4656 | 0.6688 |
+
+### The paired differences against the control (the text is the resampling unit)
+
+| scope | the booster: micro-F1 | the logistic: micro-F1 |
+|---|---|---|
+| **pooled** | **+0.1147** [+0.0964, +0.1349] | +0.0942 [+0.0758, +0.1127] |
+| pooled nDCG@5 | +0.1430 [+0.1243, +0.1620] | +0.1270 [+0.1087, +0.1453] |
+| head | +0.1432 [+0.1117, +0.1747] | +0.1324 [+0.1024, +0.1636] |
+| torso | +0.0707 [+0.0351, +0.1070] | +0.0540 [+0.0177, +0.0888] |
+| tail | +0.1241 [+0.0600, +0.1880] | +0.1007 [+0.0420, +0.1629] |
+| **unseen** | **+0.1228** [+0.0763, +0.1718] | +0.1016 [+0.0560, +0.1455] |
+| unseen nDCG@5 | +0.1282 [+0.0994, +0.1592] | +0.1712 [+0.1378, +0.2063] |
+
+**Verdict — the hypothesis is confirmed, and it is the track's largest UPR
+result.** Every pre-registered clause holds:
+
+- the augmented pack's **unseen** bucket is **not below** the control's (0.5697
+  against 0.4469 — and against the reviewer's reference of 0.4758 for the
+  logistic pack), and the **paired** interval excludes zero (+0.1228
+  [+0.0763, +0.1718]);
+- its shortlist R@50 (0.9856) is not below the control's (0.8909);
+- the augmented pack's own **control-role floor** stays **at chance** (the
+  micro-F1 0.0120 over the five draws — the CS-8d level was 0.027-0.043), so
+  the gain is **label-driven** and not the training design's own prior;
+- the **label-blind** counterpart's arm reaches only 0.4977 (+0.0160
+  [+0.0038, +0.0279] over the control) against the real arm's +0.1147 — so
+  **93% of the feature's contribution is the model's label reading** and the
+  yardstick confirms it.
+
+**The mechanism, as the measurement states it.** The hypothesis was that the
+decision probability transfers to the labels the train split never saw,
+because it is computed from the label's **name** — identically for a held-out
+label — so the combiner's fitted weight applies there too. The **fit side has
+zero positives for the eight unseen labels** (0 of 3,087 train gold cells),
+so the transfer is the whole story: the unseen bucket rises by 0.1228
+([+0.0763, +0.1718]) and the *pooled* number by 0.1147, and the fit side
+never saw the labels it is being judged on. The **random-vector floor** says
+the rest of the story: with the embedding sides replaced by noise, the
+augmented arm keeps **0.5798** (the unseen 0.5534) — so the decision
+probability carries the ranking and the **embedding geometry contributes
+almost nothing** (0.5965 against 0.5798). That is the CS-6d's OMCT finding
+("the lexical block is the ranking signal, the embedding geometry is the
+retrieval signal") in a third voice: on UPR the *decision model* is the
+ranking signal, and the geometry is not.
+
+**What this means for the track's headline.** The augmented arm's micro-F1
+(0.5965) is above the champion's (0.5479) — the first UPR number the track
+has measured that beats the main pipeline's whole-text scorer at the
+decision view, and it does so while **finding the eight held-out labels**
+(the unseen bucket 0.5697 against the champion's 0.0000). The price is
+stated: the feature needs the decision model in the loop (2 calls per text,
+1,320 calls for the val split, ~3,352 for the fit side) — that is a *scoring*
+cost, not a *retrieval* cost, and the Phase-6 slot decision is the
+reviewer's.
+
+**What this change set does not say.** Nothing about `test` (only val was
+touched — the one test shot for an adopted config is still owed); nothing
+about the feature's *cost* in a production setting (the calls are cached
+here, and a fresh run pays 1,320 calls per 660 texts); nothing about a
+decision model *other* than tev1 (laya stays closed as a lever); and
+nothing about the feature's own calibration (the arm's probability is the
+combiner's, not the decision model's).
+
+the union candidate generator, as a number (2026-10-27)
+
+**The run.** One: `upr-decide-tev1-paragraph-noul-grid-union` (the whole val
+grid; the decision calls are CS-9b's cache hits, so the run costs **zero**
+new model calls). The union is the per-row **z-max** of the champion's and
+the decision model's scores — and it is a **measurement, not a component**:
+the union is not built and enters no pipeline (the 2026-10-22 trim put
+"union shortlists" out of the track's menu; they are main-plan Phase 4/6
+machinery). The number is for PLAN.
+
+### The recall curve (val, the whole grid; the share of the gold cells inside the text's top-k)
+
+| scorer | recall@1 | recall@3 | recall@5 | **recall@10** | nDCG@5 | shortlist R@20 | shortlist R@50 | hit@1 |
+|---|---|---|---|---|---|---|---|---|
+| the champion (the geometry) | 0.4139 | 0.6295 | 0.6773 | 0.7126 | 0.6725 | 0.7260 | 0.7423 | 0.3666 |
+| the decision model | 0.3953 | 0.6928 | 0.7904 | 0.8845 | 0.7247 | 0.9538 | 0.9987 | 0.3483 |
+| **the union** | **0.4192** | **0.7241** | **0.8355** | **0.9120** | **0.7693** | 0.9718 | 0.9970 | 0.3697 |
+| the union with the **label-blind** scores (the control) | 0.4134 | 0.5811 | 0.6218 | 0.6947 | 0.6307 | 0.7553 | 0.8337 | 0.3659 |
+
+**Verdict — the union's gain is real and label-driven, and it is a number for
+PLAN, not a component.** The union's **recall@10 = 0.9120** against the
+decision model's 0.8845 and the champion's 0.7126: a candidate generator
+built on both would put the gold label in a ten-label shortlist for **91%**
+of the texts, where the champion's geometry manages 71% and the decision
+model alone 88%. The **control** is the yardstick: the same z-max with the
+decision model's **label-blind** scores reaches only 0.6947 — *below* the
+champion's own 0.7126 — so the union's gain is the model's label reading and
+not a construction artefact of the z-normalization.
+
+**But the union's *decision* view has a scale artefact, and it is worth
+stating plainly** (the union's top-2 decision view is in the artifact, and it
+is *not* a pipeline proposal):
+
+| the union's top-2 decision view | pooled | head | torso | tail | **unseen** |
+|---|---|---|---|---|---|
+| the union's micro-F1 | 0.5843 | 0.7332 | 0.5341 | 0.4901 | **0.2540** |
+| the decision model's micro-F1 | 0.5502 | 0.6510 | 0.4842 | 0.4359 | **0.5267** |
+
+The union's pooled micro-F1 (0.5843) is the best number the track has
+measured on UPR — above the champion's 0.5479 — and its **unseen** bucket
+(0.2540) is *half* the decision model's (0.5267). The reason is the z-max's
+scale: the champion's per-text z-scores are more spread out than the
+decision model's, so the max is biased toward the champion's scale, and the
+champion's scores for a held-out label are noise (its unseen coverage is
+0.000). A union of two *calibrated* scores is not a union of two *z-scored*
+ones. So the union's honest reading is the one the plan asked for: **it is
+a candidate generator's number (the recall curve), not a scorer's** — and
+the number is the recall@10 0.9120, with the decision view's unseen-bucket
+artefact stated beside it.
+
+**What this change set does not say.** Nothing about `test`; nothing about
+*building* the union (the track's menu excludes it, and this run is a
+measurement); nothing about a z-normalization other than the per-row one
+(the per-text z-score is a choice, and a different one would move the
+numbers — the recall curve is the robust part, the decision view is not).
+

@@ -190,6 +190,8 @@ def score_upr_learned_arms(
     reporting: Mapping[str, Any] | None = None,
     bucket_masks: Mapping[str, np.ndarray] | None = None,
     length_masks: Mapping[str, np.ndarray] | None = None,
+    decision_train: np.ndarray | None = None,
+    decision_eval: np.ndarray | None = None,
 ) -> UprLearningResult:
     """Fit the learned arm on train and score it (and its floors) on val.
 
@@ -216,13 +218,18 @@ def score_upr_learned_arms(
             per-bucket view).
         length_masks: The text-length buckets' row masks (the calibration's
             per-length-bucket view).
+        decision_train: The decision model's probability matrix for the **fit
+            side**'s cells (the ``decision`` group's column; the CS-13
+            feature).
+        decision_eval: The decision model's probability matrix for the
+            evaluated split's cells.
 
     Returns:
         The :class:`UprLearningResult` (the arms' score matrices and the
         artifact's ``learned`` block).
     """
-    train_features = extractor.extract(train_texts)
-    eval_features = extractor.extract(eval_texts)
+    train_features = extractor.extract(train_texts, decision_train)
+    eval_features = extractor.extract(eval_texts, decision_eval)
     train_rows, train_labels = _fit_rows(train_features, train_gold)
     eval_rows = eval_features.reshape(-1, eval_features.shape[-1])
     weights = _weights(train_labels, control_weight)
@@ -288,8 +295,8 @@ def score_upr_learned_arms(
 
     # -- the random-vector floor --
     if random_extractor is not None:
-        random_train = random_extractor.extract(train_texts)
-        random_eval = random_extractor.extract(eval_texts)
+        random_train = random_extractor.extract(train_texts, decision_train)
+        random_eval = random_extractor.extract(eval_texts, decision_eval)
         random_rows, random_labels = _fit_rows(random_train, train_gold)
         random_eval_rows = random_eval.reshape(-1, random_eval.shape[-1])
         random_combiner = combiner_factory().fit(random_rows, random_labels, weights)

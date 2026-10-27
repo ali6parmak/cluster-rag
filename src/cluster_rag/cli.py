@@ -185,6 +185,7 @@ from cluster_rag.upr_decision import (
     run_upr_listwise_stage,
     run_upr_rule_stage,
     sample_texts,
+    score_upr_grid,
     upr_per_text_block,
 )
 from cluster_rag.upr_learning import score_upr_learned_arms
@@ -4251,6 +4252,7 @@ def _upr_learned_arms(
     eval_texts = [record.text for record in setup.records]
     train_gold = build_label_matrix(setup.train_records, setup.labels)
     seed = learned.seed if learned.seed is not None else config.seed
+    decision_train, decision_eval = _upr_decision_feature(config, setup, view, learned)
     result = score_upr_learned_arms(
         train_texts=train_texts,
         train_gold=train_gold,
@@ -4269,6 +4271,8 @@ def _upr_learned_arms(
         reporting=learned.reporting.model_dump(),
         bucket_masks=_upr_bucket_masks(view),
         length_masks=_upr_length_masks(view),
+        decision_train=decision_train,
+        decision_eval=decision_eval,
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
     arms: dict[str, dict[str, Any]] = {}
@@ -4311,6 +4315,72 @@ def _upr_learned_arms(
     if backoff_meta:
         meta["backoff"] = backoff_meta
     return arms, meta
+
+
+def _upr_decision_feature(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    learned: Any,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """The decision model's probability matrix for the pack (the track's CS-13).
+
+    The feature is **cell-local**: the model reads the text against the
+    label's name and answers a probability. It is scored at the edge (the
+    model is a client) and the matrix is passed into the pack, which stays a
+    pure core.
+
+    The **fit side** is scored too: the combiner is fitted on train, so the
+    feature must exist for the train cells as well (and the train split is
+    where the eight held-out labels have **no** positives -- the transfer the
+    hypothesis is about).
+
+    Returns:
+        The fit side's and the evaluated split's matrices (``None`` when the
+        feature is off).
+    """
+    feature = learned.decision_feature
+    if not feature.enabled or feature.model is None:
+        return None, None
+    decider = build_upr_decider(feature.model, config)
+    arm = DecisionArm(
+        name=feature.model.name,
+        state=feature.model.state,
+        question_type=feature.model.question_type,
+        instructions=feature.model.instructions,
+        options=feature.model.options,
+        criteria=feature.model.criteria,
+        positive_option=feature.model.positive_option,
+        max_input_tokens=feature.model.max_input_tokens,
+    )
+    labels = tuple(setup.labels)
+    train_sample = UprDecisionSample(
+        texts=tuple(record.text for record in setup.train_records),
+        labels=labels,
+        gold=build_label_matrix(setup.train_records, setup.labels),
+        rows=tuple(range(len(setup.train_records))),
+    )
+    eval_sample = UprDecisionSample(
+        texts=tuple(record.text for record in setup.records),
+        labels=labels,
+        gold=view.gold,
+        rows=tuple(range(view.n_texts)),
+    )
+    train_matrix, _ = score_upr_grid(
+        train_sample,
+        decider,
+        arm,
+        max_questions_per_call=feature.max_questions_per_call,
+        mismatched=feature.label_blind,
+    )
+    eval_matrix, _ = score_upr_grid(
+        eval_sample,
+        decider,
+        arm,
+        max_questions_per_call=feature.max_questions_per_call,
+        mismatched=feature.label_blind,
+    )
+    return train_matrix, eval_matrix
 
 
 def _upr_backoff_arms(

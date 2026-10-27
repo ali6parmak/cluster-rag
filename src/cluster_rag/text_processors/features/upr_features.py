@@ -90,6 +90,7 @@ UPR_FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "label_part": ("labelpart_",),
     "label_type": ("labeltype_",),
     "chunk_profile": ("cprof_",),
+    "decision": ("dec_",),
 }
 
 # The group names, in the canonical order.
@@ -111,6 +112,12 @@ DEFAULT_UPR_TOP_K = 3
 # and the label-type one-hots.
 DESCRIPTION_FEATURE_PREFIX = "labelpart_description_coverage"
 LABEL_TYPE_FEATURE_PREFIX = "labeltype_"
+
+# The **decision** group's column (the track's CS-13): the decision model's
+# probability for the (text, label) cell. The pack does not compute it -- the
+# model is called at the edge and the matrix is passed in -- so the column is
+# **cell-local** by construction.
+DECISION_FEATURE_NAME = "dec_probability"
 
 # The chunk profile's feature names (the CS-8e group): the ranked cross-unit
 # match profile at the two granularities and the alignment kinds.
@@ -343,6 +350,8 @@ class UprFeatureExtractor:
             names.append(DESCRIPTION_FEATURE_PREFIX)
         if "label_type" in self.groups:
             names.extend(f"{LABEL_TYPE_FEATURE_PREFIX}{parent}" for parent in self._parent_names())
+        if "decision" in self.groups:
+            names.append(DECISION_FEATURE_NAME)
         if "chunk_profile" in self.groups:
             names.extend(self._profile_feature_names())
         return tuple(names)
@@ -510,16 +519,26 @@ class UprFeatureExtractor:
         """The number of chunks every text contributes (the artifact's lineage)."""
         return tuple(len(chunks) for chunks in self.text_chunker.segment(list(texts)))
 
-    def extract(self, texts: Sequence[str]) -> np.ndarray:
+    def extract(
+        self, texts: Sequence[str], decision_scores: np.ndarray | None = None
+    ) -> np.ndarray:
         """The feature cube of the texts, shape ``(n_texts, n_labels, n_features)``.
 
         The columns are the **selected** features (the groups the extractor
         was given); the pack computes every feature, the combiner sees the
         selection.
-        """
-        return self.extract_all(texts)[:, :, np.asarray(self._selected, dtype=np.int64)]
 
-    def extract_all(self, texts: Sequence[str]) -> np.ndarray:
+        Args:
+            texts: The texts to featurize.
+            decision_scores: The decision model's probability matrix for the
+                cells (the ``decision`` group's column; the CS-13 feature).
+        """
+        selected = np.asarray(self._selected, dtype=np.int64)
+        return self.extract_all(texts, decision_scores)[:, :, selected]
+
+    def extract_all(
+        self, texts: Sequence[str], decision_scores: np.ndarray | None = None
+    ) -> np.ndarray:
         """The full feature cube (every canonical column).
 
         The embeddings are done in **one batch per side**: the texts, their
@@ -530,9 +549,16 @@ class UprFeatureExtractor:
 
         Args:
             texts: The texts to featurize (the text only — never a label).
+            decision_scores: The decision model's probability matrix for the
+                cells (the ``decision`` group's column; the CS-13 feature).
+                Required when the group is selected.
 
         Returns:
             The float32 feature cube, one row per (text, label) cell.
+
+        Raises:
+            ValueError: If the ``decision`` group is selected and the matrix
+                is missing or has the wrong shape.
         """
         items = list(texts)
         n_texts = len(items)
@@ -541,6 +567,23 @@ class UprFeatureExtractor:
         matrix = np.zeros((n_texts, n_labels, n_features), dtype=np.float32)
         if not items:
             return matrix
+        decision_index = (
+            self._canonical_names.index(DECISION_FEATURE_NAME)
+            if "decision" in self.groups
+            else None
+        )
+        if decision_index is not None:
+            if decision_scores is None:
+                raise ValueError(
+                    "the 'decision' feature group needs the decision model's "
+                    "probability matrix (the caller scores the cells at the edge)"
+                )
+            probabilities = np.asarray(decision_scores, dtype=np.float32)
+            if probabilities.shape != (n_texts, n_labels):
+                raise ValueError(
+                    f"the decision matrix must have shape {(n_texts, n_labels)}, "
+                    f"got {probabilities.shape}"
+                )
 
         text_vectors = np.asarray(self.embedders.text.encode(items, "query"), dtype=np.float32)
         label_vectors = np.asarray(
@@ -617,6 +660,9 @@ class UprFeatureExtractor:
             # 6. the chunk profile (the CS-8e group)
             if profile is not None:
                 self._profile_values(values, profile, position)
+            # 7. the decision model's probability (the CS-13 group)
+            if decision_index is not None:
+                values[:, decision_index] = probabilities[position]
         return matrix
 
     def _profile_sides(
