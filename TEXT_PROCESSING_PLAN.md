@@ -2386,7 +2386,7 @@ main-plan Phase 4 matter).
 
 ### 7.1.2 The new change sets (P1-P4)
 
-- [ ] **CS-11 — the label catalog (name / description / parent) (P3).** The
+- [x] **CS-11 — the label catalog (name / description / parent) (P3).** The
   repo has no label catalog, so the UPR pack's two catalog-gated feature
   groups (`label_part`, `label_type`) cannot be selected and the label's
   *description* cannot be used anywhere. This change set writes the catalog
@@ -2465,6 +2465,41 @@ main-plan Phase 4 matter).
   per-bucket view, the three floors and the paired intervals against the
   control; the log carries the numbers and a verdict on each of the three
   uses.
+  *(done 2026-10-27: the catalog `catalogs/upr_labels.jsonl` (+ its meta: the
+  writer, the sources, the sha256 and the freeze) — **LLM-written from the 68
+  label names and the public taxonomy only**, frozen and committed before the
+  runs, 12 parents, the label space covered exactly; the new pure module
+  `text_processors/features/upr_backoff.py` (the sibling-max backoff, the
+  unsupported labels, the control's labels and the sibling sets), the config
+  section `upr_analysis.learned.backoff` (off by default), the **description
+  label-text variant** (`label_texts.variant: description` — the config
+  already reserved it) with the labelembed command's catalog rendering, the
+  artifact's **per-text** summary (the decision view's (tp, fp, fn) counts and
+  the ranking view's per-text nDCG, overall and per label bucket) and the new
+  repo tool `tools/compare_upr_arms.py` (the **cross-run** paired comparison:
+  two arms in two different runs, the text the resampling unit); 7 runs (the
+  two input artifacts, the guard's reference and the four arms + the
+  control). The guard holds for every `analyze-upr` run, and the control
+  reproduces the CS-8f artifact's metrics exactly. **Verdicts:** the
+  **description channel is a real, label-driven win** (the description as the
+  label's query +0.0266 of micro-F1 [+0.0084, +0.0435] against the control;
+  the catalog-gated groups +0.0258 [+0.0091, +0.0433]; the pooled intervals
+  exclude zero in both), but the **unseen** bucket's rise (+0.0221 and
+  +0.0355) has an interval that **includes** zero, so the pre-registered
+  unseen-bucket condition is **not met** — the honest claim is "the
+  description adds a signal the name does not have, everywhere", not "it
+  rescues the held-out labels"; the description is a **weaker channel than
+  the name pooled** (the per-feature AUC 0.7067 against the name's 0.7566)
+  and the pack gains because the two are complementary. The **sibling-max
+  backoff does not ship**: the mechanism acts (20-81% of the unsupported
+  labels' cells change, the mean lift +0.011 to +0.083; the two catch-alls
+  have no supported sibling — a null by construction) but the decision view
+  **falls** (the unseen bucket −0.0356 [−0.0579, −0.0117] at λ = 0.5 and
+  −0.1080 [−0.1505, −0.0626] at λ = 1), because a **max** over the siblings
+  transfers a relevance *peak*, not the relevance — the pre-registered
+  falsification fires. The **parent one-hots** are nearly empty on their own
+  (the AUC 0.4705-0.5433). The numbers are in the track log's CS-11
+  section; 582 unit tests green.)*
 - [ ] **CS-12 — the listwise second decision stage (P1).** A **second round**
   on top of the pointwise arm: round 1 is the existing 68 pointwise `noul`
   questions per text (unchanged, and **free** — the decision cache already

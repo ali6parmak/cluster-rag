@@ -17,7 +17,9 @@ paths:
   data_raw: data/raw/upr.jsonl    # original JSONL dataset, read-only
   data_processed: data/processed
   data_splits: data/splits        # fixed split id lists (committed, they are small)
-  label_catalog: null             # optional labels.jsonl with name/description/parent
+  label_catalog: catalogs/upr_labels.jsonl  # optional labels.jsonl with name/description/parent
+                                           # (the text-processing track's CS-11 catalog;
+                                           # label-side knowledge, not dataset data)
   data_external: data/external/omct_pairs.json  # auxiliary pairwise dataset (PLAN.md section 2)
   cache: cache                    # embedding cache (gitignored)
   results: results                # run artifacts (gitignored)

@@ -4175,3 +4175,130 @@ they were **superseded and removed** (the table's upsert keys on the run id,
 so it could not replace them itself). The scratch smoke run (four texts, a
 temporary config) had written a section of its own; its section and its
 `results/upr-decide-smoke` folder were removed as well. No number was edited.
+
+## CS-11 — the label catalog: the description channel and the sibling backoff (2026-10-27)
+
+**The catalog.** `catalogs/upr_labels.jsonl` (68 entries: `name`,
+`description`, `parent`) with its provenance in
+`catalogs/upr_labels.meta.json`. It is **LLM-written** (the reviewer's
+decision): the writer saw the **68 label names and the public human-rights
+taxonomy only** — never a UPR record, never a label-frequency statistic — and
+the catalog was **frozen and committed before the runs that use it** (the
+meta file records the sha256, the rules and the freeze). The taxonomy has
+**12 parents**; the label space is covered exactly (68 of 68, no extra).
+
+**The runs.** Seven, all on the UPR **val** split (the track's table carries
+the rows; the guard is green for every `analyze-upr` run):
+
+| run | what |
+|---|---|
+| `upr-labelembed-embeddinggemma-desc` | the input artifact: the 68 label **descriptions** embedded as the label-side query (68 embeddings) |
+| `upr-eval-fusionc-embeddinggemma-k10-c1-desc` | the guard's reference for the description label side (the champion with the description vectors) |
+| `upr-analyze-learned-cat-control` | the **control**: the CS-8f grid's best arm, re-run in this sweep (it **reproduces the CS-8f artifact's metrics exactly** — the reproducibility check) |
+| `upr-analyze-learned-cat-desc` | the label query = the **description** |
+| `upr-analyze-learned-cat-feat` | the **catalog-gated feature groups** on (`label_part`, `label_type`) |
+| `upr-analyze-learned-cat-backoff` | the **sibling-max backoff** + its control |
+| `upr-analyze-learned-cat-desc-backoff` | the description query + the backoff |
+
+**The comparisons are paired across runs** (the resampling unit is the text;
+2,000 resamples, seed 42) through the new repo tool
+`tools/compare_upr_arms.py`: each run's artifact now carries every arm's
+**per-text** summary (the decision view's (tp, fp, fn) counts and the ranking
+view's per-text nDCG, overall and per label bucket), and the tool bootstraps
+the difference of two arms of two different runs on the same resampled texts.
+
+### The headline (val; the learned arm; the control is the same pack without the catalog's channels)
+
+| arm | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | unseen micro-F1 | unseen nDCG@5 |
+|---|---|---|---|---|---|---|
+| the champion (the whole-text reference arm) | 0.5479 | 0.5006 | 0.6725 | 0.7423 | 0.0000 | 0.6575 |
+| **the control** (the learned arm) | 0.4818 | 0.4652 | 0.6137 | 0.8909 | 0.4469 | 0.6641 |
+| the description query | **0.5084** | 0.4872 | 0.6557 | 0.8864 | 0.4690 | 0.6650 |
+| the catalog-gated groups | **0.5076** | **0.5077** | **0.6643** | **0.8955** | **0.4824** | **0.6950** |
+
+### The paired differences against the control (the text is the resampling unit)
+
+| scope | the description query: micro-F1 | the catalog-gated groups: micro-F1 |
+|---|---|---|
+| **pooled** | **+0.0266** [+0.0084, +0.0435] | **+0.0258** [+0.0091, +0.0433] |
+| pooled nDCG@5 | +0.0420 [+0.0259, +0.0577] | +0.0506 [+0.0339, +0.0658] |
+| head | +0.0444 [+0.0137, +0.0732] | −0.0013 [−0.0288, +0.0254] |
+| torso | −0.0022 [−0.0351, +0.0276] | +0.0437 [+0.0133, +0.0743] |
+| tail | +0.0590 [−0.0011, +0.1211] | +0.0516 [+0.0037, +0.1013] |
+| **unseen** | +0.0221 [−0.0195, +0.0630] | +0.0355 [−0.0070, +0.0782] |
+| unseen nDCG@5 | +0.0010 [−0.0250, +0.0276] | **+0.0309** [+0.0088, +0.0535] |
+
+**Verdict 1 — the description channel is a real, label-driven win.** Both
+readings of "the description as its own channel" beat the control, and the
+pooled interval **excludes zero** in both: the description as the label's
+**query** (+0.0266 of micro-F1) and the catalog-gated **features** (the
+description's coverage + the parent one-hots, +0.0258). The gain is
+**label-driven** (the arms' own control-role floors stay at chance, as in
+CS-8d) and it is the **pooled** number that carries it: the **unseen**
+bucket's rise is in the same direction in both arms (+0.0221 and +0.0355) but
+its own interval **includes zero** (the unseen bucket is eight labels and
+~100 gold cells on val — a wide interval), so the pre-registered condition
+("the unseen bucket must rise with the interval excluding zero") is **not
+met** and only the catalog-gated arm's unseen **nDCG** interval excludes
+zero. The honest claim is therefore: *the description adds a signal the name
+does not have, and it adds it everywhere; it is not yet shown to add it
+specifically to the held-out labels.*
+
+**Verdict 2 — the description is a weaker channel than the name, pooled.**
+The per-feature diagnostics say so directly: the **name's** lexical coverage
+ranks the cells at the AUC **0.7566** and the **description's** coverage at
+**0.7067** — the scratch's "the description loses where the name is already
+distinctive", measured. The pack gains because the two channels are
+*complementary*, not because the description dominates. The per-label
+structure of the scratch's claim ("the description beats the name where the
+name is weak") is **not** measured here: the diagnostics are pooled per
+feature, and the per-label breakdown is an open follow-up.
+
+**Verdict 3 — the sibling-max backoff does not ship.** The mechanism *acts*
+(its report is in the artifact): the unsupported labels' scores change on
+20–81% of the cells (λ = 0.5) with a mean lift of +0.011 to +0.083, and the
+two catch-alls ("General", "Other") have **no supported sibling** — a null by
+construction, exactly as the plan predicted. But the **decision view gets
+worse**: the unsupported arm's unseen bucket falls by **−0.0356**
+[−0.0579, −0.0117] (λ = 0.5) and by **−0.1080** [−0.1505, −0.0626] (λ = 1),
+and the pooled number falls too (−0.0053 [−0.0121, +0.0015] at λ = 0.5,
+−0.0623 [−0.0807, −0.0454] at λ = 1). The **control** (the same rule on the
+fit side's eight rarest *supported* labels) falls too (−0.0091
+[−0.0150, −0.0038] at λ = 0.5, −0.0904 [−0.1061, −0.0752] at λ = 1), so the
+backoff has the *fallback* signature (it hurts the labels that have their
+own support) — but it does **not** buy the held-out labels anything. The
+reason is visible in the rule itself: the backoff takes the **max** over the
+siblings, so it transfers a sibling's *peak* relevance, not its relevance to
+this text, and the label is then suggested in the texts it does not belong
+to. The pre-registered falsification ("the backoff must raise the unseen
+labels that have a supported sibling") **fires**: the backoff does not
+ship, and the honest claim is "the sibling-max backoff as specified
+transfers relevance peaks, not relevance". The combination arm agrees: the
+description query + the backoff falls −0.0091 [−0.0167, −0.0015] against the
+description query alone.
+
+**Verdict 4 — the parent one-hots are (nearly) empty on their own.** The 12
+`labeltype_*` features rank the cells at the AUC 0.4705–0.5433 — a label's
+parent category carries almost no information about whether a *cell* is
+gold. Their contribution in the `cat-feat` arm is therefore the *parent-level
+intercept* they share with the label's siblings (the taxonomy's own
+structure), not a per-cell signal. That is why the catalog's win lives in
+the **description** channel and not in the parent one-hots.
+
+**What this change set does not say.**
+
+- **Nothing about `test`** — only val was touched.
+- **Nothing about the label catalog's *own* quality** — the descriptions are
+  one LLM's reading of the label names; the frozen catalog is the input, and
+  a second writer's catalog is not measured.
+- **The per-label structure of the description's advantage is not measured**
+  (the diagnostics are pooled per feature).
+- The **unseen** bucket's rise rests on ~100 gold cells, so its interval is
+  wide; the pooled intervals are the solid part of the claim.
+- The catalog is **label-side knowledge**; the raw data was not touched, and
+  nothing was relabelled.
+
+**The next step.** CS-12 (the listwise second stage, whose question's
+`criteria` field carries these descriptions) and CS-13 (the decision
+probability as a pack feature). **CS-10 (the LLM stage) still waits for the
+reviewer's explicit OK.**

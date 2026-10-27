@@ -52,7 +52,11 @@ from typing import Any
 import numpy as np
 
 from cluster_rag.data import Record, build_label_matrix
-from cluster_rag.eval.multilabel import apply_decision_rule
+from cluster_rag.eval.multilabel import (
+    apply_decision_rule,
+    per_row_f1_counts,
+    per_row_ndcg,
+)
 from cluster_rag.eval.report import build_label_report
 from cluster_rag.text_processors.aggregation import (
     Aggregation,
@@ -347,9 +351,73 @@ def arm_block(
         },
         "shift": shift,
         "paired": dict(paired) if paired else None,
+        "per_text": _per_text_block(
+            matrix,
+            truth,
+            predicted,
+            view,
+            ks=ks,
+        ),
         "provenance": provenance(matrix, truth, PROVENANCE_KS),
         "distributions": _distributions(view, matrix, per_label=per_label_distributions),
     }
+    return block
+
+
+def _per_text_block(
+    matrix: np.ndarray,
+    truth: np.ndarray,
+    predicted: np.ndarray,
+    view: UprView,
+    *,
+    ks: Sequence[int],
+) -> dict[str, Any]:
+    """The arm's **per-text** summary: the compact form of its two views.
+
+    The block is what makes a **cross-run** comparison possible: the two
+    scorers of such a comparison live in two different runs (their score
+    matrices are not in memory together), but the per-text counts (the
+    decision view) and the per-text nDCG (the ranking view) are enough to
+    bootstrap a **paired** interval over the texts.
+
+    The counts are the per-text (true positives, false positives, false
+    negatives) — overall and per **label bucket** (the unseen bucket is where
+    the catalog's channels are supposed to help).
+    """
+    counts = per_row_f1_counts(predicted, truth)
+    ndcg_k = 5 if 5 in ks else (ks[-1] if ks else 5)
+    values = per_row_ndcg(matrix, truth, ndcg_k)
+    block: dict[str, Any] = {
+        "f1_counts": [[int(tp), int(fp), int(fn)] for tp, fp, fn in zip(*counts, strict=True)],
+        "ndcg": {
+            "k": int(ndcg_k),
+            "values": [None if np.isnan(value) else float(value) for value in values],
+        },
+        "by_bucket": {},
+        "note": (
+            "the per-text summary of the two views: the (tp, fp, fn) counts of the "
+            "decision view and the per-text nDCG. It is what a cross-run paired "
+            "comparison needs (the two score matrices are not in memory together)."
+        ),
+    }
+    for bucket, members in view.labels_by_bucket.items():
+        columns = np.asarray(
+            [view.labels.index(label) for label in members],
+            dtype=np.int64,
+        )
+        if not columns.size:
+            continue
+        bucket_counts = per_row_f1_counts(predicted[:, columns], truth[:, columns])
+        bucket_values = per_row_ndcg(matrix[:, columns], truth[:, columns], ndcg_k)
+        block["by_bucket"][bucket] = {
+            "f1_counts": [
+                [int(tp), int(fp), int(fn)] for tp, fp, fn in zip(*bucket_counts, strict=True)
+            ],
+            "ndcg": {
+                "k": int(ndcg_k),
+                "values": [None if np.isnan(value) else float(value) for value in bucket_values],
+            },
+        }
     return block
 
 

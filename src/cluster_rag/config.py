@@ -113,40 +113,68 @@ class PathsConfig(BaseModel):
 class LabelTextsConfig(BaseModel):
     """What text stands in for each label zero-shot (Phase 4 label-embedding artifact).
 
-    The 68 UPR labels are known from annotations only (no catalog file with
-    descriptions, PLAN.md section 7), so the artifact embeds one configurable
-    text per label under the model's ``prefixes.label``:
+    The 68 UPR labels are known from annotations only (PLAN.md section 7), so
+    the artifact embeds one configurable text per label under the model's
+    ``prefixes.label``:
 
     - ``variant: name`` — the bare label name ("Discrimination");
     - ``variant: template`` — a config-provided template with a ``{label}``
       placeholder (e.g. ``"This recommendation is about {label}."``), rendered
-      per label.
+      per label;
+    - ``variant: description`` — the label's **catalog description** (the
+      text-processing track's CS-11 catalog, ``paths.label_catalog``), either
+      bare or through the same template. The label without a catalog entry
+      falls back to its name, and the artifact records the count.
 
-    A later ``descriptions`` variant would need the absent label catalog; it is
-    deliberately not implemented ahead of that file existing.
+    The ``description`` variant needs the catalog file to exist; without it the
+    command fails loudly rather than embedding a half-empty catalog.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    variant: Literal["name", "template"] = "name"
+    variant: Literal["name", "template", "description"] = "name"
     template: str | None = None
 
     @model_validator(mode="after")
     def _template_matches_variant(self) -> LabelTextsConfig:
-        """Template variant needs a template with the placeholder; name forbids one."""
+        """The template's presence must match the variant."""
         if self.variant == "name":
             if self.template is not None:
                 raise ValueError("label_texts variant 'name' must not set template")
-        elif not self.template:
-            raise ValueError("label_texts variant 'template' requires template")
-        elif "{label}" not in self.template:
+        elif self.variant == "template":
+            if not self.template:
+                raise ValueError("label_texts variant 'template' requires template")
+            elif "{label}" not in self.template:
+                raise ValueError("label_texts template must contain the {label} placeholder")
+        elif self.template is not None and "{label}" not in self.template:
             raise ValueError("label_texts template must contain the {label} placeholder")
         return self
 
-    def render_text(self, label: str) -> str:
-        """The embeddable text for one label (deterministic, config-driven)."""
+    def render_text(self, label: str, description: str | None = None) -> str:
+        """The embeddable text for one label (deterministic, config-driven).
+
+        Args:
+            label: The label's name.
+            description: The label's catalog description (the
+                ``description`` variant only).
+
+        Returns:
+            The text to embed.
+
+        Raises:
+            ValueError: If the variant needs a description and none is given.
+        """
         if self.variant == "name":
             return label
+        if self.variant == "description":
+            if not description:
+                raise ValueError(
+                    f"the label_texts variant 'description' needs a description for "
+                    f"the label {label!r}: the catalog has none (or the file is absent)"
+                )
+            if self.template:
+                return self.template.replace("{label}", description)
+            return description
         assert self.template is not None  # guaranteed by the validator
         return self.template.replace("{label}", label)
 
@@ -1337,6 +1365,43 @@ class UprLearnedReportingConfig(BaseModel):
     threshold_quantiles: int = Field(default=99, ge=3, le=999)
 
 
+class UprBackoffConfig(BaseModel):
+    """The **sibling-max backoff** on the UPR pack (the track's CS-11).
+
+    The catalog's **parent** channel: a label with no fit-side support (zero
+    gold cells on the train split) inherits the score of a taxonomy sibling.
+    The backoff is a **fallback**, and the **control** beside it is the point:
+    the same rule applied to a label that *has* fit-side support must not
+    help it, or the honest claim changes to "another correlated signal".
+
+    Attributes:
+        enabled: Whether the run computes the backoff arms at all. The default
+            is ``False``, so the earlier runs' artifacts keep their exact
+            content.
+        lams: The pre-registered mixing weights (the backoff's score is
+            ``lam`` times the siblings' best, and the label's own score is the
+            floor). Nothing is fitted on the evaluated split.
+        control: Whether the control arm (the same rule on the fit side's
+            rarest *supported* labels) is measured beside the backoff arm.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    lams: tuple[float, ...] = (0.5, 1.0)
+    control: bool = True
+
+    @field_validator("lams")
+    @classmethod
+    def _lams_are_positive(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        """Reject a negative or empty weight grid."""
+        if not value:
+            raise ValueError("upr_analysis.learned.backoff.lams must not be empty")
+        if any(lam < 0 for lam in value):
+            raise ValueError(f"upr_analysis.learned.backoff.lams must be >= 0, got {list(value)}")
+        return value
+
+
 class UprLearnedConfig(BaseModel):
     """The UPR learned arm (CS-8d): the feature pack, the combiner, the floors.
 
@@ -1365,6 +1430,8 @@ class UprLearnedConfig(BaseModel):
         floors: The three sanity floors.
         reporting: The reporting blocks (the calibration and the decision-rule
             comparison); off by default.
+        backoff: The **sibling-max backoff** (the catalog's parent channel);
+            off by default.
         seed: The seed of the floors' permutations and of the random-vector
             draw. ``None`` uses the run's seed.
     """
@@ -1383,6 +1450,7 @@ class UprLearnedConfig(BaseModel):
     control_weight: float = Field(default=0.3, ge=0.0, le=1.0)
     floors: UprLearnedFloorsConfig = Field(default_factory=UprLearnedFloorsConfig)
     reporting: UprLearnedReportingConfig = Field(default_factory=UprLearnedReportingConfig)
+    backoff: UprBackoffConfig = Field(default_factory=UprBackoffConfig)
     seed: int | None = None
 
     @field_validator("groups")

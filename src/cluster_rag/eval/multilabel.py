@@ -391,18 +391,44 @@ def label_coverage(
 PAIRED_METRICS: tuple[str, ...] = ("micro_f1", "sample_f1", "ndcg")
 
 
-def _per_row_f1_counts(
+def per_row_f1_counts(
     predicted: np.ndarray, truth: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Every row's (true positives, false positives, false negatives)."""
+    """Every row's (true positives, false positives, false negatives).
+
+    The per-row counts are the **compact summary** of a scorer's decision
+    view: the micro-F1 of any set of rows follows from their summed counts,
+    so a run's artifact can carry them (instead of its whole score matrix)
+    and a later comparison can still be **paired** over the texts.
+
+    Args:
+        predicted: The bool decision matrix.
+        truth: The bool gold matrix (the same shape).
+
+    Returns:
+        The three per-row count arrays.
+    """
     tp = (predicted & truth).sum(axis=1).astype(np.float64)
     fp = (predicted & ~truth).sum(axis=1).astype(np.float64)
     fn = (~predicted & truth).sum(axis=1).astype(np.float64)
     return tp, fp, fn
 
 
-def _per_row_ndcg(scores: np.ndarray, truth: np.ndarray, k: int) -> np.ndarray:
-    """Every row's nDCG@k (binary gains, the ideal from the row's gold count)."""
+def per_row_ndcg(scores: np.ndarray, truth: np.ndarray, k: int) -> np.ndarray:
+    """Every row's nDCG@k (binary gains, the ideal from the row's gold count).
+
+    The per-row values are the **compact summary** of a scorer's ranking
+    view: the nDCG of any set of rows is their mean, so a run's artifact can
+    carry them and a later comparison can still be **paired** over the texts.
+
+    Args:
+        scores: The score matrix (higher = more relevant).
+        truth: The bool gold matrix (the same shape).
+        k: The cut-off.
+
+    Returns:
+        The per-row nDCG values (``NaN`` for the rows without gold cells).
+    """
     matrix = _as_matrix(scores)
     n_labels = matrix.shape[1]
     k_eff = min(k, n_labels)
@@ -503,8 +529,8 @@ def paired_metric_bootstrap(
         raise ValueError(f"confidence must be in (0, 1), got {confidence}")
 
     if metric == "ndcg":
-        left_values = _per_row_ndcg(left, truth, k)
-        right_values = _per_row_ndcg(right, truth, k)
+        left_values = per_row_ndcg(left, truth, k)
+        right_values = per_row_ndcg(right, truth, k)
     else:
         if decision is None:
             raise ValueError(
@@ -525,8 +551,8 @@ def paired_metric_bootstrap(
             threshold=decision.get("threshold"),
             min_score=decision.get("min_score"),
         )
-        left_values = _per_row_f1_counts(left_decision, truth)
-        right_values = _per_row_f1_counts(right_decision, truth)
+        left_values = per_row_f1_counts(left_decision, truth)
+        right_values = per_row_f1_counts(right_decision, truth)
 
     generator = np.random.default_rng(seed)
     differences = np.empty(resamples, dtype=np.float64)
@@ -575,5 +601,143 @@ def paired_metric_bootstrap(
         "note": (
             "the resampling unit is the text: both scorers are judged on the same "
             "resampled texts, so the interval is paired"
+        ),
+    }
+
+
+def paired_counts_bootstrap(
+    left_counts: np.ndarray,
+    right_counts: np.ndarray,
+    *,
+    resamples: int = 2000,
+    seed: int = 42,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """The **paired** bootstrap of a micro-F1 difference from per-row counts.
+
+    The cross-run counterpart of :func:`paired_metric_bootstrap`: the two
+    scorers live in **two different runs** (so their score matrices are not
+    in memory together), but each run's artifact carries the **per-text**
+    (true positives, false positives, false negatives) counts of its arms —
+    and the counts are enough: the micro-F1 of a set of texts follows from
+    their summed counts, so the comparison is still **paired** over the
+    texts.
+
+    Args:
+        left_counts: The left scorer's ``(n_texts, 3)`` counts (tp, fp, fn).
+        right_counts: The right scorer's counts (the same shape).
+        resamples: The number of bootstrap resamples.
+        seed: The seed of the generator (the statistic is reproducible).
+        confidence: The interval's coverage.
+
+    Returns:
+        The same block as :func:`paired_metric_bootstrap` (the two point
+        estimates, the difference, the interval and the provenance).
+
+    Raises:
+        ValueError: If the shapes disagree or the resample count is not
+            positive.
+    """
+    if resamples < 1:
+        raise ValueError(f"resamples must be positive, got {resamples}")
+    left = np.asarray(left_counts, dtype=np.float64)
+    right = np.asarray(right_counts, dtype=np.float64)
+    if left.shape != right.shape or left.ndim != 2 or left.shape[1] != 3:
+        raise ValueError(
+            f"the two count matrices must share the (n_texts, 3) shape, got "
+            f"{left.shape} and {right.shape}"
+        )
+    n_rows = left.shape[0]
+    generator = np.random.default_rng(seed)
+    differences = np.empty(resamples, dtype=np.float64)
+    for index in range(resamples):
+        rows = generator.integers(0, n_rows, size=n_rows)
+        left_value = float(_micro_f1_from_counts(*(value[rows] for value in left.T)))
+        right_value = float(_micro_f1_from_counts(*(value[rows] for value in right.T)))
+        differences[index] = left_value - right_value
+    left_point = float(_micro_f1_from_counts(*left.T))
+    right_point = float(_micro_f1_from_counts(*right.T))
+    tail = (1.0 - confidence) / 2.0
+    quantiles = np.quantile(differences, [tail, 1.0 - tail])
+    return {
+        "metric": "micro_f1",
+        "left": left_point,
+        "right": right_point,
+        "delta": left_point - right_point,
+        "ci_low": float(quantiles[0]),
+        "ci_high": float(quantiles[1]),
+        "confidence": confidence,
+        "resamples": resamples,
+        "seed": seed,
+        "n_texts": n_rows,
+        "share_positive": float((differences > 0).mean()),
+        "note": (
+            "the resampling unit is the text: both scorers are judged on the same "
+            "resampled texts, so the interval is paired (the per-text counts come "
+            "from the two runs' own artifacts)"
+        ),
+    }
+
+
+def paired_values_bootstrap(
+    left_values: np.ndarray,
+    right_values: np.ndarray,
+    *,
+    resamples: int = 2000,
+    seed: int = 42,
+    confidence: float = 0.95,
+) -> dict[str, Any]:
+    """The **paired** bootstrap of a difference between two per-row values.
+
+    The cross-run counterpart of :func:`paired_metric_bootstrap` for the
+    ranking view: the per-row nDCG values of the two arms (each run's
+    artifact carries its own), compared on the same resampled texts.
+
+    Args:
+        left_values: The left scorer's per-row values.
+        right_values: The right scorer's per-row values (the same shape).
+        resamples: The number of bootstrap resamples.
+        seed: The seed of the generator (the statistic is reproducible).
+        confidence: The interval's coverage.
+
+    Returns:
+        The same block as :func:`paired_metric_bootstrap`.
+    """
+    if resamples < 1:
+        raise ValueError(f"resamples must be positive, got {resamples}")
+    left = np.asarray(left_values, dtype=np.float64)
+    right = np.asarray(right_values, dtype=np.float64)
+    if left.shape != right.shape:
+        raise ValueError(
+            f"the two value arrays must share one shape, got {left.shape} and {right.shape}"
+        )
+    n_rows = left.shape[0]
+    generator = np.random.default_rng(seed)
+    differences = np.empty(resamples, dtype=np.float64)
+    for index in range(resamples):
+        rows = generator.integers(0, n_rows, size=n_rows)
+        left_value = float(np.nanmean(left[rows]))
+        right_value = float(np.nanmean(right[rows]))
+        differences[index] = left_value - right_value
+    left_point = float(np.nanmean(left))
+    right_point = float(np.nanmean(right))
+    tail = (1.0 - confidence) / 2.0
+    quantiles = np.quantile(differences, [tail, 1.0 - tail])
+    return {
+        "metric": "mean",
+        "left": left_point,
+        "right": right_point,
+        "delta": left_point - right_point,
+        "ci_low": float(quantiles[0]),
+        "ci_high": float(quantiles[1]),
+        "confidence": confidence,
+        "resamples": resamples,
+        "seed": seed,
+        "n_texts": n_rows,
+        "share_positive": float((differences > 0).mean()),
+        "note": (
+            "the resampling unit is the text: both scorers are judged on the same "
+            "resampled texts, so the interval is paired (the per-text values come "
+            "from the two runs' own artifacts)"
         ),
     }

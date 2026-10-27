@@ -1,0 +1,39 @@
+{
+  "catalog": "catalogs/upr_labels.jsonl",
+  "sha256": "e813fd0c77c10e7f5fbcf626c61b4e0b9c79a81b169bd655d429aa02ff53a280",
+  "written_on": "2026-10-27",
+  "writer": "an LLM (a research-track sub-agent), from the 68 label names and the public human-rights taxonomy only",
+  "reviewer_decision": "TEXT_PROCESSING_PLAN.md section 7.1 (CS-11): the catalog is LLM-written, with the writer seeing the label name and the public taxonomy only, never the records",
+  "inputs_seen_by_the_writer": [
+    "the 68 label names (the dataset's own taxonomy terms)",
+    "the writer's own knowledge of the public human-rights taxonomy"
+  ],
+  "inputs_never_seen_by_the_writer": [
+    "any UPR record text",
+    "any label-frequency statistic (the head / torso / tail / unseen buckets)",
+    "any run artifact, any measurement, any val-split number"
+  ],
+  "rules_given_to_the_writer": [
+    "one short topical description per label, never mentioning frequency",
+    "one parent per label, from a single consistent hierarchy of at most 12 categories",
+    "the generic labels (General, Other, the two '- general' ones) are described as catch-alls, not as narrow topics"
+  ],
+  "freeze": "The catalog is written and committed BEFORE the runs that use it (CS-11's arms and CS-12's listwise question). The sha256 above identifies the frozen version; a later change is a new version, never an edit.",
+  "n_entries": 68,
+  "n_parents": 12,
+  "parents": [
+    "Administration of justice and accountability",
+    "Civil and political rights",
+    "Economic and social rights",
+    "Freedom of expression, association and belief",
+    "General and cross-cutting",
+    "Liberty and security of the person",
+    "Migrants, refugees and displaced persons",
+    "Non-discrimination and equality",
+    "Participation and civil society",
+    "Security, conflict and armed violence",
+    "Specific groups and vulnerable populations",
+    "The review process, institutions and international framework"
+  ],
+  "note": "The catalog is label-side knowledge, the same kind of thing the zero-shot label vectors are allowed to use. It is not part of the dataset and never changes the raw data (AGENTS.md: the raw data is read-only)."
+}

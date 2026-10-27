@@ -1,0 +1,68 @@
+{"name": "Access to justice", "description": "Effective courts, legal aid and fair proceedings so people can obtain remedies for violations.", "parent": "Administration of justice and accountability"}
+{"name": "Asylum-seekers - refugees", "description": "Protection of people fleeing persecution, covering asylum procedure, non-refoulement and reception conditions.", "parent": "Migrants, refugees and displaced persons"}
+{"name": "Business and human rights", "description": "Corporate duty to respect human rights, due diligence, and remedy for business-caused harms.", "parent": "Economic and social rights"}
+{"name": "CP rights - general", "description": "Umbrella label covering the whole field of civil and political rights across all its topics.", "parent": "Civil and political rights"}
+{"name": "Civil society", "description": "Protection of non-state actors who promote human rights, including activists, unions and watchdogs.", "parent": "Participation and civil society"}
+{"name": "Corruption", "description": "Integrity of public institutions and officials, and freedom from governance corrupted by bribery.", "parent": "Administration of justice and accountability"}
+{"name": "Death penalty", "description": "Abolition of capital punishment and safeguards around sentencing and execution of death sentences.", "parent": "Liberty and security of the person"}
+{"name": "Detention", "description": "Conditions of custody, arrest and pretrial confinement, and safeguards against unlawful detention.", "parent": "Liberty and security of the person"}
+{"name": "Disability rights", "description": "Equal enjoyment of rights by persons with disabilities, accessibility, and independent living.", "parent": "Specific groups and vulnerable populations"}
+{"name": "Discrimination", "description": "Elimination of unfair distinctions between people on any ground, in law and in practice.", "parent": "Non-discrimination and equality"}
+{"name": "ESC rights - general", "description": "Umbrella label covering the whole field of economic, social and cultural rights across all its topics.", "parent": "Economic and social rights"}
+{"name": "Elections", "description": "Free and fair elections, political participation, and genuine representation of the people.", "parent": "Participation and civil society"}
+{"name": "Enforced disappearances", "description": "Cases of people vanishing at the hands of state agents, and the duty to investigate and disclose fate.", "parent": "Liberty and security of the person"}
+{"name": "Environment and human rights", "description": "Right to a healthy environment and state and business duties on pollution and climate harm.", "parent": "Economic and social rights"}
+{"name": "Extrajudicial executions", "description": "Unlawful killings by state agents or others acting with impunity, and accountability for them.", "parent": "Liberty and security of the person"}
+{"name": "Freedom of assembly", "description": "Peaceful gathering by individuals and groups, and the state duty to protect it.", "parent": "Freedom of expression, association and belief"}
+{"name": "Freedom of association and peaceful assembly", "description": "Right to form and join groups and to gather peacefully without unjustified interference.", "parent": "Freedom of expression, association and belief"}
+{"name": "Freedom of movement", "description": "Liberty to travel, reside and choose one's place of residence within a country's territory.", "parent": "Liberty and security of the person"}
+{"name": "Freedom of opinion and expression", "description": "Freedom to hold opinions, seek and spread information, and criticize government without censorship.", "parent": "Freedom of expression, association and belief"}
+{"name": "Freedom of religion and belief", "description": "Free practice, teaching and change of religion, and protection against religious intolerance.", "parent": "Freedom of expression, association and belief"}
+{"name": "Freedom of the press", "description": "Independent journalism, access to information, and protection of journalists from interference.", "parent": "Freedom of expression, association and belief"}
+{"name": "Gender-based violence", "description": "Prevention and response to violence targeting women, girls and other genders, and prosecution of perpetrators.", "parent": "Non-discrimination and equality"}
+{"name": "General", "description": "Catch-all for recommendations that do not fit into any more specific topic of this taxonomy.", "parent": "General and cross-cutting"}
+{"name": "HIV - Aids", "description": "Protection of people living with HIV, access to treatment, and freedom from HIV-related discrimination.", "parent": "Economic and social rights"}
+{"name": "Human rights and terrorism", "description": "Safeguards against abuses committed in the name of countering terrorism, including detention and profiling.", "parent": "Security, conflict and armed violence"}
+{"name": "Human rights defenders", "description": "Protection of people who defend human rights against threats, attacks and intimidation.", "parent": "Participation and civil society"}
+{"name": "Human rights education and training", "description": "Teaching human rights in schools, universities and public bodies to build awareness and capacity.", "parent": "Participation and civil society"}
+{"name": "Human rights violations by state agents", "description": "Abuses committed by officials acting for the state, and the duty to prevent and punish them.", "parent": "Administration of justice and accountability"}
+{"name": "Impunity", "description": "Failure to investigate and punish violations, and measures to end the impunity of perpetrators.", "parent": "Administration of justice and accountability"}
+{"name": "Indigenous peoples", "description": "Rights of indigenous communities to land, self-determination, culture and participation in decisions.", "parent": "Specific groups and vulnerable populations"}
+{"name": "Internally displaced persons", "description": "Rights of people forced to flee their homes within their own country, including return and aid.", "parent": "Migrants, refugees and displaced persons"}
+{"name": "International humanitarian law", "description": "Rules of armed conflict protecting civilians, wounded combatants and detained persons during hostilities.", "parent": "Security, conflict and armed violence"}
+{"name": "International instruments", "description": "Adoption, ratification and implementation of the core international human rights treaties.", "parent": "The review process, institutions and international framework"}
+{"name": "Justice", "description": "Fair, impartial legal institutions and processes that deliver due process and remedy.", "parent": "Administration of justice and accountability"}
+{"name": "Labour rights", "description": "Fair working conditions, freedom of association, and protection from forced or exploitative labour.", "parent": "Economic and social rights"}
+{"name": "Migrants", "description": "Rights of people moving across borders, including admission, work and integration conditions.", "parent": "Migrants, refugees and displaced persons"}
+{"name": "Minority rights", "description": "Equal treatment and participation of ethnic, religious and linguistic minority groups.", "parent": "Non-discrimination and equality"}
+{"name": "National Human Rights Institution", "description": "Establishment and operation of a national human rights institution with independence and a mandate.", "parent": "The review process, institutions and international framework"}
+{"name": "National action plan", "description": "National policies and plans that implement human rights commitments across government.", "parent": "The review process, institutions and international framework"}
+{"name": "Other", "description": "Residual label for recommendations that fit none of the specified topics in this taxonomy.", "parent": "General and cross-cutting"}
+{"name": "Poverty", "description": "Adequate standard of living, social protection, and measures to reduce poverty and inequality.", "parent": "Economic and social rights"}
+{"name": "Privacy", "description": "Protection of personal data, private life, home and communications from arbitrary surveillance.", "parent": "Liberty and security of the person"}
+{"name": "Public security", "description": "Law enforcement conduct, public order measures and state security practices that infringe rights.", "parent": "Administration of justice and accountability"}
+{"name": "Racial discrimination", "description": "Elimination of racial prejudice and unequal treatment in law, services and public life.", "parent": "Non-discrimination and equality"}
+{"name": "Right to development", "description": "Participation in and benefit from economic and social progress, and conditions favourable to it.", "parent": "Economic and social rights"}
+{"name": "Right to education", "description": "Free, inclusive and quality primary and secondary education for every child.", "parent": "Economic and social rights"}
+{"name": "Right to food", "description": "Access to adequate, safe and nutritious food, and freedom from hunger.", "parent": "Economic and social rights"}
+{"name": "Right to health", "description": "Access to affordable, timely and quality health services and medical care.", "parent": "Economic and social rights"}
+{"name": "Right to housing", "description": "Adequate, affordable and secure housing, and protection against forced eviction.", "parent": "Economic and social rights"}
+{"name": "Right to land", "description": "Secure land tenure, protection from arbitrary dispossession, and fair land registration.", "parent": "Economic and social rights"}
+{"name": "Right to life", "description": "Protection against arbitrary deprivation of life and the duty to protect persons from threats.", "parent": "Liberty and security of the person"}
+{"name": "Right to water and sanitation", "description": "Access to safe drinking water and adequate sanitation, with dignity and affordability.", "parent": "Economic and social rights"}
+{"name": "Rights for older people", "description": "Equal enjoyment of rights by older persons, including care, social security and participation.", "parent": "Specific groups and vulnerable populations"}
+{"name": "Rights of the Child", "description": "Protection of children from harm, and their care, education, health and participation rights.", "parent": "Specific groups and vulnerable populations"}
+{"name": "SDGs", "description": "Alignment of policies and funding with the Sustainable Development Goals and human rights commitments.", "parent": "The review process, institutions and international framework"}
+{"name": "Sexual Orientation and Gender Identity", "description": "Equal rights and non-discrimination for people of any sexual orientation or gender identity.", "parent": "Non-discrimination and equality"}
+{"name": "Sexual and reproductive rights", "description": "Access to contraception, safe abortion, maternal care, and freedom from sexual violence.", "parent": "Economic and social rights"}
+{"name": "Special procedures", "description": "Country-specific mechanisms, rapporteurs and working groups examining particular human rights situations.", "parent": "The review process, institutions and international framework"}
+{"name": "Statelessness and the right to nationality", "description": "Prevention of statelessness and the right to acquire, retain and change nationality.", "parent": "Liberty and security of the person"}
+{"name": "Technical assistance and cooperation", "description": "Capacity building and peer support provided to states to implement their human rights commitments.", "parent": "The review process, institutions and international framework"}
+{"name": "Torture and other CID treatment", "description": "Prohibition of torture and cruel, inhuman or degrading treatment or punishment in any setting.", "parent": "Liberty and security of the person"}
+{"name": "Trafficking", "description": "Prevention of trafficking in persons, protection of victims, and prosecution of traffickers.", "parent": "Migrants, refugees and displaced persons"}
+{"name": "Transitional justice", "description": "Measures addressing past abuses, including truth, reparations, prosecutions and institutional reform.", "parent": "Administration of justice and accountability"}
+{"name": "Treaty Bodies", "description": "Monitoring of state compliance with ratified treaties by expert committees in the treaty system.", "parent": "The review process, institutions and international framework"}
+{"name": "UPR process", "description": "Peer review of states' human rights records, covering reporting, dialogue and follow-up.", "parent": "The review process, institutions and international framework"}
+{"name": "Violent extremism and human rights", "description": "Responses to violent extremism that respect human rights, in prevention, prosecution and detention.", "parent": "Security, conflict and armed violence"}
+{"name": "Women's rights", "description": "Equality and empowerment of women in law, political life, work and the family.", "parent": "Specific groups and vulnerable populations"}
+{"name": "Youth rights", "description": "Rights and participation of adolescents and young people in education, work and civic life.", "parent": "Specific groups and vulnerable populations"}

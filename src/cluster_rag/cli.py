@@ -153,6 +153,11 @@ from cluster_rag.text_processors.features import (
     PairFeatureExtractor,
     ProfileUnits,
 )
+from cluster_rag.text_processors.features.upr_backoff import (
+    control_labels,
+    sibling_backoff,
+    unsupported_labels,
+)
 from cluster_rag.text_processors.features.upr_features import (
     UprFeatureEmbedders,
     UprFeatureExtractor,
@@ -900,7 +905,16 @@ def _cmd_labelembed(config: AppConfig) -> int:
     labels = sorted({label for record in report.records for label in record.labels})
     if not labels:
         raise ValueError("the dataset has no labels; nothing to embed")
-    texts = [config.label_texts.render_text(label) for label in labels]
+    catalog = _upr_label_catalog(config) if config.label_texts.variant == "description" else {}
+    texts: list[str] = []
+    n_fallback = 0
+    for label in labels:
+        entry = catalog.get(label)
+        description = entry.description if entry else None
+        if config.label_texts.variant == "description" and not description:
+            description = label
+            n_fallback += 1
+        texts.append(config.label_texts.render_text(label, description))
 
     spec = build_preprocess_spec(config.preprocess)
     processed = spec.apply(texts)
@@ -946,8 +960,22 @@ def _cmd_labelembed(config: AppConfig) -> int:
         "label_texts": {
             "variant": config.label_texts.variant,
             "template": config.label_texts.template,
-            "label_space": "sorted unique labels of the dataset (no catalog file)",
+            "label_space": (
+                "the dataset's sorted unique labels"
+                + (
+                    ""
+                    if config.label_texts.variant != "description"
+                    else " (the catalog's descriptions, with the name as the fallback)"
+                )
+            ),
             "rendered_example": texts[0],
+            "rendered_texts": texts,
+            "catalog_path": (
+                str(config.paths.label_catalog)
+                if config.label_texts.variant == "description" and config.paths.label_catalog
+                else None
+            ),
+            "n_fallback_to_name": n_fallback,
         },
         "source_sha256": file_sha256(config.paths.data_raw),
         "n_malformed_lines": report.n_invalid,
@@ -3553,9 +3581,10 @@ def _check_embedder_matches_artifact(config: AppConfig, setup: EvalSetup) -> Any
 def _upr_label_texts(setup: EvalSetup) -> list[str]:
     """The label texts the zero-shot vectors were built from.
 
-    The label artifact's own metadata names the variant and the template, so
-    the label side is reconstructed from the artifact that produced the
-    vectors (never from a guess).
+    The label artifact's own metadata names the variant and the template (and,
+    since the CS-11 catalog, records the **rendered** texts), so the label
+    side is reconstructed from the artifact that produced the vectors (never
+    from a guess).
     """
     if setup.label_artifact is None:
         raise ValueError(
@@ -3563,6 +3592,14 @@ def _upr_label_texts(setup: EvalSetup) -> list[str]:
             "eval.label_embedding_run_id to a prior upr-labelembed-* run"
         )
     label_texts = setup.label_artifact.meta["label_texts"]
+    rendered = label_texts.get("rendered_texts")
+    if rendered:
+        if len(rendered) != len(setup.labels):
+            raise ValueError(
+                f"the label artifact carries {len(rendered)} rendered texts for "
+                f"{len(setup.labels)} labels: the label spaces disagree"
+            )
+        return [str(text) for text in rendered]
     variant = label_texts.get("variant", "name")
     template = label_texts.get("template")
     if variant == "name":
@@ -4121,7 +4158,107 @@ def _upr_learned_arms(
             "here."
         ),
     }
+    backoff_meta = _upr_backoff_arms(config, setup, view, learned, result, arms, labels)
+    if backoff_meta:
+        meta["backoff"] = backoff_meta
     return arms, meta
+
+
+def _upr_backoff_arms(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    learned: Any,
+    result: Any,
+    arms: dict[str, dict[str, Any]],
+    labels: Sequence[Any],
+) -> dict[str, Any]:
+    """The **sibling-max backoff** arms (the track's CS-11).
+
+    The catalog's **parent** channel: a label with no fit-side support (zero
+    gold cells on the train split) inherits the score of a taxonomy sibling.
+    The **control** is the point — the same rule applied to the fit side's
+    rarest *supported* labels must **not** help them, or the honest claim
+    changes to "another correlated signal".
+
+    Which labels get the backoff and which labels form the control are
+    decided on the **fit side** (the train split's own gold counts), so
+    nothing about the evaluated split enters the choice.
+    """
+    if not learned.backoff.enabled:
+        return {}
+    parents = {label.name: label.parent for label in labels if label.parent}
+    if not parents:
+        raise ValueError(
+            "the sibling-max backoff needs the catalog's parent field: the label "
+            "catalog is absent or carries no parent (paths.label_catalog)"
+        )
+    train_gold = build_label_matrix(setup.train_records, setup.labels)
+    unsupported = unsupported_labels(train_gold, setup.labels)
+    control = (
+        control_labels(train_gold, setup.labels, n=len(unsupported))
+        if learned.backoff.control
+        else ()
+    )
+    main_arm = result.meta["arm"]
+    main_scores = result.scores[main_arm]
+    report: dict[str, Any] = {
+        "unsupported_labels": list(unsupported),
+        "control_labels": list(control),
+        "n_unsupported": len(unsupported),
+        "n_control": len(control),
+        "note": (
+            "the sibling-max backoff: the targets are the labels with NO "
+            "fit-side support (decided on the train split) and the control's "
+            "labels are the fit side's rarest SUPPORTED ones (matched in "
+            "rarity). A label without a supported sibling is a measured null "
+            "by construction."
+        ),
+        "per_lam": {},
+    }
+    for lam in learned.backoff.lams:
+        variants = (("backoff", unsupported), ("backoff_control", control))
+        for suffix, targets in variants:
+            if not targets:
+                continue
+            backoff_scores, detail = sibling_backoff(
+                main_scores,
+                setup.labels,
+                parents,
+                train_gold,
+                targets=targets,
+                lam=lam,
+            )
+            name = f"{main_arm}_{suffix}_l{lam:g}"
+            arms[name] = arm_block(
+                view,
+                backoff_scores,
+                decision=eval_decision(config),
+                ks=config.eval.metrics.ks,
+                shortlist_ms=config.eval.metrics.shortlist_ms,
+                reference_scores=setup.scores,
+                chunks_per_text=None,
+                arm=name,
+                predictor={
+                    "name": "learned_backoff",
+                    "combiner": learned.combiner.name,
+                    "params": dict(learned.combiner.params),
+                    "groups": list(learned.groups),
+                    "variant": suffix,
+                },
+                chunker=None,
+                aggregation=None,
+                per_label_distributions=True,
+                # the paired comparison is against the **unbacked-off** arm of
+                # the same run: the backoff is the only difference
+                paired=_upr_paired(config, view, backoff_scores, main_scores),
+            )
+            report["per_lam"].setdefault(f"{lam:g}", {})[suffix] = {
+                "arm": name,
+                "targets": list(targets),
+                **detail,
+            }
+    return report
 
 
 def _select_semantic_threshold(

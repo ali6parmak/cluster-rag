@@ -337,3 +337,10 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-eval-best-embeddinggemma-st1.75-test | 2026-10-20 | test | fusion | embeddinggemma | thr=1.75 | 0.5979 | 0.5287 | 0.5430 | 0.853 | 0.2720 | 0.7110 | 0.6647 | 0.7378 | 664 | 0.134 |
+
+## UPR — upr_learned_catalog
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-labelembed-embeddinggemma-desc | 2026-10-27 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.079 | 68 | 0 |
+| upr-eval-fusionc-embeddinggemma-k10-c1-desc | 2026-10-27 | val | fusion | embeddinggemma | top_k k=2 | 0.5456 | 0.4959 | 0.5248 | 0.868 | 0.2755 | 0.7093 | 0.6702 | 0.7352 | 660 | 0.182 |
