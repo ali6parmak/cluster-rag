@@ -1966,7 +1966,7 @@ The **pre-registered expectations** (written down before the runs):
   weakest bucket (micro-F1 0.4727, nDCG@5 0.6104) — the starting point of
   the CS-8b hypothesis. The numbers are in the track log's CS-8a section; 511
   unit tests green.)*
-- [ ] **CS-8b — the segmentation ladder on UPR.** The one-sided family (the
+- [x] **CS-8b — the segmentation ladder on UPR.** The one-sided family (the
   **text** chunked with `atoms`, `word_windows` N = 15/25/40,
   `sentence_windows`, `semantic`) folded with `max`, `top_k_mean:2`,
   `top_k_mean:3`, `mean`, `decayed_top_k:3:0.5:0.25`, `local_global:0.5|max`,
@@ -2019,7 +2019,7 @@ The **pre-registered expectations** (written down before the runs):
   The semantic threshold is selected on the fit side and the grid is flat
   (0.4606-0.4609 over the six thresholds; all three folds choose the same
   one). The numbers are in the track log's CS-8b section.)*
-- [ ] **CS-8c — the text-side extras and the label-side transform.** The
+- [x] **CS-8c — the text-side extras and the label-side transform.** The
   **chunk header** (the text's own first sentence, prepended to every chunk,
   in both modes `others` and `all`; the other headings stay ruled out), the
   **late chunking** (the text embedded once, its token-level embeddings pooled
@@ -2266,6 +2266,59 @@ The **pre-registered expectations** (written down before the runs):
   operating point on UPR (the opposite of the CS-7b arm on OMCT), while laya
   is the compressed one (its `noul` arm's gold mean 0.4852). The numbers are
   in the track log's CS-9 section; 557 unit tests green.)*
+- [ ] **CS-9b — the full-val pointwise grid, the safe-negative rule and the
+  shortlist rerank (the follow-up CS-9's own deviation promised).** The
+  `upr_analysis.decision.scope: grid` scope scores the **whole val grid**
+  (660 texts x 68 labels = 44,880 cells) instead of the CS-9 sample's 150
+  texts, on the **tev1** arms (the `paragraph` shape, the `noul` and the
+  `choice` types) — the shape the pipeline would use and the shape whose cost
+  is known (2 calls per text in the `paragraph` shape against the `pair`
+  shape's 68). Three new blocks in the `decisions.json` artifact:
+  - the **safe-negative rule** in its three forms — the **fixed 0.5 cut**, the
+    **fit-side threshold** and the **margin rule** (a cell at least X below
+    its own text's best candidate, X fitted on the fit side) — with the
+    **label-blind counterpart** beside each form. The rule's **fit side is
+    the train split** (its grid's decision probabilities, computed here and
+    cached), so no threshold is ever fitted on the evaluated split. The
+    UPR-side deliverable keeps the OMCT honesty rule: a **reach** claim (how
+    many of the 44,880 cells the rule calls safe negatives) and a **cost**
+    claim (how many of the 1,312 gold cells it discards), **never a precision
+    claim** (the background cells' true positive rate is unmeasured).
+  - the **shortlist rerank**: the champion's top-K labels per text, re-ordered
+    by the decision model's own probability. The full grid is already scored,
+    so the rerank costs **zero** additional calls; the shortlist's own recall
+    is the ceiling, and the champion's own hit@1 and the decision model's own
+    sit beside it. This is the Phase-6 shape; it is **not** P4's union (a
+    hard shortlist against a soft score combination) — the two are different
+    measurements and must never be conflated.
+  - the **train-side** decision probabilities (the fit side for the rule's
+    threshold and, later, for CS-13's feature), computed once and cached.
+  *Pre-registered expectation:* the **fit-side threshold** is the best of the
+  three forms (the OMCT verdict, CS-7b), and the **label-blind counterpart's
+  harm is materially larger** at the same reach (the label-driven signature
+  that turned the OMCT rule's cost into a quality claim). If the blind
+  counterpart's harm is *not* larger at the same reach, the rule's cost is a
+  construction artefact and the deliverable ships as a reach claim only.
+  *Cost:* 11,984 new decision calls (the val grid's tev1 `noul` arm 1,320 +
+  its label-blind counterpart 1,320; the train grid's the same 3,352 + 3,352;
+  the val grid's tev1 `choice` arm 1,320 + 1,320) — the measured cache
+  throughput is ~8 calls/s, so the wall time is minutes, not hours. The train
+  grid's calls are **reused** by CS-13 (so CS-13's marginal cost is zero).
+  *Leakage:* the thresholds and the margin are fitted on the **train** grid
+  only; the decision model is frozen and zero-shot (it carries no UPR
+  label); the label-blind counterpart is the yardstick that says how much of
+  the cost is the model's own label-blind signal; val is the evaluated split
+  and `test` is not touched.
+  *Not in this change set:* `laya` (a second decision model is closed as a
+  lever — tev1 beats it by 0.33 — and its full grid costs 4 calls per text)
+  and the `pair` shape (its full grid is 44,880 calls per arm for a shape
+  whose cost is already measured and which no proposal uses). Both stay at
+  their CS-9 samples, which remain their record. This exclusion is the
+  reviewer's call and is one line to reverse.
+  *Exit:* the full-val pointwise arm (the reference for CS-12), the rule's
+  three forms with their label-blind counterparts, the shortlist rerank and
+  the train-side probabilities, all in the artifact; the table carries the
+  rows; the log carries the numbers.
 - [ ] **CS-10 — the LLM stage on UPR (needs the reviewer's explicit OK).** The
   **exp09-style rerank** on the embedding shortlist with the local models
   (gemma4:e2b, llama3.2:3b, gpt-oss — the decision models are far too small
@@ -2280,6 +2333,262 @@ The **pre-registered expectations** (written down before the runs):
   CS-8d needs can be produced here instead (a human-readable `labels.jsonl`
   with name / description / parent — the config hook the plan already
   provides).
+
+### 7.1.1 The reviewer's decisions of 2026-10-27 (they bind the change sets below)
+
+Recorded here because **the plan is where the reviewer's decisions live**
+(AGENTS.md rule 5: if something is ambiguous, ask — and the answer is written
+down, not remembered).
+
+1. **P1 (the listwise stage) runs on the FULL val split**, not the 150-text
+   sample: the decision model is cheap enough (1,320 calls for the whole val
+   grid in the `paragraph` shape) that the sample buys little, and the
+   *ordering* is what the sample measures worst. A 3-text smoke test comes
+   first, because the 20-option `choice` has never been exercised against
+   the server.
+2. **The previous `upr_decision` probe also gets a FULL run** — that is
+   **CS-9b** above: the full val grid for the pointwise arms, the
+   safe-negative rule in its three forms with the label-blind counterpart
+   beside each, and the shortlist rerank. The 150-text sample was CS-9's
+   deliberate scope deviation with the cost in front of it; the cost is now
+   known and small.
+3. **P1-P4 are recorded as new numbered change sets** (one checkbox each,
+   the plan's style), each with the mechanism, the pre-registered
+   falsification, the cost and the leakage check written out: **P3 -> CS-11**,
+   **P1 -> CS-12**, **P2 -> CS-13**, **P4 -> CS-14**.
+4. **The catalog is LLM-written**, subject to the freeze-before-the-runs rule
+   in CS-11: the writer sees the label name and the public taxonomy only,
+   never the records, and the catalog is frozen and committed before the runs
+   that use it.
+
+**The execution order** (the numbering skips CS-10, which is blocked on the
+reviewer's explicit OK and is a separate branch):
+
+    CS-9b -> CS-11 (P3, the catalog) -> CS-12 (P1, the listwise) ->
+    CS-13 (P2, the decision probability) -> CS-14 (P4, the union)
+
+CS-11 comes **before** CS-12 because the listwise question's `criteria` field
+carries the label's description (P3's third use), so the catalog must exist
+and be frozen before the listwise run.
+
+**Settled and closed on 2026-10-27 — do not reopen:** more chunking families
+(153 arms already; the pooled null is measured and the long-text tail is 25
+texts); text length as a feature (forbidden by the plan's leakage rules and
+confounded); fine-tuning a decision model (forbidden here — the OMCT
+questions are shared across documents with conflicting labels); a second or
+bigger decision model (tev1 beats laya by 0.33); reading the decision
+answer's `confidence` field as a probability (the port's own docstring says
+it is not one); the R@k curve and its tie-break (the shortlist metric and
+the ranking metric are the same number, the artifacts already carry
+recall@1/@3/@5/@10 and shortlist_recall@20/@50/@100, and the champion, the
+decision model and the union have zero ties — the kNN arm's tie-break is a
+main-plan Phase 4 matter).
+
+### 7.1.2 The new change sets (P1-P4)
+
+- [ ] **CS-11 — the label catalog (name / description / parent) (P3).** The
+  repo has no label catalog, so the UPR pack's two catalog-gated feature
+  groups (`label_part`, `label_type`) cannot be selected and the label's
+  *description* cannot be used anywhere. This change set writes the catalog
+  and measures its three proposed uses:
+  - **the description as its own channel** — the label's description as the
+    label-side **query** (the third point of the label-text comparison: the
+    bare name, the config template and the description), measured in the
+    learned pack beside the template (the control) and the name;
+  - **the parent as a sibling-max backoff** — a label with **no fit-side
+    support** (zero gold cells in train) inherits the score of a taxonomy
+    sibling: `score'(text, L) = max(score(text, L), lambda * max over the
+    siblings S of score(text, S))`, with `lambda` a pre-registered grid
+    (0.5, 1.0) and **no fitting on val**;
+  - **the description as the wording inside CS-12's comparison question**
+    (the `criteria` field) — the reason the catalog is written *before*
+    CS-12, not after it.
+  Plus the pack's two **catalog-gated feature groups** (`label_part`: the
+  label-description coverage; `label_type`: the label-type one-hots), which
+  the catalog unlocks for free (the code exists; only the input was
+  missing).
+  **The catalog itself** (the reviewer's decision, 2026-10-27): it is
+  **LLM-written** — the writer sees the **68 label names and the public
+  taxonomy only**, never a UPR record and never a label-frequency statistic
+  — and it is **frozen and committed before the runs that use it** (a catalog
+  written after looking at val is a leak). It lives in
+  `catalogs/upr_labels.jsonl` (one JSON object per label: `name`,
+  `description`, `parent`) with its provenance in
+  `catalogs/upr_labels.meta.json` (the writer, the date, the sources, the
+  freeze's commit). The repo's existing hook (`paths.label_catalog`) reads
+  it; the raw data is untouched.
+  *Pre-registered falsification:*
+  - the **description channel**: the description arm's **unseen** bucket (the
+    generic labels — "General", "Other", "ESC rights - general" — whose
+    names are weak) must rise with the paired interval excluding zero, and
+    its pooled micro-F1 must not fall by more than 0.01. The scratch's
+    finding (a description beats the name where the name is weak and loses
+    where the name is already distinctive) predicts exactly this trade: the
+    description is a **specialist**, not a replacement for the name;
+  - the **sibling backoff**: it must raise the unseen labels that *have* a
+    supported sibling, and the **control** — the same rule applied to the
+    fit-side-chosen **seen** labels — must show the backoff **not helping**
+    them. If the backoff helps the seen labels too, the honest claim changes
+    to "another correlated signal" and the log says so;
+  - a label with **no supported sibling** (a catch-all, if the catalog gives
+    it none) is a **measured null by construction** — the catalog decides,
+    and the result is reported, not engineered around.
+  *Cost:* **zero model calls** for the experiments (the catalog's LLM writing
+  is a one-off outside the harness) and 68 new label embeddings (one new
+  label-embedding run for the description query). The arms are the learned
+  pack's arms; the pack and the combiner are cheap.
+  *Leakage:* the catalog is **label-side knowledge** (the same kind of thing
+  the zero-shot label vectors are allowed to use), written from the label
+  names and the public taxonomy only and frozen before the runs; which labels
+  get the backoff (zero fit-side support) and which labels form the control
+  are decided on the **fit side**; the fit side is train only; val is the
+  evaluated split; `test` is not touched.
+  *Runs:* the input artifacts `catalogs/upr_labels.jsonl` (+ its meta) and
+  `upr-labelembed-embeddinggemma-desc`; the guard's reference run for the
+  description label side `upr-eval-fusionc-embeddinggemma-k10-c1-desc` (the
+  guard compares the run's whole-text reference arm against an `evaluate` run
+  with the **same** label vectors, so a new label side needs its own
+  reference); the arms
+  `upr-analyze-learned-cat-desc` (the label query = the description),
+  `upr-analyze-learned-cat-feat` (the catalog-gated feature groups on),
+  `upr-analyze-learned-cat-backoff` (the sibling backoff) and
+  `upr-analyze-learned-cat-desc-backoff` (the description query + the
+  backoff), against the control `upr-analyze-learned-cat-control` (the
+  CS-8f grid's best arm, **re-run in this sweep** so the cross-run paired
+  comparison has both sides' per-text blocks — the re-run reproduces the
+  CS-8f artifact's metrics exactly, so it doubles as the reproducibility
+  check). The **bare name** is not an arm: the name is the pack's *lexical*
+  block's text (it is in every pack), so the single-variable change is the
+  **query** (the template against the description) — and a name-only query
+  would need a new main-pipeline `evaluate` run to guard its reference arm.
+  *Exit:* the catalog is committed and frozen; the arms are measured with the
+  per-bucket view, the three floors and the paired intervals against the
+  control; the log carries the numbers and a verdict on each of the three
+  uses.
+- [ ] **CS-12 — the listwise second decision stage (P1).** A **second round**
+  on top of the pointwise arm: round 1 is the existing 68 pointwise `noul`
+  questions per text (unchanged, and **free** — the decision cache already
+  holds them from CS-9b), and round 2 is **one** call per text asking "which
+  of these 20 topics is the text about?", the 20 options being the round-1
+  top-20 and each option's `criteria` its **catalog description** (CS-11).
+  The hypothesis: the decision model is good at **finding** the candidates
+  and weak at **ordering** them, and the ordering is where the pipeline's
+  `top_k k=2` lives.
+  The arm's final ranking is a **rank fusion** (parameter-free, so nothing is
+  fitted on val): the round-2 order over the 20 candidates, then the
+  remaining 48 in the round-1 order. The arm's score matrix is the negative
+  final rank, so every rank-based metric (the decision view's top-2, the
+  nDCG, the recall@k, the shortlist recall) is well defined; the
+  **calibration** and the **compression** blocks are explicitly **not
+  applicable** (a within-text distribution over 20 options is not a per-cell
+  probability) and are flagged as such in the artifact.
+  *Pre-registered falsification:* the listwise arm's micro-F1 (the top-2
+  view) must beat the **measured** full-val pointwise arm's (CS-9b) with a
+  **paired** bootstrap interval excluding zero (the text is the resampling
+  unit, 2,000 resamples, seed 42 — `eval.multilabel.paired_metric_bootstrap`),
+  and the listwise arm's **unseen** bucket micro-F1 must not fall below the
+  pointwise arm's. The scratch predicted 0.5489 overall and 0.4706 unseen;
+  those are **indicative** (a scratch computation, not a harness result, on
+  a different population than the run that measures the comparison), so the
+  operative criterion is the **relative** one and the absolute numbers are
+  reported beside it. If the listwise arm's top-2 equals the pointwise arm's
+  top-2 on every text (to four decimals), the comparative mechanism buys
+  nothing and the arm is recorded as a null.
+  The **controls:** the listwise arm with the **name-only** criteria (no
+  description) isolates the *listwise mechanism* from the *descriptions*; the
+  **label-blind counterpart** (the wrong pairing, the same pipeline) must
+  stay at chance, which is what makes the gain label-driven.
+  *Feasibility first:* a 20-option `choice` has never been exercised against
+  the server (every track `choice` arm is two-option), so the shape is
+  **smoke-tested on 3 texts** before the run; if the server refuses it or
+  degrades on it, the shape is abandoned and the plan records that (a
+  feasibility check, not a metric: no run, no number, no row). The call
+  planner must also **count the options and the criteria** in the estimated
+  input size (today it counts only the instructions and the state), or a
+  20-option call could exceed tev1's 2,500-token budget unnoticed.
+  *Cost:* 2,640 new decision calls (the listwise round 2 for the real arm
+  660 and for the label-blind counterpart 660, twice over for the two
+  criteria variants); round 1 is free (the cache).
+  *Leakage:* the round-2 options are the round-1 model's **own output** (no
+  label is involved); the criteria are **label-side catalog text**, frozen
+  before the run; the model is frozen and zero-shot; the fusion is
+  parameter-free (nothing fitted on val); the train split is not used.
+  *Runs:* `upr-decide-tev1-paragraph-noul-listwise` (the pointwise arm + the
+  listwise stage with the catalog's criteria) and
+  `upr-decide-tev1-paragraph-noul-listwise-nodesc` (the name-only control).
+  *Exit:* both arms are measured on the full val grid with the paired
+  interval against CS-9b's pointwise arm, the per-bucket view and the
+  label-blind counterpart; the log carries the numbers and the verdict.
+- [ ] **CS-13 — the decision probability as a feature in the UPR pack (P2).**
+  One more column in the pack's `(n_texts, n_labels, n_features)` cube: the
+  decision model's probability for the (text, label) cell. The pack stays a
+  pure core (the matrix is passed in; the model is called at the edge), and
+  the feature is **cell-local**: no corpus statistic, no document identity, no
+  length. The combiner is **sklearn's HistGB** (the plan's CS-6b defers
+  `lightgbm` until HistGB is beaten, and HistGB is already a core dep and
+  beats the logistic on UPR); the logistic arm is measured beside it.
+  The hypothesis: the pack's lexical block finds five of the eight unseen
+  labels because the **name-vs-text** mechanism is identical for a seen and
+  an unseen label, so its fitted weight transfers; the decision probability
+  has the same property (it is computed from the label's **name**, identically
+  for a held-out label). The fit side has **zero** positives for the eight
+  unseen labels (0 of 3,087 train gold cells), so the combiner must
+  **transfer** the weight — that is the hypothesis, and it is what to
+  measure.
+  *Pre-registered falsification:* the augmented pack's **unseen** bucket
+  micro-F1 must be **not below** the control's (0.4758 — a harness result
+  from CS-8d, so directly comparable) and its shortlist R@50 not below the
+  control's (0.8692); the **paired** interval of the difference (augmented
+  minus control) is reported for every metric, and a *win* is claimed only
+  where the interval excludes zero; the augmented pack's own **control-role
+  floor** must stay at chance (the CS-8d level, 0.027-0.043), which is what
+  says the gain is label-driven; and the arm with the **label-blind**
+  decision feature (the same pack, the wrong pairing) must not beat the real
+  arm.
+  *Cost:* **zero new decision calls** — the train and val decision
+  probabilities are computed and cached by CS-9b (the rule's fit side needs
+  them) and are read from the cache here. (CS-13's *own* cost, if it had to
+  pay for them, would have been 3,352 train calls per arm.)
+  *Leakage:* the feature is cell-local and label-blind in the fit sense (the
+  model is frozen and carries no UPR label); the fit side is **train** only;
+  the eight unseen labels' absence from the fit side is the *hypothesis*, not
+  a leak (nothing about them is used to fit); val is the evaluated split;
+  `test` is not touched.
+  *Runs:* `upr-analyze-learned-dec-histgb` and
+  `upr-analyze-learned-dec-logistic` (the pack + the decision feature),
+  `upr-analyze-learned-dec-blind-histgb` and
+  `upr-analyze-learned-dec-blind-logistic` (the same, with the label-blind
+  decision feature), against the controls `upr-analyze-learned-report-histgb`
+  and `upr-analyze-learned-report-logistic` (the same pack and combiner
+  without the feature).
+  *Exit:* the four arms are measured with the per-bucket view, the three
+  floors, the calibration and the paired intervals against the controls; the
+  log carries the numbers and the verdict (including the "the weight
+  transferred / it did not" answer).
+- [ ] **CS-14 — the union candidate generator as a number (P4).** The
+  **measurement** of the union — the per-row **z-max** of the champion's and
+  the decision model's scores (the row = the text, the z-score over the 68
+  labels) — and nothing else: the union is **not built** and enters no
+  pipeline. The 2026-10-22 trim put "union shortlists" out of the track's
+  menu (they are main-plan Phase 4/6 machinery), so this change set produces
+  a number for PLAN, not a component.
+  *Pre-registered falsification:* the union's shortlist recall@10 (and the
+  whole recall curve) is reported on the full val grid, beside the
+  champion's and the decision model's own, with the **control**: the same
+  z-max with the decision model's **label-blind** scores. If the blind union
+  reaches the same recall, the union's gain is a construction artefact and
+  the number is reported as such.
+  *Cost:* **zero new calls** (both score matrices are already computed) and
+  no new machinery beyond the block.
+  *Leakage:* the z-score is a **per-row** normalization (no statistic across
+  texts, no fit, no threshold); nothing is fitted on val; the blind control
+  is the yardstick; `test` is not touched.
+  *Runs:* `upr-decide-tev1-paragraph-noul-grid-union` (the union block on;
+  the pointwise arm is a cache hit).
+  *Exit:* the union's recall curve is in the artifact and the table beside
+  the two references, the blind control beside it, and the log states
+  plainly that the union is **not** built and that the slot decision is
+  PLAN's (and the reviewer's).
 
 ## 8. The durable deliverable (named, so it is not lost)
 
