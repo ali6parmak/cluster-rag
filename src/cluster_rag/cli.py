@@ -184,6 +184,7 @@ from cluster_rag.upr_decision import (
     run_upr_decision_arm,
     run_upr_listwise_stage,
     run_upr_rule_stage,
+    run_upr_union_stage,
     sample_texts,
     score_upr_grid,
     upr_per_text_block,
@@ -2995,6 +2996,57 @@ def _cmd_decide_upr(config: AppConfig) -> int:
                     max_questions_per_call=decision.max_questions_per_call,
                 )
             )
+        if decision.union:
+            # The **union** as a number (CS-14): the per-row z-max of the
+            # champion's and the decision model's scores, with the blind
+            # control beside it. A measurement, not a component.
+            champion_scores = np.asarray(setup.scores, dtype=np.float64)[sample_rows]
+            union_block, union_matrix = run_upr_union_stage(
+                arm_matrix,
+                sample.gold,
+                champion_scores=champion_scores,
+                blind_matrix=blind_matrix,
+                decision=eval_decision(config),
+                ks=config.eval.metrics.ks,
+                shortlist_ms=config.eval.metrics.shortlist_ms,
+            )
+            block["union"] = union_block
+            arms[f"{model_config.name}-union"] = {
+                "arm": f"{model_config.name}-union",
+                "state": arm.state,
+                "question_type": "union",
+                "instructions": (
+                    "the per-row z-max of the champion's and the decision model's scores"
+                ),
+                "options": 0,
+                "criteria": {},
+                "positive_option": None,
+                "max_input_tokens": model_config.max_input_tokens,
+                "label_blind": False,
+                "n_cells": sample.n_cells,
+                "n_calls_planned": 0,
+                "model": {
+                    "name": f"{model_config.name}-union",
+                    "model_id": info.model_id,
+                    "digest": info.digest,
+                    "backend": info.backend,
+                    "host": info.host,
+                    "prompt_version": decision.prompt_version,
+                    "extra": info.extra,
+                },
+                "cache": {"hits": 0, "misses": 0, "stored": 0},
+                "usage": {},
+                "measurement": measure_upr_arm(
+                    union_matrix,
+                    sample.gold,
+                    decision=eval_decision(config),
+                    ks=config.eval.metrics.ks,
+                    shortlist_ms=config.eval.metrics.shortlist_ms,
+                    bins=decision.bins,
+                    bucket_masks=bucket_masks,
+                    probability_scores=False,
+                ),
+            }
         arms[model_config.name] = block
         seconds = round(time.perf_counter() - started, 3)
         rows.extend(

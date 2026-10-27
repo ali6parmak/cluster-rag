@@ -370,3 +370,10 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-decide-tev1-paragraph-noul-grid-union | 2026-10-27 | val | tev1-paragraph-noul | tev1:latest | paragraph | noul | grid | no | 0.5502 | 0.5609 | 0.5349 | 1.000 | 0.7247 | 0.9987 | 0.3483 | 0.0147 | 0.2116 | 0.5000 | 0.1982 | 0.0932 | 0.7543 | 0.2116 | n/a | 660 | 44880 | 1320 | 0.762 |
 | upr-decide-tev1-paragraph-noul-grid-union | 2026-10-27 | val | tev1-paragraph-noul | n/a | paragraph | noul | grid | yes | 0.0517 | 0.0365 | 0.0464 | 1.000 | 0.0868 | 0.7850 | 0.0191 | 0.4118 | 0.2257 | 0.5000 | 0.1982 | 0.1205 | 0.2868 | 0.2257 | n/a | 660 | 44880 | 1320 | 0.762 |
+
+## UPR — upr_union
+
+| run_id | date | split | model | model_version | state | question_type | scope | label_blind | micro-F1 | macro-F1 | sample-F1 | coverage | nDCG@5 | shortlist R@50 | hit@1 | gold_rank_p50 | bg_mean | bg_rank_p50 | ece | brier | gold_prob_mean | bg_prob_mean | comp_auc | n_texts | n_cells | n_calls | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-decide-tev1-paragraph-noul-grid-union | 2026-10-27 | val | tev1-paragraph-noul | tev1:latest | paragraph | noul | grid | no | 0.5502 | 0.5609 | 0.5349 | 1.000 | 0.7247 | 0.9987 | 0.3483 | 0.0147 | 0.2116 | 0.5000 | 0.1982 | 0.0932 | 0.7543 | 0.2116 | n/a | 660 | 44880 | 1320 | 0.796 |
+| upr-decide-tev1-paragraph-noul-grid-union | 2026-10-27 | val | tev1-paragraph-noul | n/a | paragraph | noul | grid | yes | 0.0517 | 0.0365 | 0.0464 | 1.000 | 0.0868 | 0.7850 | 0.0191 | 0.4118 | 0.2257 | 0.5000 | 0.1982 | 0.1205 | 0.2868 | 0.2257 | n/a | 660 | 44880 | 1320 | 0.796 |

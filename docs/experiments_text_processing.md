@@ -4496,59 +4496,7 @@ the arm's calls are cached, so a re-read is free.
 
 the union candidate generator, as a number (2026-10-27)
 
-**The run.** One: `upr-decide-tev1-paragraph-noul-grid-union` (the whole val
-grid; the decision calls are CS-9b's cache hits, so the run costs **zero**
-new model calls). The union is the per-row **z-max** of the champion's and
-the decision model's scores — and it is a **measurement, not a component**:
-the union is not built and enters no pipeline (the 2026-10-22 trim put
-"union shortlists" out of the track's menu; they are main-plan Phase 4/6
-machinery). The number is for PLAN.
 
-### The recall curve (val, the whole grid; the share of the gold cells inside the text's top-k)
-
-| scorer | recall@1 | recall@3 | recall@5 | **recall@10** | nDCG@5 | shortlist R@20 | shortlist R@50 | hit@1 |
-|---|---|---|---|---|---|---|---|---|
-| the champion (the geometry) | 0.4139 | 0.6295 | 0.6773 | 0.7126 | 0.6725 | 0.7260 | 0.7423 | 0.3666 |
-| the decision model | 0.3953 | 0.6928 | 0.7904 | 0.8845 | 0.7247 | 0.9538 | 0.9987 | 0.3483 |
-| **the union** | **0.4192** | **0.7241** | **0.8355** | **0.9120** | **0.7693** | 0.9718 | 0.9970 | 0.3697 |
-| the union with the **label-blind** scores (the control) | 0.4134 | 0.5811 | 0.6218 | 0.6947 | 0.6307 | 0.7553 | 0.8337 | 0.3659 |
-
-**Verdict — the union's gain is real and label-driven, and it is a number for
-PLAN, not a component.** The union's **recall@10 = 0.9120** against the
-decision model's 0.8845 and the champion's 0.7126: a candidate generator
-built on both would put the gold label in a ten-label shortlist for **91%**
-of the texts, where the champion's geometry manages 71% and the decision
-model alone 88%. The **control** is the yardstick: the same z-max with the
-decision model's **label-blind** scores reaches only 0.6947 — *below* the
-champion's own 0.7126 — so the union's gain is the model's label reading and
-not a construction artefact of the z-normalization.
-
-**But the union's *decision* view has a scale artefact, and it is worth
-stating plainly** (the union's top-2 decision view is in the artifact, and it
-is *not* a pipeline proposal):
-
-| the union's top-2 decision view | pooled | head | torso | tail | **unseen** |
-|---|---|---|---|---|---|
-| the union's micro-F1 | 0.5843 | 0.7332 | 0.5341 | 0.4901 | **0.2540** |
-| the decision model's micro-F1 | 0.5502 | 0.6510 | 0.4842 | 0.4359 | **0.5267** |
-
-The union's pooled micro-F1 (0.5843) is the best number the track has
-measured on UPR — above the champion's 0.5479 — and its **unseen** bucket
-(0.2540) is *half* the decision model's (0.5267). The reason is the z-max's
-scale: the champion's per-text z-scores are more spread out than the
-decision model's, so the max is biased toward the champion's scale, and the
-champion's scores for a held-out label are noise (its unseen coverage is
-0.000). A union of two *calibrated* scores is not a union of two *z-scored*
-ones. So the union's honest reading is the one the plan asked for: **it is
-a candidate generator's number (the recall curve), not a scorer's** — and
-the number is the recall@10 0.9120, with the decision view's unseen-bucket
-artefact stated beside it.
-
-**What this change set does not say.** Nothing about `test`; nothing about
-*building* the union (the track's menu excludes it, and this run is a
-measurement); nothing about a z-normalization other than the per-row one
-(the per-text z-score is a choice, and a different one would move the
-numbers — the recall curve is the robust part, the decision view is not).
 
 ## CS-13 — the decision probability as a feature in the UPR pack (2026-10-27)
 
@@ -4702,3 +4650,58 @@ measurement); nothing about a z-normalization other than the per-row one
 (the per-text z-score is a choice, and a different one would move the
 numbers — the recall curve is the robust part, the decision view is not).
 
+## CS-14 — the union candidate generator, as a number (2026-10-27)
+
+**The run.** One: `upr-decide-tev1-paragraph-noul-grid-union` (the whole val
+grid; the decision calls are CS-9b's cache hits, so the run costs **zero**
+new model calls). The union is the per-row **z-max** of the champion's and
+the decision model's scores — and it is a **measurement, not a component**:
+the union is not built and enters no pipeline (the 2026-10-22 trim put
+"union shortlists" out of the track's menu; they are main-plan Phase 4/6
+machinery). The number is for PLAN.
+
+### The recall curve (val, the whole grid; the share of the gold cells inside the text's top-k)
+
+| scorer | recall@1 | recall@3 | recall@5 | **recall@10** | nDCG@5 | shortlist R@20 | shortlist R@50 | hit@1 |
+|---|---|---|---|---|---|---|---|---|
+| the champion (the geometry) | 0.4139 | 0.6295 | 0.6773 | 0.7126 | 0.6725 | 0.7260 | 0.7423 | 0.3666 |
+| the decision model | 0.3953 | 0.6928 | 0.7904 | 0.8845 | 0.7247 | 0.9538 | 0.9987 | 0.3483 |
+| **the union** | **0.4192** | **0.7241** | **0.8355** | **0.9120** | **0.7693** | 0.9718 | 0.9970 | 0.3697 |
+| the union with the **label-blind** scores (the control) | 0.4134 | 0.5811 | 0.6218 | 0.6947 | 0.6307 | 0.7553 | 0.8337 | 0.3659 |
+
+**Verdict — the union's gain is real and label-driven, and it is a number for
+PLAN, not a component.** The union's **recall@10 = 0.9120** against the
+decision model's 0.8845 and the champion's 0.7126: a candidate generator
+built on both would put the gold label in a ten-label shortlist for **91%**
+of the texts, where the champion's geometry manages 71% and the decision
+model alone 88%. The **control** is the yardstick: the same z-max with the
+decision model's **label-blind** scores reaches only 0.6947 — *below* the
+champion's own 0.7126 — so the union's gain is the model's label reading and
+not a construction artefact of the z-normalization.
+
+**But the union's *decision* view has a scale artefact, and it is worth
+stating plainly** (the union's top-2 decision view is in the artifact, and it
+is *not* a pipeline proposal):
+
+| the union's top-2 decision view | pooled | head | torso | tail | **unseen** |
+|---|---|---|---|---|---|
+| the union's micro-F1 | 0.5843 | 0.7332 | 0.5341 | 0.4901 | **0.2540** |
+| the decision model's micro-F1 | 0.5502 | 0.6510 | 0.4842 | 0.4359 | **0.5267** |
+
+The union's pooled micro-F1 (0.5843) is the best number the track has
+measured on UPR — above the champion's 0.5479 — and its **unseen** bucket
+(0.2540) is *half* the decision model's (0.5267). The reason is the z-max's
+scale: the champion's per-text z-scores are more spread out than the
+decision model's, so the max is biased toward the champion's scale, and the
+champion's scores for a held-out label are noise (its unseen coverage is
+0.000). A union of two *calibrated* scores is not a union of two *z-scored*
+ones. So the union's honest reading is the one the plan asked for: **it is
+a candidate generator's number (the recall curve), not a scorer's** — and
+the number is the recall@10 0.9120, with the decision view's unseen-bucket
+artefact stated beside it.
+
+**What this change set does not say.** Nothing about `test`; nothing about
+*building* the union (the track's menu excludes it, and this run is a
+measurement); nothing about a z-normalization other than the per-row one
+(the per-text z-score is a choice, and a different one would move the
+numbers — the recall curve is the robust part, the decision view is not).

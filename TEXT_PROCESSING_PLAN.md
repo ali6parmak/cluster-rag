@@ -2684,7 +2684,7 @@ main-plan Phase 4 matter).
   labels** (the unseen bucket 0.5697 against the champion's 0.0000). The
   price is stated: the decision model in the loop (2 calls per text). The
   numbers are in the track log's CS-13 section.)*
-- [ ] **CS-14 — the union candidate generator as a number (P4).** The
+- [x] **CS-14 — the union candidate generator as a number (P4).** The
   **measurement** of the union — the per-row **z-max** of the champion's and
   the decision model's scores (the row = the text, the z-score over the 68
   labels) — and nothing else: the union is **not built** and enters no
@@ -2708,6 +2708,24 @@ main-plan Phase 4 matter).
   the two references, the blind control beside it, and the log states
   plainly that the union is **not** built and that the slot decision is
   PLAN's (and the reviewer's).
+  *(done 2026-10-27: the new pure module
+  `text_processors/decision/upr_union.py` (the per-row z-score, the z-max
+  and the block), the config flag `upr_analysis.decision.union`, the
+  driver's union stage, the sweep
+  `experiments_text_processing/upr_union_sweep.py` and 1 run
+  `upr-decide-tev1-paragraph-noul-grid-union` (the whole val grid; **zero**
+  new model calls — the decision calls are CS-9b's cache hits). **Verdict:**
+  the union's **recall@10 = 0.9120** against the decision model's 0.8845 and
+  the champion's 0.7126 — and the **control** (the same z-max with the
+  decision model's label-blind scores) reaches only 0.6947, *below* the
+  champion's own, so the gain is label-driven. The union is a **measurement,
+  not a component** (the 2026-10-22 trim put union shortlists out of the
+  track's menu): the number is for PLAN. The union's *decision* view has a
+  scale artefact, and it is stated plainly — the union's pooled micro-F1
+  (0.5843) is the best number the track has measured on UPR, but its unseen
+  bucket (0.2540) is half the decision model's (0.5267), because the
+  champion's per-text z-scores are more spread out and the z-max is biased
+  toward its scale. The numbers are in the track log's CS-14 section.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 

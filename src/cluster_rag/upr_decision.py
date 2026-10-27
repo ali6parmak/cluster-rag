@@ -64,6 +64,7 @@ from cluster_rag.text_processors.decision.upr_rule import (
     upr_rule_block,
     upr_shortlist_rerank_block,
 )
+from cluster_rag.text_processors.decision.upr_union import upr_union_block, z_max_union
 from cluster_rag.upr_analysis import UprView
 
 logger = logging.getLogger(__name__)
@@ -467,6 +468,40 @@ def run_upr_rule_stage(
         ks=rerank_ks,
     )
     return block
+
+
+def run_upr_union_stage(
+    arm_matrix: np.ndarray,
+    gold: np.ndarray,
+    *,
+    champion_scores: np.ndarray,
+    blind_matrix: np.ndarray | None,
+    decision: Mapping[str, Any],
+    ks: Sequence[int],
+    shortlist_ms: Sequence[int],
+    bucket_masks: Mapping[str, np.ndarray] | None = None,
+    bins: int = 10,
+) -> tuple[dict[str, Any], np.ndarray]:
+    """The union candidate generator, as a number (the track's CS-14).
+
+    The union is the per-row **z-max** of the champion's and the decision
+    model's scores. It is a **measurement**, not a component: the union is not
+    built and enters no pipeline.
+
+    Returns:
+        The union's block (the curve, the two references and the blind
+        control) and the union's score matrix.
+    """
+    union_matrix = z_max_union(champion_scores, arm_matrix)
+    block = upr_union_block(
+        champion_scores,
+        arm_matrix,
+        gold,
+        blind_decision=blind_matrix,
+        ks=ks,
+        shortlist_ms=shortlist_ms,
+    )
+    return block, union_matrix
 
 
 def build_upr_safe_negative_rule(

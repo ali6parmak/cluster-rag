@@ -1406,6 +1406,9 @@ class UprDecisionConfig(BaseModel):
             exact content.
         listwise: The **listwise** second stage (CS-12). Off by default, so
             the earlier runs' artifacts keep their exact content.
+        union: Whether the run measures the **union** candidate generator
+            (CS-14). It is a measurement, not a component: the union is not
+            built and enters no pipeline. Off by default.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1424,6 +1427,7 @@ class UprDecisionConfig(BaseModel):
     mismatched_control: bool = True
     rule: UprDecisionRuleConfig = Field(default_factory=UprDecisionRuleConfig)
     listwise: UprListwiseConfig = Field(default_factory=UprListwiseConfig)
+    union: bool = False
 
 
 class UprLearnedReportingConfig(BaseModel):
