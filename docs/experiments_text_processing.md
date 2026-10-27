@@ -4705,3 +4705,153 @@ artefact stated beside it.
 measurement); nothing about a z-normalization other than the per-row one
 (the per-text z-score is a choice, and a different one would move the
 numbers — the recall curve is the robust part, the decision view is not).
+
+## CS-15 — the zero-shot rerankers on UPR, as **scorers** (2026-10-27)
+
+**The runs.** Nine: `upr-rerank-<model>-<candidate set>` (the three
+rerankers × the three candidate sets), all on the UPR **val** split, the
+guard green for every run (the command scores the split with the pipeline's
+own wiring and checks the reference arm against the matching `evaluate` run
+field by field, like the `analyze-upr` command does).
+
+**The design** (the pre-registration of §7.1.3): a reranker **re-orders** a
+candidate set, never enlarges it, so the candidate set is the experiment's
+independent variable and **only the ordering changes** between the two sides
+of every comparison. The incumbent is the ordering that produced the set.
+
+### The three candidate sets and their ceilings (val, the whole grid)
+
+| the candidate set | the gold cells inside it (the **cell-level** share) | the row-mean recall@10 | the ceiling a **perfect** reordering could reach (micro-F1) | the incumbent (the set's own ordering) |
+|---|---|---|---|---|
+| the champion's top-10 | 979/1,312 = 0.7462 | 0.7126 | 0.7439 | the champion: 0.5479 (nDCG@5 0.6725) |
+| the **decision model's** top-10 | 1,153/1,312 = 0.8788 | 0.8845 | 0.8761 | the decision model: 0.5502 (nDCG@5 0.7247) |
+| the **union's** top-10 | 1,217/1,312 = 0.9276 | 0.9120 | 0.9248 | the union: 0.5843 (nDCG@5 0.7693) |
+
+The reviewer's ceiling table is confirmed, and the two aggregations are
+named because they differ: the cell-level share (the gold cells' share, the
+one the micro-F1 is made of) and the row-mean recall (the ranking view's
+aggregation of the same question) — 0.8788 against 0.8845 for the decision
+model's set, 0.9276 against 0.9120 for the union's.
+
+### The arms (the decision model's top-10; val; the paired difference against the incumbent)
+
+| the arm | micro-F1 | nDCG@5 | hit@1 | the paired Δ micro-F1 | the paired Δ nDCG@5 | the unseen bucket | the tail bucket |
+|---|---|---|---|---|---|---|---|
+| the incumbent (the decision model's own order) | 0.5502 | 0.7247 | 0.3483 | — | — | 0.5267 | 0.4359 |
+| the 1B head, the label's **name**, the **label-first** order | **0.5593** | 0.7163 | 0.3438 | **+0.0091 [−0.0122, +0.0294]** | −0.0084 [−0.0266, +0.0093] | 0.5171 | **0.6125** |
+| the listwise model, the **description**, the text first | 0.5152 | 0.7018 | 0.3277 | −0.0350 [−0.0583, −0.0122] | −0.0229 [−0.0416, −0.0050] | **0.5506** | 0.4706 |
+| the listwise model, the name, the text first | 0.5137 | 0.6894 | 0.3194 | −0.0365 [−0.0576, −0.0139] | −0.0353 [−0.0521, −0.0187] | 0.4689 | 0.5847 |
+| the 1B head, the description, the label-first order | 0.5008 | 0.6692 | 0.3323 | −0.0494 [−0.0710, −0.0282] | −0.0555 [−0.0744, −0.0370] | 0.4664 | 0.4889 |
+| the 1B head, the description, the text first | 0.4818 | 0.6622 | 0.3209 | −0.0684 [−0.0913, −0.0458] | −0.0625 [−0.0828, −0.0413] | 0.4633 | 0.3887 |
+| the 278M cross-encoder, the description, the label-first order | 0.4901 | 0.6715 | 0.3194 | −0.0600 [−0.0839, −0.0360] | −0.0532 [−0.0738, −0.0331] | 0.5489 | 0.4840 |
+| the 278M cross-encoder, the description, the text first | 0.4696 | 0.6550 | 0.3117 | −0.0805 [−0.1048, −0.0573] | −0.0697 [−0.0894, −0.0505] | 0.5159 | 0.4811 |
+| the 278M cross-encoder, the name, the text first | 0.4058 | 0.5685 | 0.2477 | −0.1444 [−0.1692, −0.1190] | −0.1562 [−0.1789, −0.1332] | 0.4022 | 0.3848 |
+| the 278M cross-encoder, the name, the label-first order | 0.4271 | 0.6044 | 0.2912 | −0.1231 [−0.1452, −0.0991] | −0.1203 [−0.1423, −0.0965] | 0.3616 | 0.4831 |
+| the 1B head, the name, the text first | 0.4460 | 0.6344 | 0.2729 | −0.1041 [−0.1274, −0.0810] | −0.0903 [−0.1100, −0.0708] | 0.5165 | 0.3747 |
+| *the label-blind counterparts (the yardstick)* | *0.1725-0.2758* | | | *−0.2743 to −0.3777* | | | |
+
+### The other two candidate sets (the same comparison, the other two sets)
+
+| the candidate set | the arm | micro-F1 | the paired Δ micro-F1 |
+|---|---|---|---|
+| the union's top-10 | the listwise model, the description | 0.5357 | −0.0486 [−0.0741, −0.0249] |
+| the union's top-10 | the 1B head, the description | 0.4856 | −0.0988 [−0.1247, −0.0716] |
+| the union's top-10 | the 278M cross-encoder, the description | 0.4711 | −0.1132 [−0.1423, −0.0867] |
+| the champion's top-10 | the listwise model, the description | 0.4529 | −0.0950 [−0.1168, −0.0734] |
+| the champion's top-10 | the 1B head, the description | 0.4187 | −0.1292 [−0.1515, −0.1074] |
+| the champion's top-10 | the 278M cross-encoder, the description | 0.3617 | −0.1862 [−0.2129, −0.1589] |
+
+(The champion's set's arms have an unseen bucket of **0.0000**: the
+champion's own top-10 never contains a held-out label, so there is nothing
+for a reranker to re-order there — the ceiling's per-bucket coverage, and a
+clean illustration of the reviewer's point that a reranker can re-order a set
+but never enlarge it.)
+
+**Verdict — a zero-shot reranker does NOT beat the ordering we already
+have.** Every arm's paired difference against the incumbent of the **same**
+candidate set is negative except one, and that one is a **null**: the best
+arm (the 1B yes/no head, the label's **name**, the **label-first** order)
+reaches the micro-F1 0.5593 against the decision model's 0.5502 — a paired
+**+0.0091 [−0.0122, +0.0294]**, and the nDCG@5 −0.0084 [−0.0266, +0.0093].
+The interval includes zero on both views, so the pre-registered ship
+criterion is **not met** and the null criterion fires. The pipeline claim
+(the micro-F1 against the pack + the decision probability, 0.5965, by at
+least +0.02) is **not** met either — the best arm is 0.0372 *below* it.
+
+**The signal is there; the ordering is the weak part.** The **label-blind
+counterpart** is catastrophic beside every arm (−0.2743 to −0.3777 against
+the incumbent): the same model, the same cost, the wrong pairing. So the
+rerankers *do* read the label — a reranker's score is label-driven — and
+what they lose is the *ordering* of a set the decision model already orders
+well (the decision model's own hit@1 is 0.3483, the champion's 0.3666).
+
+**The per-bucket view is the round's finding: a zero-shot reranker is a
+rare-label specialist.** On the tail (the rarest labels) the 1B head's name
+arm gains **+0.1766 [+0.1141, +0.2419]** and the listwise model's name arm
+**+0.1488 [+0.0889, +0.2086]** (both significant); the held-out bucket's
+point estimates are positive for the description arms (the 278M
+cross-encoder's label-first arm +0.0222, the listwise model's +0.0239, both
+with intervals including zero). On the **head** and the **torso** the same
+arms fall (the head: −0.0114 to −0.1825). That is the reviewer's expectation,
+measured: the champion's kNN term votes with 1,676 labelled in-domain
+recommendations, and a zero-shot reranker has no such vote — it wins where
+the geometry has no support and loses where it has.
+
+### The cost (PLAN's Phase 6 exit criterion: "quality gain vs latency and cost")
+
+| the model | the shape | the pairs per text | the measured pairs/s | the projected wall time per 660 val texts | the peak VRAM |
+|---|---|---|---|---|---|
+| the 278M cross-encoder (`jina-reranker-v2-base-multilingual`) | one forward pass per **pair** (207 passes per 660 texts) | 10 | 1,126-1,598 | **4-6 s** | 1.2 GB |
+| the 1B yes/no head (`llama-nemotron-rerank-1b-v2`) | one forward pass per **pair** (413 passes per 660 texts) | 10 | 152-209 | **32-43 s** | 5.8 GB |
+| the listwise model (`jina-reranker-v3`) | one forward pass per **(query, ≤64 documents)** (660 passes per 660 texts) | 10 | 664-771 | **8.6-9.9 s** | 5.9 GB |
+
+The pre-registered cost bar (the reranker's wall time for the 660 val texts
+must not exceed the decision model's ~13 minutes) is cleared **by a wide
+margin** — the candidate-restricted scorer form is 10 pairs per text, and
+the three models project 4-43 seconds against the decision model's ~780
+seconds. The **listwise** model is the interesting shape: **one** call per
+text covers the whole candidate set (660 passes instead of the
+cross-encoders' 6,600), so its cost scales with the *texts* and not with
+the *pairs* — which is why the full-grid feature form of CS-16 (68 labels
+per text) is the listwise model's *cheapest* shape and the 1B head's
+most expensive one.
+
+### What the implementation had to settle (and the plan records it)
+
+- **The dtype is a measurement decision**: the two cross-encoders run in
+  **float32**, because in bfloat16 a score depends on the batch's
+  composition (the padding and the kernels' accumulation order): the
+  measured wobble is up to **0.007** on the 278M model's [0, 1] scale and up
+  to **0.3 logits** on the 1B model's scale — enough to **flip a near-tie**,
+  i.e. to let the GPU's rounding decide a measurement. In float32 the
+  wobble is 1e-6 and the ranking is identical across the batch sizes (the
+  feasibility tool's check). The price is the throughput (898 pairs/s
+  instead of 1,485 for the 278M model, 94 instead of 467 for the 1B one).
+- **The listwise model is not a late-interaction scorer**: it is a
+  **listwise** reranker (Qwen3-0.6B, one query and up to 64 documents in
+  one context, the score from the cosine of the query's and the documents'
+  embeddings). The plan's premise (a ColBERT-style multi-vector model) was
+  corrected against the model card before the runs, and the 2026-10-22
+  trim's "multi-vector / late-interaction" clause therefore does not bind
+  this round.
+- **The order matters, and it is measured**: the **label-first** order (the
+  label's document as the query, the text as the passage: the orientation
+  the cross-encoders' training distribution suggests) is the better of the
+  two for both cross-encoders (the 278M: −0.0600 against −0.0805; the 1B
+  head: −0.0494 against −0.0684, and its name variant is the only arm that
+  reaches the incumbent). The pre-registered primary (the text first) is
+  the *worse* one for the cross-encoders; the listwise model's API admits
+  only that one.
+- **The label side matters too, and it is measured**: the catalog's
+  **description** beats the label's bare **name** for the 278M cross-encoder
+  (the text-first order: −0.0805 against −0.1444) and for the listwise
+  model, while the 1B head prefers the name.
+
+**What this change set does not say.** Nothing about `test` (only val was
+touched — the one test shot for an adopted config is still owed); nothing
+about a reranker *in* the pipeline (this is a measurement, and the CS-9b
+lesson stands: a reranker's arm is only meaningful against the ordering of
+the **same** set); nothing about a **fine-tuned** reranker (CS-17, the
+destination, not this step); and nothing about the *combination* of a
+reranker's score with the pack (CS-16 measures the feature form).
+

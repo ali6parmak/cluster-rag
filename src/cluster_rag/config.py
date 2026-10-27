@@ -1430,6 +1430,171 @@ class UprDecisionConfig(BaseModel):
     union: bool = False
 
 
+class RerankerModelConfig(BaseModel):
+    """One reranker and how it is called (the track's CS-15, PLAN's Phase 6).
+
+    A reranker re-orders an existing candidate list. The three families
+    differ in what one forward pass covers, so the family (``kind``) is part
+    of the model, not of the caller:
+
+    - ``cross_encoder``: one forward pass per **(query, document) pair**, the
+      score is the sigmoid of the classification logit (the jina-reranker-v2
+      card's own score);
+    - ``llm_yesno``: one forward pass per pair as well, but the pair is
+      rendered into a **single sequence** by the ``template`` (the
+      llama-nemotron card's ``"question:... passage:..."`` format), and the
+      score is the raw relevance logit;
+    - ``listwise``: one forward pass per **(query, up to ``max_documents``)**
+      — the whole candidate list in one context (the jina-reranker-v3 card's
+      ``rerank``), and the score is the card's relevance score.
+
+    Attributes:
+        name: The arm's handle (the run id's model part).
+        model_id: The Hugging Face model id.
+        revision: The **pinned** commit hash of the model (the repo's rule:
+            the model and its revision are pinned in the config).
+        kind: The reranker family (see above).
+        max_length: The input budget in tokens for the pair-based families.
+        batch_size: How many pairs one forward pass carries.
+        dtype: The torch dtype of the loaded weights (``auto`` keeps the
+            checkpoint's own).
+        device: The device the model runs on.
+        trust_remote_code: Whether the model's custom modelling code is
+            allowed (all three rerankers ship custom code).
+        template: The pair template of the ``llm_yesno`` family (the
+            ``{query}`` / ``{document}`` placeholders).
+        padding_side: The tokenizer's padding side (the llama-nemotron card
+            asks for ``left``; the cross-encoders take the default).
+        max_query_length: The listwise family's query budget in tokens.
+        max_doc_length: The listwise family's per-document budget in tokens.
+        max_documents: The listwise family's block size (how many documents
+            one forward pass may read; the card's own limit is 64).
+        model_kwargs: Extra keyword arguments for the model loader (e.g.
+            ``{"use_flash_attn": false}`` for the jina-reranker-v2, whose
+            flash attention needs a package this environment does not have).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    model_id: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    kind: Literal["cross_encoder", "llm_yesno", "listwise"] = "cross_encoder"
+    max_length: int = Field(default=512, ge=1)
+    batch_size: int = Field(default=32, ge=1)
+    dtype: str = "auto"
+    device: str = "cuda"
+    trust_remote_code: bool = True
+    padding_side: Literal["left", "right"] = "right"
+    template: str | None = None
+    max_query_length: int | None = Field(default=None, ge=1)
+    max_doc_length: int | None = Field(default=None, ge=1)
+    max_documents: int = Field(default=64, ge=1)
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_run_id_safe(cls, value: str) -> str:
+        """The arm's handle ends up in a run id and a table row: keep it safe."""
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+            raise ValueError(
+                f"the reranker's name must be filesystem-safe ([A-Za-z0-9._-]+), got {value!r}"
+            )
+        return value
+
+    @field_validator("revision")
+    @classmethod
+    def _revision_is_a_commit(cls, value: str) -> str:
+        """The revision is a commit hash; anything shorter is a typo."""
+        if not re.fullmatch(r"[0-9a-f]{7,40}", value):
+            raise ValueError(
+                "the reranker's revision must be a commit hash (7-40 hex characters), "
+                f"got {value!r}"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _template_matches_the_family(self) -> RerankerModelConfig:
+        """The pair template belongs to the ``llm_yesno`` family alone."""
+        if self.kind == "llm_yesno" and not self.template:
+            raise ValueError(
+                "an 'llm_yesno' reranker needs the pair template (the model's own "
+                'prompt format, e.g. "question:{query} \\n \\n passage:{document}")'
+            )
+        if self.kind != "llm_yesno" and self.template:
+            raise ValueError(
+                f"a {self.kind!r} reranker takes no pair template (its pair is "
+                "tokenized as a pair, not rendered into one sequence)"
+            )
+        return self
+
+
+class UprRerankConfig(BaseModel):
+    """The rerankers on UPR, as **scorers** over a fixed candidate set (CS-15).
+
+    A reranker can re-order a set, never enlarge it, so the **candidate set**
+    is the experiment's independent variable: the run is configured with the
+    set it re-orders (the decision model's top-10, the union's top-10, or the
+    champion's top-10 as the control), and the run measures the reordering
+    against **the ordering that produced the set**.
+
+    Attributes:
+        enabled: Whether the run measures the rerankers at all. The default is
+            ``False``, so the earlier runs' artifacts keep their exact content.
+        models: The rerankers to measure (each pinned by id **and**
+            revision).
+        candidate_set: Which set is re-ordered: ``"decision"`` (the decision
+            model's own top-k), ``"union"`` (the per-row z-max of the
+            champion's and the decision model's scores) or ``"champion"`` (the
+            geometry's own top-k — the control, whose ceiling is the lowest).
+        candidate_k: How many labels per text the candidate set holds.
+        label_documents: The label side's variants: ``"description"`` (the
+            catalog's description) and ``"name"`` (the label's own name).
+        orders: The pair order variants: ``"text_first"`` (the pipeline's
+            retrieval framing) and ``"label_first"`` (the cross-encoders'
+            training orientation). The listwise family only admits the first.
+        label_blind: Whether the **label-blind counterpart** runs beside every
+            arm (the yardstick that says whether a gain is label-driven).
+        benchmark_requests: How many requests the **throughput probe** times
+            (the probe bypasses the cache, so the cost claim does not depend
+            on the cache's state).
+        bootstrap: The paired-bootstrap settings of the arm comparisons.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    models: tuple[RerankerModelConfig, ...] = ()
+    candidate_set: Literal["decision", "union", "champion"] = "decision"
+    candidate_k: int = Field(default=10, ge=1)
+    label_documents: tuple[Literal["description", "name"], ...] = ("description",)
+    orders: tuple[Literal["text_first", "label_first"], ...] = ("text_first",)
+    label_blind: bool = True
+    benchmark_requests: int = Field(default=64, ge=0)
+    bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
+
+    @field_validator("models")
+    @classmethod
+    def _model_names_are_unique(
+        cls, value: tuple[RerankerModelConfig, ...]
+    ) -> tuple[RerankerModelConfig, ...]:
+        """Two arms of one run must not share a name (the arm names' prefix)."""
+        names = [model.name for model in value]
+        if len(set(names)) != len(names):
+            raise ValueError(f"the rerankers must have unique names: {names}")
+        return value
+
+    @model_validator(mode="after")
+    def _enabled_needs_models(self) -> UprRerankConfig:
+        """An enabled rerank stage needs at least one pinned model."""
+        if self.enabled and not self.models:
+            raise ValueError(
+                "upr_analysis.rerank is enabled but carries no model: the rerank "
+                "stage needs at least one pinned reranker (id and revision)"
+            )
+        return self
+
+
 class UprLearnedReportingConfig(BaseModel):
     """The UPR learned arm's reporting (CS-8f).
 
@@ -1663,6 +1828,9 @@ class UprAnalysisConfig(BaseModel):
             artifact keeps its exact content.
         decision: The **decision probe** (CS-9): the models, the prompt grid
             and the scope. Off by default (no models = no probe).
+        rerank: The **rerankers** (CS-15): the models, the candidate set they
+            re-order and the label side's variants. Off by default, so the
+            earlier runs' artifacts keep their exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1677,6 +1845,7 @@ class UprAnalysisConfig(BaseModel):
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
     learned: UprLearnedConfig = Field(default_factory=UprLearnedConfig)
     decision: UprDecisionConfig = Field(default_factory=UprDecisionConfig)
+    rerank: UprRerankConfig = Field(default_factory=UprRerankConfig)
 
     @field_validator("length_buckets")
     @classmethod

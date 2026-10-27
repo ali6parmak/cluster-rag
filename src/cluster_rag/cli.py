@@ -100,6 +100,8 @@ from cluster_rag.experiment_table import (
     PROBE_OMCT_GROUPS_COLUMNS,
     PROBE_OMCT_GROUPS_KEY_COLUMNS,
     PROBE_OMCT_KEY_COLUMNS,
+    RERANK_UPR_COLUMNS,
+    RERANK_UPR_KEY_COLUMNS,
     append_table_rows,
     intro_for,
     section_heading,
@@ -142,12 +144,14 @@ from cluster_rag.preprocess import (
     build_preprocess_spec,
     question_transform_version,
 )
+from cluster_rag.rerank.base import KIND_LISTWISE
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
 from cluster_rag.sweep import SHARED_EXPERIMENTS_DIR
 from cluster_rag.text_processors.aggregation import aggregate_chunk_similarities, parse_aggregations
 from cluster_rag.text_processors.chunkers import build_chunker
 from cluster_rag.text_processors.combining import COMBINER_LOGISTIC, build_combiner
 from cluster_rag.text_processors.decision.upr_probe import measure_upr_arm
+from cluster_rag.text_processors.decision.upr_union import z_max_union
 from cluster_rag.text_processors.features import (
     FeatureEmbedders,
     PairFeatureExtractor,
@@ -163,6 +167,13 @@ from cluster_rag.text_processors.features.upr_features import (
     UprFeatureExtractor,
     UprLabel,
 )
+from cluster_rag.text_processors.rerank.upr_rerank import (
+    ORDER_TEXT_FIRST,
+    candidate_ceiling,
+    candidate_columns,
+    label_documents,
+    shifted_documents,
+)
 from cluster_rag.upr_analysis import (
     UprView,
     aggregation_of,
@@ -175,6 +186,7 @@ from cluster_rag.upr_analysis import (
     encode_chunks,
     encode_late_chunks,
     fusion_components,
+    per_text_block,
     symmetric_arm_scores,
 )
 from cluster_rag.upr_decision import (
@@ -190,6 +202,13 @@ from cluster_rag.upr_decision import (
     upr_per_text_block,
 )
 from cluster_rag.upr_learning import score_upr_learned_arms
+from cluster_rag.upr_rerank import (
+    RerankSources,
+    build_upr_rerank_report,
+    candidate_set_matrix,
+    paired_arm_comparison,
+    run_upr_rerank_arm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +431,32 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     decide_upr.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with eval: and upr_analysis: sections (or "
+        "sweep-resolved configs; experiment values live in "
+        "experiments_text_processing/*.py sweeps).",
+    )
+
+    rerank_upr = subparsers.add_parser(
+        "rerank-upr",
+        help="Text-processing track: the UPR zero-shot reranker probe (rerank-upr).",
+        description=(
+            "The text-processing track's UPR reranker probe "
+            "(TEXT_PROCESSING_PLAN.md, CS-15): the zero-shot rerankers RE-ORDER "
+            "an existing candidate set (the decision model's top-k, the union's "
+            "top-k, or the champion's top-k as the control), and the run compares "
+            "their ordering with the ordering that produced the set — the same "
+            "candidate set, two orderings, paired over the texts. The set's own "
+            "ceiling is measured beside every arm, the label-blind counterpart "
+            "is the yardstick, and the cost (the pairs per text, the pairs per "
+            "second, the wall time, the peak GPU memory) is part of the "
+            "deliverable. Writes results/<run_id>/rerank.json; the row goes to "
+            "the track's own UPR table."
+        ),
+    )
+    rerank_upr.add_argument(
         "--config",
         type=Path,
         required=True,
@@ -3267,6 +3312,444 @@ class EvalSetup:
     query_vectors: np.ndarray | None
 
 
+def _cmd_rerank_upr(config: AppConfig) -> int:
+    """Run rerank-upr: the track's zero-shot reranker probe (CS-15).
+
+    The rerankers are **scorers over a fixed candidate set**: they re-order an
+    existing set of labels, and the run compares their ordering with **the
+    ordering that produced the set** (the decision model's own probabilities,
+    the union's own z-max, the champion's own scores). A reranker can
+    re-order a set, never enlarge it, so the candidate set is the experiment's
+    independent variable and the run's **ceiling** is measured beside every
+    arm.
+
+    Writes ``results/<run_id>/{config.yaml, rerank.json}``: the candidate set
+    and its ceiling, the incumbent's own numbers, every arm's measurement
+    (the decision view, the ranking view, the per-bucket view), the
+    **label-blind counterpart** beside every arm, the **paired** differences
+    over the texts and the **cost** block (the pairs per text, the pairs per
+    second, the wall time and the peak GPU memory).
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.upr_analysis is None:
+        raise ValueError(
+            "the upr_analysis: section (the rerankers and the candidate set) is "
+            "required for the `rerank-upr` command"
+        )
+    rerank = config.upr_analysis.rerank
+    if not rerank.enabled or not rerank.models:
+        raise ValueError(
+            "the upr_analysis.rerank: section is required for the `rerank-upr` "
+            "command: it carries the pinned rerankers and the candidate set"
+        )
+    if config.eval is None:
+        raise ValueError(
+            "the eval: section (the decision rule) is required for the `rerank-upr` command"
+        )
+    setup = _prepare_evaluation(config, config.eval.split)
+    view = build_upr_view(
+        setup.records,
+        setup.labels,
+        setup.buckets,
+        config.upr_analysis.length_buckets,
+    )
+    gold = np.asarray(view.gold, dtype=bool)
+    labels = list(setup.labels)
+    texts = [record.text for record in setup.records]
+    bucket_masks = _upr_bucket_masks(view)
+    decision_rule = eval_decision(config)
+
+    # The **reference arm** and the guard: the champion's own scoring is the
+    # main pipeline's scoring, so it must reproduce the matching `evaluate`
+    # run field by field (the track's guard, the same one the `analyze-upr`
+    # command applies).
+    reference_block = arm_block(
+        view,
+        setup.scores,
+        decision=decision_rule,
+        ks=config.eval.metrics.ks,
+        shortlist_ms=config.eval.metrics.shortlist_ms,
+        arm=BASELINE_ARM,
+        predictor=setup.predictor.describe(),
+        chunker="full_text",
+        aggregation=None,
+    )
+    guard = _check_reference_arm(config, config.upr_analysis.reference_eval_run, reference_block)
+
+    champion = np.asarray(setup.scores, dtype=np.float64)
+    sources = RerankSources(
+        champion=champion,
+        decision=np.zeros_like(champion),
+        union=np.zeros_like(champion),
+    )
+    needs_decision = rerank.candidate_set in ("decision", "union")
+    decision_matrix: np.ndarray | None = None
+    if needs_decision:
+        decision_matrix = _rerank_decision_matrix(config, setup, view)
+        sources = RerankSources(
+            champion=champion,
+            decision=decision_matrix,
+            union=z_max_union(champion, decision_matrix),
+        )
+    source = candidate_set_matrix(sources, rerank.candidate_set)
+    columns = candidate_columns(source, rerank.candidate_k)
+    n_predicted = _rerank_n_predicted(decision_rule, len(texts))
+    ceiling = candidate_ceiling(
+        columns,
+        gold,
+        n_predicted=n_predicted,
+        labels_by_bucket=view.labels_by_bucket,
+        bucket_masks=bucket_masks,
+    )
+    incumbent_measurement = measure_upr_arm(
+        source,
+        gold,
+        decision=decision_rule,
+        ks=config.eval.metrics.ks,
+        shortlist_ms=config.eval.metrics.shortlist_ms,
+        bucket_masks=bucket_masks,
+        probability_scores=(rerank.candidate_set == "decision"),
+    )
+    incumbent_block = per_text_block(
+        source,
+        gold,
+        apply_decision_rule(
+            source,
+            rule=decision_rule["rule"],
+            k=decision_rule.get("k"),
+            threshold=decision_rule.get("threshold"),
+            min_score=decision_rule.get("min_score"),
+        ),
+        labels,
+        view.labels_by_bucket,
+        ks=config.eval.metrics.ks,
+    )
+
+    catalog = _upr_label_catalog(config)
+    descriptions = {name: entry.description for name, entry in catalog.items() if entry.description}
+
+    arms: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    for model_config in rerank.models:
+        client = build_reranker(model_config, config)
+        for variant in rerank.label_documents:
+            documents = label_documents(labels, descriptions, variant)
+            blind_documents = shifted_documents(documents)
+            for order in rerank.orders:
+                if model_config.kind == KIND_LISTWISE and order != ORDER_TEXT_FIRST:
+                    logger.info(
+                        "Skipping the %r order for the listwise model %r: its API "
+                        "takes one query and many documents",
+                        order,
+                        model_config.name,
+                    )
+                    continue
+                for blind, side in ((False, documents), (True, blind_documents)):
+                    if blind and not rerank.label_blind:
+                        continue
+                    block, fused = run_upr_rerank_arm(
+                        texts=texts,
+                        gold=gold,
+                        columns=columns,
+                        incumbent=source,
+                        reranker=client,
+                        model_config=model_config,
+                        documents=side,
+                        label_document=variant,
+                        order=order,
+                        label_blind=blind,
+                        decision=decision_rule,
+                        ks=config.eval.metrics.ks,
+                        shortlist_ms=config.eval.metrics.shortlist_ms,
+                        bucket_masks=bucket_masks,
+                        benchmark_requests=config.upr_analysis.rerank.benchmark_requests,
+                    )
+                    block["label_document"] = variant
+                    block["comparison_vs_incumbent"] = paired_arm_comparison(
+                        fused,
+                        source,
+                        gold,
+                        labels,
+                        view.labels_by_bucket,
+                        decision=decision_rule,
+                        ks=config.eval.metrics.ks,
+                        resamples=rerank.bootstrap.resamples,
+                        seed=rerank.bootstrap.seed if rerank.bootstrap.seed is not None else 42,
+                    )
+                    block["per_text"] = per_text_block(
+                        fused,
+                        gold,
+                        apply_decision_rule(
+                            fused,
+                            rule=decision_rule["rule"],
+                            k=decision_rule.get("k"),
+                            threshold=decision_rule.get("threshold"),
+                            min_score=decision_rule.get("min_score"),
+                        ),
+                        labels,
+                        view.labels_by_bucket,
+                        ks=config.eval.metrics.ks,
+                    )
+                    info = client.info
+                    block["model_info"] = {
+                        "name": model_config.name,
+                        "model_id": info.model_id,
+                        "revision": info.revision,
+                        "kind": info.kind,
+                        "backend": info.backend,
+                        "extra": info.extra,
+                    }
+                    arms[block["arm"]] = block
+                    rows.append(
+                        _rerank_upr_row(
+                            block,
+                            run_id=run_id,
+                            split=setup.split,
+                            candidate_set=rerank.candidate_set,
+                            n_texts=len(texts),
+                            seconds=round(time.perf_counter() - started, 3),
+                        )
+                    )
+
+    incumbent_arm = {
+        "arm": f"incumbent-{rerank.candidate_set}",
+        "candidate_set": rerank.candidate_set,
+        "measurement": incumbent_measurement,
+        "per_text": incumbent_block,
+        "note": (
+            "the incumbent: the ordering that produced the candidate set (the "
+            "decision model's own probabilities, the union's own z-max or the "
+            "champion's own scores). Every arm of this run is compared against "
+            "it, with the candidate set held fixed."
+        ),
+    }
+    arms[incumbent_arm["arm"]] = incumbent_arm
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    payload = build_upr_rerank_report(
+        run_id=run_id,
+        split=setup.split,
+        source=str(config.paths.data_raw),
+        source_sha256=setup.source_sha256,
+        n_texts=len(texts),
+        n_labels=len(labels),
+        candidate_set=rerank.candidate_set,
+        candidate_k=rerank.candidate_k,
+        arms=arms,
+        incumbent=incumbent_measurement,
+        ceiling=ceiling,
+        guard=guard,
+        reference=reference_block,
+        config_block={
+            "candidate_set": rerank.candidate_set,
+            "candidate_k": rerank.candidate_k,
+            "label_documents": list(rerank.label_documents),
+            "orders": list(rerank.orders),
+            "label_blind": rerank.label_blind,
+            "models": [model.model_dump(mode="python") for model in rerank.models],
+            "decision_rule": decision_rule,
+            "bootstrap": rerank.bootstrap.model_dump(mode="python"),
+            "decision_model": (
+                {
+                    "name": config.upr_analysis.decision.models[0].name,
+                    "model_id": config.upr_analysis.decision.models[0].model_id,
+                    "digest": config.upr_analysis.decision.models[0].digest,
+                }
+                if needs_decision and config.upr_analysis.decision.models
+                else None
+            ),
+            "notes": [
+                "the rerankers are frozen and zero-shot: they carry no UPR "
+                "label, and the label side is the frozen catalog (label-side "
+                "knowledge, the same kind the zero-shot label vectors use).",
+                "a reranker re-orders a candidate set, never enlarges it: the "
+                "candidate set is held fixed and only the ordering changes.",
+                "the comparison is paired over the texts, and the label-blind "
+                "counterpart is the yardstick that says whether a gain is the "
+                "model's label reading.",
+                "the raw data is never touched: a reranker only scores.",
+            ],
+        },
+        total_seconds=round(time.perf_counter() - started, 3),
+    )
+    (results_dir / "rerank.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    _append_command_rows(
+        config,
+        "rerank-upr",
+        columns=RERANK_UPR_COLUMNS,
+        key_columns=RERANK_UPR_KEY_COLUMNS,
+        rows=rows,
+    )
+
+    print(f"UPR rerank probe (CS-15): {run_id}")
+    print(
+        f"  candidate set: {rerank.candidate_set} (k={rerank.candidate_k}); "
+        f"{len(texts)} texts, {len(labels)} labels"
+    )
+    print(
+        f"  the set's ceiling: micro-F1 {ceiling['micro_f1_ceiling']:.4f} "
+        f"(the gold cells inside the set: {ceiling['n_gold_cells_in_set']}/"
+        f"{ceiling['n_gold_cells']})"
+    )
+    for name, block in arms.items():
+        if name.startswith("incumbent-"):
+            measurement = block["measurement"]
+            print(
+                f"  [incumbent] micro-F1 {measurement['decision']['micro_f1']:.4f}, "
+                f"nDCG@5 {measurement['ranking'].get('ndcg@5', 0.0):.4f}"
+            )
+            continue
+        measurement = block["measurement"]
+        comparison = block["comparison_vs_incumbent"]["pooled"]["micro_f1"]
+        cost = block["cost"]
+        print(
+            f"  [{name}] micro-F1 {measurement['decision']['micro_f1']:.4f}, "
+            f"nDCG@5 {measurement['ranking'].get('ndcg@5', 0.0):.4f}; "
+            f"vs the incumbent {comparison['delta']:+.4f} "
+            f"[{comparison['ci_low']:+.4f}, {comparison['ci_high']:+.4f}]; "
+            f"{cost['n_pairs']} pairs, {cost['seconds']:.1f}s, "
+            f"{cost['peak_gpu_mb']:.0f} MB"
+        )
+    print(f"Report written to {results_dir / 'rerank.json'}")
+    return 0
+
+
+def _rerank_n_predicted(decision_rule: Mapping[str, Any], n_texts: int) -> int:
+    """How many cells the decision rule predicts (the top-k rule's k per text)."""
+    if decision_rule.get("rule") != "top_k":
+        raise ValueError(
+            "the rerank probe's ceiling needs the top_k decision rule (the "
+            f"rule {decision_rule.get('rule')!r} predicts a variable number of cells)"
+        )
+    return int(decision_rule.get("k") or 0) * n_texts
+
+
+def _rerank_decision_matrix(config: AppConfig, setup: EvalSetup, view: UprView) -> np.ndarray:
+    """The decision model's score matrix (the cache hits of CS-9b's grid).
+
+    The candidate sets of the ``decision`` and ``union`` runs come from the
+    decision model, so its grid is scored here with the very same arm (and
+    the very same cache keys) as CS-9b's: the calls are cache hits, and the
+    artifact records the cache's counters.
+
+    Raises:
+        ValueError: If the decision section carries no model.
+    """
+    decision = config.upr_analysis.decision if config.upr_analysis else None
+    if decision is None or not decision.models:
+        raise ValueError(
+            "the upr_analysis.decision: section (a pinned decision model) is "
+            "required for the 'decision' and 'union' candidate sets: they are "
+            "the decision model's candidates"
+        )
+    model_config = decision.models[0]
+    decider = build_upr_decider(model_config, config)
+    arm = DecisionArm(
+        name=model_config.name,
+        state=model_config.state,
+        question_type=model_config.question_type,
+        instructions=model_config.instructions,
+        options=model_config.options,
+        criteria=model_config.criteria,
+        positive_option=model_config.positive_option,
+        max_input_tokens=model_config.max_input_tokens,
+    )
+    sample = UprDecisionSample(
+        texts=tuple(record.text for record in setup.records),
+        labels=tuple(setup.labels),
+        gold=view.gold,
+        rows=tuple(range(view.n_texts)),
+    )
+    matrix, _cost = score_upr_grid(
+        sample,
+        decider,
+        arm,
+        max_questions_per_call=decision.max_questions_per_call,
+    )
+    return matrix
+
+
+def build_reranker(model_config: Any, config: AppConfig) -> Any:
+    """Build the reranker's client (the CLI's wiring seam).
+
+    The Hugging Face client behind the :class:`~cluster_rag.rerank.base.Reranker`
+    port, with the rerankers' **own** disk cache wrapped around it (its own
+    root under ``cache/``, never the embedding cache), so a re-run is
+    reproducible and never re-scores a pair.
+    """
+    from cluster_rag.rerank.cache import CachedReranker
+    from cluster_rag.rerank.hf import HFReranker
+
+    client = HFReranker(model_config)
+    shape = {
+        "max_length": model_config.max_length,
+        "max_documents": model_config.max_documents,
+        "max_query_length": model_config.max_query_length,
+        "max_doc_length": model_config.max_doc_length,
+        "template": model_config.template,
+        "padding_side": model_config.padding_side,
+        "batch_size": model_config.batch_size,
+    }
+    return CachedReranker(client, config.paths.cache, shape=shape)
+
+
+def _rerank_upr_row(
+    block: dict[str, Any],
+    *,
+    run_id: str,
+    split: str,
+    candidate_set: str,
+    n_texts: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One row of the rerank probe's comparison table."""
+    measurement = block["measurement"]
+    comparison = block["comparison_vs_incumbent"]["pooled"]
+    cost = block["cost"]
+    info = block.get("model_info", {})
+    probe = cost.get("throughput_probe") or {}
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "split": split,
+        "candidate_set": candidate_set,
+        "model": info.get("model_id", block.get("model", "")),
+        "model_version": str(info.get("revision", ""))[:12],
+        "kind": block.get("kind", ""),
+        "order": block.get("order", ""),
+        "label_document": block.get("label_document", ""),
+        "label_blind": block.get("label_blind", False),
+        "micro-F1": _fmt(measurement["decision"]["micro_f1"], 4),
+        "macro-F1": _fmt(measurement["decision"]["macro_f1"], 4),
+        "nDCG@5": _fmt(measurement["ranking"].get("ndcg@5"), 4),
+        "shortlist R@50": _fmt(measurement["ranking"].get("shortlist_recall@50"), 4),
+        "hit@1": _fmt(measurement["gold"].get("hit@1"), 4),
+        "d_micro-F1": _fmt(comparison["micro_f1"]["delta"], 4),
+        "d_micro-F1_lo": _fmt(comparison["micro_f1"]["ci_low"], 4),
+        "d_micro-F1_hi": _fmt(comparison["micro_f1"]["ci_high"], 4),
+        "d_nDCG@5": _fmt(comparison["ndcg"]["delta"], 4),
+        "d_nDCG@5_lo": _fmt(comparison["ndcg"]["ci_low"], 4),
+        "d_nDCG@5_hi": _fmt(comparison["ndcg"]["ci_high"], 4),
+        "n_pairs": cost.get("n_pairs"),
+        "pairs_per_text": _fmt(cost.get("n_pairs_per_text"), 2),
+        "pairs_per_second": _fmt(probe.get("pairs_per_second"), 1),
+        "seconds": _fmt(cost.get("seconds"), 2),
+        # the peak memory of the arm's own forward passes, or the probe's when
+        # the arm was served entirely from the cache (the probe always runs)
+        "peak_gpu_mb": _fmt(
+            max(float(cost.get("peak_gpu_mb") or 0.0), float(probe.get("peak_gpu_mb") or 0.0)),
+            1,
+        ),
+        "n_texts": n_texts,
+    }
+
+
 def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
     """Load the split, build the predictor from train context, score the split.
 
@@ -5042,6 +5525,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_analyze_upr(run.config)
         elif run.command == "decide-upr":  # the track's UPR decision probe (CS-9)
             code = _cmd_decide_upr(run.config)
+        elif run.command == "rerank-upr":  # the track's UPR reranker probe (CS-15)
+            code = _cmd_rerank_upr(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
@@ -5094,6 +5579,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_analyze_upr(config)
         if args.command == "decide-upr":
             return _cmd_decide_upr(config)
+        if args.command == "rerank-upr":
+            return _cmd_rerank_upr(config)
         if args.command == "sweep":
             return _cmd_sweep(args.file)
     except FileNotFoundError as exc:

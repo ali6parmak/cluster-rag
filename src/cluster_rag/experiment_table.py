@@ -68,6 +68,7 @@ COMMAND_TARGETS: dict[str, TableTarget] = {
     "decide-omct": TableTarget("omct", TEXT_PROCESSING_TRACK),
     "analyze-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
     "decide-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
+    "rerank-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
 }
 
 
@@ -533,6 +534,51 @@ ANALYZE_UPR_COLUMNS: tuple[str, ...] = (
     "seconds",
 )
 ANALYZE_UPR_KEY_COLUMNS: tuple[str, ...] = ("run_id", "arm")
+
+# The text-processing track's reranker probe (the `rerank-upr` command): one
+# row per arm of a run. The arm is a **re-ordering of a fixed candidate set**,
+# so the row carries the **paired difference against the incumbent** (the
+# ordering that produced the set) with its interval — the like-for-like
+# comparison the probe is built around — beside the arm's own numbers, the
+# candidate set's **ceiling** and the **cost** (the pairs per text, the pairs
+# per second, the wall time, the peak GPU memory).
+RERANK_UPR_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "candidate_set",
+    "model",
+    "model_version",
+    "kind",
+    "order",
+    "label_document",
+    "label_blind",
+    "micro-F1",
+    "macro-F1",
+    "nDCG@5",
+    "shortlist R@50",
+    "hit@1",
+    "d_micro-F1",
+    "d_micro-F1_lo",
+    "d_micro-F1_hi",
+    "d_nDCG@5",
+    "d_nDCG@5_lo",
+    "d_nDCG@5_hi",
+    "n_pairs",
+    "pairs_per_text",
+    "pairs_per_second",
+    "seconds",
+    "peak_gpu_mb",
+    "n_texts",
+)
+RERANK_UPR_KEY_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "model",
+    "kind",
+    "order",
+    "label_document",
+    "label_blind",
+)
 
 
 def _cell(value: Any) -> str:

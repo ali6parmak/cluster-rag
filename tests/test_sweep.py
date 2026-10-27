@@ -76,6 +76,7 @@ def test_sweep_cell_validation() -> None:
         "decide-omct",
         "analyze-upr",
         "decide-upr",
+        "rerank-upr",
     )
     assert DATASET_COMMANDS == {
         "upr": (
@@ -86,6 +87,7 @@ def test_sweep_cell_validation() -> None:
             "evaluate",
             "analyze-upr",
             "decide-upr",
+            "rerank-upr",
         ),
         "omct": ("stats-omct", "probe-omct", "analyze-omct", "decide-omct"),
     }

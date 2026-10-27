@@ -70,6 +70,7 @@ UPR_COMMANDS: tuple[str, ...] = (
     "evaluate",
     "analyze-upr",
     "decide-upr",
+    "rerank-upr",
 )
 OMCT_COMMANDS: tuple[str, ...] = (
     "stats-omct",
@@ -90,6 +91,7 @@ COMMANDS: tuple[str, ...] = (
     "decide-omct",
     "analyze-upr",
     "decide-upr",
+    "rerank-upr",
 )
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
@@ -536,6 +538,81 @@ class DecideUprCell(_LabelledCell):
         return payload
 
 
+class RerankUprCell(_LabelledCell):
+    """One ``rerank-upr`` cell: the rerankers and the candidate set.
+
+    The text-processing track's UPR reranker probe
+    (TEXT_PROCESSING_PLAN.md, section 7.1, CS-15): the zero-shot rerankers
+    **re-order** a candidate set, and the run compares their ordering with the
+    ordering that produced the set. The cell carries the decision rule (the
+    probe's decision view) and the two embedding runs (the probe runs beside
+    the pipeline's own scoring, so the incumbent's numbers are the
+    pipeline's), plus the rerank section itself: the pinned rerankers, the
+    candidate set and the label side's variants.
+
+    ``analysis`` is the whole :class:`~cluster_rag.config.UprAnalysisConfig` —
+    the rerank section (the models, the candidate set, the label side and the
+    order variants) plus the decision section (the decision model whose
+    candidates the ``decision`` and ``union`` sets are).
+    """
+
+    decision: EvalDecisionConfig | None = None
+    k: int | None = Field(default=None, ge=1)
+    split: Literal["val", "test"] = "val"
+    embedding_run: str
+    label_embedding_run: str | None = None
+    analysis: UprAnalysisConfig
+
+    @field_validator("embedding_run")
+    @classmethod
+    def _embedding_run_is_valid(cls, value: str) -> str:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        return validate_embedding_run_id(value)
+
+    @field_validator("label_embedding_run")
+    @classmethod
+    def _label_embedding_run_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        if value is None:
+            return None
+        return validate_label_embedding_run_id(value)
+
+    @model_validator(mode="after")
+    def _decision_xor_k(self) -> RerankUprCell:
+        """``decision`` and the ``k`` shorthand are exactly one thing."""
+        if self.decision is not None and self.k is not None:
+            raise ValueError(
+                f"RerankUprCell {self.label!r}: give decision= or the top_k shorthand k=, not both"
+            )
+        if self.decision is None and self.k is None:
+            raise ValueError(
+                f"RerankUprCell {self.label!r}: needs a decision rule — pass the "
+                "top_k shorthand k= or a full decision="
+            )
+        return self
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "rerank-upr"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (the ``eval`` section + ``upr_analysis``)."""
+        decision = self.decision or EvalDecisionConfig(rule="top_k", k=self.k)
+        payload: dict[str, Any] = {
+            "eval": {
+                "predictor": {"name": "fusion", "params": {"a": 0.5, "b": 1.0, "c": 1.0, "k": 10}},
+                "decision": decision.model_dump(mode="python"),
+                "split": self.split,
+                "embedding_run_id": self.embedding_run,
+                "label_embedding_run_id": self.label_embedding_run,
+            },
+            "upr_analysis": self.analysis.model_dump(mode="python"),
+        }
+        return payload
+
+
 Cell = (
     SweepCell
     | EvalCell
@@ -546,6 +623,7 @@ Cell = (
     | DecideOmctCell
     | AnalyzeUprCell
     | DecideUprCell
+    | RerankUprCell
 )
 
 

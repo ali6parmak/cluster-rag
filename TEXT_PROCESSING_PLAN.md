@@ -2805,7 +2805,7 @@ main-plan Phase 4 matter).
   champion's per-text z-scores are more spread out and the z-max is biased
   toward its scale. The numbers are in the track log's CS-14 section.)*
 
-- [ ] **CS-15 — the zero-shot rerankers on UPR, as a *scorer* (the candidate
+- [x] **CS-15 — the zero-shot rerankers on UPR, as a *scorer* (the candidate
   set fixed, the ordering changed).** The three HF rerankers, measured as
   **reorderings of a candidate set** (never as a new candidate generator):
   the client (a new edge package `src/cluster_rag/rerank/`: the port, the HF
@@ -2824,6 +2824,38 @@ main-plan Phase 4 matter).
   the **paired** differences over the texts, the **cost** block (the pairs per
   text, the pairs per second, the wall time per 660 texts, the peak GPU
   memory) and the log carries the numbers and the verdict.
+  *(done 2026-10-27: the new edge package `src/cluster_rag/rerank/` (the
+  port, the Hugging Face client with its three families — the cross-encoder,
+  the yes/no head and the **listwise** model — and the rerankers' own disk
+  cache), the new pure core `text_processors/rerank/upr_rerank.py` (the
+  candidate sets, their **ceilings**, the label side, the label-blind
+  counterpart, the rank fusion and the measurement), the new CLI command
+  `rerank-upr` (with the pipeline's own scoring as the incumbent and the
+  track's **guard** beside it), the config section `upr_analysis.rerank`, the
+  sweep `experiments_text_processing/upr_rerank_sweep.py` and the feasibility
+  tool `tools/smoke_upr_rerank.py`; 9 runs (`upr-rerank-<model>-<set>`, the
+  three models x the three candidate sets). **Verdict: a zero-shot reranker
+  does NOT beat the ordering we already have.** Every arm's paired
+  difference against the incumbent of the **same** candidate set is negative
+  except one, and that one is a null: the best arm (the 1B yes/no head, the
+  label's **name**, the label-first order) reaches the micro-F1 0.5593
+  against the decision model's 0.5502, a paired **+0.0091** [−0.0122, +0.0294]
+  (the nDCG@5 −0.0084 [−0.0266, +0.0093]) — the interval includes zero, so
+  the pre-registered ship criterion is **not met** and the null criterion
+  fires. The **label-blind counterpart** is catastrophic beside every arm
+  (−0.29 to −0.39), so the arms do read the label: the signal is there and
+  the *ordering* is the weak part. The **per-bucket** view is the finding:
+  the rerankers are a **rare-label specialist** (the 1B model's name arm
+  gains **+0.1766** [+0.1141, +0.2419] on the tail, the listwise model's
+  name arm **+0.1488** [+0.0889, +0.2086], the held-out bucket's point
+  estimates are positive for the description arms) while the head and the
+  torso fall — the reviewer's expectation, measured. The **cost** clears the
+  pre-registered bar with a wide margin: the candidate-restricted scorer
+  form is 10 pairs per text, and the measured throughput projects **4-5 s**
+  (the 278M cross-encoder), **33-59 s** (the 1B head) and **22-24 s** (the
+  listwise model) per 660 val texts, against the decision model's ~13
+  minutes; the peak VRAM is 1.2-5.9 GB. The numbers are in the track log's
+  CS-15 section.)*
 - [ ] **CS-16 — the reranker's score as a **pack feature** (the CS-13
   precedent).** The reranker's score per (text, label) cell becomes one more
   column of the UPR pack's cube, in **two shapes**: the **full grid** (68
@@ -2840,6 +2872,7 @@ main-plan Phase 4 matter).
   intervals, the per-bucket view (the unseen bucket is the one the champion
   cannot reach at all), the three floors, the cost block and the log's
   verdict on the "scorer vs. feature" question.
+
 - [ ] **CS-17 — the *fine-tuned* cross-encoder (PLAN Phase 6's second step;
   acknowledged, NOT scheduled here).** The zero-shot measurement of CS-15 /
   CS-16 is the cheap first step; the destination is a **trained** reranker,
@@ -3032,6 +3065,20 @@ transformers 5.19, so a downgrade would change the embeddings and break the
 UPR guard (`tools/verify_upr_baseline.py`) — the guard is the track's
 contract. The shim is contained in the edge client, is documented, and is
 covered by a test.
+
+**8b. The dtype is a measurement decision, not a default (2026-10-27).**
+The two cross-encoders run in **float32**, not in their checkpoints' own
+bfloat16, because in bfloat16 a **score depends on the batch's
+composition** (the padding and the kernels' accumulation order): the
+measured wobble is up to **0.007** on the 278M model's [0, 1] scale and up
+to **0.3 logits** on the 1B model's scale, which is enough to **flip a
+near-tie** — i.e. to let the GPU's rounding decide a measurement. In
+float32 the wobble is 1e-6 (the 278M model) and 7e-5 (the 1B model) and the
+ranking is identical across the batch sizes. The price is the throughput
+(898 pairs/s instead of 1,485 for the 278M model, 94 instead of 467 for the
+1B one), which the cost bar below still clears. The **listwise** model stays
+in its own dtype: it reads one request per forward pass (no batch padding),
+so its score is already batch-independent.
 
 **9. The prize one step further out (acknowledged, not scheduled).** The
 **fine-tuned** cross-encoder is PLAN Phase 6's second step, and the track now
