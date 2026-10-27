@@ -60,6 +60,8 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   │   ├── control.py       # the same-document grid + the seeded control sample (subset B)
     │   │   ├── decision/        # the decision models' pure side (Stage 3.5): the question
     │   │   │                   # specs, the call plan, the competence control, the measurement
+    │   │   ├── rerank/          # the rerankers' pure side (CS-15): the candidate sets,
+    │   │   │                   # their ceilings, the rank fusion, the measurement
     │   ├── embed/
     │   │   ├── base.py          # Embedder protocol
     │   │   ├── hf.py            # sentence-transformers backend
@@ -73,7 +75,8 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── index.py             # ExampleIndex, LabelIndex
     │   ├── retrieve/            # knn.py, prototypes.py, zeroshot.py, fusion.py, threshold.py
     │   ├── cluster.py           # discovery + routing
-    │   ├── rerank/              # cross_encoder.py, llm.py
+    │   ├── rerank/              # the rerankers at the edge (CS-15): base.py (the port),
+    │   │                        # hf.py (the HF client), cache.py (their own disk cache)
     │   ├── feedback/            # store.py (SQLite), updates.py (memory, negatives, Rocchio)
     │   ├── active.py            # selection strategies
     │   ├── eval/                # metrics.py, run.py, simulate.py

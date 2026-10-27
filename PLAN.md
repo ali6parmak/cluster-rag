@@ -277,6 +277,38 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 
 *Track input, not yet delivered:* the text-processing track's named deliverable is a **characterized pair-relevance benchmark on OMCT** (the reviewer-verified hard negatives, the unjudged-proxy control and the per-document strata) plus a combiner/feature scorer — i.e. exactly the negative-pair source this phase lacks today. See `TEXT_PROCESSING_PLAN.md` §8; nothing is adopted before its artifact lands in `results/`.
 
+*Track input, delivered 2026-10-27 (the text-processing track's CS-15/CS-16,
+`TEXT_PROCESSING_PLAN.md` §7.1.3):* the **zero-shot** half of this phase is
+measured, on the UPR val split, with three Hugging Face rerankers (a 278M
+cross-encoder, a 1B yes/no head and a 0.6B **listwise** reranker — the last
+one is not a multi-vector model, it reads a whole candidate list in one
+context). The evidence, in one line each:
+
+- **as a re-ordering of an existing candidate set** (the decision model's
+  top-10, the union's top-10, the champion's top-10 as the control): every
+  zero-shot reranker is **worse** than the ordering we already have (the best
+  arm a paired **+0.0091 [−0.0122, +0.0294]** against the decision model's
+  own ordering — a null), while the **label-blind counterpart** is
+  catastrophic (−0.27 to −0.38): the signal is label-driven and the
+  *ordering* is the weak part. The per-bucket view says the rerankers are a
+  **rare-label specialist** (the tail +0.1766 [+0.1141, +0.2419]) and lose
+  on the head and the torso.
+- **as a pack feature** (the CS-13 precedent, one level up): the
+  **listwise** model's score lifts the pack from the micro-F1 0.5965 to
+  **0.6117** (a paired **+0.0152 [+0.0015, +0.0280]**, the label-blind
+  counterpart at null) — the best UPR number the track has measured — but
+  the pre-registered **+0.02 margin is not met**, so this phase's exit
+  criterion ("enabled only if it improves val F1 / P@k by a meaningful
+  margin") is **not** satisfied and the slot decision is the reviewer's.
+- **the cost**: the candidate-restricted scorer form is 4-43 s per 660 val
+  texts (against the decision model's ~13 min); the full-grid feature form
+  is 266 s for the val grid **and** the fit side (the listwise model, one
+  call per text) against the 1B head's 909 s (one pass per pair).
+- **the next step is the fine-tuning**, not a zero-shot model: the track
+  holds all three ingredients (the OMCT hard negatives, the UPR safe-negative
+  hard negatives, the decision model's 99.87%-recall candidate set as the
+  positive mining source) — see the track's CS-17.
+
 - [ ] Cross-encoder reranker on (text, label name/description) pairs. Zero-shot first, then fine-tuned on the auxiliary pairwise data (Phase 1.5) plus hard negatives from rejected suggestions.
 - ~~LLM reranker via Ollama~~ **Skipped by decision (2026-10): no LLMs in the pipeline.**
 - [ ] Compare against fusion alone: quality gain vs latency and cost.
