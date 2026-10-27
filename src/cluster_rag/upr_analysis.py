@@ -351,11 +351,12 @@ def arm_block(
         },
         "shift": shift,
         "paired": dict(paired) if paired else None,
-        "per_text": _per_text_block(
+        "per_text": per_text_block(
             matrix,
             truth,
             predicted,
-            view,
+            view.labels,
+            view.labels_by_bucket,
             ks=ks,
         ),
         "provenance": provenance(matrix, truth, PROVENANCE_KS),
@@ -364,11 +365,12 @@ def arm_block(
     return block
 
 
-def _per_text_block(
+def per_text_block(
     matrix: np.ndarray,
     truth: np.ndarray,
     predicted: np.ndarray,
-    view: UprView,
+    labels: Sequence[str],
+    labels_by_bucket: Mapping[str, Sequence[str]],
     *,
     ks: Sequence[int],
 ) -> dict[str, Any]:
@@ -400,11 +402,9 @@ def _per_text_block(
             "comparison needs (the two score matrices are not in memory together)."
         ),
     }
-    for bucket, members in view.labels_by_bucket.items():
-        columns = np.asarray(
-            [view.labels.index(label) for label in members],
-            dtype=np.int64,
-        )
+    index = {label: position for position, label in enumerate(labels)}
+    for bucket, members in labels_by_bucket.items():
+        columns = np.asarray([index[label] for label in members], dtype=np.int64)
         if not columns.size:
             continue
         bucket_counts = per_row_f1_counts(predicted[:, columns], truth[:, columns])

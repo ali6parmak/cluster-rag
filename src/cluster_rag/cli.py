@@ -182,7 +182,9 @@ from cluster_rag.upr_decision import (
     build_upr_decision_report,
     run_upr_competence_control,
     run_upr_decision_arm,
+    run_upr_rule_stage,
     sample_texts,
+    upr_per_text_block,
 )
 from cluster_rag.upr_learning import score_upr_learned_arms
 
@@ -2772,6 +2774,18 @@ def _cmd_decide_upr(config: AppConfig) -> int:
 
     arms: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
+
+    def _per_text(matrix: np.ndarray) -> dict[str, Any]:
+        """The arm's per-text summary (what a paired comparison needs)."""
+        return upr_per_text_block(
+            matrix,
+            sample.gold,
+            list(setup.labels),
+            view.labels_by_bucket,
+            decision=eval_decision(config),
+            ks=config.eval.metrics.ks,
+        )
+
     # The pipeline's own scoring of the **same** cells (the champion's scores
     # restricted to the sample's texts), so every probe number has its
     # reference beside it on the same texts.
@@ -2788,6 +2802,17 @@ def _cmd_decide_upr(config: AppConfig) -> int:
             bins=decision.bins,
             bucket_masks=bucket_masks,
         )
+    # The **fit side** of the safe-negative rule (CS-9b): the train split's
+    # grid, scored with the very same arm, so no operating point is ever
+    # fitted on the evaluated split.
+    fit_sample: UprDecisionSample | None = None
+    if decision.rule.enabled and setup.train_records:
+        fit_sample = UprDecisionSample(
+            texts=tuple(record.text for record in setup.train_records),
+            labels=tuple(setup.labels),
+            gold=build_label_matrix(setup.train_records, setup.labels),
+            rows=tuple(range(len(setup.train_records))),
+        )
     for model_config in decision.models:
         decider = build_upr_decider(model_config, config)
         arm = DecisionArm(
@@ -2800,7 +2825,7 @@ def _cmd_decide_upr(config: AppConfig) -> int:
             positive_option=model_config.positive_option,
             max_input_tokens=model_config.max_input_tokens,
         )
-        block = run_upr_decision_arm(
+        block, arm_matrix = run_upr_decision_arm(
             sample,
             decider,
             arm,
@@ -2811,6 +2836,7 @@ def _cmd_decide_upr(config: AppConfig) -> int:
             bins=decision.bins,
             bucket_masks=bucket_masks,
         )
+        block["per_text"] = _per_text(arm_matrix)
         info = decider.info
         block["model"] = {
             "name": model_config.name,
@@ -2836,8 +2862,9 @@ def _cmd_decide_upr(config: AppConfig) -> int:
                 max_questions_per_call=decision.max_questions_per_call,
                 bins=decision.bins,
             )
+        blind_matrix: np.ndarray | None = None
         if decision.mismatched_control:
-            blind = run_upr_decision_arm(
+            blind_block, blind_matrix = run_upr_decision_arm(
                 sample,
                 decider,
                 arm,
@@ -2849,7 +2876,28 @@ def _cmd_decide_upr(config: AppConfig) -> int:
                 mismatched=True,
                 bucket_masks=bucket_masks,
             )
-            block["label_blind_counterpart"] = blind
+            blind_block["per_text"] = _per_text(blind_matrix)
+            block["label_blind_counterpart"] = blind_block
+        if decision.rule.enabled:
+            block.update(
+                run_upr_rule_stage(
+                    sample,
+                    decider,
+                    arm,
+                    arm_matrix=arm_matrix,
+                    blind_matrix=blind_matrix,
+                    fit_sample=fit_sample,
+                    champion_scores=np.asarray(setup.scores, dtype=np.float64)[sample_rows],
+                    fixed_cut=decision.rule.fixed_cut,
+                    threshold_quantiles=decision.rule.threshold_quantiles,
+                    margin_quantiles=decision.rule.margin_quantiles,
+                    rerank_ks=decision.rule.rerank_ks,
+                    decision=eval_decision(config),
+                    ks=config.eval.metrics.ks,
+                    shortlist_ms=config.eval.metrics.shortlist_ms,
+                    max_questions_per_call=decision.max_questions_per_call,
+                )
+            )
         arms[model_config.name] = block
         seconds = round(time.perf_counter() - started, 3)
         rows.extend(
@@ -2949,12 +2997,17 @@ def _cmd_decide_upr(config: AppConfig) -> int:
             f"{_fmt(measurement['ranking'].get('ndcg@5'), 4)}, shortlist R@50 "
             f"{_fmt(measurement['ranking'].get('shortlist_recall@50'), 4)}"
         )
-        print(
-            f"      calibration: ECE {_fmt(measurement['calibration']['ece'], 4)}, the "
-            f"Brier {_fmt(measurement['calibration']['brier'], 4)}; the compression: the "
-            f"gold's mean probability {_fmt(measurement['compression']['gold_mean'], 4)} "
-            f"against the background's {_fmt(measurement['compression']['background_mean'], 4)}"
-        )
+        calibration = measurement["calibration"]
+        if "ece" in calibration:
+            print(
+                f"      calibration: ECE {_fmt(calibration['ece'], 4)}, the "
+                f"Brier {_fmt(calibration['brier'], 4)}; the compression: the "
+                f"gold's mean probability {_fmt(measurement['compression']['gold_mean'], 4)} "
+                f"against the background's "
+                f"{_fmt(measurement['compression']['background_mean'], 4)}"
+            )
+        else:
+            print(f"      calibration: {calibration.get('note', 'n/a')}")
     print(f"Report written to {results_dir / 'decisions.json'}")
     return 0
 

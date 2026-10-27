@@ -1281,6 +1281,47 @@ class UprLearnedFloorsConfig(BaseModel):
     random_seed: int = Field(default=42)
 
 
+class UprDecisionRuleConfig(BaseModel):
+    """The UPR safe-negative rule and the shortlist rerank (CS-9b).
+
+    The rule's three forms (the **fixed cut**, the **fit-side threshold** and
+    the **margin rule**) and the **label-blind counterpart** beside each; the
+    rule's fit side is the **train** split, so no operating point is fitted on
+    the evaluated split. The **shortlist rerank** re-orders the champion's
+    top-K labels per text with the decision model's own probability.
+
+    Attributes:
+        enabled: Whether the run computes the rule and the rerank at all. The
+            default is ``False``, so the CS-9 runs' artifacts keep their exact
+            content.
+        fixed_cut: The fixed cut of the first form (the calibrated model's own
+            operating point).
+        threshold_quantiles: How many quantiles of the fit side's scores form
+            the threshold's candidate grid.
+        margin_quantiles: How many quantiles of the fit side's margins form
+            the margin rule's candidate grid.
+        rerank_ks: The shortlist rerank's K grid.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    fixed_cut: float = 0.5
+    threshold_quantiles: int = Field(default=99, ge=3, le=999)
+    margin_quantiles: int = Field(default=49, ge=3, le=999)
+    rerank_ks: tuple[int, ...] = (5, 10, 20, 50)
+
+    @field_validator("rerank_ks")
+    @classmethod
+    def _rerank_ks_are_positive(cls, value: tuple[int, ...]) -> tuple[int, ...]:
+        """Reject a non-positive K."""
+        if not value or any(k < 1 for k in value):
+            raise ValueError(
+                f"upr_analysis.decision.rule.rerank_ks must be positive, got {list(value)}"
+            )
+        return value
+
+
 class UprDecisionConfig(BaseModel):
     """The UPR decision probe's settings (the track's CS-9).
 
@@ -1316,6 +1357,9 @@ class UprDecisionConfig(BaseModel):
         mismatched_control: Whether the **label-blind counterpart** runs beside
             every arm (the yardstick that turns the cost into a quality
             claim).
+        rule: The **safe-negative rule** and the **shortlist rerank**
+            (CS-9b). Off by default, so the CS-9 runs' artifacts keep their
+            exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1332,6 +1376,7 @@ class UprDecisionConfig(BaseModel):
     max_questions_per_call: int = Field(default=64, ge=1, le=64)
     bins: int = Field(default=10, ge=2, le=50)
     mismatched_control: bool = True
+    rule: UprDecisionRuleConfig = Field(default_factory=UprDecisionRuleConfig)
 
 
 class UprLearnedReportingConfig(BaseModel):

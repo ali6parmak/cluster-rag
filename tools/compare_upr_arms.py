@@ -37,15 +37,18 @@ DEFAULT_RESULTS = Path("results")
 
 
 def load_artifact(results: Path, run_id: str) -> dict[str, Any]:
-    """One run's analysis artifact.
+    """One run's artifact (``analysis.json`` or ``decisions.json``).
 
     Raises:
         FileNotFoundError: If the artifact does not exist.
     """
-    path = results / run_id / "analysis.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"no analysis.json for {run_id}: {path}")
-    return json.loads(path.read_text("utf-8"))
+    for name in ("analysis.json", "decisions.json"):
+        path = results / run_id / name
+        if path.is_file():
+            return json.loads(path.read_text("utf-8"))
+    raise FileNotFoundError(
+        f"no analysis.json or decisions.json for {run_id}: {results / run_id}"
+    )
 
 
 def arm_block(artifact: dict[str, Any], arm: str) -> dict[str, Any]:

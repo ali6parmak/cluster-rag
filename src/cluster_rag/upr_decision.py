@@ -54,6 +54,10 @@ from cluster_rag.text_processors.decision.upr_probe import (
     measure_upr_arm,
     score_matrix,
 )
+from cluster_rag.text_processors.decision.upr_rule import (
+    upr_rule_block,
+    upr_shortlist_rerank_block,
+)
 from cluster_rag.upr_analysis import UprView
 
 logger = logging.getLogger(__name__)
@@ -119,6 +123,62 @@ def sample_texts(
     )
 
 
+def score_upr_grid(
+    sample: UprDecisionSample,
+    decider: Decider,
+    arm: DecisionArm,
+    *,
+    max_questions_per_call: int = 64,
+    mismatched: bool = False,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Score a grid with one arm: the score matrix and the call plan's cost.
+
+    This is the raw scoring half of :func:`run_upr_decision_arm`, split out
+    so the **fit side** (the train split's grid, whose scores fit the rule's
+    operating point) can be scored with the very same arm and the very same
+    cache keys.
+
+    Args:
+        sample: The grid to score (the evaluated split's or the fit side's).
+        decider: The decision model (the port; the CLI wires the client in).
+        arm: The arm's prompt (the state shape, the question type, the task).
+        max_questions_per_call: How many questions one call may carry.
+        mismatched: Whether the cells are the **label-blind counterpart**.
+
+    Returns:
+        The ``(n_texts, n_labels)`` score matrix and the cost block (the
+        cells, the planned calls and the truncation report).
+    """
+    cells = build_upr_cells(
+        sample.texts,
+        sample.labels,
+        sample.gold,
+        mismatched=mismatched,
+    )
+    probabilities, truncated, n_calls = score_cells(
+        decider,
+        cells,
+        arm,
+        max_questions_per_call=max_questions_per_call,
+    )
+    matrix = score_matrix(cells, probabilities)
+    cost = {
+        "n_cells": len(cells),
+        "n_calls_planned": n_calls,
+        "truncation": {
+            "n_cells": len(cells),
+            "n_truncated": int(sum(truncated)),
+            "share": (sum(truncated) / len(cells)) if cells else None,
+            "note": (
+                "the cells whose text was cut to fit the model's input budget "
+                "(the question and the instructions are never cut): a shortened "
+                "input is never silent"
+            ),
+        },
+    }
+    return matrix, cost
+
+
 def run_upr_decision_arm(
     sample: UprDecisionSample,
     decider: Decider,
@@ -131,7 +191,7 @@ def run_upr_decision_arm(
     bins: int = 10,
     mismatched: bool = False,
     bucket_masks: Mapping[str, np.ndarray] | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], np.ndarray]:
     """Run one arm: score the sample's cells and measure them.
 
     Args:
@@ -147,22 +207,17 @@ def run_upr_decision_arm(
         bucket_masks: The label buckets' column masks (the per-bucket view).
 
     Returns:
-        The arm's block: the measurement, the call plan's cost and the
-        truncation report.
+        The arm's block (the measurement, the call plan's cost and the
+        truncation report) and the arm's ``(n_texts, n_labels)`` score matrix
+        (the rule and the rerank need it; it never enters the artifact).
     """
-    cells = build_upr_cells(
-        sample.texts,
-        sample.labels,
-        sample.gold,
-        mismatched=mismatched,
-    )
-    probabilities, truncated, n_calls = score_cells(
+    matrix, cost = score_upr_grid(
+        sample,
         decider,
-        cells,
         arm,
         max_questions_per_call=max_questions_per_call,
+        mismatched=mismatched,
     )
-    matrix = score_matrix(cells, probabilities)
     measurement = measure_upr_arm(
         matrix,
         sample.gold,
@@ -172,7 +227,7 @@ def run_upr_decision_arm(
         bins=bins,
         bucket_masks=bucket_masks,
     )
-    return {
+    block = {
         "arm": arm.name,
         "state": arm.state,
         "question_type": arm.question_type,
@@ -182,20 +237,166 @@ def run_upr_decision_arm(
         "positive_option": arm.positive_option,
         "max_input_tokens": arm.max_input_tokens,
         "label_blind": mismatched,
-        "n_cells": len(cells),
-        "n_calls_planned": n_calls,
-        "truncation": {
-            "n_cells": len(cells),
-            "n_truncated": int(sum(truncated)),
-            "share": (sum(truncated) / len(cells)) if cells else None,
-            "note": (
-                "the cells whose text was cut to fit the model's input budget "
-                "(the question and the instructions are never cut): a shortened "
-                "input is never silent"
-            ),
-        },
+        **cost,
         "measurement": measurement,
     }
+    return block, matrix
+
+
+def upr_per_text_block(
+    matrix: np.ndarray,
+    gold: np.ndarray,
+    labels: Sequence[str],
+    labels_by_bucket: Mapping[str, Sequence[str]],
+    *,
+    decision: Mapping[str, Any],
+    ks: Sequence[int],
+) -> dict[str, Any]:
+    """An arm's **per-text** summary (what a paired comparison needs).
+
+    The block is the compact form of the arm's two views: the decision
+    view's per-text (true positives, false positives, false negatives) and the
+    ranking view's per-text nDCG. It is what makes a **cross-run** paired
+    comparison possible (the two score matrices are not in memory together).
+
+    Args:
+        matrix: The arm's score matrix.
+        gold: The bool gold matrix (the same shape).
+        labels: The label space (the matrix's column order).
+        labels_by_bucket: The label buckets' members.
+        decision: The decision rule (the ``eval.decision`` mapping).
+        ks: The ranking metrics' k values.
+
+    Returns:
+        The per-text block.
+    """
+    from cluster_rag.eval.multilabel import apply_decision_rule
+    from cluster_rag.upr_analysis import per_text_block
+
+    values = np.asarray(matrix, dtype=np.float64)
+    predicted = apply_decision_rule(
+        values,
+        rule=decision["rule"],
+        k=decision.get("k"),
+        threshold=decision.get("threshold"),
+        min_score=decision.get("min_score"),
+    )
+    return per_text_block(
+        values,
+        np.asarray(gold, dtype=bool),
+        predicted,
+        labels,
+        labels_by_bucket,
+        ks=ks,
+    )
+
+
+def run_upr_rule_stage(
+    sample: UprDecisionSample,
+    decider: Decider,
+    arm: DecisionArm,
+    *,
+    arm_matrix: np.ndarray,
+    blind_matrix: np.ndarray | None,
+    fit_sample: UprDecisionSample | None,
+    champion_scores: np.ndarray,
+    fixed_cut: float,
+    threshold_quantiles: int,
+    margin_quantiles: int,
+    rerank_ks: Sequence[int],
+    decision: Mapping[str, Any],
+    ks: Sequence[int],
+    shortlist_ms: Sequence[int],
+    max_questions_per_call: int = 64,
+) -> dict[str, Any]:
+    """The safe-negative rule and the shortlist rerank (the track's CS-9b).
+
+    The rule's three forms (the fixed cut, the fit-side threshold, the margin
+    rule) with the **label-blind counterpart** beside each, and the shortlist
+    rerank (the champion's top-K, re-ordered by the decision model's own
+    probability). The rule's fit side is the **train** split, so no operating
+    point is fitted on the evaluated split.
+
+    Returns:
+        The stage's block: the rule and the rerank.
+    """
+    block: dict[str, Any] = {}
+    if fit_sample is not None:
+        fit_matrix, fit_cost = score_upr_grid(
+            fit_sample,
+            decider,
+            arm,
+            max_questions_per_call=max_questions_per_call,
+        )
+        rule = build_upr_safe_negative_rule(
+            arm_matrix,
+            sample.gold,
+            fit_scores=fit_matrix,
+            fit_gold=fit_sample.gold,
+            blind_scores=blind_matrix,
+            fixed_cut=fixed_cut,
+            threshold_quantiles=threshold_quantiles,
+            margin_quantiles=margin_quantiles,
+        )
+        rule["fit_side_cost"] = fit_cost
+        block["safe_negative_rule"] = rule
+    block["shortlist_rerank"] = build_upr_shortlist_rerank(
+        arm_matrix,
+        sample.gold,
+        reference_scores=champion_scores,
+        ks=rerank_ks,
+    )
+    return block
+
+
+def build_upr_safe_negative_rule(
+    scores: np.ndarray,
+    gold: np.ndarray,
+    *,
+    fit_scores: np.ndarray,
+    fit_gold: np.ndarray,
+    blind_scores: np.ndarray | None = None,
+    fixed_cut: float = 0.5,
+    threshold_quantiles: int = 99,
+    margin_quantiles: int = 49,
+) -> dict[str, Any]:
+    """The safe-negative rule on the UPR grid (the pure core's block).
+
+    The rule's three forms (the fixed cut, the fit-side threshold, the margin
+    rule) with the **label-blind counterpart** beside each, at the **same**
+    operating point (the CS-7b OMCT precedent). The fit side is the **train**
+    split's grid, so no operating point is fitted on the evaluated split.
+    """
+    return upr_rule_block(
+        scores,
+        gold,
+        fit_scores=fit_scores,
+        fit_gold=fit_gold,
+        blind_scores=blind_scores,
+        fixed_cut=fixed_cut,
+        threshold_quantiles=threshold_quantiles,
+        margin_quantiles=margin_quantiles,
+    )
+
+
+def build_upr_shortlist_rerank(
+    scores: np.ndarray,
+    gold: np.ndarray,
+    *,
+    reference_scores: np.ndarray,
+    ks: Sequence[int],
+) -> dict[str, Any]:
+    """The shortlist rerank on UPR (the pure core's block).
+
+    The champion's top-K labels per text, re-ordered by the decision model's
+    own probability, with the shortlist's own recall as the ceiling.
+    """
+    return upr_shortlist_rerank_block(
+        scores,
+        gold,
+        reference_scores=reference_scores,
+        ks=ks,
+    )
 
 
 def run_upr_competence_control(

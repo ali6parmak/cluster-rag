@@ -2266,7 +2266,7 @@ The **pre-registered expectations** (written down before the runs):
   operating point on UPR (the opposite of the CS-7b arm on OMCT), while laya
   is the compressed one (its `noul` arm's gold mean 0.4852). The numbers are
   in the track log's CS-9 section; 557 unit tests green.)*
-- [ ] **CS-9b — the full-val pointwise grid, the safe-negative rule and the
+- [x] **CS-9b — the full-val pointwise grid, the safe-negative rule and the
   shortlist rerank (the follow-up CS-9's own deviation promised).** The
   `upr_analysis.decision.scope: grid` scope scores the **whole val grid**
   (660 texts x 68 labels = 44,880 cells) instead of the CS-9 sample's 150
@@ -2299,11 +2299,12 @@ The **pre-registered expectations** (written down before the runs):
   that turned the OMCT rule's cost into a quality claim). If the blind
   counterpart's harm is *not* larger at the same reach, the rule's cost is a
   construction artefact and the deliverable ships as a reach claim only.
-  *Cost:* 11,984 new decision calls (the val grid's tev1 `noul` arm 1,320 +
-  its label-blind counterpart 1,320; the train grid's the same 3,352 + 3,352;
-  the val grid's tev1 `choice` arm 1,320 + 1,320) — the measured cache
-  throughput is ~8 calls/s, so the wall time is minutes, not hours. The train
-  grid's calls are **reused** by CS-13 (so CS-13's marginal cost is zero).
+  *Cost:* 11,984 new decision calls (5,992 per arm: the val grid's tev1 arm
+  1,320, its label-blind counterpart 1,320, and the train grid's fit side
+  3,352 — the counterpart takes the **same** operating point, so it needs no
+  fit side of its own, the CS-7b precedent). The measured cache throughput is
+  ~100 calls/min, so the wall time is about two hours. The train grid's calls
+  are **reused** by CS-13 (so CS-13's marginal cost is zero).
   *Leakage:* the thresholds and the margin are fitted on the **train** grid
   only; the decision model is frozen and zero-shot (it carries no UPR
   label); the label-blind counterpart is the yardstick that says how much of
@@ -2319,6 +2320,34 @@ The **pre-registered expectations** (written down before the runs):
   three forms with their label-blind counterparts, the shortlist rerank and
   the train-side probabilities, all in the artifact; the table carries the
   rows; the log carries the numbers.
+  *(done 2026-10-27: the new pure module `text_processors/decision/upr_rule.py`
+  (the rule's three forms, the margins, the label-blind counterpart **at the
+  same operating point** — the CS-7b OMCT precedent) and the driver stage
+  (`run_upr_rule_stage`), the config section `upr_analysis.decision.rule` (off
+  by default), the sweep `experiments_text_processing/upr_decision_grid_sweep.py`
+  and 2 runs `upr-decide-tev1-paragraph-{noul,choice}-grid` (the whole val
+  grid; 0 truncated cells). **Verdicts:** the decision model **beats the
+  champion** on the full val grid (the micro-F1 0.5502 against 0.5479, the
+  nDCG@5 0.7247 against 0.6725, the shortlist R@50 0.9987 against 0.7423)
+  and it finds the eight held-out labels (the unseen bucket 0.5267 against
+  0.0000); the label-blind counterpart is at chance (0.0517), and the CS-9
+  sample's findings hold at full-val scale (the `noul` type beats the
+  `choice` type; the `choice` type is better calibrated; the probabilities
+  are not compressed). The **rule's cost is a quality claim**: the
+  label-blind counterpart discards **75-85%** of the gold cells where the real
+  arm discards 13-20% at a similar reach, so the UPR deliverable's cost claim
+  is label-driven (the background's true positive rate stays unmeasured, so
+  there is still **no precision claim**). The best form on UPR is the
+  **margin rule** (the coverage 0.9143 at the harm 0.1502) and **not** the
+  fit-side threshold (0.9328 at 0.2012) — the OMCT verdict does not
+  transfer, so that pre-registered clause is **not met**. The **shortlist
+  rerank does not ship**: the reranked hit@1 (0.3521 at K = 5) is below the
+  champion's own (0.3666) at every K, so that pre-registered falsification
+  fires — but the same table says where the ceiling is: the **shortlist's own
+  recall** (0.7462 at K = 10) is the binding constraint, while the decision
+  model alone reaches 0.9987, so a Phase-6 reranker has to be fed the
+  decision model's candidates and has to be **trained**. The numbers are in the
+  track log's CS-9b section.)*
 - [ ] **CS-10 — the LLM stage on UPR (needs the reviewer's explicit OK).** The
   **exp09-style rerank** on the embedding shortlist with the local models
   (gemma4:e2b, llama3.2:3b, gpt-oss — the decision models are far too small

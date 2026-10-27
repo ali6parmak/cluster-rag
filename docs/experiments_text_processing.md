@@ -4302,3 +4302,163 @@ the **description** channel and not in the parent one-hots.
 `criteria` field carries these descriptions) and CS-13 (the decision
 probability as a pack feature). **CS-10 (the LLM stage) still waits for the
 reviewer's explicit OK.**
+
+
+
+
+
+## CS-9b — the full-val grid, the safe-negative rule and the shortlist rerank (2026-10-27)
+
+*(This entry is appended after the CS-11 one: the CS-9b run was still in
+flight — 11,984 decision calls — when the CS-11 entry was written.)*
+
+**The runs.** Two, on the UPR **val** split's **whole grid** (660 texts x 68
+labels = 44,880 cells), the champion's arms as the reference:
+
+| run | the arm |
+|---|---|
+| `upr-decide-tev1-paragraph-noul-grid` | tev1, the `paragraph` shape, the `noul` type |
+| `upr-decide-tev1-paragraph-choice-grid` | tev1, the `paragraph` shape, the `choice` type |
+
+**The cost:** 5,992 calls per arm — the val grid (1,320), its label-blind
+counterpart (1,320) and the **fit side** (the train grid's 3,352 calls, which
+the rule's operating points are fitted on). The `laya` arms and the `pair`
+shape stay at their CS-9 samples (a second decision model is closed as a
+lever, and the `pair` shape's full grid is 44,880 calls per arm for a shape
+whose cost is already measured).
+
+### The headline (val, the whole grid)
+
+| arm | micro-F1 | nDCG@5 | shortlist R@50 | **unseen** micro-F1 | unseen coverage | ECE | the blind counterpart's micro-F1 |
+|---|---|---|---|---|---|---|---|
+| the champion (the whole-text reference) | 0.5479 | 0.6725 | 0.7423 | **0.0000** | 0.000 | — | — |
+| **tev1, `noul`** | **0.5502** | **0.7247** | **0.9987** | **0.5267** | 1.000 | 0.1982 | 0.0517 |
+| tev1, `choice` | 0.5494 | 0.7176 | 0.9987 | 0.5106 | 1.000 | 0.1557 | 0.0540 |
+
+**The decision model beats the champion on the full val split** — the micro-F1
+0.5502 against 0.5479, the nDCG@5 0.7247 against 0.6725, the shortlist
+recall@50 0.9987 against 0.7423 — and it does so while **finding the eight
+held-out labels** (the unseen bucket 0.5267 against the champion's 0.0000).
+The label-blind counterparts are at chance (0.0517 and 0.0540), so the
+quality is label-driven. The CS-9 sample's findings **hold at full-val
+scale**: the `noul` type beats the `choice` type (0.5502 against 0.5494, the
+nDCG@5 0.7247 against 0.7176) while the `choice` type is **better
+calibrated** (the ECE 0.1557 against 0.1982); and tev1's probabilities are
+**not compressed** on UPR (the gold cells' mean 0.7543 against the
+background's 0.2116), so a fixed 0.5 cut is a meaningful operating point.
+
+### The safe-negative rule (the `noul` arm; the `choice` arm in brackets)
+
+| form | the coverage (the reach) | the harm (the gold cells discarded) | the blind counterpart's coverage | the blind counterpart's harm |
+|---|---|---|---|---|
+| the **fixed 0.5 cut** | 0.8584 (0.8908) | 0.1288 (0.1555) | 0.8396 | **0.7553** (0.7782) |
+| the **fit-side threshold** (0.6070) | 0.9328 (0.9242) | 0.2012 (0.1928) | 0.9142 | **0.8270** (0.8239) |
+| the **margin rule** (0.2823) | 0.9143 (0.9171) | 0.1502 (0.1532) | 0.8941 | **0.8247** (0.8285) |
+
+(the harm at the **matched** coverage: the blind 0.8505 for the fit-side
+threshold and 0.8475 for the margin rule — against the real arm's 0.2012 and
+0.1502.)
+
+**Verdict 1 — the rule's cost is a quality claim on UPR too.** The
+label-blind counterpart discards **75-85%** of the gold cells where the real
+arm discards 13-20%, at a *similar* reach. That is the CS-7b OMCT
+signature, and it is what turns the UPR rule's cost from "a construction
+artefact" into a quality number — the deliverable now ships a **reach claim
+and a cost claim that is label-driven** on UPR as well (the background cells'
+true positive rate stays unmeasured, so there is still **no precision
+claim**).
+
+**Verdict 2 — the best form on UPR is the margin rule, not the fit-side
+threshold.** The OMCT verdict (the fit-side threshold is the best form) does
+**not** transfer: the fit-side threshold is the *most aggressive* form here
+(the coverage 0.9328 at the harm 0.2012), and the rule's own trade-off
+criterion (the coverage minus the harm) prefers the **margin rule** (0.9143
+at the harm 0.1502 — 0.7641 against the fixed cut's 0.7296 and the fit-side
+threshold's 0.7316). The pre-registered expectation is therefore **not
+met**, and the honest reading is: *on UPR the probabilities are not
+compressed, so a fitted threshold over-clears; the margin rule is the
+shape that trades reach against harm best.*
+
+### The shortlist rerank (the champion's top-K, re-ordered by the decision model)
+
+| K | the shortlist's own recall (the ceiling) | the champion's hit@1 | the decision model's own hit@1 | the **reranked** hit@1 |
+|---|---|---|---|---|
+| 5 | 0.6966 | 0.3666 | 0.3483 | 0.3521 |
+| 10 | 0.7462 | 0.3666 | 0.3483 | 0.3384 |
+| 20 | 0.7652 | 0.3666 | 0.3483 | 0.3293 |
+| 50 | 0.7797 | 0.3666 | 0.3483 | 0.3239 |
+
+**Verdict 3 — the rerank does not ship, and it says where the ceiling is.**
+The pre-registered falsification **fires**: the reranked hit@1 (0.3521 at
+K = 5) is *below* the champion's own (0.3666) at every K, so the decision
+model is **not** a better ranker of the champion's shortlist than the
+champion's own geometry. But the table also says something more useful:
+**the shortlist's own recall is the binding constraint** (0.7462 at K = 10 —
+even a *perfect* reranker of the champion's top-10 could only reach 74.6%),
+while the decision model **alone** reaches 0.9987. So the Phase-6 slot
+should not be fed the champion's shortlist: a reranker worth having has to
+be fed the *decision model's* candidates (or the union's — CS-14's number),
+and it has to be a **trained** ranker, because the zero-shot decision model
+is a good candidate generator and a weak one.
+
+**What this change set does not say.** Nothing about `test` (only val was
+touched); nothing about a *precision* claim for the rule (the background's
+true positive rate is unmeasured); nothing about the `laya` arms or the
+`pair` shape at full-val scale (they stay at their CS-9 samples, and the
+exclusion is the reviewer's to reverse).
+
+the union candidate generator, as a number (2026-10-27)
+
+**The run.** One: `upr-decide-tev1-paragraph-noul-grid-union` (the whole val
+grid; the decision calls are CS-9b's cache hits, so the run costs **zero**
+new model calls). The union is the per-row **z-max** of the champion's and
+the decision model's scores — and it is a **measurement, not a component**:
+the union is not built and enters no pipeline (the 2026-10-22 trim put
+"union shortlists" out of the track's menu; they are main-plan Phase 4/6
+machinery). The number is for PLAN.
+
+### The recall curve (val, the whole grid; the share of the gold cells inside the text's top-k)
+
+| scorer | recall@1 | recall@3 | recall@5 | **recall@10** | nDCG@5 | shortlist R@20 | shortlist R@50 | hit@1 |
+|---|---|---|---|---|---|---|---|---|
+| the champion (the geometry) | 0.4139 | 0.6295 | 0.6773 | 0.7126 | 0.6725 | 0.7260 | 0.7423 | 0.3666 |
+| the decision model | 0.3953 | 0.6928 | 0.7904 | 0.8845 | 0.7247 | 0.9538 | 0.9987 | 0.3483 |
+| **the union** | **0.4192** | **0.7241** | **0.8355** | **0.9120** | **0.7693** | 0.9718 | 0.9970 | 0.3697 |
+| the union with the **label-blind** scores (the control) | 0.4134 | 0.5811 | 0.6218 | 0.6947 | 0.6307 | 0.7553 | 0.8337 | 0.3659 |
+
+**Verdict — the union's gain is real and label-driven, and it is a number for
+PLAN, not a component.** The union's **recall@10 = 0.9120** against the
+decision model's 0.8845 and the champion's 0.7126: a candidate generator
+built on both would put the gold label in a ten-label shortlist for **91%**
+of the texts, where the champion's geometry manages 71% and the decision
+model alone 88%. The **control** is the yardstick: the same z-max with the
+decision model's **label-blind** scores reaches only 0.6947 — *below* the
+champion's own 0.7126 — so the union's gain is the model's label reading and
+not a construction artefact of the z-normalization.
+
+**But the union's *decision* view has a scale artefact, and it is worth
+stating plainly** (the union's top-2 decision view is in the artifact, and it
+is *not* a pipeline proposal):
+
+| the union's top-2 decision view | pooled | head | torso | tail | **unseen** |
+|---|---|---|---|---|---|
+| the union's micro-F1 | 0.5843 | 0.7332 | 0.5341 | 0.4901 | **0.2540** |
+| the decision model's micro-F1 | 0.5502 | 0.6510 | 0.4842 | 0.4359 | **0.5267** |
+
+The union's pooled micro-F1 (0.5843) is the best number the track has
+measured on UPR — above the champion's 0.5479 — and its **unseen** bucket
+(0.2540) is *half* the decision model's (0.5267). The reason is the z-max's
+scale: the champion's per-text z-scores are more spread out than the
+decision model's, so the max is biased toward the champion's scale, and the
+champion's scores for a held-out label are noise (its unseen coverage is
+0.000). A union of two *calibrated* scores is not a union of two *z-scored*
+ones. So the union's honest reading is the one the plan asked for: **it is
+a candidate generator's number (the recall curve), not a scorer's** — and
+the number is the recall@10 0.9120, with the decision view's unseen-bucket
+artefact stated beside it.
+
+**What this change set does not say.** Nothing about `test`; nothing about
+*building* the union (the track's menu excludes it, and this run is a
+measurement); nothing about a z-normalization other than the per-row one
+(the per-text z-score is a choice, and a different one would move the
+numbers — the recall curve is the robust part, the decision view is not).
