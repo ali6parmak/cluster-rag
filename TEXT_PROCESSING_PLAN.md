@@ -2925,10 +2925,11 @@ main-plan Phase 4 matter).
   pre-registered +0.02 margin is NOT met** (+0.0152), so the ship criterion
   is not satisfied and the slot decision stays the reviewer's. The two
   cross-encoders' features are **nulls** in both shapes (every interval
-  includes zero). The **cost** is where the listwise model wins: its
-  full-grid feature costs 266 s for the val grid **and** the 1,676-text fit
-  side (one call per text), against the 1B head's 909 s (one pass per pair)
-  and the 278M cross-encoder's 42 s — the first clears the cost bar, the
+  includes zero). The **cost** is where the listwise model
+  wins: its full-grid feature costs 266 s (measured, cold) for the val grid
+  **and** the 1,676-text fit side — one call per text — against the 1B head's
+  909 s (one pass per pair) and the 278M cross-encoder's 99-141 s (the
+  projection from its measured rate); the first clears the cost bar, the
   second misses it. The numbers are in the track log's CS-16 section.)*
 - [ ] **CS-17 — the *fine-tuned* cross-encoder (PLAN Phase 6's second step;
   acknowledged, NOT scheduled here).** The zero-shot measurement of CS-15 /

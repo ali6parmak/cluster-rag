@@ -4946,20 +4946,34 @@ is not significant.
 
 ### The cost (the feature form is the expensive shape)
 
-| the arm | the pairs per text | the run's wall time (the val grid **and** the 1,676-text fit side) |
-|---|---|---|
-| the control (no reranker) | 0 | 33 s |
-| the 278M cross-encoder, the full grid | 68 | 42 s |
-| the 1B yes/no head, the full grid | 68 | 909 s (15.2 min) |
-| the **listwise model, the full grid** | 68 (one **call** per text) | **266 s (4.4 min)** |
-| the listwise model, the candidate-restricted feature | 10 | 144 s (2.4 min) |
+The feature form's cost is the **pairs per text** (68 for the full grid, 10
+for the candidate-restricted one) times the model's **measured** rate (the
+CS-15 probe's, which bypasses the cache), and the **fit side pays it too**
+(the 1,676 train texts): 158,848 pairs for the full grid, 23,360 for the
+candidate-restricted one.
 
-The cost bar of §7.1.3 (the reranker's wall time for the 660 val texts must
-not exceed the decision model's ~13 minutes) is cleared by the listwise
-model's full-grid feature (4.4 minutes for the val grid **and** the fit side)
-and by the 278M cross-encoder, and **missed** by the 1B yes/no head (15.2
-minutes for the same work — its per-pair forward pass is the price of its
-per-pair shape).
+| the arm | the pairs (the val grid + the fit side) | the measured rate (the CS-15 probe) | the projected wall time (the val grid) | the projected wall time (the val grid + the fit side) | the measured cold wall time |
+|---|---|---|---|---|---|
+| the control (no reranker) | 0 | — | — | — | 33 s |
+| the 278M cross-encoder, the full grid | 158,848 | 1,126-1,598 pairs/s | 28-40 s | 99-141 s | — (its run was served from the cache) |
+| the 1B yes/no head, the full grid | 158,848 | 152-209 pairs/s | 215-295 s | 760-1,044 s | **909 s** |
+| the **listwise model, the full grid** | 158,848 (one **call** per text) | 664-771 pairs/s | 58-68 s | 206-239 s | **266 s** |
+| the candidate-restricted shape (any model) | 23,360 | the same rate | 15-154 s | 30-154 s | — (its pairs are a subset of the full grid's, so the runs' order decides) |
+
+(The projections are the measured rate times the shape's pair count; the two
+measured cold wall times sit inside their projections ✓. The runs' own wall
+times are in the artifacts, and they depend on the cache's state — the
+*pair-based* models' candidate-restricted arms reuse the full grid's pairs.)
+
+The cost bar of §7.1.3 (the reranker's wall time for the **660 val texts**
+must not exceed the decision model's ~13 minutes) is cleared by **all three
+models** in both shapes (the val grid alone costs 28-295 s against the
+decision model's ~780 s), and the **full-grid feature form** — the shape a
+pipeline would pay — is cleared by the listwise model (58-68 s for the val
+grid, 206-239 s with the fit side) and by the 278M cross-encoder, and
+**missed** by the 1B yes/no head (215-295 s for the val grid, 760-1,044 s
+with the fit side — its per-pair forward pass is the price of its per-pair
+shape).
 
 **What this change set does not say.** Nothing about `test` (only val was
 touched — the one test shot for an adopted config is still owed); nothing
