@@ -1529,6 +1529,67 @@ class RerankerModelConfig(BaseModel):
         return self
 
 
+class UprRerankFeatureConfig(BaseModel):
+    """The reranker's score as a **pack feature** (the track's CS-16).
+
+    The CS-13 precedent is the reason this exists: the decision probability
+    as a stand-alone scorer was worth +0.0023 of micro-F1 over the champion,
+    and the *same* probability as a pack **feature** was worth +0.1147. So the
+    reranker's score is measured as one more column of the pack's cube, in
+    **two shapes**:
+
+    - ``full``: the score of every (text, label) cell (68 pairs per text, no
+      fill value needed);
+    - ``restricted``: the score of the candidate set's cells only (10 pairs
+      per text) with the **pre-registered fill value** — the row's minimum
+      scored value — for the cells outside the set.
+
+    The feature is **cell-local** by construction: the pack never calls the
+    model (the cells are scored at the edge and the matrix is passed in), and
+    the label side is the frozen catalog's description, so the fitted weight
+    transfers to the labels the fit side never saw.
+
+    Attributes:
+        enabled: Whether the run computes the feature at all. The default is
+            ``False``, so the earlier runs' artifacts keep their exact
+            content.
+        model: The reranker (pinned by id **and** revision).
+        shape: ``"full"`` or ``"restricted"``.
+        candidate_set: The candidate set of the ``restricted`` shape (the
+            decision model's own top-k).
+        candidate_k: How many labels per text the candidate set holds.
+        label_document: The label side's variant (``"description"`` or
+            ``"name"``).
+        order: The pair order variant (``"text_first"`` or
+            ``"label_first"``).
+        label_blind: Whether the feature is the **label-blind counterpart's**
+            score (the wrong pairing, the same model and the same cost) — the
+            yardstick that says how much of the feature's contribution is the
+            model's own label-blind signal.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: RerankerModelConfig | None = None
+    shape: Literal["full", "restricted"] = "full"
+    candidate_set: Literal["decision", "union", "champion"] = "decision"
+    candidate_k: int = Field(default=10, ge=1)
+    label_document: Literal["description", "name"] = "description"
+    order: Literal["text_first", "label_first"] = "text_first"
+    label_blind: bool = False
+
+    @model_validator(mode="after")
+    def _model_is_required(self) -> UprRerankFeatureConfig:
+        """An enabled feature needs a pinned model."""
+        if self.enabled and self.model is None:
+            raise ValueError(
+                "upr_analysis.learned.rerank_feature is enabled but carries no "
+                "model: the feature needs a pinned reranker (id and revision)"
+            )
+        return self
+
+
 class UprRerankConfig(BaseModel):
     """The rerankers on UPR, as **scorers** over a fixed candidate set (CS-15).
 
@@ -1742,6 +1803,8 @@ class UprLearnedConfig(BaseModel):
             comparison); off by default.
         backoff: The **sibling-max backoff** (the catalog's parent channel);
             off by default.
+        rerank_feature: The **reranker's score** as a pack feature (the
+            track's CS-16; the CS-13 precedent's shape). Off by default.
         decision_feature: The **decision probability** as a pack feature
             (CS-13); off by default.
         seed: The seed of the floors' permutations and of the random-vector
@@ -1764,6 +1827,7 @@ class UprLearnedConfig(BaseModel):
     reporting: UprLearnedReportingConfig = Field(default_factory=UprLearnedReportingConfig)
     backoff: UprBackoffConfig = Field(default_factory=UprBackoffConfig)
     decision_feature: UprDecisionFeatureConfig = Field(default_factory=UprDecisionFeatureConfig)
+    rerank_feature: UprRerankFeatureConfig = Field(default_factory=UprRerankFeatureConfig)
     seed: int | None = None
 
     @field_validator("groups")

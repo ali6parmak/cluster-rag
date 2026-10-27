@@ -1499,6 +1499,37 @@ Innovations, a ModernBERT-large fine-tune, digest `1f196b37…`).
   enough — and whether the reranker's ordering puts them first when it does.
   The runs measure the set's unseen coverage and the reranked unseen bucket
   side by side; the *ceiling* of the unseen bucket is stated, not assumed.
+- **The reranker's ordering against the pack's: answered (CS-15/CS-16,
+  2026-10-27).** The two forms of the same score answer two different
+  questions, and the answers differ. As an **ordering** of the decision
+  model's candidates, every zero-shot reranker is *worse* than the
+  decision model's own ordering (the best arm: a paired +0.0091 with the
+  interval including zero — a null), while the *same* score as a **pack
+  column** is the best UPR number the track has measured (the listwise
+  model's full-grid feature: 0.6117 against the control's 0.5965, a paired
+  +0.0152 [+0.0015, +0.0280], the label-blind counterpart at null). So the
+  reranker's value is **not** in the order it produces but in the *signal*
+  it adds to a learner that already has the decision model's probability —
+  which is the CS-13 precedent one level up (the decision probability: +0.0023
+  as a scorer, +0.1147 as a feature). **Open (still):** the "fusion rule"
+  this suggests — a *fitted* weight between the pack's order and the
+  reranker's order — is **not measured**, and it would be a new thing to fit
+  (with the fit side's own discipline), so it needs its own pre-registration
+  and is not in CS-15/CS-16.
+- **The held-out labels and the reranker: answered (CS-15/CS-16,
+  2026-10-27).** The bound is the candidate set's unseen coverage, and it is
+  real: the champion's own top-10 contains **no** held-out label at all (the
+  arms' unseen bucket is 0.0000 — nothing to re-order), the decision
+  model's set holds 84.6% of the held-out gold cells and the union's 92.0%.
+  Inside the decision model's set, the rerankers' re-ordering moves the
+  unseen bucket's *point estimate* up (the listwise model +0.0239, the 278M
+  cross-encoder's label-first arm +0.0222) but not significantly, and the
+  **feature** form is where the held-out labels gain: the listwise model's
+  full-grid column's unseen nDCG@5 gain is significant (+0.0205 [+0.0016,
+  +0.0390]) and its candidate-restricted column reaches the unseen micro-F1
+  **0.5957** — the best unseen number the track has measured (the control's
+  0.5697, the champion's 0.0000). The weight transfers to the labels the
+  fit side never saw, exactly as the CS-13 hypothesis predicted.
 - **The fine-tuning's training target (CS-17, 2026-10-27).** The track holds
   the three ingredients (the OMCT hard negatives, the UPR safe-negative hard
   negatives, the decision model's 99.87%-recall candidate set as the positive
@@ -2856,7 +2887,7 @@ main-plan Phase 4 matter).
   listwise model) per 660 val texts, against the decision model's ~13
   minutes; the peak VRAM is 1.2-5.9 GB. The numbers are in the track log's
   CS-15 section.)*
-- [ ] **CS-16 — the reranker's score as a **pack feature** (the CS-13
+- [x] **CS-16 — the reranker's score as a **pack feature** (the CS-13
   precedent).** The reranker's score per (text, label) cell becomes one more
   column of the UPR pack's cube, in **two shapes**: the **full grid** (68
   pairs per text, no fill value needed) and the **candidate-restricted**
@@ -2872,7 +2903,33 @@ main-plan Phase 4 matter).
   intervals, the per-bucket view (the unseen bucket is the one the champion
   cannot reach at all), the three floors, the cost block and the log's
   verdict on the "scorer vs. feature" question.
-
+  *(done 2026-10-27: the pack's new **rerank** feature group (one more column
+  of the cube, scored at the edge and passed in, so it is cell-local by
+  construction), the config section `upr_analysis.learned.rerank_feature` (the
+  two shapes — the full grid and the candidate-restricted one with the
+  pre-registered row-minimum fill — the label side, the order and the
+  label-blind counterpart), the plumbing of the two matrices through the
+  learning driver, the sweep
+  `experiments_text_processing/upr_rerank_feature_sweep.py` and 13 runs (the
+  control + the two shapes x the three models x the label-blind counterpart);
+  the guard is green for every run. **Verdict: the feature form is the one
+  that pays, and only the *listwise* model's feature pays.** The listwise
+  model's full-grid column lifts the pack from the control's micro-F1 0.5965
+  to **0.6117** — the best UPR number the track has measured — with the
+  paired difference **+0.0152 [+0.0015, +0.0280]** (the nDCG@5 +0.0194
+  [+0.0080, +0.0314]), the unseen bucket not below the control's (0.5766
+  against 0.5697, and its nDCG@5 gain +0.0205 [+0.0016, +0.0390] is
+  significant), the arm's own control-role floor at chance (0.0122) and the
+  **label-blind counterpart at null** (-0.0076, the interval including zero)
+  — the yardstick confirms the gain is the model's label reading. **But the
+  pre-registered +0.02 margin is NOT met** (+0.0152), so the ship criterion
+  is not satisfied and the slot decision stays the reviewer's. The two
+  cross-encoders' features are **nulls** in both shapes (every interval
+  includes zero). The **cost** is where the listwise model wins: its
+  full-grid feature costs 266 s for the val grid **and** the 1,676-text fit
+  side (one call per text), against the 1B head's 909 s (one pass per pair)
+  and the 278M cross-encoder's 42 s — the first clears the cost bar, the
+  second misses it. The numbers are in the track log's CS-16 section.)*
 - [ ] **CS-17 — the *fine-tuned* cross-encoder (PLAN Phase 6's second step;
   acknowledged, NOT scheduled here).** The zero-shot measurement of CS-15 /
   CS-16 is the cheap first step; the destination is a **trained** reranker,

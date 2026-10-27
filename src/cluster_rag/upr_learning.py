@@ -192,6 +192,8 @@ def score_upr_learned_arms(
     length_masks: Mapping[str, np.ndarray] | None = None,
     decision_train: np.ndarray | None = None,
     decision_eval: np.ndarray | None = None,
+    rerank_train: np.ndarray | None = None,
+    rerank_eval: np.ndarray | None = None,
 ) -> UprLearningResult:
     """Fit the learned arm on train and score it (and its floors) on val.
 
@@ -223,13 +225,17 @@ def score_upr_learned_arms(
             feature).
         decision_eval: The decision model's probability matrix for the
             evaluated split's cells.
+        rerank_train: The reranker's score matrix for the **fit side**'s
+            cells (the ``rerank`` group's column; the CS-16 feature).
+        rerank_eval: The reranker's score matrix for the evaluated split's
+            cells.
 
     Returns:
         The :class:`UprLearningResult` (the arms' score matrices and the
         artifact's ``learned`` block).
     """
-    train_features = extractor.extract(train_texts, decision_train)
-    eval_features = extractor.extract(eval_texts, decision_eval)
+    train_features = extractor.extract(train_texts, decision_train, rerank_train)
+    eval_features = extractor.extract(eval_texts, decision_eval, rerank_eval)
     train_rows, train_labels = _fit_rows(train_features, train_gold)
     eval_rows = eval_features.reshape(-1, eval_features.shape[-1])
     weights = _weights(train_labels, control_weight)
@@ -295,8 +301,8 @@ def score_upr_learned_arms(
 
     # -- the random-vector floor --
     if random_extractor is not None:
-        random_train = random_extractor.extract(train_texts, decision_train)
-        random_eval = random_extractor.extract(eval_texts, decision_eval)
+        random_train = random_extractor.extract(train_texts, decision_train, rerank_train)
+        random_eval = random_extractor.extract(eval_texts, decision_eval, rerank_eval)
         random_rows, random_labels = _fit_rows(random_train, train_gold)
         random_eval_rows = random_eval.reshape(-1, random_eval.shape[-1])
         random_combiner = combiner_factory().fit(random_rows, random_labels, weights)

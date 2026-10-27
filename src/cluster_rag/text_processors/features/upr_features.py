@@ -91,6 +91,7 @@ UPR_FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "label_type": ("labeltype_",),
     "chunk_profile": ("cprof_",),
     "decision": ("dec_",),
+    "rerank": ("rerank_",),
 }
 
 # The group names, in the canonical order.
@@ -118,6 +119,12 @@ LABEL_TYPE_FEATURE_PREFIX = "labeltype_"
 # model is called at the edge and the matrix is passed in -- so the column is
 # **cell-local** by construction.
 DECISION_FEATURE_NAME = "dec_probability"
+
+# The **rerank** group's column (the track's CS-16): the reranker's score for
+# the (text, label) cell. Like the decision column, the pack does not compute
+# it -- the reranker is a client and the cells are scored at the edge -- so the
+# column is **cell-local** by construction.
+RERANK_FEATURE_NAME = "rerank_score"
 
 # The chunk profile's feature names (the CS-8e group): the ranked cross-unit
 # match profile at the two granularities and the alignment kinds.
@@ -352,6 +359,8 @@ class UprFeatureExtractor:
             names.extend(f"{LABEL_TYPE_FEATURE_PREFIX}{parent}" for parent in self._parent_names())
         if "decision" in self.groups:
             names.append(DECISION_FEATURE_NAME)
+        if "rerank" in self.groups:
+            names.append(RERANK_FEATURE_NAME)
         if "chunk_profile" in self.groups:
             names.extend(self._profile_feature_names())
         return tuple(names)
@@ -520,7 +529,10 @@ class UprFeatureExtractor:
         return tuple(len(chunks) for chunks in self.text_chunker.segment(list(texts)))
 
     def extract(
-        self, texts: Sequence[str], decision_scores: np.ndarray | None = None
+        self,
+        texts: Sequence[str],
+        decision_scores: np.ndarray | None = None,
+        rerank_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         """The feature cube of the texts, shape ``(n_texts, n_labels, n_features)``.
 
@@ -532,12 +544,17 @@ class UprFeatureExtractor:
             texts: The texts to featurize.
             decision_scores: The decision model's probability matrix for the
                 cells (the ``decision`` group's column; the CS-13 feature).
+            rerank_scores: The reranker's score matrix for the cells (the
+                ``rerank`` group's column; the CS-16 feature).
         """
         selected = np.asarray(self._selected, dtype=np.int64)
-        return self.extract_all(texts, decision_scores)[:, :, selected]
+        return self.extract_all(texts, decision_scores, rerank_scores)[:, :, selected]
 
     def extract_all(
-        self, texts: Sequence[str], decision_scores: np.ndarray | None = None
+        self,
+        texts: Sequence[str],
+        decision_scores: np.ndarray | None = None,
+        rerank_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         """The full feature cube (every canonical column).
 
@@ -552,13 +569,16 @@ class UprFeatureExtractor:
             decision_scores: The decision model's probability matrix for the
                 cells (the ``decision`` group's column; the CS-13 feature).
                 Required when the group is selected.
+            rerank_scores: The reranker's score matrix for the cells (the
+                ``rerank`` group's column; the CS-16 feature). Required when
+                the group is selected.
 
         Returns:
             The float32 feature cube, one row per (text, label) cell.
 
         Raises:
-            ValueError: If the ``decision`` group is selected and the matrix
-                is missing or has the wrong shape.
+            ValueError: If the ``decision`` or the ``rerank`` group is
+                selected and its matrix is missing or has the wrong shape.
         """
         items = list(texts)
         n_texts = len(items)
@@ -583,6 +603,22 @@ class UprFeatureExtractor:
                 raise ValueError(
                     f"the decision matrix must have shape {(n_texts, n_labels)}, "
                     f"got {probabilities.shape}"
+                )
+
+        rerank_index = (
+            self._canonical_names.index(RERANK_FEATURE_NAME) if "rerank" in self.groups else None
+        )
+        if rerank_index is not None:
+            if rerank_scores is None:
+                raise ValueError(
+                    "the 'rerank' feature group needs the reranker's score matrix "
+                    "(the caller scores the cells at the edge)"
+                )
+            rerank_values = np.asarray(rerank_scores, dtype=np.float32)
+            if rerank_values.shape != (n_texts, n_labels):
+                raise ValueError(
+                    f"the rerank matrix must have shape {(n_texts, n_labels)}, "
+                    f"got {rerank_values.shape}"
                 )
 
         text_vectors = np.asarray(self.embedders.text.encode(items, "query"), dtype=np.float32)
@@ -663,6 +699,9 @@ class UprFeatureExtractor:
             # 7. the decision model's probability (the CS-13 group)
             if decision_index is not None:
                 values[:, decision_index] = probabilities[position]
+            # 8. the reranker's score (the CS-16 group)
+            if rerank_index is not None:
+                values[:, rerank_index] = rerank_values[position]
         return matrix
 
     def _profile_sides(

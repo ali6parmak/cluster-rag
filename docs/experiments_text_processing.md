@@ -4855,3 +4855,116 @@ the **same** set); nothing about a **fine-tuned** reranker (CS-17, the
 destination, not this step); and nothing about the *combination* of a
 reranker's score with the pack (CS-16 measures the feature form).
 
+## CS-16 — the reranker's score as a **pack feature** (2026-10-27)
+
+**The runs.** Thirteen, all on the UPR **val** split, the pack fitted on
+**train** (the main pipeline's protocol) and the guard green for every run:
+
+| the run | the feature |
+|---|---|
+| `upr-analyze-learned-rerank-control` | the **control**: the CS-13 pack (the pack + the decision probability), re-run in this sweep so the cross-run paired comparison has both sides' per-text blocks |
+| `upr-analyze-learned-rerank-<model>-full-real` | the pack + the decision probability + the reranker's **full-grid** score (68 pairs per text) |
+| `upr-analyze-learned-rerank-<model>-full-blind` | the same, with the **label-blind** reranker (the wrong pairing, the same model and the same cost) |
+| `upr-analyze-learned-rerank-<model>-restricted-real` | the pack + the decision probability + the **candidate-restricted** score (the decision model's top-10, 10 pairs per text; the cells outside the set filled with the **pre-registered** row's minimum) |
+| `upr-analyze-learned-rerank-<model>-restricted-blind` | the same, with the label-blind reranker |
+
+The three models are the CS-15 probe's three (each pinned by id **and**
+revision); the label side is the catalog's **description**; the order is the
+**text first** (the pre-registered primary). The pack's groups are the CS-13
+pack's plus the new `rerank` column, and the combiner is the boosted one
+(CS-13's best).
+
+### The headline (val; the paired difference against the control, over the texts)
+
+| the arm | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | the unseen bucket | the paired Δ micro-F1 | the paired Δ nDCG@5 |
+|---|---|---|---|---|---|---|---|
+| the control (the pack + the decision probability) | 0.5965 | 0.5839 | 0.7567 | 0.9856 | 0.5697 | — | — |
+| **the listwise model, the full grid** | **0.6117** | **0.5954** | **0.7760** | **0.9917** | 0.5766 | **+0.0152 [+0.0015, +0.0280]** | **+0.0194 [+0.0080, +0.0314]** |
+| the listwise model, the candidate-restricted feature | 0.6033 | 0.5910 | 0.7656 | 0.9821 | **0.5957** | +0.0068 [−0.0046, +0.0180] | +0.0089 [−0.0015, +0.0193] |
+| the 1B yes/no head, the candidate-restricted feature | 0.5988 | 0.5917 | 0.7555 | 0.9775 | 0.5615 | +0.0023 [−0.0068, +0.0106] | −0.0012 [−0.0083, +0.0056] |
+| the 1B yes/no head, the full grid | 0.5957 | 0.5887 | 0.7551 | 0.9760 | 0.5737 | −0.0008 [−0.0097, +0.0076] | −0.0016 [−0.0091, +0.0059] |
+| the 278M cross-encoder, the candidate-restricted feature | 0.5957 | 0.5837 | 0.7539 | 0.9821 | 0.5755 | −0.0008 [−0.0106, +0.0085] | −0.0028 [−0.0115, +0.0056] |
+| the 278M cross-encoder, the full grid | 0.5912 | 0.5778 | 0.7541 | 0.9798 | 0.5562 | −0.0053 [−0.0151, +0.0053] | −0.0026 [−0.0114, +0.0062] |
+| *the listwise model, the label-blind counterpart (the full grid)* | *0.5889* | *0.5817* | *0.7506* | *0.9775* | *0.5481* | *−0.0076 [−0.0160, +0.0008]* | *−0.0060 [−0.0136, +0.0012]* |
+| *the 1B yes/no head, the label-blind counterpart (the full grid)* | *0.5950* | *0.5805* | *0.7541* | *0.9798* | *0.5686* | *−0.0015 [−0.0101, +0.0076]* | *−0.0025 [−0.0103, +0.0056]* |
+| *the 278M cross-encoder, the label-blind counterpart (the full grid)* | *0.5927* | *0.5807* | *0.7544* | *0.9775* | *0.5385* | *−0.0038 [−0.0135, +0.0061]* | *−0.0023 [−0.0090, +0.0041]* |
+
+(The label-blind counterpart of the candidate-restricted feature: the
+listwise model 0.5935 (−0.0030), the 1B head 0.5973 (+0.0008), the 278M
+cross-encoder 0.5874 (−0.0091) — every interval includes zero.)
+
+### The floors (the same three, on the same arms)
+
+| the arm | the chance floor | the control-role floor | the random-vector floor |
+|---|---|---|---|
+| the control | 0.0582 [0.0426, 0.0669] | 0.0120 [0.0068, 0.0160] | 0.5798 |
+| the listwise model, the full grid | 0.0518 [0.0334, 0.0638] | 0.0122 [0.0068, 0.0160] | 0.5957 |
+| the listwise model, the label-blind counterpart | 0.0561 [0.0403, 0.0691] | 0.0125 [0.0091, 0.0167] | 0.5745 |
+| the 1B head, the full grid | 0.0594 [0.0418, 0.0775] | 0.0146 [0.0129, 0.0190] | 0.5752 |
+| the 278M cross-encoder, the full grid | 0.0573 [0.0486, 0.0669] | 0.0116 [0.0091, 0.0160] | 0.5851 |
+
+**Verdict — the feature form is the one that pays, and only the *listwise*
+model's feature pays.** The CS-13 precedent is confirmed and sharpened: the
+decision probability as a stand-alone scorer was worth +0.0023 of micro-F1
+over the champion and the *same* probability as a pack feature was worth
+**+0.1147**; the same thing happens here, one level up — the listwise
+model's re-ordering of the decision model's candidates was **worse** than the
+decision model's own ordering (CS-15: −0.0350, the interval excluding
+zero), and the *same* score as a **pack column** is the **best UPR number the
+track has measured**: the micro-F1 **0.6117** against the control's 0.5965, a
+paired **+0.0152 [+0.0015, +0.0280]**, and the nDCG@5 **+0.0194 [+0.0080,
++0.0314]**. The pre-registered clauses:
+
+- the paired interval **excludes zero** on both views ✓ (the mechanism
+  claim);
+- the **unseen bucket is not below** the control's (0.5766 against 0.5697) ✓,
+  and its nDCG@5 gain is significant (+0.0205 [+0.0016, +0.0390]) — the
+  weight transfers to the labels the fit side never saw, as the CS-13
+  hypothesis predicted (the fit side has zero positives for the eight
+  held-out labels);
+- the arm's own **control-role floor stays at chance** (0.0122, the CS-8d
+  level) ✓ — the gain is label-driven, not the training design's prior;
+- the **label-blind counterpart does not gain** (0.5889, the paired
+  difference −0.0076 with the interval including zero) ✓ — the yardstick
+  confirms it: the real pairing is worth +0.0152 and the shifted one
+  nothing.
+
+**But the pre-registered +0.02 margin is NOT met** (+0.0152), so the
+*ship* criterion of §7.1.3 (the mechanism claim **and** the margin) is
+**not** satisfied: the honest verdict is *a small, significant,
+label-driven gain that falls below the pre-registered margin*, and **the slot
+decision is the reviewer's**. The two cross-encoders' features are **nulls**
+(every interval includes zero, in both shapes): a zero-shot cross-encoder's
+score adds nothing to a pack that already carries the decision model's
+probability.
+
+**The rare-label pattern of CS-15 survives into the feature form** and is
+visible in the *unseen* bucket: the candidate-restricted feature of the
+listwise model reaches the unseen micro-F1 **0.5957** (the control's 0.5697,
+the best unseen number the track has measured) even though its *pooled* gain
+is not significant.
+
+### The cost (the feature form is the expensive shape)
+
+| the arm | the pairs per text | the run's wall time (the val grid **and** the 1,676-text fit side) |
+|---|---|---|
+| the control (no reranker) | 0 | 33 s |
+| the 278M cross-encoder, the full grid | 68 | 42 s |
+| the 1B yes/no head, the full grid | 68 | 909 s (15.2 min) |
+| the **listwise model, the full grid** | 68 (one **call** per text) | **266 s (4.4 min)** |
+| the listwise model, the candidate-restricted feature | 10 | 144 s (2.4 min) |
+
+The cost bar of §7.1.3 (the reranker's wall time for the 660 val texts must
+not exceed the decision model's ~13 minutes) is cleared by the listwise
+model's full-grid feature (4.4 minutes for the val grid **and** the fit side)
+and by the 278M cross-encoder, and **missed** by the 1B yes/no head (15.2
+minutes for the same work — its per-pair forward pass is the price of its
+per-pair shape).
+
+**What this change set does not say.** Nothing about `test` (only val was
+touched — the one test shot for an adopted config is still owed); nothing
+about a reranker *inside* the pipeline (the feature form is a measurement in
+the track's harness); nothing about the **order** or the **label side** in
+the feature form (only the pre-registered primary was measured: the
+description, the text first); and nothing about the listwise model's
+*re-ordering* being useful on its own (CS-15 says it is not).

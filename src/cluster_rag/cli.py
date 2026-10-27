@@ -171,6 +171,7 @@ from cluster_rag.text_processors.rerank.upr_rerank import (
     ORDER_TEXT_FIRST,
     candidate_ceiling,
     candidate_columns,
+    fill_restricted_scores,
     label_documents,
     shifted_documents,
 )
@@ -204,6 +205,7 @@ from cluster_rag.upr_decision import (
 from cluster_rag.upr_learning import score_upr_learned_arms
 from cluster_rag.upr_rerank import (
     RerankSources,
+    build_candidate_requests,
     build_upr_rerank_report,
     candidate_set_matrix,
     paired_arm_comparison,
@@ -4788,6 +4790,9 @@ def _upr_learned_arms(
     train_gold = build_label_matrix(setup.train_records, setup.labels)
     seed = learned.seed if learned.seed is not None else config.seed
     decision_train, decision_eval = _upr_decision_feature(config, setup, view, learned)
+    rerank_train, rerank_eval = _upr_rerank_feature(
+        config, setup, view, learned, decision_train, decision_eval
+    )
     result = score_upr_learned_arms(
         train_texts=train_texts,
         train_gold=train_gold,
@@ -4807,6 +4812,8 @@ def _upr_learned_arms(
         bucket_masks=_upr_bucket_masks(view),
         length_masks=_upr_length_masks(view),
         decision_train=decision_train,
+        rerank_train=rerank_train,
+        rerank_eval=rerank_eval,
         decision_eval=decision_eval,
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
@@ -4916,6 +4923,159 @@ def _upr_decision_feature(
         mismatched=feature.label_blind,
     )
     return train_matrix, eval_matrix
+
+
+def _upr_rerank_feature(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    learned: Any,
+    decision_train: np.ndarray | None,
+    decision_eval: np.ndarray | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """The reranker's score matrix for the pack (the track's CS-16).
+
+    The feature is **cell-local**: the reranker reads the text against the
+    label's document and answers a score. It is scored at the edge (the
+    reranker is a client) and the matrix is passed into the pack, which stays
+    a pure core.
+
+    The **fit side** is scored too: the combiner is fitted on train, so the
+    feature must exist for the train cells as well (and the train split is
+    where the eight held-out labels have **no** positives — the transfer the
+    CS-13 hypothesis was about).
+
+    Two shapes:
+
+    - ``full``: every (text, label) cell is scored (68 pairs per text);
+    - ``restricted``: only the candidate set's cells are scored (10 pairs per
+      text) and the cells outside it are filled with the **pre-registered**
+      fill value (the row's minimum scored value).
+
+    Returns:
+        The fit side's and the evaluated split's matrices (``None`` when the
+        feature is off).
+    """
+    feature = learned.rerank_feature
+    if not feature.enabled or feature.model is None:
+        return None, None
+    model_config = feature.model
+    client = build_reranker(model_config, config)
+    catalog = _upr_label_catalog(config)
+    descriptions = {name: entry.description for name, entry in catalog.items() if entry.description}
+    documents = label_documents(list(setup.labels), descriptions, feature.label_document)
+    if feature.label_blind:
+        documents = shifted_documents(documents)
+
+    train_texts = [record.text for record in setup.train_records]
+    eval_texts = [record.text for record in setup.records]
+
+    if feature.shape == "full":
+        train_matrix = _rerank_full_matrix(
+            client, model_config, train_texts, documents, feature.order
+        )
+        eval_matrix = _rerank_full_matrix(
+            client, model_config, eval_texts, documents, feature.order
+        )
+        return train_matrix, eval_matrix
+
+    # The restricted shape: the candidate set's cells only, the rest filled.
+    if feature.candidate_set == "decision" and (decision_train is None or decision_eval is None):
+        raise ValueError(
+            "the restricted rerank feature needs the decision model's score "
+            "matrix (its candidate set): enable the decision feature as well"
+        )
+    sources = {
+        "decision": (decision_train, decision_eval),
+        "champion": (
+            np.asarray(setup.context.train_scores, dtype=np.float64)
+            if hasattr(setup.context, "train_scores")
+            else None,
+            np.asarray(setup.scores, dtype=np.float64),
+        ),
+    }
+    if feature.candidate_set == "union":
+        raise ValueError(
+            "the restricted rerank feature's 'union' candidate set is not wired: "
+            "the union needs the decision model's grid (the 'decision' set)"
+        )
+    train_source, eval_source = sources[feature.candidate_set]
+    if train_source is None or eval_source is None:
+        raise ValueError(
+            f"the restricted rerank feature's candidate set {feature.candidate_set!r} "
+            "has no score matrix on the fit side"
+        )
+    train_matrix = _rerank_restricted_matrix(
+        client,
+        model_config,
+        train_texts,
+        documents,
+        train_source,
+        feature.candidate_k,
+        feature.order,
+    )
+    eval_matrix = _rerank_restricted_matrix(
+        client,
+        model_config,
+        eval_texts,
+        documents,
+        eval_source,
+        feature.candidate_k,
+        feature.order,
+    )
+    return train_matrix, eval_matrix
+
+
+def _rerank_full_matrix(
+    client: Any,
+    model_config: Any,
+    texts: Sequence[str],
+    documents: Sequence[str],
+    order: str,
+) -> np.ndarray:
+    """Every (text, label) cell's score (the full-grid shape)."""
+    per_text = [list(documents) for _ in texts]
+    requests = build_candidate_requests(texts, per_text, kind=model_config.kind, order=order)
+    scores = client.score(requests)
+    matrix = np.zeros((len(texts), len(documents)), dtype=np.float64)
+    if model_config.kind == KIND_LISTWISE:
+        for row, row_scores in enumerate(scores):
+            matrix[row, :] = row_scores
+        return matrix
+    flat = [value for row in scores for value in row]
+    cursor = 0
+    for row in range(len(texts)):
+        size = len(documents)
+        matrix[row, :] = flat[cursor : cursor + size]
+        cursor += size
+    return matrix
+
+
+def _rerank_restricted_matrix(
+    client: Any,
+    model_config: Any,
+    texts: Sequence[str],
+    documents: Sequence[str],
+    source: np.ndarray,
+    candidate_k: int,
+    order: str,
+) -> np.ndarray:
+    """The candidate set's cells' scores, the rest filled with the row's floor."""
+    columns = candidate_columns(np.asarray(source, dtype=np.float64), candidate_k)
+    per_text = [[documents[column] for column in row] for row in columns]
+    requests = build_candidate_requests(texts, per_text, kind=model_config.kind, order=order)
+    scores = client.score(requests)
+    if model_config.kind == KIND_LISTWISE:
+        per_candidate = [list(row) for row in scores]
+    else:
+        flat = [value for row in scores for value in row]
+        per_candidate = []
+        cursor = 0
+        for row in columns:
+            size = len(row)
+            per_candidate.append(flat[cursor : cursor + size])
+            cursor += size
+    return fill_restricted_scores(columns, per_candidate, len(documents))
 
 
 def _upr_backoff_arms(
