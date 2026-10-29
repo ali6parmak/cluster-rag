@@ -586,40 +586,75 @@ def _safe_margin_rule(
     return choice, None
 
 
-def _stage3_reporting(
+@dataclass(frozen=True)
+class _Stage3Setup:
+    """The masks, indices and per-document helpers one rotation's reporting needs.
+
+    The three blocks of the Stage-3 reporting (the calibration, the threshold,
+    the safe-negative margin) all read the same masks over the same grid, and
+    the grid's own indices are the same for all of them, so they are computed
+    once here.
+    """
+
+    context: Stage3Context
+    holdout: str
+    holdout_scores: np.ndarray
+    inner_scores: Mapping[str, np.ndarray]
+    floor_draws: Sequence[Mapping[str, Any]]
+    fit_side_documents: list[str]
+    grid: Stage3Grid
+    labels: np.ndarray
+    pair_cells: np.ndarray
+    control_cells: np.ndarray
+    pair_documents: np.ndarray
+    control_documents: np.ndarray
+    cells_by_document: Mapping[str, np.ndarray]
+    cell_positions: np.ndarray
+    judged_mask: np.ndarray
+    positive_mask: np.ndarray
+    unjudged_mask: np.ndarray
+    holdout_cells: np.ndarray
+    holdout_rows: np.ndarray
+    holdout_columns: np.ndarray
+    holdout_unjudged: np.ndarray
+    holdout_positive: np.ndarray
+    holdout_pair_cells: np.ndarray
+    holdout_pair_labels: np.ndarray
+    holdout_pair_mask: np.ndarray
+    fit_pair_mask: np.ndarray
+    fit_control_mask: np.ndarray
+    holdout_control_cells: np.ndarray
+
+    def arm_scores(self, document: str) -> np.ndarray:
+        """The arm's scores of a document's cells (the holdout: the outer model)."""
+        return self.holdout_scores if document == self.holdout else self.inner_scores[document]
+
+    def arm_margins(self, document: str) -> np.ndarray:
+        """The arm's margins of a document's cells."""
+        cells = self.cells_by_document[document]
+        return _margins_of_document(
+            self.grid.rows[cells], self.grid.columns[cells], self.arm_scores(document)
+        )
+
+    def cosine_margins(self, document: str) -> np.ndarray:
+        """The cosine's margins of a document's cells (the geometry)."""
+        cells = self.cells_by_document[document]
+        rows = self.grid.rows[cells]
+        columns = self.grid.columns[cells]
+        return _margins_of_document(
+            rows, columns, self.context.reference_similarities[rows, columns]
+        )
+
+
+def _stage3_setup(
     context: Stage3Context,
     *,
     holdout: str,
     holdout_scores: np.ndarray,
     inner_scores: Mapping[str, np.ndarray],
     floor_draws: Sequence[Mapping[str, Any]],
-    reporting: ReportingSpec,
-) -> dict[str, Any]:
-    """The Stage-3 reporting of one rotation (CS-6e).
-
-    Three blocks, all measured with the plan's discipline:
-
-    - the **calibration**: the arm's own probability and the full-text cosine
-      put on a probability scale by a **fit-side** calibration map (a logistic
-      regression on the cosine as its single feature), each with a reliability
-      diagram (the predicted probability against the observed positive rate,
-      with the bin counts), the expected calibration error and the Brier
-      score;
-    - the **threshold**: the per-document operating point, chosen on the
-      **fit side** (the other two documents) and applied to the held-out one.
-      The fit side's own rows are scored by the **inner** cross-fit, so the
-      choice never rests on a model that saw the holdout;
-    - the **safe-negative margin**: the rule that declares a cell a safe
-      negative when it sits at least the chosen margin below its own
-      paragraph's best candidate. Its numbers are the rule's **coverage** over
-      the whole unjudged grid and its **harm** on the verified positives, next
-      to the same numbers for the **control-role floor** (the model that only
-      knows the training design's prior).
-
-    The two negative subsets are never pooled: the control cells (subset B,
-    presumed) and the reviewer-verified hard negatives (subset A, ground
-    truth) are separate masks everywhere.
-    """
+) -> _Stage3Setup:
+    """The masks and indices one rotation's reporting works on."""
     grid = context.grid
     labels = context.labels
     pair_cells = context.pair_cells
@@ -628,7 +663,6 @@ def _stage3_reporting(
     control_documents = context.control_documents
     cells_by_document = context.cells_by_document
     cell_positions = context.cell_positions
-    fit_side_documents = [document for document in context.documents if document != holdout]
 
     # the cell masks over the whole grid
     judged_mask = np.zeros(grid.n_cells, dtype=bool)
@@ -638,62 +672,95 @@ def _stage3_reporting(
     unjudged_mask = ~judged_mask
 
     holdout_cells = cells_by_document[holdout]
-    holdout_rows = grid.rows[holdout_cells]
-    holdout_columns = grid.columns[holdout_cells]
-    holdout_unjudged = unjudged_mask[holdout_cells]
-    holdout_positive = positive_mask[holdout_cells]
-
-    def _arm_scores(document: str) -> np.ndarray:
-        """The arm's scores of a document's cells (the holdout: the outer model)."""
-        return holdout_scores if document == holdout else inner_scores[document]
-
-    def _arm_margins(document: str) -> np.ndarray:
-        """The arm's margins of a document's cells."""
-        cells = cells_by_document[document]
-        return _margins_of_document(grid.rows[cells], grid.columns[cells], _arm_scores(document))
-
-    def _cosine_margins(document: str) -> np.ndarray:
-        """The cosine's margins of a document's cells (the geometry)."""
-        cells = cells_by_document[document]
-        rows = grid.rows[cells]
-        columns = grid.columns[cells]
-        return _margins_of_document(rows, columns, context.reference_similarities[rows, columns])
-
-    # ------------------------------------------------------------------
-    # the calibration
-    # ------------------------------------------------------------------
     holdout_pair_mask = pair_documents == holdout
-    holdout_pair_cells = pair_cells[holdout_pair_mask]
-    holdout_pair_labels = labels[holdout_pair_mask]
-    arm_probabilities = holdout_scores[cell_positions[holdout_pair_cells]]
+    return _Stage3Setup(
+        context=context,
+        holdout=holdout,
+        holdout_scores=holdout_scores,
+        inner_scores=inner_scores,
+        floor_draws=floor_draws,
+        fit_side_documents=[document for document in context.documents if document != holdout],
+        grid=grid,
+        labels=labels,
+        pair_cells=pair_cells,
+        control_cells=control_cells,
+        pair_documents=pair_documents,
+        control_documents=control_documents,
+        cells_by_document=cells_by_document,
+        cell_positions=cell_positions,
+        judged_mask=judged_mask,
+        positive_mask=positive_mask,
+        unjudged_mask=unjudged_mask,
+        holdout_cells=holdout_cells,
+        holdout_rows=grid.rows[holdout_cells],
+        holdout_columns=grid.columns[holdout_cells],
+        holdout_unjudged=unjudged_mask[holdout_cells],
+        holdout_positive=positive_mask[holdout_cells],
+        holdout_pair_cells=pair_cells[holdout_pair_mask],
+        holdout_pair_labels=labels[holdout_pair_mask],
+        holdout_pair_mask=holdout_pair_mask,
+        fit_pair_mask=pair_documents != holdout,
+        fit_control_mask=control_documents != holdout,
+        holdout_control_cells=control_cells[control_documents == holdout],
+    )
+
+
+def _stage3_calibration(
+    setup: _Stage3Setup, reporting: ReportingSpec
+) -> tuple[dict[str, Any], np.ndarray, np.ndarray]:
+    """The calibration block of one rotation.
+
+    The arm's own probability and the full-text cosine put on a probability
+    scale by a **fit-side** calibration map (a logistic regression on the
+    cosine as its single feature), each with a reliability diagram (the
+    predicted probability against the observed positive rate, with the bin
+    counts), the expected calibration error and the Brier score.
+
+    Returns:
+        The block, the arm's probabilities and the cosine's (the pooling and
+        the threshold's operating point need them).
+    """
+    arm_probabilities = setup.holdout_scores[setup.cell_positions[setup.holdout_pair_cells]]
 
     # The cosine's calibration map: a logistic regression on the cosine as its
     # single feature, fitted on the fit side's rows only (Platt scaling).
-    fit_pair_mask = pair_documents != holdout
-    fit_control_mask = control_documents != holdout
-    cosine_feature = context.all_features[:, context.cosine_index].reshape(-1, 1)
-    map_rows = np.concatenate([pair_cells[fit_pair_mask], control_cells[fit_control_mask]])
+    fit_pair_mask = setup.fit_pair_mask
+    fit_control_mask = setup.fit_control_mask
+    cosine_feature = setup.context.all_features[:, setup.context.cosine_index].reshape(-1, 1)
+    map_rows = np.concatenate(
+        [setup.pair_cells[fit_pair_mask], setup.control_cells[fit_control_mask]]
+    )
     map_labels = np.concatenate(
-        [labels[fit_pair_mask], np.zeros(int(fit_control_mask.sum()), dtype=np.int64)], axis=0
+        [
+            setup.labels[fit_pair_mask],
+            np.zeros(int(fit_control_mask.sum()), dtype=np.int64),
+        ],
+        axis=0,
     )
     map_weights = np.concatenate(
         [
             np.ones(int(fit_pair_mask.sum()), dtype=np.float64),
-            np.full(int(fit_control_mask.sum()), float(context.control_weight), dtype=np.float64),
+            np.full(
+                int(fit_control_mask.sum()), float(setup.context.control_weight), dtype=np.float64
+            ),
         ],
         axis=0,
     )
-    calibration_map = context.calibration_map_factory().fit(
+    calibration_map = setup.context.calibration_map_factory().fit(
         cosine_feature[map_rows], map_labels, map_weights
     )
-    cosine_probabilities = calibration_map.score(cosine_feature[holdout_cells])[
-        cell_positions[holdout_pair_cells]
+    cosine_probabilities = calibration_map.score(cosine_feature[setup.holdout_cells])[
+        setup.cell_positions[setup.holdout_pair_cells]
     ]
 
     calibration = {
-        "arm": reliability_diagram(arm_probabilities, holdout_pair_labels, n_bins=reporting.bins),
+        "arm": reliability_diagram(
+            arm_probabilities, setup.holdout_pair_labels, n_bins=reporting.bins
+        ),
         "cosine": {
-            **reliability_diagram(cosine_probabilities, holdout_pair_labels, n_bins=reporting.bins),
+            **reliability_diagram(
+                cosine_probabilities, setup.holdout_pair_labels, n_bins=reporting.bins
+            ),
             "map": {
                 "name": "logistic",
                 "feature": COSINE_FEATURE_NAME,
@@ -716,24 +783,40 @@ def _stage3_reporting(
             "calibrations and are flagged as such."
         ),
     }
+    return calibration, arm_probabilities, cosine_probabilities
 
-    # ------------------------------------------------------------------
-    # the per-document threshold
-    # ------------------------------------------------------------------
-    fit_pair_labels = labels[fit_pair_mask]
+
+def _stage3_threshold(
+    setup: _Stage3Setup, reporting: ReportingSpec, arm_probabilities: np.ndarray
+) -> dict[str, Any]:
+    """The per-document threshold of one rotation.
+
+    The operating point is chosen on the **fit side** (the other two documents)
+    and applied to the held-out one. The fit side's own rows are scored by the
+    **inner** cross-fit, so the choice never rests on a model that saw the
+    holdout.
+    """
+    fit_pair_mask = setup.fit_pair_mask
+    fit_control_mask = setup.fit_control_mask
+    fit_side_documents = setup.fit_side_documents
+    fit_pair_labels = setup.labels[fit_pair_mask]
     fit_pair_scores = np.concatenate(
         [
-            inner_scores[document][
-                cell_positions[pair_cells[fit_pair_mask][pair_documents[fit_pair_mask] == document]]
+            setup.inner_scores[document][
+                setup.cell_positions[
+                    setup.pair_cells[fit_pair_mask][setup.pair_documents[fit_pair_mask] == document]
+                ]
             ]
             for document in fit_side_documents
         ]
     )
     fit_control_scores = np.concatenate(
         [
-            inner_scores[document][
-                cell_positions[
-                    control_cells[fit_control_mask][control_documents[fit_control_mask] == document]
+            setup.inner_scores[document][
+                setup.cell_positions[
+                    setup.control_cells[fit_control_mask][
+                        setup.control_documents[fit_control_mask] == document
+                    ]
                 ]
             ]
             for document in fit_side_documents
@@ -769,8 +852,8 @@ def _stage3_reporting(
         threshold_choice = None
         threshold_error = str(error)
     threshold = float(threshold_choice["threshold"]) if threshold_choice is not None else None
-    holdout_control_cells = control_cells[control_documents == holdout]
-    holdout_control_scores = holdout_scores[cell_positions[holdout_control_cells]]
+    holdout_control_cells = setup.holdout_control_cells
+    holdout_control_scores = setup.holdout_scores[setup.cell_positions[holdout_control_cells]]
     threshold_block = {
         "criterion": reporting.threshold_criterion,
         "criterion_description": THRESHOLD_CRITERION_DESCRIPTIONS.get(
@@ -797,7 +880,7 @@ def _stage3_reporting(
         "holdout": {
             "threshold": threshold,
             "operating_point": (
-                operating_point(arm_probabilities, holdout_pair_labels, threshold)
+                operating_point(arm_probabilities, setup.holdout_pair_labels, threshold)
                 if threshold is not None
                 else None
             ),
@@ -815,28 +898,154 @@ def _stage3_reporting(
             },
             "unjudged_grid": (
                 rule_counts(
-                    holdout_scores < threshold,
-                    unjudged=holdout_unjudged,
-                    positives=holdout_positive,
+                    setup.holdout_scores < threshold,
+                    unjudged=setup.holdout_unjudged,
+                    positives=setup.holdout_positive,
                 )
                 if threshold is not None
                 else None
             ),
         },
     }
+    return threshold_block
 
-    # ------------------------------------------------------------------
-    # the safe-negative margin rule
-    # ------------------------------------------------------------------
-    fit_arm_margins = np.concatenate([_arm_margins(document) for document in fit_side_documents])
+
+def _stage3_floor_block(
+    setup: _Stage3Setup,
+    floor_runs: Sequence[Mapping[str, Any]],
+    real_coverage: float | None,
+    *,
+    cosine_part: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """The control-role floor's numbers for one rule variant."""
+    if not floor_runs:
+        return {
+            "n_draws": 0,
+            "note": (
+                "the run drew no control-role floor (the permutation "
+                "resamples are zero), so the rule has no floor counterpart"
+            ),
+        }
+    per_draw: list[dict[str, Any]] = []
+    for run in floor_runs:
+        cleared = run["cleared"]
+        curve = run["curve"]
+        if cosine_part is not None:
+            cleared = cleared & cosine_part
+            curve = run["both_curve"]
+        counts = rule_counts(
+            cleared, unjudged=setup.holdout_unjudged, positives=setup.holdout_positive
+        )
+        matched = harm_at_coverage(curve, real_coverage) if real_coverage is not None else None
+        per_draw.append(
+            {
+                "margin": run["choice"]["margin"],
+                "coverage": counts["coverage"],
+                "harm": counts["harm"],
+                "harm_at_matched_coverage": matched,
+            }
+        )
+    coverages = [entry["coverage"] for entry in per_draw if entry["coverage"] is not None]
+    harms = [entry["harm"] for entry in per_draw if entry["harm"] is not None]
+    matched_values = [
+        entry["harm_at_matched_coverage"]
+        for entry in per_draw
+        if entry["harm_at_matched_coverage"] is not None
+    ]
+    return {
+        "n_draws": len(per_draw),
+        "per_draw": per_draw,
+        "mean": {
+            "coverage": float(np.mean(coverages)) if coverages else None,
+            "harm": float(np.mean(harms)) if harms else None,
+        },
+        "harm_at_matched_coverage": {
+            "coverage": real_coverage,
+            "harm": float(np.mean(matched_values)) if matched_values else None,
+            "n_draws_compared": len(matched_values),
+        },
+        "note": (
+            "the control-role floor: the model fitted with the judged pairs' "
+            "labels permuted (the control cells keep their presumed-negative "
+            "role). The rule runs on it exactly as on the real arm — its own "
+            "fit-side margin choice — so the two numbers say how much of the "
+            "rule's reach is the training design's own prior. The floor is "
+            "one draw per permutation, and the mean over the draws is "
+            "reported."
+        ),
+    }
+
+
+def _stage3_variant(
+    setup: _Stage3Setup,
+    *,
+    space: str,
+    fit_choice: Mapping[str, Any] | None,
+    error: str | None,
+    cleared: np.ndarray,
+    curve: list[dict[str, Any]],
+    floor: Mapping[str, Any],
+    note: str | None = None,
+) -> dict[str, Any]:
+    """One rule variant's block: the fit side's choice and the holdout's numbers."""
+    counts = rule_counts(cleared, unjudged=setup.holdout_unjudged, positives=setup.holdout_positive)
+    control_positions = setup.cell_positions[setup.holdout_control_cells]
+    control_cleared = cleared[control_positions]
+    return {
+        "space": space,
+        "fit_side": {
+            "margin": fit_choice["margin"] if fit_choice else None,
+            "criterion_value": fit_choice["value"] if fit_choice else None,
+            "coverage": fit_choice["coverage"] if fit_choice else None,
+            "harm": fit_choice["harm"] if fit_choice else None,
+            "n_candidates": fit_choice["n_candidates"] if fit_choice else 0,
+            "error": error,
+            "note": note
+            or (
+                "the margin is chosen on the fit side (the other two "
+                "documents) by the rule's own criterion — the coverage over "
+                "the fit side's unjudged cells minus the harm on the fit "
+                "side's verified positives — and applied to the held-out one"
+            ),
+        },
+        "holdout": {
+            "counts": counts,
+            "control_sample": {
+                "n": int(control_positions.size),
+                "n_cleared": int(control_cleared.sum()),
+                "coverage": (float(control_cleared.mean()) if control_positions.size else None),
+                "note": (
+                    "the holdout's unjudged control cells (subset B) the rule "
+                    "clears: they are presumed negatives, never ground truth"
+                ),
+            },
+            "curve": curve,
+        },
+        "floor_arm": dict(floor),
+    }
+
+
+def _stage3_safe_negative(setup: _Stage3Setup, reporting: ReportingSpec) -> dict[str, Any]:
+    """The safe-negative margin rule of one rotation (CS-6e).
+
+    The rule declares a cell a safe negative when it sits at least the chosen
+    margin below its own paragraph's best candidate. Its numbers are the rule's
+    **coverage** over the whole unjudged grid and its **harm** on the verified
+    positives, next to the same numbers for the **control-role floor** (the model
+    that only knows the training design's prior).
+    """
+    fit_side_documents = setup.fit_side_documents
+    fit_arm_margins = np.concatenate(
+        [setup.arm_margins(document) for document in fit_side_documents]
+    )
     fit_cosine_margins = np.concatenate(
-        [_cosine_margins(document) for document in fit_side_documents]
+        [setup.cosine_margins(document) for document in fit_side_documents]
     )
     fit_unjudged = np.concatenate(
-        [unjudged_mask[cells_by_document[document]] for document in fit_side_documents]
+        [setup.unjudged_mask[setup.cells_by_document[document]] for document in fit_side_documents]
     )
     fit_positive = np.concatenate(
-        [positive_mask[cells_by_document[document]] for document in fit_side_documents]
+        [setup.positive_mask[setup.cells_by_document[document]] for document in fit_side_documents]
     )
     arm_grid = (
         margin_candidates(fit_arm_margins[fit_unjudged], n_quantiles=reporting.margin_quantiles)
@@ -863,8 +1072,8 @@ def _stage3_reporting(
     arm_margin = arm_choice["margin"] if arm_choice else None
     cosine_margin_value = cosine_choice["margin"] if cosine_choice else None
 
-    holdout_arm_margins = _arm_margins(holdout)
-    holdout_cosine_margins = _cosine_margins(holdout)
+    holdout_arm_margins = setup.arm_margins(setup.holdout)
+    holdout_cosine_margins = setup.cosine_margins(setup.holdout)
     arm_cleared = (
         holdout_arm_margins >= arm_margin
         if arm_margin is not None
@@ -876,41 +1085,42 @@ def _stage3_reporting(
         else np.zeros_like(holdout_cosine_margins, dtype=bool)
     )
     both_cleared = arm_cleared & cosine_cleared
-    control_positions = cell_positions[holdout_control_cells]
     arm_curve = margin_curve(
         holdout_arm_margins,
-        unjudged=holdout_unjudged,
-        positives=holdout_positive,
+        unjudged=setup.holdout_unjudged,
+        positives=setup.holdout_positive,
         candidates=arm_grid,
     )
     cosine_curve = margin_curve(
         holdout_cosine_margins,
-        unjudged=holdout_unjudged,
-        positives=holdout_positive,
+        unjudged=setup.holdout_unjudged,
+        positives=setup.holdout_positive,
         candidates=cosine_grid,
     )
     both_curve = rule_curve(
         [cosine_cleared & (holdout_arm_margins >= float(candidate)) for candidate in arm_grid],
-        unjudged=holdout_unjudged,
-        positives=holdout_positive,
+        unjudged=setup.holdout_unjudged,
+        positives=setup.holdout_positive,
         candidates=arm_grid,
     )
 
     # The control-role floor's own rule: the same procedure on the model whose
     # judged labels were permuted (the control cells keep their role).
     floor_runs: list[dict[str, Any]] = []
-    for draw in floor_draws:
+    for draw in setup.floor_draws:
         draw_fit_margins = np.concatenate(
             [
                 _margins_of_document(
-                    grid.rows[cells_by_document[document]],
-                    grid.columns[cells_by_document[document]],
+                    setup.grid.rows[setup.cells_by_document[document]],
+                    setup.grid.columns[setup.cells_by_document[document]],
                     draw["inner"][document],
                 )
                 for document in fit_side_documents
             ]
         )
-        draw_holdout_margins = _margins_of_document(holdout_rows, holdout_columns, draw["outer"])
+        draw_holdout_margins = _margins_of_document(
+            setup.holdout_rows, setup.holdout_columns, draw["outer"]
+        )
         draw_grid = (
             margin_candidates(
                 draw_fit_margins[fit_unjudged], n_quantiles=reporting.margin_quantiles
@@ -933,8 +1143,8 @@ def _stage3_reporting(
                 "cleared": draw_holdout_margins >= draw_choice["margin"],
                 "curve": margin_curve(
                     draw_holdout_margins,
-                    unjudged=holdout_unjudged,
-                    positives=holdout_positive,
+                    unjudged=setup.holdout_unjudged,
+                    positives=setup.holdout_positive,
                     candidates=draw_grid,
                 ),
                 # the two-part rule's curve on the floor: the same cosine's
@@ -945,123 +1155,23 @@ def _stage3_reporting(
                         cosine_cleared & (draw_holdout_margins >= float(candidate))
                         for candidate in draw_grid
                     ],
-                    unjudged=holdout_unjudged,
-                    positives=holdout_positive,
+                    unjudged=setup.holdout_unjudged,
+                    positives=setup.holdout_positive,
                     candidates=draw_grid,
                 ),
             }
         )
 
-    def _floor_block(
-        real_coverage: float | None, *, cosine_part: np.ndarray | None = None
-    ) -> dict[str, Any]:
-        """The control-role floor's numbers for one rule variant."""
-        if not floor_runs:
-            return {
-                "n_draws": 0,
-                "note": (
-                    "the run drew no control-role floor (the permutation "
-                    "resamples are zero), so the rule has no floor counterpart"
-                ),
-            }
-        per_draw: list[dict[str, Any]] = []
-        for run in floor_runs:
-            cleared = run["cleared"]
-            curve = run["curve"]
-            if cosine_part is not None:
-                cleared = cleared & cosine_part
-                curve = run["both_curve"]
-            counts = rule_counts(cleared, unjudged=holdout_unjudged, positives=holdout_positive)
-            matched = harm_at_coverage(curve, real_coverage) if real_coverage is not None else None
-            per_draw.append(
-                {
-                    "margin": run["choice"]["margin"],
-                    "coverage": counts["coverage"],
-                    "harm": counts["harm"],
-                    "harm_at_matched_coverage": matched,
-                }
-            )
-        coverages = [entry["coverage"] for entry in per_draw if entry["coverage"] is not None]
-        harms = [entry["harm"] for entry in per_draw if entry["harm"] is not None]
-        matched_values = [
-            entry["harm_at_matched_coverage"]
-            for entry in per_draw
-            if entry["harm_at_matched_coverage"] is not None
-        ]
-        return {
-            "n_draws": len(per_draw),
-            "per_draw": per_draw,
-            "mean": {
-                "coverage": float(np.mean(coverages)) if coverages else None,
-                "harm": float(np.mean(harms)) if harms else None,
-            },
-            "harm_at_matched_coverage": {
-                "coverage": real_coverage,
-                "harm": float(np.mean(matched_values)) if matched_values else None,
-                "n_draws_compared": len(matched_values),
-            },
-            "note": (
-                "the control-role floor: the model fitted with the judged pairs' "
-                "labels permuted (the control cells keep their presumed-negative "
-                "role). The rule runs on it exactly as on the real arm — its own "
-                "fit-side margin choice — so the two numbers say how much of the "
-                "rule's reach is the training design's own prior. The floor is "
-                "one draw per permutation, and the mean over the draws is "
-                "reported."
-            ),
-        }
-
-    def _variant(
-        *,
-        space: str,
-        fit_choice: Mapping[str, Any] | None,
-        error: str | None,
-        cleared: np.ndarray,
-        curve: list[dict[str, Any]],
-        floor: Mapping[str, Any],
-        note: str | None = None,
-    ) -> dict[str, Any]:
-        """One rule variant's block: the fit side's choice and the holdout's numbers."""
-        counts = rule_counts(cleared, unjudged=holdout_unjudged, positives=holdout_positive)
-        control_cleared = cleared[control_positions]
-        return {
-            "space": space,
-            "fit_side": {
-                "margin": fit_choice["margin"] if fit_choice else None,
-                "criterion_value": fit_choice["value"] if fit_choice else None,
-                "coverage": fit_choice["coverage"] if fit_choice else None,
-                "harm": fit_choice["harm"] if fit_choice else None,
-                "n_candidates": fit_choice["n_candidates"] if fit_choice else 0,
-                "error": error,
-                "note": note
-                or (
-                    "the margin is chosen on the fit side (the other two "
-                    "documents) by the rule's own criterion — the coverage over "
-                    "the fit side's unjudged cells minus the harm on the fit "
-                    "side's verified positives — and applied to the held-out one"
-                ),
-            },
-            "holdout": {
-                "counts": counts,
-                "control_sample": {
-                    "n": int(control_positions.size),
-                    "n_cleared": int(control_cleared.sum()),
-                    "coverage": (float(control_cleared.mean()) if control_positions.size else None),
-                    "note": (
-                        "the holdout's unjudged control cells (subset B) the rule "
-                        "clears: they are presumed negatives, never ground truth"
-                    ),
-                },
-                "curve": curve,
-            },
-            "floor_arm": dict(floor),
-        }
-
-    arm_counts = rule_counts(arm_cleared, unjudged=holdout_unjudged, positives=holdout_positive)
-    both_counts = rule_counts(both_cleared, unjudged=holdout_unjudged, positives=holdout_positive)
+    arm_counts = rule_counts(
+        arm_cleared, unjudged=setup.holdout_unjudged, positives=setup.holdout_positive
+    )
+    both_counts = rule_counts(
+        both_cleared, unjudged=setup.holdout_unjudged, positives=setup.holdout_positive
+    )
 
     variants = {
-        RULE_VARIANT_COSINE: _variant(
+        RULE_VARIANT_COSINE: _stage3_variant(
+            setup,
             space="the full-text cosine's similarity (the geometry)",
             fit_choice=cosine_choice,
             error=cosine_error,
@@ -1076,15 +1186,17 @@ def _stage3_reporting(
                 ),
             },
         ),
-        RULE_VARIANT_ARM: _variant(
+        RULE_VARIANT_ARM: _stage3_variant(
+            setup,
             space="the learned arm's probability (the ranking)",
             fit_choice=arm_choice,
             error=arm_error,
             cleared=arm_cleared,
             curve=arm_curve,
-            floor=_floor_block(arm_counts["coverage"]),
+            floor=_stage3_floor_block(setup, floor_runs, arm_counts["coverage"]),
         ),
-        RULE_VARIANT_BOTH: _variant(
+        RULE_VARIANT_BOTH: _stage3_variant(
+            setup,
             space=(
                 "both: the cosine's margin (the geometry) and the arm's margin "
                 "(the ranking) — CS-6d's 'retrieve with the cosine, rank with "
@@ -1105,7 +1217,9 @@ def _stage3_reporting(
             error=arm_error or cosine_error,
             cleared=both_cleared,
             curve=both_curve,
-            floor=_floor_block(both_counts["coverage"], cosine_part=cosine_cleared),
+            floor=_stage3_floor_block(
+                setup, floor_runs, both_counts["coverage"], cosine_part=cosine_cleared
+            ),
             note=(
                 "each margin is chosen on the fit side by its own criterion; the "
                 "two are not jointly optimized, so the intersection cannot "
@@ -1115,39 +1229,87 @@ def _stage3_reporting(
     }
 
     return {
+        "definition": {
+            "margin": (
+                "the cell's distance below its own paragraph's best "
+                "candidate, inside the paragraph's document"
+            ),
+            "rule": (
+                "a cell is a safe negative when its margin is at least the "
+                "chosen margin: a margin rule, never an absolute cut, so a "
+                "document's score level never enters it"
+            ),
+            "criterion": (
+                "the fit side's coverage over the unjudged cells minus the "
+                "harm on the verified positives"
+            ),
+        },
+        "variants": variants,
+        "unmeasured": (
+            "the unjudged cells' true positive rate is UNMEASURED: no human "
+            "labelling in this track. The rule ships as the margin half "
+            "only, and its quality claim is about its reach over the "
+            "unjudged grid and its harm on the verified positives — read "
+            "against the control-role floor — never about its precision on "
+            "the unjudged cells."
+        ),
+    }
+
+
+def _stage3_reporting(
+    context: Stage3Context,
+    *,
+    holdout: str,
+    holdout_scores: np.ndarray,
+    inner_scores: Mapping[str, np.ndarray],
+    floor_draws: Sequence[Mapping[str, Any]],
+    reporting: ReportingSpec,
+) -> dict[str, Any]:
+    """The Stage-3 reporting of one rotation (CS-6e).
+
+    Three blocks, all measured with the plan's discipline:
+
+    - the **calibration**: the arm's own probability and the full-text cosine
+      put on a probability scale by a **fit-side** calibration map (a logistic
+      regression on the cosine as its single feature), each with a reliability
+      diagram (the predicted probability against the observed positive rate,
+      with the bin counts), the expected calibration error and the Brier
+      score;
+    - the **threshold**: the per-document operating point, chosen on the
+      **fit side** (the other two documents) and applied to the held-out one.
+      The fit side's own rows are scored by the **inner** cross-fit, so the
+      choice never rests on a model that saw the holdout;
+    - the **safe-negative margin**: the rule that declares a cell a safe
+      negative when it sits at least the chosen margin below its own
+      paragraph's best candidate. Its numbers are the rule's **coverage** over
+      the whole unjudged grid and its **harm** on the verified positives, next
+      to the same numbers for the **control-role floor** (the model that only
+      knows the training design's prior).
+
+    The two negative subsets are never pooled: the control cells (subset B,
+    presumed) and the reviewer-verified hard negatives (subset A, ground
+    truth) are separate masks everywhere.
+    """
+    setup = _stage3_setup(
+        context,
+        holdout=holdout,
+        holdout_scores=holdout_scores,
+        inner_scores=inner_scores,
+        floor_draws=floor_draws,
+    )
+    calibration, arm_probabilities, cosine_probabilities = _stage3_calibration(setup, reporting)
+    threshold_block = _stage3_threshold(setup, reporting, arm_probabilities)
+    safe_negative = _stage3_safe_negative(setup, reporting)
+
+    return {
         "calibration": calibration,
         "thresholds": threshold_block,
         "pool_inputs": {
             "arm": [float(value) for value in arm_probabilities],
             "cosine": [float(value) for value in cosine_probabilities],
-            "labels": [int(value) for value in holdout_pair_labels],
+            "labels": [int(value) for value in setup.holdout_pair_labels],
         },
-        "safe_negative": {
-            "definition": {
-                "margin": (
-                    "the cell's distance below its own paragraph's best "
-                    "candidate, inside the paragraph's document"
-                ),
-                "rule": (
-                    "a cell is a safe negative when its margin is at least the "
-                    "chosen margin: a margin rule, never an absolute cut, so a "
-                    "document's score level never enters it"
-                ),
-                "criterion": (
-                    "the fit side's coverage over the unjudged cells minus the "
-                    "harm on the verified positives"
-                ),
-            },
-            "variants": variants,
-            "unmeasured": (
-                "the unjudged cells' true positive rate is UNMEASURED: no human "
-                "labelling in this track. The rule ships as the margin half "
-                "only, and its quality claim is about its reach over the "
-                "unjudged grid and its harm on the verified positives — read "
-                "against the control-role floor — never about its precision on "
-                "the unjudged cells."
-            ),
-        },
+        "safe_negative": safe_negative,
     }
 
 
