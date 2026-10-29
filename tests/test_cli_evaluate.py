@@ -16,8 +16,8 @@ import numpy as np
 import pytest
 import yaml
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import embed as embed_commands
 from cluster_rag.data import load_jsonl
 from cluster_rag.dataset_stats import file_sha256
 from fake_embedder import FakeEmbedder
@@ -325,7 +325,7 @@ def _run_labelembed(
         created.append(fake)
         return fake
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     config_file = write_config(sample_jsonl, run_id=run_id, extra=extra)
     code = main(["labelembed", "--config", str(config_file)])
     results_dir = tmp_path / "results" / run_id

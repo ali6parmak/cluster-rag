@@ -11,8 +11,8 @@ import logging
 
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import omct as omct_commands
 from cluster_rag.config import PreprocessConfig, ProbeConfig
 from cluster_rag.omct_probe import (
     build_probe_corpus,
@@ -247,7 +247,9 @@ def test_probe_omct_command_end_to_end(
         "  question_transforms: [strip_block, keep]\n"
     )
     monkeypatch.setattr(
-        cli, "build_embedder", lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8)
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
     config_file = write_config(
         sample_pairs, run_id="probe-test", data_external=sample_pairs, extra=extra
@@ -291,7 +293,9 @@ def test_probe_omct_appends_experiment_tables(
     """paths.experiment_table: variant rows + per-group rows (Phase 2.5)."""
 
     monkeypatch.setattr(
-        cli, "build_embedder", lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8)
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
     table = tmp_path / "experiments_table.md"
     extra = PROBE_CONFIG_EXTRA + "probe:\n  question_transforms: [strip_block]\n"
@@ -322,7 +326,9 @@ def test_probe_omct_default_question_transform(
 ) -> None:
     """Schema default: the probe runs strip_block only (keep needs an explicit config)."""
     monkeypatch.setattr(
-        cli, "build_embedder", lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8)
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
     config_file = write_config(
         sample_pairs, run_id="probe-default", data_external=sample_pairs, extra=PROBE_CONFIG_EXTRA

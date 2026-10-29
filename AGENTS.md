@@ -57,7 +57,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | What are the main pipeline's phases, and which are done? | `PLAN.md` §4 |
 | What are the coding rules and the pure-core boundary? | `AGENTS.md` "Coding conventions" · `TEXT_PROCESSING_PLAN.md` §2 and §4 |
 | How is leakage prevented? | `AGENTS.md` "Data and evaluation discipline" · `TEXT_PROCESSING_PLAN.md` §4 |
-| How do I add a command or a sweep? | `AGENTS.md` "Running things" · `src/cluster_rag/sweep.py` · `src/cluster_rag/cli.py` |
+| How do I add a command or a sweep? | `AGENTS.md` "Running things" · `src/cluster_rag/commands/` · `src/cluster_rag/sweep.py` · `src/cluster_rag/cli.py` |
 | How do I check that a run reproduced? | `tools/verify_analysis_baseline.py` · `tools/verify_upr_baseline.py` |
 
 ### The house rules in one screen
@@ -150,7 +150,14 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── feedback/            # store.py (SQLite), updates.py (memory, negatives, Rocchio)
     │   ├── active.py            # selection strategies
     │   ├── eval/                # metrics.py, run.py, simulate.py
-    │   └── cli.py
+    │   ├── commands/            # the CLI's commands, one module per family
+    │   │   ├── _common.py       # the shared helpers (the run id, the table append, the guard)
+    │   │   ├── stats.py         # stats, stats --omct, split
+    │   │   ├── embed.py         # embed, labelembed
+    │   │   ├── omct.py          # probe-omct, analyze-omct, decide-omct
+    │   │   ├── upr.py           # evaluate, analyze-upr, decide-upr, rerank-upr
+    │   │   └── sweep.py         # the sweep runner
+    │   └── cli.py               # the argparse layer + the dispatch (thin)
     └── tests/
 
 ## Environment
@@ -180,7 +187,7 @@ Check the prefixes against the model card before running experiments.
 - Type hints everywhere, and docstrings on public functions. Run `ruff check` and `ruff format` over `src`, `tests` *and* `experiments/` before finishing (sweep files live outside src).
 - Embeddings are `np.float32`, shape `(n, d)`, L2-normalized. Assert this at index boundaries.
 - Pure functions for scoring and metrics, with no hidden global state. Components take a config object.
-- Dependency direction: `cli.py` orchestrates, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
+- Dependency direction: `cli.py` (the argparse layer and the dispatch) and `commands/` (the commands themselves) orchestrate, component modules hold the logic, and pure cores (`data.py`, `dataset_stats.py`, `pairs.py`, `retrieve/`, `eval/`, `active.py`) stay free of model/I/O client imports (`torch`, `sentence-transformers`, `httpx`, `faiss`, `sqlite3`). Only `embed/*` and `feedback/*` touch models, caches and the database. Ports are plain `typing.Protocol` (e.g. `embed/base.py`), so tests can substitute fakes without network access or model downloads.
 - The text-processing track's package (`text_processors/`) is a pure core too: it may import `cluster_rag.embed.base` (Protocol + numpy) and nothing heavier — no `torch`/`sentence-transformers`/`httpx`/`sqlite3`. Model clients (embedders, Ollama LLMs) are wired in CLI code, never inside the package. A test enforces this. One exception, reviewed and recorded in `TEXT_PROCESSING_PLAN.md` §2: the track's *combiners* (`text_processors/combining/logistic.py`, `text_processors/combining/histgb.py`) import scikit-learn — a core dependency of the main pipeline, with no model download, no network and no I/O. The track's *decision* side (`text_processors/decision/`) stays pure the same way: the question specs, the call plan, the competence control and the measurement are pure, and the model client (`cluster_rag/decision/`, the `/v1/systemone` caller) lives at the edge.
 - No hard-coded paths, thresholds or model names in the logic. Put them in `configs/`.
 - Pass explicit seeds (`numpy`, `random`, `torch`, UMAP `random_state`).

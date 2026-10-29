@@ -17,8 +17,8 @@ import json
 
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import omct as omct_commands
 from cluster_rag.decision.base import DecisionAnswer, DecisionInfo
 from cluster_rag.text_processors.decision.probe import GROUP_COMPETENCE, GROUP_CONTROL, GROUP_JUDGED
 from fake_embedder import FakeEmbedder
@@ -78,7 +78,7 @@ class FakeDecider:
 def fake_decider(monkeypatch) -> FakeDecider:
     """Wire the CLI to a fake decider (no server, no model download)."""
     decider = FakeDecider()
-    monkeypatch.setattr(cli, "build_decider", lambda model_config, config: decider)
+    monkeypatch.setattr(omct_commands, "build_decider", lambda model_config, config: decider)
     return decider
 
 
@@ -164,7 +164,7 @@ def test_analyze_omct_adds_the_decision_arm(
 ) -> None:
     """The decision model becomes an arm of the analysis (CS-7b)."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -225,7 +225,7 @@ def test_the_decision_arm_gets_its_own_table_row(
 ) -> None:
     """The decision arm's row lands in the track's table (the arms shape)."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )

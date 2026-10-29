@@ -23,8 +23,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import omct as omct_commands
 from cluster_rag.config import (
     AnalysisConfig,
     AnalysisEmbedderConfig,
@@ -355,7 +355,7 @@ def test_analyze_omct_ladder_run_end_to_end(
 ) -> None:
     """A Stage-2 ladder run: the chunked arms and the symmetric question side."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -403,7 +403,7 @@ def test_analyze_omct_semantic_run_selects_the_threshold_on_the_fit_side(
 ) -> None:
     """A swept run: the threshold is chosen per document on the fit side."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -591,7 +591,7 @@ def test_analyze_omct_command_end_to_end(
 ) -> None:
     """The command writes the artifact, the frozen config and the table row."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -639,7 +639,7 @@ def test_analyze_omct_appends_the_track_table_row(
 ) -> None:
     """The row lands in the track's own table file (command-derived)."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -955,7 +955,7 @@ def test_analyze_omct_arms_end_to_end(
 ) -> None:
     """The arms land in the artifact, paired with the baseline arm on the same cells."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1006,7 +1006,7 @@ def test_analyze_omct_stage3_end_to_end(
 ) -> None:
     """A Stage-3 run: the learned arm, the rotations and the label-permutation floors."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1081,7 +1081,7 @@ def test_analyze_omct_stage3_group_selection_end_to_end(
 ) -> None:
     """A Stage-3.1b run: the pack keeps only the selected feature groups."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1123,7 +1123,7 @@ def test_analyze_omct_stage3_histgb_end_to_end(
 ) -> None:
     """A Stage-3.2 run: the gradient-boosted combiner and its feature usage."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1175,7 +1175,7 @@ def test_analyze_omct_stage3_reporting_end_to_end(
 ) -> None:
     """The Stage-3 reporting: the calibration, the thresholds and the margin rule."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1262,7 +1262,7 @@ def test_analyze_omct_stage3_reporting_is_off_by_default(
 ) -> None:
     """The reporting is opt-in, so the earlier runs' artifacts keep their content."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1291,7 +1291,7 @@ def test_analyze_omct_stage3_reporting_is_reproducible(
 ) -> None:
     """The same seed gives the same reporting numbers."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1321,7 +1321,7 @@ def test_analyze_omct_stage3_random_floor_end_to_end(
 ) -> None:
     """The Stage-3 random-vector floor: the pack's embedding sides become noise."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1386,7 +1386,7 @@ def test_analyze_omct_stage3_random_floor_is_reproducible(
 ) -> None:
     """The floor is a function of the seed: the same seed gives the same run."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1617,7 +1617,7 @@ def test_analyze_omct_arms_table_rows_use_the_arms_columns(
 ) -> None:
     """A run with arms writes the Stage-1 columns (one row per model and arm)."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )
@@ -1646,7 +1646,7 @@ def test_analyze_omct_stage3_table_row_carries_the_groups_and_the_hit1(
 ) -> None:
     """A Stage-3 run writes the learned-arm columns (the groups, the hit@1)."""
     monkeypatch.setattr(
-        cli,
+        omct_commands,
         "build_embedder",
         lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
     )

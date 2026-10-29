@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import sweep as sweep_commands
 from cluster_rag.config import EmbedderConfig, EvalDecisionConfig
 from cluster_rag.sweep import (
     COMMANDS,
@@ -174,7 +174,7 @@ def test_sweep_file_imports_sibling_module(repo_root: Path) -> None:
     )
     subdir_resolved = str(subdir.resolve())
     assert subdir_resolved not in sys.path
-    runs = cli._load_sweep_runs(subdir / "mini_sweep.py")
+    runs = sweep_commands._load_sweep_runs(subdir / "mini_sweep.py")
     assert [run.label for run in runs] == ["upr-stats-mini-a", "upr-stats-mini-b"]
     assert subdir_resolved not in sys.path  # removed again after the load
 
@@ -200,7 +200,7 @@ def test_sweep_file_imports_the_shared_pool_from_another_directory(repo_root: Pa
     # The import must go through the loader, not through a cached module.
     sys.modules.pop("embedder_pool", None)
     shared_resolved = str(SHARED_EXPERIMENTS_DIR.resolve())
-    runs = cli._load_sweep_runs(subdir / "track_sweep.py")
+    runs = sweep_commands._load_sweep_runs(subdir / "track_sweep.py")
     pool = sys.modules.get("embedder_pool")
     assert pool is not None, "the sweep file did not import the shared embedder pool"
     assert sorted(pool.MODELS)[0].replace("/", "_") in runs[0].label
@@ -216,7 +216,7 @@ def test_the_random_floor_sweep_resolves_its_grid(monkeypatch) -> None:
     """
     repo = Path(__file__).resolve().parents[1]
     monkeypatch.chdir(repo)
-    runs = cli._load_sweep_runs(
+    runs = sweep_commands._load_sweep_runs(
         repo / "experiments_text_processing" / "stage3_random_floor_sweep.py"
     )
     assert len(runs) == 9
@@ -247,7 +247,7 @@ def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path)
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="does not implement"):
-        cli._cmd_sweep(repo_root / "bogus_sweep.py")
+        sweep_commands._cmd_sweep(repo_root / "bogus_sweep.py")
 
 
 def test_define_sweep_resolves_typed_cells(repo_root: Path) -> None:
@@ -479,8 +479,8 @@ def test_sweep_command_executes_cells_in_order(repo_root: Path, monkeypatch, cap
         calls.append(("evaluate", config.run_id))
         return 0
 
-    monkeypatch.setattr(cli, "_cmd_embed", fake_embed)
-    monkeypatch.setattr(cli, "_cmd_evaluate", fake_evaluate)
+    monkeypatch.setattr(sweep_commands, "_cmd_embed", fake_embed)
+    monkeypatch.setattr(sweep_commands, "_cmd_evaluate", fake_evaluate)
     sweep_file = _write_sweep_file(repo_root, TWO_CELLS)
     assert main(["sweep", "--file", str(sweep_file)]) == 0
     out = capsys.readouterr().out
@@ -496,7 +496,7 @@ def test_sweep_command_runs_stats_by_command_name(repo_root: Path, monkeypatch) 
         calls.append(("stats", config.run_id, str(omct)))
         return 0
 
-    monkeypatch.setattr(cli, "_cmd_stats", fake_stats)
+    monkeypatch.setattr(sweep_commands, "_cmd_stats", fake_stats)
     # One sweep per dataset (upr + omct in one file via SWEEP concatenation):
     sweep_file = repo_root / "stats_sweep.py"
     sweep_file.write_text(
@@ -522,9 +522,11 @@ def test_sweep_command_aborts_on_first_failure(repo_root: Path, monkeypatch, cap
     calls: list[str] = []
 
     monkeypatch.setattr(
-        cli, "_cmd_embed", lambda config, kinds: (calls.append(config.run_id), 1)[1]
+        sweep_commands, "_cmd_embed", lambda config, kinds: (calls.append(config.run_id), 1)[1]
     )
-    monkeypatch.setattr(cli, "_cmd_evaluate", lambda config: (calls.append(config.run_id), 0)[1])
+    monkeypatch.setattr(
+        sweep_commands, "_cmd_evaluate", lambda config: (calls.append(config.run_id), 0)[1]
+    )
     sweep_file = _write_sweep_file(repo_root, TWO_CELLS)
     with caplog.at_level(logging.ERROR):
         assert main(["sweep", "--file", str(sweep_file)]) == 1

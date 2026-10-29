@@ -12,8 +12,8 @@ import logging
 import numpy as np
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands import embed as embed_commands
 from fake_embedder import FakeEmbedder
 
 EMBED_CONFIG_EXTRA = """
@@ -40,7 +40,7 @@ def embed_run(sample_jsonl, write_config, monkeypatch, tmp_path):
         created.append(fake)
         return fake
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
 
     def run(command_args: list[str] | None = None, run_id: str = "embed-test") -> int:
         config_file = write_config(
@@ -105,7 +105,7 @@ def test_embed_command_cache_disabled(sample_jsonl, write_config, monkeypatch, t
         created.append(fake)
         return fake
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     config_file = write_config(
         sample_jsonl,
         run_id="embed-nocache",
@@ -128,7 +128,7 @@ def test_embed_appends_experiment_table_row(
             model_id="fake-embedder", dimension=6, prefixes={"document": "passage: "}
         )
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     table = tmp_path / "experiments_table.md"
     config_file = write_config(
         sample_jsonl,
@@ -162,7 +162,7 @@ def test_embed_table_row_under_sweep_heading(
             model_id="fake-embedder", dimension=6, prefixes={"document": "passage: "}
         )
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     table = tmp_path / "experiments_table.md"
     config_file = write_config(
         sample_jsonl,
@@ -198,7 +198,7 @@ def test_embed_command_kinds_flag(
         created.append(fake)
         return fake
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     config_file = write_config(sample_jsonl, run_id="embed-multi", extra=EMBED_CONFIG_EXTRA)
     assert main(["embed", "--config", str(config_file), "--kinds", "document,query"]) == 0
     npz = np.load(tmp_path / "results" / "embed-multi" / "embeddings.npz")
@@ -222,7 +222,7 @@ def test_embed_command_kinds_from_config(sample_jsonl, write_config, monkeypatch
         created.append(fake)
         return fake
 
-    monkeypatch.setattr(cli, "build_embedder", factory)
+    monkeypatch.setattr(embed_commands, "build_embedder", factory)
     config_file = write_config(
         sample_jsonl,
         run_id="embed-cfg-kinds",

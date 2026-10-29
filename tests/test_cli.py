@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cluster_rag import cli
 from cluster_rag.cli import main
+from cluster_rag.commands._common import _append_command_rows
 
 
 def test_help_exits_zero() -> None:
@@ -89,10 +89,10 @@ def test_append_command_rows_uses_the_command_derived_file(tmp_path: Path) -> No
         }
     )
     columns = ("run_id", "value")
-    cli._append_command_rows(
+    _append_command_rows(
         config, "evaluate", columns=columns, key_columns=("run_id",), rows=[{"run_id": "r-1"}]
     )
-    cli._append_command_rows(
+    _append_command_rows(
         config,
         "analyze-omct",
         columns=columns,
