@@ -16,8 +16,11 @@ Contracts under test (TEXT_PROCESSING_PLAN.md section 3, Stage 0.1):
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import re
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +63,9 @@ from cluster_rag.text_processors.features import (
     ProfileUnits,
 )
 from fake_embedder import FakeEmbedder
+
+ANALYSIS_ROOT = Path(__file__).resolve().parents[1] / "src" / "cluster_rag" / "omct_analysis"
+FORBIDDEN_IMPORTS = ("torch", "sentence_transformers", "httpx", "sqlite3", "requests")
 
 ANALYSIS_CONFIG_EXTRA = """
 analysis:
@@ -1676,3 +1682,43 @@ def test_analyze_omct_stage3_table_row_carries_the_groups_and_the_hit1(
     header = [line for line in text.splitlines() if line.startswith("| run_id")][0]
     assert "perm_auc_within" in header
     assert "ctrl_role_auc_within" in header
+
+
+def test_the_analysis_driver_is_a_pure_core() -> None:
+    """The analysis driver never imports a model client.
+
+    It is the track's **measurement** code: a model client here would put a
+    non-reproducible dependency between a run and its numbers. The embedder
+    reaches it as a port (``cluster_rag.embed.base``), injected by the CLI.
+    """
+    pattern = re.compile(r"^\s*(?:import|from)\s+(" + "|".join(FORBIDDEN_IMPORTS) + r")\b")
+    for module_path in sorted(ANALYSIS_ROOT.rglob("*.py")):
+        source = module_path.read_text(encoding="utf-8")
+        for line in source.splitlines():
+            assert not pattern.match(line), f"{module_path.name} imports a model client: {line}"
+
+
+def test_the_analysis_driver_imports_only_numpy_and_cluster_rag() -> None:
+    """Beyond numpy, the analysis driver may not import a third-party library.
+
+    The track's pure package has one documented exception (scikit-learn, for
+    the combiner); the driver has none — it orchestrates the pure core and the
+    harness's own metrics.
+    """
+    allowed = {"numpy"}
+    stdlib = set(sys.stdlib_module_names)
+    for module_path in sorted(ANALYSIS_ROOT.rglob("*.py")):
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                imported.add(node.module.split(".")[0])
+        for module in sorted(imported):
+            if module in stdlib or module in allowed or module.startswith("cluster_rag"):
+                continue
+            raise AssertionError(
+                f"{module_path.name} imports {module}: the analysis driver may only "
+                "import numpy and cluster_rag"
+            )

@@ -180,6 +180,23 @@ moved verbatim on 2026-10-29. The pool itself is live in `experiments/embedder_p
   *(done 2026-10-29: 638 unit tests green, ruff check + format clean, both baseline
   verifiers OK, and the two final sweeps reproduce their artifacts field for field.)*
 
+- [x] **`omct_analysis.py` → `omct_analysis/`.** The track's 5,059-line analysis
+  driver becomes a package: `helpers.py` (the vocabulary + the leaf helpers), `view.py`
+  (the dataset view + the encoding), `arms.py` (the ladder's arms + the comparison),
+  `stage3.py` (the learned pack + its reporting), `decision.py` (the decision models +
+  the safe-negative rule) and `report.py` (the artifact one run writes). The layering
+  is acyclic and one-way: *helpers ← view ← arms ← stage3 ← decision*, with *report*
+  on the view. A **pure move**: all 79 top-level definitions and the 23 constants are
+  byte-for-byte identical, each lands in exactly one module, and the package's public
+  surface (50 names) is **unchanged** — `__init__.py` re-exports it, so **not one
+  importer changed**. The module's constants move as one group to the leaf layer (they
+  reference each other), which is what keeps the layering acyclic.
+  **The pure-core boundary is now guarded where it was not before**: two new tests
+  assert that the driver imports no model client and nothing beyond numpy and
+  `cluster_rag` (the track's pure package had this guard; the driver did not).
+  *(done 2026-10-29: 640 unit tests green, ruff check + format clean, both baseline
+  verifiers OK, and the two final sweeps reproduce their artifacts field for field.)*
+
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [x] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute; done 2026-10-20: `predictors/knn.py` (port) over the pure core `retrieve/knn.py` — votes = Σ max(cos,0)^p over the top-k train examples, p configurable (softmax-with-temperature deliberately deferred until a grid needs it), ties → earlier train row, k clamped to n_train; consumes the Phase 4 wiring (train-only document vectors at construction); fake-embedder unit tests incl. hand-computed votes, tie and clipping cases; val evidence arrives with Phase 4 opening C)*
 - [x] **Label prototypes:** mean of the example embeddings per label. *(done 2026-10-20: `predictors/prototype.py` over `retrieve/prototypes.py` — renormalized per-label mean of train document vectors (float64 accumulation → float32 output); zero-example labels carry zero prototypes and score 0, matching the trivial baselines' unseen-label behavior; max-sim aggregation over the same matrix joins with the checkbox-C sweep)*

@@ -119,7 +119,13 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── pairs.py             # auxiliary PairRecord model + loader/validation
     │   ├── dataset_stats.py     # UPR dataset statistics (pure functions)
     │   ├── omct_probe.py        # omct probe driver (numpy + eval metrics only)
-    │   ├── omct_analysis.py     # track's Stage-0 analysis driver (analyze-omct)
+    │   ├── omct_analysis/        # track's Stage-0 analysis driver (analyze-omct)
+    │   │   ├── helpers.py       # the vocabulary + the leaf helpers
+    │   │   ├── view.py          # the dataset view + the encoding
+    │   │   ├── arms.py          # the ladder's arms + the comparison
+    │   │   ├── stage3.py        # the learned pack + its reporting
+    │   │   ├── decision.py      # the decision models + the safe-negative rule
+    │   │   └── report.py        # the artifact one run writes
     │   ├── omct_decision.py     # track's Stage-3.5 decision-probe driver (decide-omct)
     │   ├── upr_analysis.py      # track's UPR analysis driver (analyze-upr)
     │   ├── sweep.py             # SweepCell, define_sweep (sweep cells -> configs)
