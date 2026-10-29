@@ -737,6 +737,92 @@ The change sets still open:
   *Runs:* the sweep file, the run ids and the log section are fixed in the round's
   own pre-registration, before the first call.
 
+  **The amendment of 2026-10-29 — written before the first call, after the
+  sentence count was measured.** The pre-registration asks for the sentence count
+  to be measured *before* scheduling. Measured on the UPR **val** split (660
+  texts, the track's own `split_sentences`):
+
+  | sentences | 1 | 2 | 3 |
+  |---|---|---|---|
+  | texts | 653 | 6 | 1 |
+
+  mean 1.012, median 1, Σ_text s_text = 668. **653 of the 660 texts (98.94%) have
+  no sentence-level ablation** — they are reported as "not ablatable", never
+  dropped. Of the seven texts with two or three "sentences", **four are false
+  splits**: the splitter cuts at "decree No. 170" ("No." is not in its
+  abbreviation list), so only **three val texts (0.45%) are genuinely
+  multi-sentence** (eight gold cells between them). A sentence-level map on this
+  corpus therefore rests on three texts: it cannot answer question 3.
+
+  **What the amendment does.** It adds a **second ablation unit** beside the
+  plan's, and fixes the runs. The plan's sentence-level arm still runs, exactly
+  as pre-registered, and its near-null is reported as a near-null.
+
+  - **The clause-level arm.** The track's own atom chunker
+    (`AtomChunker(split_clauses=True)` — the CS-2/CS-3 atoms, a deterministic
+    rule-based splitter already in the repo, no new dependency) cuts a UPR text
+    at its clause separators. Measured on val: the clause counts are 1 (312
+    texts), 2 (190), 3 (84), 4 (47), 5 (14), 6 (9), 7 (2), 8 (1), 9 (1) — mean
+    1.95, median 2, Σ = 1,287. **348 texts (52.7%) are ablatable and hold 799
+    gold cells**; the other 312 are "not ablatable" and reported as such. 205
+    texts (31.1%) open with a formulaic opener clause ("Continue to ensure that
+    …") — the pre-registration's own falsification example.
+
+  **The fixed runs** (the "*Runs:*" clause, discharged):
+
+  | what | run id | artifact | new calls |
+  |---|---|---|---|
+  | the sentence-level arm (the plan's unit) + Version A | `upr-hitmap-sentence` | `results/upr-hitmap-sentence/hitmap.json` | 60 |
+  | the clause-level arm (the amendment) + Version A | `upr-hitmap-clause` | `results/upr-hitmap-clause/hitmap.json` | 3,900 |
+
+  The sweep file is `experiments_text_processing/upr_hitmap_sweep.py` (sweep
+  label `upr_hitmap`, so the comparison table's section is `## UPR — upr_hitmap`);
+  the log section is **`## CS-18 — the hit map: which words carry the signal
+  (2026-10-29)`** in `docs/experiments_text_processing.md`.
+
+  **The text set is the whole val split** (660 texts), pre-registered — not a
+  sample chosen after looking at the results.
+
+  **The cost, corrected.** A text with *k* units yields *k* variants (one per
+  removable unit: removing a unit leaves the other *k − 1*), and a text with
+  **one** unit yields **none** — removing it would leave nothing to ask about,
+  so it is not ablatable and is reported as such. The round's new calls are
+  therefore 4 × Σ over the **ablatable** texts of their unit count (2 calls per
+  variant: the real pairing and the label-blind counterpart): **60** for the
+  sentence arm (15 variants over the 7 ablatable texts) and **3,900** for the
+  clause arm (975 variants over the 348 ablatable texts). The plan's own
+  formula (2 × Σ_text s_text) is an upper bound: it counts the not-ablatable
+  texts' meaningless variants too. The full-text baselines are **CS-9b's cache
+  hits** (the same tev1 id and digest, the same prompt, the same cell layout —
+  checked: 1,320 of 1,320 planned calls are already cached), so the round pays
+  for the ablations only.
+
+  **The falsification readouts, made concrete** (the pre-registration states the
+  conditions; this fixes the numbers):
+
+  - *Version B, question 3.* For every gold cell the **label-linked unit** is
+    the unit whose content tokens overlap the gold label's name the most (ties:
+    the earliest). The measure: the mean drop in the decision probability of the
+    gold cells when the **label-linked** unit is removed, against the mean drop
+    when a **non-linked** unit is removed, with the **label-blind counterpart's**
+    two drops beside them. The second measure: the mean drop of the **formulaic**
+    units (a unit that starts with one of the config's `preprocess.strip_openers`)
+    against the **topical** units'. The third: the mean drop over the **gold**
+    cells against the mean drop over the **background** cells. **Falsified** if
+    the label-linked drop is not larger than the non-linked drop, or if the
+    formulaic drop is not smaller than the topical drop, or if the label-blind
+    counterpart's pattern is the same as the real arm's (the attribution would
+    then not be label-driven).
+  - *Version A, question 2.* A label's word is **distinctive** when no other
+    label in the 68-label space contains it, and **generic** otherwise. The
+    measure: the held-out labels' per-word contributions split between the
+    generic and the distinctive words, with the generic catch-alls ("General",
+    "Other", "ESC rights - general" — all three are themselves held out) beside
+    them. **Falsified** if the generic words carry the held-out labels' coverage.
+  - *Both.* The per-word contributions must sum to `lex_label_coverage` exactly
+    (the artifact records the largest deviation). A null is a legitimate outcome
+    and is reported as one.
+
   *Exit:* the map is in the track log with its numbers beside it, and it answers —
   or explicitly fails to answer — each of the three questions, with the
   falsification conditions read out one by one.
