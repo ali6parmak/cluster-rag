@@ -490,6 +490,29 @@ def test_sweep_command_executes_cells_in_order(repo_root: Path, monkeypatch, cap
     assert "Sweep" in out and "2 cell(s)" in out and "Sweep finished" in out
 
 
+def test_sweep_command_dispatches_the_hit_map(repo_root: Path, monkeypatch) -> None:
+    """A `hitmap-upr` cell dispatches to the map's own command function."""
+    calls: list[tuple[str, str]] = []
+
+    def fake_hitmap(config):
+        calls.append(("hitmap-upr", config.run_id))
+        return 0
+
+    monkeypatch.setattr(sweep_commands, "_cmd_hitmap_upr", fake_hitmap)
+    sweep_file = repo_root / "hitmap_sweep.py"
+    sweep_file.write_text(
+        "from cluster_rag.config import UprAnalysisConfig\n"
+        "from cluster_rag.sweep import HitMapUprCell, define_sweep\n"
+        "SWEEP = define_sweep(\n"
+        "    [HitMapUprCell(label='upr-hitmap-x', k=2, embedding_run='upr-embed-a',\n"
+        "                  analysis=UprAnalysisConfig())],\n"
+        "    dataset='upr', label='sweep-label')\n",
+        encoding="utf-8",
+    )
+    assert main(["sweep", "--file", str(sweep_file)]) == 0
+    assert calls == [("hitmap-upr", "upr-hitmap-x")]
+
+
 def test_sweep_command_runs_stats_by_command_name(repo_root: Path, monkeypatch) -> None:
     """`stats` and `stats-omct` cells dispatch to _cmd_stats with the omct flag."""
     calls: list[tuple[str, str, str]] = []

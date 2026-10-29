@@ -23,6 +23,7 @@ from cluster_rag.commands.upr import (
     _cmd_analyze_upr,
     _cmd_decide_upr,
     _cmd_evaluate,
+    _cmd_hitmap_upr,
     _cmd_rerank_upr,
 )
 from cluster_rag.sweep import COMMANDS as SWEEP_COMMANDS
@@ -121,6 +122,8 @@ def _cmd_sweep(path: Path) -> int:
             code = _cmd_decide_upr(run.config)
         elif run.command == "rerank-upr":  # the track's UPR reranker probe (CS-15)
             code = _cmd_rerank_upr(run.config)
+        elif run.command == "hitmap-upr":  # the track's hit map (CS-18)
+            code = _cmd_hitmap_upr(run.config)
         else:  # a command the CLI does not implement: fail loudly, never guess
             raise ValueError(
                 f"sweep cell {run.label!r} runs command {run.command!r}, which this CLI "
