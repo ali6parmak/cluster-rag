@@ -41,10 +41,22 @@ from cluster_rag.text_processors.features.lexical_map import (
     WORD_GENERIC,
     aggregate_lexical_map,
     build_lexical_map,
+    build_text_side_map,
     cell_coverage,
     exactness_check,
     label_word_classes,
     label_word_contributions,
+    text_side_coverage,
+    text_word_contributions,
+)
+from cluster_rag.text_processors.surrogate import (
+    agreement_with_carrier,
+    build_design_matrix,
+    build_vocabulary,
+    fit_ridge_surrogate,
+    surrogate_predictions,
+    surrogate_quality,
+    topic_attribution,
 )
 
 OPENERS: tuple[str, ...] = ("continue to", "ensure that the", "take all necessary measures to")
@@ -448,3 +460,171 @@ def test_the_pure_core_stays_pure() -> None:
         source = Path(module.__file__).read_text("utf-8")
         for forbidden in ("httpx", "sqlite3", "torch", "sentence_transformers"):
             assert forbidden not in source
+
+
+# --- mode B: the text-side word map ---
+
+
+def test_the_text_side_decomposition_is_exact() -> None:
+    """The text's words sum to the cell's ``lex_text_coverage``."""
+    text = "Ensure safe working conditions and protect the labour rights of migrant workers"
+    contributions = text_word_contributions(text, "Labour rights")
+    assert sum(item.contribution for item in contributions) == pytest.approx(
+        text_side_coverage(text, "Labour rights")
+    )
+    # "labour" is fully covered by the label's name, "migrant" is not
+    words = {item.word: item for item in contributions}
+    assert words["labour"].coverage == pytest.approx(1.0)
+    assert words["migrant"].coverage == pytest.approx(0.0)
+    assert words["labour"].contribution > words["migrant"].contribution
+
+
+def test_the_text_side_map_covers_the_grid_and_its_words() -> None:
+    """The map's own aggregates: the exactness, the words and the per-cell rows."""
+    texts = ["Ensure the labour rights of migrant workers", "Ratify the convention"]
+    labels = ["Labour rights", "International instruments"]
+    gold = np.asarray([[True, False], [False, True]])
+    block = build_text_side_map(texts, labels, gold)
+    assert block["exactness"]["max_abs_error"] == pytest.approx(0.0)
+    assert block["exactness"]["n_cells"] == 4
+    assert block["grid"]["n_cells"] == 4
+    # the gold cell's decomposition carries the matching word
+    cell = block["per_gold_cell"][0]
+    assert cell["label"] == "Labour rights"
+    assert cell["words"][0]["word"] == "labour"
+    # the corpus-level words are the ones that matched ("rights" matches more
+    # labels partially, so it can outrank "labour" in the corpus totals)
+    matched = {word["word"] for word in block["corpus_top_words"]}
+    assert "labour" in matched
+    assert block["concentration"]["n_words"] >= 1
+
+
+# --- mode C: the surrogate attribution ---
+
+
+def test_the_surrogate_reads_the_topic_it_is_asked_about() -> None:
+    """The per-topic coefficients separate the two topics' own words."""
+    texts = [
+        "ensure freedom of expression",
+        "ratify the migrant workers convention",
+        "freedom of expression online",
+        "migrant workers rights",
+    ]
+    vocabulary = build_vocabulary(texts, min_document_frequency=1)
+    design = build_design_matrix(texts, vocabulary)
+    targets = np.asarray([[0.9, 0.1], [0.2, 0.8], [0.85, 0.15], [0.1, 0.75]])
+    fit = fit_ridge_surrogate(design, targets, ridge_lambda=1e-6)
+    assert fit.coefficients.shape == (2, len(vocabulary))
+    rows = topic_attribution(fit, vocabulary, ["Freedom of expression", "Migrant workers"])
+    first = {word["word"] for word in rows[0]["top_positive_words"]}
+    second = {word["word"] for word in rows[1]["top_positive_words"]}
+    assert "expression" in first and "freedom" in first
+    assert "migrant" in second or "workers" in second
+    assert not (first & second)
+
+
+def test_the_surrogate_quality_is_reported_per_topic() -> None:
+    """The quality block carries the per-topic correlation and R²."""
+    texts = ["freedom of expression", "migrant workers", "expression online", "workers rights"]
+    vocabulary = build_vocabulary(texts, min_document_frequency=1)
+    design = build_design_matrix(texts, vocabulary)
+    targets = np.asarray([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8]])
+    fit = fit_ridge_surrogate(design, targets, ridge_lambda=1e-6)
+    quality = surrogate_quality(surrogate_predictions(fit, design), targets)
+    assert len(quality["per_topic_correlation"]) == 2
+    assert quality["mean_correlation"] == pytest.approx(1.0)
+
+
+def test_the_carrier_agreement_counts_the_words_inside_the_clause() -> None:
+    """The cross-check: the top words that fall inside the carrier clause."""
+    attribution = [
+        {
+            "topic": "Freedom of movement",
+            "top_positive_words": [
+                {"word": "movement", "coefficient": 1.0},
+                {"word": "migrant", "coefficient": 0.5},
+            ],
+        }
+    ]
+    carriers = {(0, 0): "as well as freedom of movement"}
+    block = agreement_with_carrier(
+        attribution, carriers, text_words={0: "as well as freedom of movement for all"}
+    )
+    assert block["n_pairs"] == 1
+    # "movement" is inside the clause, "migrant" is not in the text at all
+    assert block["share_inside_the_carrier"] == pytest.approx(0.5)
+    assert block["share_elsewhere_in_the_text"] == pytest.approx(0.0)
+    assert block["share_absent_from_the_text"] == pytest.approx(0.5)
+    # the chance level is the carrier clause's own share of the text's words
+    assert block["chance_level"] is not None
+    assert block["beats_the_chance_level"] in (True, False, None)
+
+
+def test_the_surrogate_is_fitted_on_the_train_side_only() -> None:
+    """The vocabulary is the fit side's: a val-only word is not a feature."""
+    vocabulary = build_vocabulary(
+        ["freedom of expression", "labour rights"], min_document_frequency=1
+    )
+    # the vocabulary is sorted, so the design matrix's columns are the same
+    # from one run to the next
+    assert vocabulary == ("expression", "freedom", "labour", "rights")
+
+
+# --- the CLI: the two new modes ---
+
+
+def test_hitmap_upr_runs_the_surrogate_mode(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """The surrogate mode writes its block: the fit, the quality and the attribution."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_surrogate: true
+    include_ablation: true
+    surrogate_min_df: 1
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-surrogate-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-surrogate-test" / "hitmap.json").read_text("utf-8")
+    )
+    arm = next(iter(payload["ablation_map"]["arms"].values()))
+    surrogate = arm["surrogate"]
+    assert surrogate["fit"]["side"].startswith("the train split")
+    assert surrogate["fit"]["n_texts"] > 0
+    assert "mean_correlation" in surrogate["quality"]
+    assert len(surrogate["per_topic"]) == payload["text_set"]["n_labels"]
+    # the topic-faithfulness yardstick is reported beside the attribution
+    assert "the real attribution's own-name share" in surrogate["topic_faithfulness"]
+
+
+def test_hitmap_upr_runs_the_text_side_mode(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """The text-side mode writes its block (and skips the ablation)."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_text_side_map: true
+    include_surrogate: false
+    include_ablation: false
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-text-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-text-test" / "hitmap.json").read_text("utf-8")
+    )
+    assert payload["text_side_map"]["exactness"]["max_abs_error"] == pytest.approx(0.0)
+    arm = next(iter(payload["ablation_map"]["arms"].values()))
+    assert arm["measurement"]["applicable"] is False

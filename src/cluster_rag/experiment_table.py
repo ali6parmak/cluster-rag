@@ -621,6 +621,12 @@ HITMAP_UPR_COLUMNS: tuple[str, ...] = (
     "label_driven",
     "heldout_generic_share",
     "top1_word_share",
+    "text_side_exactness",
+    "text_side_top1_share",
+    "surrogate_r",
+    "surrogate_own_name_share",
+    "surrogate_carrier_agreement",
+    "surrogate_chance_level",
     "seconds",
 )
 HITMAP_UPR_KEY_COLUMNS: tuple[str, ...] = ("run_id", "unit", "model")

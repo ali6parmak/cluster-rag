@@ -74,6 +74,7 @@ research record and are **not** indexed here.
 | [CS-15 — the zero-shot rerankers on UPR, as **scorers**](#cs-15--the-zero-shot-rerankers-on-upr-as-scorers-2026-10-27) | nine `upr-rerank-<model>-<candidate set>` runs | a null as a re-ordering: the best arm **+0.0091 [−0.0122, +0.0294]**; the label-blind counterpart is catastrophic (−0.27…−0.38) → the signal is label-driven and the *ordering* is the weak part | the CS-15 runs |
 | [CS-16 — the reranker's score as a **pack feature**](#cs-16--the-rerankers-score-as-a-pack-feature-2026-10-27) | thirteen `upr-analyze-learned-rerank-*` runs | the listwise model's score lifts the pack 0.5965 → **0.6117** (+0.0152 [+0.0015, +0.0280]) — the best UPR number — but the pre-registered **+0.02 margin is not met**, so the slot decision is the reviewer's | the CS-16 runs |
 | [CS-18 — the hit map: which words carry the signal](#cs-18--the-hit-map-which-words-carry-the-signal-2026-10-29) | two `upr-hitmap-*` runs (the lexical map + the decision model's ablation) | the map answers question 3 with a **yes and a no**: the decision model keys on the label's own words (the label-linked clause's drop 0.2687 against 0.0918, the label-blind counterpart flat) **and** it leans on the recommendation's opening clause (the formulaic drop is *larger*, +0.0489 [+0.0139, +0.0849]); the lexical map's exactness is 0.0 and the held-out labels' coverage is carried by their own distinctive words (the generic share 0.3105) | `results/upr-hitmap-{sentence,clause}/hitmap.json` |
+| [CS-19 — the hit map's two cheap modes](#cs-19--the-hit-maps-two-cheap-modes-the-text-side-word-map-and-the-surrogate-attribution-2026-10-29) | two `upr-hitmap-*` runs (the text-side word map + the surrogate attribution) | the **text side** of the word map (the pack's second lexical feature, exact: the deviation 0.0) says the matching words are the UPR register ("rights" 0.2260, "human" 0.0597), not the topics; the **surrogate** of the model's own probability reads each topic correctly (the out-of-sample correlation 0.6933; the blind counterpart's attribution follows the *shifted* topic, 0.0806 against 0.0090) and **agrees with the causal map** (its words land in the carrier clause 83.4% of the time against a 48.4% chance level) | `results/upr-hitmap-{text,surrogate}/hitmap.json` |
 
 ## Change sets
 
@@ -5225,3 +5226,159 @@ pack's lexical block — and is labelled as such wherever it is shown); nothing
 about the **frame and the content apart** (the clause splitter cannot separate
 them in this corpus); and nothing about the 312 val texts the clause arm cannot
 ablate (they are reported as "not ablatable", never dropped).
+
+## CS-19 — the hit map's two cheap modes: the text-side word map and the surrogate attribution (2026-10-29)
+
+**The runs.** Two, both on the UPR **val** split (660 texts, 68 labels, 1,312
+gold cells), the text set pre-registered as the whole split, the decision model
+the very same pinned `tev1` the CS-13 feature and the CS-18 map used:
+
+| run | the mode | the artifact | the cost |
+|---|---|---|---|
+| `upr-hitmap-text` | the **text-side** word map | `results/upr-hitmap-text/hitmap.json` | **0 model calls** (1.7 s) |
+| `upr-hitmap-surrogate` | the **surrogate** attribution | `results/upr-hitmap-surrogate/hitmap.json` | **0 new model calls** (4.5 s) |
+
+Every call both runs make is a **cache hit**: the val grid and the train-side
+fit grid are the CS-9b run's (1,320 + 3,352 planned calls, all cached — checked
+before the run). The surrogate's ablation recomputation (for the cross-check)
+is the CS-18 round's cache too, and it reproduced CS-18's numbers exactly (the
+label-linked drop 0.2687 against 0.0918).
+
+### Mode B — the text-side word map (the pack's second lexical feature, decomposed)
+
+The pack has **two** lexical features and they are not symmetric:
+`lex_label_coverage` is "the **topic's** words, how much of each is in the text"
+(CS-18's mode A) and `lex_text_coverage` is "the **text's** words, how much of
+each is in the topic's name". Both are averages, so both decompose exactly.
+
+**The exactness: the largest deviation between the per-word contributions' sum
+and the feature's own value is 0.0, over all 44,880 cells.**
+
+**The corpus-level map (the text's own words, ranked by the coverage they
+carry):**
+
+| the word | its share | the topics it matches |
+|---|---|---|
+| rights | 0.2260 | 68 |
+| human | 0.0597 | 68 |
+| right | 0.0347 | 68 |
+| national | 0.0344 | — |
+| international | 0.0255 | — |
+| efforts | 0.0145 | — |
+| discrimination | 0.0125 | — |
+| freedom | 0.0115 | — |
+| protection | 0.0111 | — |
+| legislation | 0.0110 | — |
+
+The signal is **distributed**: the top word carries 0.2260 of the grid's total,
+the top five 0.3804, the top twenty 0.5173 — over **1,985** distinct words.
+The head of the list is the **UPR register** ("rights", "human", "national",
+"international", "efforts"), not the topics: the same words match *every*
+topic, which is exactly why the word-overlap feature cannot rank on its own.
+
+**The per-document view (the "which word of *this* text" question):**
+
+| the text | its top topic | the words that carried it |
+|---|---|---|
+| 0 | Right to development (0.2063) | *development* 0.1667, *implement* 0.0278, *achieve* 0.0119 |
+| 2 | National Human Rights Institution (0.5435) | *human* 0.1818, *rights* 0.1818, *national* 0.0909 |
+
+**The per-topic view (the text words that match a topic):** "Access to justice"
+← *access* 3.25, *justice* 1.46, *violence* 0.72; "Asylum-seekers - refugees" ←
+*refugees* 1.43, *asylum* 1.22, *seekers* 0.94, *workers* 0.38.
+
+### Mode C — the surrogate attribution (the model's own words, cheaply)
+
+A **ridge surrogate** of the decision model's own probability: the text's
+content words in, the model's confidence out, one coefficient vector per topic.
+Fitted on the **train** split (1,676 texts, 1,203 features — the train
+corpus's words with df ≥ 3 — λ = 1.0); no val text and no val label enters the
+fit, and the vocabulary is the train corpus's (a word that appears only in val
+never becomes a feature).
+
+**The validity (read out first, because a surrogate's attribution is worth
+nothing if the surrogate does not track the model):**
+
+| the check | the real arm | the label-blind counterpart |
+|---|---|---|
+| the out-of-sample correlation with the model's own val probability | **0.6933** (the per-topic range 0.2920–0.8783, the median 0.7219) | 0.6935 |
+| the out-of-sample R² | **0.4466** | 0.4468 |
+| the share of the top words that are the **asked** topic's own name words | **0.0786** | **0.0090** |
+| the share of the top words that are the **shifted** topic's own name words | — | **0.0806** |
+
+The surrogate tracks the model well out of sample (the mean correlation 0.69),
+so its coefficients are worth reading. And the **topic-faithfulness** yardstick
+holds: the blind counterpart's attribution is about the topic it is *actually*
+asked about — its own-name share for the asked topic is **0.0090**, against
+**0.0806** for the shifted one, i.e. the same magnitude as the real arm's
+0.0786. The attribution follows the pairing.
+
+**The examples (the per-topic attribution):**
+
+| the topic | its strongest positive words | its strongest negative words |
+|---|---|---|
+| Corruption | *corruption* 0.635, *transparent* 0.201, *unlawful* 0.155, *transparency* 0.155 | *individual*, *physical*, *unemployment* |
+| Access to justice | *judiciary* 0.367, *justice* 0.361, *courts* 0.281, *impunity* 0.253, *legal* 0.252 | *teachers*, *surveillance*, *press* |
+| Gender-based violence | *violence* 0.400, *rape* 0.276, *cedaw* 0.249, *women* 0.206 | — |
+| Freedom of religion and belief | *religious* 0.217, *iccpr* 0.153, *ratified* 0.147, *persecution* 0.099 | — |
+| Asylum-seekers - refugees | *migrants* 0.184, *return* 0.174, *displaced* 0.172 | — |
+| **General** (the catch-all) | *complete* 0.064, *lawyer* 0.060, *becoming* 0.056, *progress* 0.053 | — |
+| **Other** (the catch-all) | *complete* 0.104, *effects* 0.073, *profiling* 0.061 | — |
+
+**The blind counterpart, for the same topics, is a different topic's
+attribution** — which is the point: "General" is asked about **"HIV - Aids"**
+and reads *hiv* 0.563, *aids* 0.212, *healthcare* 0.100; "Other" is asked about
+**"Poverty"** and reads *poverty* 0.640, *food* 0.220, *livelihoods* 0.207;
+"Freedom of religion and belief" is asked about **"Freedom of the press"** and
+reads *journalists* 0.504, *press* 0.362, *libel* 0.320.
+
+**And the two worst-fitted topics are the catch-alls:** "Other" (the
+correlation 0.2920) and "General" (0.3681) are the two lowest of the 68 — the
+model's confidence on the catch-alls is the **least** word-driven of any topic,
+which is the same finding CS-18 reached from the other side ("Other" has no
+content word at all for the lexical feature, so the word-overlap feature cannot
+reach it; here the *model's* confidence on it is the least predictable from
+words).
+
+### The cross-check against the causal map (the cheap attribution against the expensive ablation)
+
+For every (text, topic) pair whose carrier clause the CS-18 ablation
+identified (520 pairs), where do the surrogate's top words sit?
+
+| | the share |
+|---|---|
+| inside the carrier clause (of the top words that the text contains at all) | **0.8338** |
+| the **chance level** (the carrier clause's own share of the text's words) | **0.4839** |
+
+**The two methods agree**: when the surrogate's top words appear in a text,
+they land inside the clause the ablation says carries the signal **83.4%** of
+the time, against a 48.4% chance level. (The naive shares are in the artifact:
+inside 0.0764, elsewhere in the text 0.0205, absent from the text 0.9031 — the
+topic's top words are corpus-level, so most of them are simply not in any given
+text, which is why the conditional share is the one that carries the signal.)
+
+### The falsification conditions, read out one by one
+
+1. *Mode C's validity* — the surrogate's **out-of-sample quality** is reported
+   first, and it is good (the mean correlation 0.6933): the surrogate tracks
+   the model, so its attribution is readable.
+2. *Mode C's topic-faithfulness* — the real attribution's top words must be the
+   asked topic's own name words and the blind counterpart's must follow the
+   **shifted** topic: **holds** (0.0786 against the blind's 0.0090 for the asked
+   topic and 0.0806 for the shifted one).
+3. *Mode C against the causal map* — the attribution's words must land in the
+   carrier clause: **holds** (0.8338 against a 0.4839 chance level).
+4. *Mode B's exactness* — the per-word contributions must sum to
+   `lex_text_coverage` exactly: **holds** (the largest deviation 0.0 over
+   44,880 cells).
+
+### What this change set does not say
+
+Nothing about `test` (only **val** was touched); nothing **causal** about the
+surrogate (it is an attribution — the causal half is the CS-18 ablation, and
+the two are cross-checked here, not merged); nothing about the **word-level
+causal ablation** (mode E: delete one word and re-ask) — it is the expensive
+instrument (~1k–26k calls) and it needs its own pre-registration; nothing
+about the **embedding model's** attribution (out of scope since CS-18); and
+nothing about the 312 val texts the clause arm cannot ablate (reported as "not
+ablatable", never dropped).

@@ -53,7 +53,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | What is the safe-negative rule — the track's deliverable? | §Stage 3.5.2 · §CS-9b · §CS-14 · `TEXT_PROCESSING_PLAN.md` §8 |
 | What is the label catalog? | §CS-11 · `catalogs/upr_labels.jsonl` (+ `catalogs/upr_labels.meta.json`) |
 | What did the zero-shot rerankers do? | §CS-15 (as scorers) · §CS-16 (as a pack feature) |
-| What did the hit map show (which words carry the signal)? | the track log's §CS-18 · the archive's §7.1.4 (the pre-registration and its amendment) |
+| What did the hit map show (which words carry the signal)? | the track log's §CS-18 (the topic-side map + the causal ablation) · §CS-19 (the text-side map + the surrogate attribution) · the archive's §7.1.4 / §7.1.5 |
 | What is still open, and what is the next step? | `TEXT_PROCESSING_PLAN.md` §5 (the unanswered questions) and §7 (CS-17) · `PLAN.md` §7 |
 | What are the main pipeline's phases, and which are done? | `PLAN.md` §4 |
 | What are the coding rules and the pure-core boundary? | `AGENTS.md` "Coding conventions" · `TEXT_PROCESSING_PLAN.md` §2 and §4 |

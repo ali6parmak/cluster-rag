@@ -621,6 +621,9 @@ per change set, so a reader can always tell *moved* from *lost*:
   archive's §7.1.3.
 - **CS-18** (the hit map: which words carry the signal) → executed 2026-10-29 → the
   archive's §7.1.4 and the track log's §CS-18.
+- **CS-19** (the hit map's two cheap modes: the text-side word map and the
+  surrogate attribution) → executed 2026-10-29 → the archive's §7.1.5 and the
+  track log's §CS-19.
 
 The change sets still open:
 

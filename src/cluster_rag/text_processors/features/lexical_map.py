@@ -127,6 +127,64 @@ def cell_coverage(
     return soft_coverage(name_ngrams, char_ngrams(text))
 
 
+def text_side_coverage(
+    text: str,
+    label_name: str,
+    *,
+    stopwords: frozenset[str] = DEFAULT_STOPWORDS,
+) -> float:
+    """The cell's ``lex_text_coverage`` value (the feature's own definition).
+
+    The pack's **second** lexical feature, the mirror of
+    :func:`cell_coverage`: the *text's* content words, and how much of each one
+    the label's name has. It is the same average, so it decomposes exactly the
+    same way (see :func:`text_word_contributions`).
+    """
+    text_ngrams = [char_ngrams(token) for token in content_tokens(text, stopwords)]
+    return soft_coverage(text_ngrams, char_ngrams(label_name))
+
+
+def text_word_contributions(
+    text: str,
+    label_name: str,
+    *,
+    stopwords: frozenset[str] = DEFAULT_STOPWORDS,
+) -> tuple[WordContribution, ...]:
+    """The exact per-word decomposition of ``lex_text_coverage`` for one cell.
+
+    The **text side** of the lexical map: which words *of the text* are
+    matching the label's name, and by how much. The mirror of
+    :func:`label_word_contributions` (which decomposes the *label's* words):
+    the pack has both features, and both are averages, so both split exactly.
+
+    Args:
+        text: The cell's text.
+        label_name: The cell's label name.
+        stopwords: The stopwords of the coverage (the feature's own unit).
+
+    Returns:
+        The text's content words and their contributions, in the text's order.
+    """
+    label_ngrams = char_ngrams(label_name)
+    tokens = content_tokens(text, stopwords)
+    contributions: list[WordContribution] = []
+    for token in tokens:
+        grams = char_ngrams(token)
+        if not grams:
+            contributions.append(WordContribution(word=token, coverage=0.0, contribution=0.0))
+            continue
+        hits = sum(1 for gram in grams if gram in label_ngrams)
+        coverage = hits / len(grams)
+        contributions.append(
+            WordContribution(
+                word=token,
+                coverage=coverage,
+                contribution=coverage / len(tokens),
+            )
+        )
+    return tuple(contributions)
+
+
 def label_word_classes(
     labels: Sequence[str],
     *,
@@ -494,3 +552,188 @@ def _label_words(
         )
     rows.sort(key=lambda row: (-float(row["gold_contribution"]), str(row["word"])))
     return rows
+
+
+def build_text_side_map(
+    texts: Sequence[str],
+    labels: Sequence[str],
+    gold: np.ndarray,
+    *,
+    stopwords: frozenset[str] = DEFAULT_STOPWORDS,
+    top_words: int = 5,
+    per_label_words: int = 15,
+) -> dict[str, object]:
+    """The **text side** of the lexical map: the text's words and their shares.
+
+    The mirror of :func:`build_lexical_map`: the pack's second lexical feature
+    (``lex_text_coverage``) measures how much of each of the **text's** content
+    words the label's name has, so every cell decomposes exactly as well. This
+    is the "which word of *this* text did the matching" view, and over the grid
+    it is the corpus's own long tail of matching words.
+
+    The pass keeps only what the map reports (the gold cells' decompositions,
+    each text's top label and its words, the per-label and corpus-level word
+    totals) — the full grid of decompositions is never held in memory.
+
+    Args:
+        texts: The texts (the grid's rows).
+        labels: The label space (the grid's columns).
+        gold: The bool gold matrix of the grid.
+        stopwords: The stopwords of the coverage.
+        top_words: How many words each text's top-label row carries.
+        per_label_words: How many words each label's row carries.
+
+    Returns:
+        The text-side map block (JSON-friendly).
+
+    Raises:
+        ValueError: If the gold matrix's shape does not match the grid.
+    """
+    truth = np.asarray(gold, dtype=bool)
+    n_labels = len(labels)
+    if truth.ndim != 2 or truth.shape[1] != n_labels:
+        raise ValueError(f"the gold matrix must have {n_labels} columns, got {truth.shape}")
+    n_texts = truth.shape[0]
+
+    label_ngrams = {label: char_ngrams(label) for label in labels}
+    corpus_totals: Counter[str] = Counter()
+    corpus_labels: dict[str, set[str]] = {}
+    label_totals: dict[str, Counter[str]] = {label: Counter() for label in labels}
+    label_values: dict[str, float] = dict.fromkeys(labels, 0.0)
+    label_cells: Counter[str] = Counter()
+    per_gold_cell: list[dict[str, object]] = []
+    per_text_top: list[dict[str, object]] = []
+    max_error = 0.0
+
+    for row, text in enumerate(texts):
+        tokens = content_tokens(text, stopwords)
+        token_ngrams = [char_ngrams(token) for token in tokens]
+        best_label: str | None = None
+        best_value = -1.0
+        best_words: tuple[WordContribution, ...] = ()
+        for column, label in enumerate(labels):
+            name = label_ngrams[label]
+            contributions: list[WordContribution] = []
+            total = 0.0
+            for token, grams in zip(tokens, token_ngrams, strict=True):
+                if not grams:
+                    contributions.append(WordContribution(token, 0.0, 0.0))
+                    continue
+                coverage = sum(1 for gram in grams if gram in name) / len(grams)
+                total += coverage
+                contributions.append(WordContribution(token, coverage, coverage / len(tokens)))
+            value = (total / len(tokens)) if tokens else 0.0
+            # the exactness check against the pack's own formula
+            reference = soft_coverage(token_ngrams, name)
+            max_error = max(max_error, abs(reference - value))
+            label_values[label] += value
+            label_cells[label] += 1
+            for contribution in contributions:
+                corpus_totals[contribution.word] += contribution.contribution
+                corpus_labels.setdefault(contribution.word, set()).add(label)
+                label_totals[label][contribution.word] += contribution.contribution
+            if value > best_value:
+                best_value = value
+                best_label = label
+                best_words = tuple(contributions)
+            if truth[row, column]:
+                per_gold_cell.append(
+                    {
+                        "text_row": row,
+                        "label": label,
+                        "value": round(value, 6),
+                        "words": _word_rows(contributions, top_words),
+                    }
+                )
+        per_text_top.append(
+            {
+                "text_row": row,
+                "label": best_label,
+                "value": round(best_value, 6),
+                "words": _word_rows(best_words, top_words),
+            }
+        )
+
+    total_contribution = float(sum(corpus_totals.values()))
+    ranked = sorted(corpus_totals.items(), key=lambda item: (-item[1], item[0]))
+    shares: list[float] = []
+    cumulative = 0.0
+    for _, value in ranked:
+        cumulative += value
+        shares.append(cumulative / total_contribution if total_contribution else 0.0)
+    per_word_rows = [
+        {
+            "word": word,
+            "total_contribution": round(float(value), 6),
+            "share": round(float(value) / total_contribution, 6) if total_contribution else 0.0,
+            "n_labels": len(corpus_labels.get(word, ())),
+        }
+        for word, value in ranked
+    ]
+    return {
+        "feature": "lex_text_coverage",
+        "note": (
+            "the text side of the word-overlap feature's own definition (the "
+            "pack's second lexical feature): which words OF THE TEXT matched "
+            "the label's name, and by how much"
+        ),
+        "grid": {"n_texts": n_texts, "n_labels": n_labels, "n_cells": n_texts * n_labels},
+        "exactness": {"n_cells": n_texts * n_labels, "max_abs_error": max_error},
+        "concentration": {
+            "total_contribution": round(total_contribution, 6),
+            "n_words": len(corpus_totals),
+            "top1_word_share": round(shares[0], 6) if shares else None,
+            "top5_word_share": round(shares[4], 6) if len(shares) > 4 else None,
+            "top20_word_share": round(shares[19], 6) if len(shares) > 19 else None,
+        },
+        "per_text_top_label": per_text_top,
+        "per_gold_cell": per_gold_cell,
+        "per_label": [
+            {
+                "label": label,
+                "n_cells": int(label_cells.get(label, 0)),
+                "mean_coverage": _mean(label_values.get(label, 0.0), label_cells.get(label, 0)),
+                "words": [
+                    {"word": word, "total_contribution": round(float(value), 6)}
+                    for word, value in sorted(
+                        label_totals[label].items(), key=lambda item: (-item[1], item[0])
+                    )[:per_label_words]
+                ],
+            }
+            for label in labels
+        ],
+        "corpus_top_words": per_word_rows[: max(top_words * 5, 25)],
+        "per_word": per_word_rows,
+    }
+
+
+def _word_rows(
+    contributions: Sequence[WordContribution],
+    limit: int,
+) -> list[dict[str, object]]:
+    """The contributions as rows, the strongest first.
+
+    A word that occurs twice in the text is **one** row with its occurrences
+    counted and its contributions added: the feature averages over the token
+    *occurrences*, so grouping them changes neither the sum nor the share.
+    """
+    grouped: dict[str, dict[str, float]] = {}
+    for contribution in contributions:
+        row = grouped.setdefault(
+            contribution.word,
+            {"coverage": 0.0, "contribution": 0.0, "n": 0.0},
+        )
+        row["coverage"] += contribution.coverage
+        row["contribution"] += contribution.contribution
+        row["n"] += 1.0
+    rows = [
+        {
+            "word": word,
+            "n_occurrences": int(row["n"]),
+            "coverage": round(row["coverage"] / row["n"], 6),
+            "contribution": round(row["contribution"], 6),
+        }
+        for word, row in grouped.items()
+    ]
+    rows.sort(key=lambda row: (-float(row["contribution"]), str(row["word"])))
+    return rows[:limit]

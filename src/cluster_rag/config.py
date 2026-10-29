@@ -1342,13 +1342,32 @@ class UprHitMapConfig(BaseModel):
             texts average ~152 characters and 98.9% of them are a single
             sentence, so the sentence unit can ablate almost nothing.
         include_lexical_map: Whether the run computes the **lexical map**
-            (Version A). It is free, so it is on by default.
+            (Version A — the topic side of the word-overlap feature's own
+            decomposition). It is free, so it is on by default.
+        include_text_side_map: Whether the run computes the **text-side map**
+            (the mirror decomposition: which words *of the text* matched the
+            label's name). It is free, so it is on by default.
+        include_surrogate: Whether the run computes the **surrogate
+            attribution** (a ridge surrogate of the decision model's own
+            probability, fitted on the train split, read as a per-topic word
+            attribution). It needs the model's cached probabilities and no new
+            model call, so it is on by default.
+        include_ablation: Whether the run computes the **ablation map** (the
+            decision model's own sentence- or clause-level ablation). It is
+            needed by the surrogate's cross-check against the causal map, and
+            it is off for a run that only wants the cheap modes.
         include_label_blind: Whether the **label-blind counterpart** runs
             beside the ablation (the yardstick that says whether the
             attribution is label-driven). Off by default would make the map
             say nothing, so it is on by default.
         catch_all_labels: The generic catch-alls the map reports beside the
             held-out labels.
+        surrogate_lambda: The ridge penalty of the surrogate (the larger, the
+            more its coefficients are shrunk towards zero).
+        surrogate_min_df: The smallest number of **train** texts a word must
+            appear in to become a surrogate feature.
+        surrogate_top_words: How many words each topic's attribution carries on
+            each side (the positive ones and the negative ones).
         bootstrap: The paired bootstrap's settings (the resampling unit is the
             text).
     """
@@ -1357,8 +1376,14 @@ class UprHitMapConfig(BaseModel):
 
     unit: Literal["sentence", "clause"] = "clause"
     include_lexical_map: bool = True
+    include_text_side_map: bool = True
+    include_surrogate: bool = True
+    include_ablation: bool = True
     include_label_blind: bool = True
     catch_all_labels: tuple[str, ...] = ("General", "Other")
+    surrogate_lambda: float = Field(default=1.0, ge=0.0)
+    surrogate_min_df: int = Field(default=3, ge=1)
+    surrogate_top_words: int = Field(default=15, ge=1)
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
 
 

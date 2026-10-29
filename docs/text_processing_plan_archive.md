@@ -3007,3 +3007,125 @@ line). The verdict and the numbers are the track log's §CS-18.*
     multi-sentence texts** (653 of the 660 val texts are a single sentence) —
     it is reported as the near-null it is, and the clause arm is the one that
     answers the round's questions.
+
+---
+
+## The hit map's two cheap modes (CS-19) — the pre-registration and the verdict
+
+*Added on 2026-10-29, when the round was executed: the live plan's §7.1
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-19.*
+
+### 7.1 The hit map's cheap modes (CS-19)
+
+- [x] **CS-19 — the hit map's two cheap modes: the text-side word map and the
+  surrogate attribution.** CS-18 (the archive's §7.1.4) measured the map's
+  first two versions: the **topic-side** decomposition of the word-overlap
+  feature (mode A) and the decision model's clause-level ablation (mode D, the
+  causal one). A colleague then asked for the **text side** of the word map —
+  "split the text into words, check which one contributes more for each label" —
+  which is the pack's *second* lexical feature (``lex_text_coverage``)
+  decomposed the same exact way. And the question the map was built for is
+  about the **model**, not about a feature, so the map needs a way to read the
+  model's own words cheaply.
+
+  **The mechanism — two modes, both of which cost no new model call.**
+
+  - **Mode B — the text-side word map.** The pack has *two* lexical features
+    and they are not symmetric: ``lex_label_coverage`` is "the topic's words,
+    how much of each is in the text" (CS-18's mode A) and
+    ``lex_text_coverage`` is "the text's words, how much of each is in the
+    topic's name". Both are averages, so both decompose exactly. Mode B is the
+    second: per document, which word of *this* recommendation did the matching,
+    and over the grid, the corpus's own long tail of matching words.
+  - **Mode C — the surrogate attribution.** A **ridge surrogate** of the
+    decision model's own probability: the text's content words in, the model's
+    confidence out, one coefficient vector per topic. Its coefficients are a
+    per-topic word attribution ("these words push the model's confidence on
+    this topic up"). The surrogate is fitted on the **train** split (the CS-9b
+    run's fit-side probabilities, every call a cache hit) and read on val.
+
+  **The falsification (pre-registered, read out one by one).**
+
+  - *Mode C's validity.* A surrogate's attribution is worth nothing if the
+    surrogate does not track the model: the **out-of-sample quality** (the
+    per-topic correlation and R² against the model's own val probabilities) is
+    reported first, and a surrogate that does not track the model is reported
+    as **not usable** (a null, not a map). The **topic-faithfulness** check is
+    the yardstick: the real attribution's top words must be the topic's *own
+    name* words, and the **label-blind counterpart** (the same fit on the
+    shifted pairing) must follow the *shifted* topic instead — if the blind
+    counterpart's top words are the same as the real one's, the attribution is
+    about the model's prior and says nothing about the topics.
+  - *Mode C against the causal map.* The cheap attribution and the expensive
+    ablation must agree about **where** the signal is: the share of a topic's
+    top words that fall **inside** the clause the CS-18 ablation identified as
+    the carrier, against the share that fall in the text but in another clause.
+    A low inside-share means the two methods do not agree, and that is
+    reported as such.
+  - *Mode B's exactness.* The per-word contributions must sum to
+    ``lex_text_coverage`` exactly (the artifact records the largest deviation,
+    as CS-18's mode A did for its own feature).
+
+  **The cost.** **Zero new model calls.** The val grid and the train-side fit
+  grid are the CS-9b run's cache hits (1,320 + 3,352 planned calls, all cached —
+  checked before the run), and mode B is pure arithmetic. The ablation is
+  recomputed only for mode C's cross-check (also cache hits).
+
+  **Leakage.** The surrogate is fitted on the **train** split alone: no val text
+  and no val label enters the fit, and the vocabulary is the train corpus's
+  words (a word that appears only in val never becomes a feature). Val is used
+  only to *measure* the surrogate and for the cross-check. Nothing is fitted on
+  the evaluated split.
+
+  **The runs** (the sweep file, the run ids and the log section are fixed here,
+  before the first call):
+
+  | what | run id | artifact | the log section |
+  |---|---|---|---|
+  | mode B — the text-side word map | `upr-hitmap-text` | `results/upr-hitmap-text/hitmap.json` | `## CS-19 — the hit map's cheap modes` in `docs/experiments_text_processing.md` |
+  | mode C — the surrogate attribution | `upr-hitmap-surrogate` | `results/upr-hitmap-surrogate/hitmap.json` | the same section |
+
+  The sweep file is `experiments_text_processing/upr_hitmap_words_sweep.py`
+  (the sweep label `upr_hitmap_words`, so the comparison table's section is
+  `## UPR — upr_hitmap_words`). The text set is the **whole val split**
+  (pre-registered, as in CS-18). `test` is not touched.
+
+  **What stays open.** The **word-level causal ablation** (mode E: delete one
+  word and re-ask) is *not* in this change set: it is the expensive instrument
+  (~1k–26k calls), and it needs its own pre-registration when it runs.
+
+  *(pre-registered 2026-10-29; **executed 2026-10-29** — the two runs are
+  `upr-hitmap-text` and `upr-hitmap-surrogate`, the log section is
+  `## CS-19 — the hit map's two cheap modes` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR val, 660 texts, 68 labels, 1,312
+  gold cells; the text set = the whole val split, pre-registered; **zero new
+  model calls** — every call is a CS-9b cache hit).**
+
+  - **Mode B — the text-side word map.** The decomposition is **exact** (the
+    largest deviation **0.0** over all 44,880 cells). The matching words are
+    the **UPR register**, not the topics: "rights" **0.2260** (it matches all
+    68 topics), "human" 0.0597, "right" 0.0347, "national" 0.0344,
+    "international" 0.0255. The signal is **distributed**: the top word 0.2260,
+    the top five 0.3804, the top twenty 0.5173, over **1,985** words.
+  - **Mode C — the surrogate attribution.** The surrogate **tracks the model**
+    out of sample (the mean correlation **0.6933**, the R² 0.4466, the per-topic
+    range 0.2920–0.8783), so its coefficients are readable. The
+    **topic-faithfulness** yardstick holds: the real attribution's top words are
+    the asked topic's own name words **0.0786** of the time, while the
+    **label-blind counterpart**'s are the **shifted** topic's **0.0806** — and
+    only **0.0090** for the topic it was asked about (its "General" reads *hiv*,
+    its "Other" reads *poverty*: the pairing is followed). The two
+    **worst-fitted** topics are the catch-alls ("Other" 0.2920, "General"
+    0.3681): the model's confidence on them is the least word-driven of any
+    topic.
+  - **The cross-check against the causal map.** When the surrogate's top words
+    appear in a text, they land inside the clause the CS-18 ablation
+    identified as the carrier **0.8338** of the time, against a **0.4839**
+    chance level: the cheap attribution and the expensive ablation **agree**.
+  - **The word-level causal ablation (mode E) is not in this change set** — it
+    is the expensive instrument (~1k–26k calls) and it needs its own
+    pre-registration.

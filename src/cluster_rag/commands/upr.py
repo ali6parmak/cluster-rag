@@ -83,6 +83,7 @@ from cluster_rag.text_processors.decision.ablation_map import (
     build_ablation_cells,
     build_variants,
     label_bucket_map,
+    label_linked_units,
     measure_ablation,
     text_units,
 )
@@ -92,6 +93,7 @@ from cluster_rag.text_processors.features import ProfileUnits
 from cluster_rag.text_processors.features.lexical_map import (
     aggregate_lexical_map,
     build_lexical_map,
+    build_text_side_map,
     exactness_check,
     label_word_classes,
 )
@@ -112,6 +114,16 @@ from cluster_rag.text_processors.rerank.upr_rerank import (
     fill_restricted_scores,
     label_documents,
     shifted_documents,
+)
+from cluster_rag.text_processors.surrogate import (
+    agreement_with_carrier,
+    build_design_matrix,
+    build_vocabulary,
+    fit_ridge_surrogate,
+    name_word_share,
+    surrogate_predictions,
+    surrogate_quality,
+    topic_attribution,
 )
 from cluster_rag.upr_analysis import (
     UprView,
@@ -771,6 +783,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
 
     # -- Version A: the lexical map (pure, no model call) --------------------------
     lexical_block: dict[str, Any] | None = None
+    text_side_block: dict[str, Any] | None = None
     if hitmap.include_lexical_map:
         map_cells = build_lexical_map(texts, labels)
         word_classes = label_word_classes(labels)
@@ -785,6 +798,8 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
         )
         lexical_block["exactness"] = exactness_check(map_cells, texts, labels)
         lexical_block["label_buckets"] = label_bucket_map(buckets, labels)
+    if hitmap.include_text_side_map:
+        text_side_block = build_text_side_map(texts, labels, gold)
 
     # -- Version B: the ablation map (the decision model's own ablation) ----------
     units = tuple(text_units(text, unit=hitmap.unit, openers=openers) for text in texts)
@@ -826,24 +841,33 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             mismatched=True,
         )
         # The ablated texts: one variant per removable unit.
-        cells = build_ablation_cells(variants, labels)
-        probabilities, truncated, n_calls = score_cells(
-            decider,
-            cells,
-            arm,
-            max_questions_per_call=decision.max_questions_per_call,
-        )
-        ablated = np.asarray(probabilities, dtype=np.float64).reshape(len(variants), len(labels))
-        blind_cells = build_ablation_cells(variants, labels, mismatched=True)
-        blind_probabilities, blind_truncated, blind_calls = score_cells(
-            decider,
-            blind_cells,
-            arm,
-            max_questions_per_call=decision.max_questions_per_call,
-        )
-        blind_ablated = np.asarray(blind_probabilities, dtype=np.float64).reshape(
-            len(variants), len(labels)
-        )
+        ablated = np.zeros((len(variants), len(labels)), dtype=np.float64)
+        blind_ablated = np.zeros((len(variants), len(labels)), dtype=np.float64)
+        n_calls = 0
+        blind_calls = 0
+        truncated: list[bool] = []
+        blind_truncated: list[bool] = []
+        if hitmap.include_ablation:
+            cells = build_ablation_cells(variants, labels)
+            probabilities, truncated, n_calls = score_cells(
+                decider,
+                cells,
+                arm,
+                max_questions_per_call=decision.max_questions_per_call,
+            )
+            ablated = np.asarray(probabilities, dtype=np.float64).reshape(
+                len(variants), len(labels)
+            )
+            blind_cells = build_ablation_cells(variants, labels, mismatched=True)
+            blind_probabilities, blind_truncated, blind_calls = score_cells(
+                decider,
+                blind_cells,
+                arm,
+                max_questions_per_call=decision.max_questions_per_call,
+            )
+            blind_ablated = np.asarray(blind_probabilities, dtype=np.float64).reshape(
+                len(variants), len(labels)
+            )
         measurement = measure_ablation(
             texts=texts,
             labels=labels,
@@ -857,6 +881,16 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             resamples=hitmap.bootstrap.resamples,
             seed=bootstrap_seed,
         )
+        if not hitmap.include_ablation:
+            measurement = {
+                "applicable": False,
+                "note": (
+                    "the ablation map was not computed in this run "
+                    "(upr_analysis.hitmap.include_ablation is false): the "
+                    "reads below are the ones the surrogate's cross-check "
+                    "needs (the carrier clauses), not a measurement"
+                ),
+            }
         info = decider.info
         block = {
             "model": {
@@ -906,6 +940,18 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             },
             "measurement": measurement,
         }
+        if hitmap.include_surrogate:
+            block["surrogate"] = _hitmap_surrogate_block(
+                setup,
+                decider,
+                arm,
+                decision=decision,
+                units=units,
+                labels=labels,
+                gold=gold,
+                hitmap=hitmap,
+                sample=sample,
+            )
         arms[model_config.name] = block
         rows.append(
             _hitmap_upr_row(
@@ -915,6 +961,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
                 unit=hitmap.unit,
                 text_set=text_set,
                 lexical_block=lexical_block,
+                text_side_block=text_side_block,
                 seconds=round(time.perf_counter() - started, 3),
             )
         )
@@ -941,6 +988,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             "label_buckets": label_bucket_map(buckets, labels),
         },
         "lexical_map": lexical_block,
+        "text_side_map": text_side_block,
         "ablation_map": {"arms": arms},
         "config": {
             "unit": hitmap.unit,
@@ -999,7 +1047,10 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             f"{_fmt(lexical_block['concentration']['top1_word_share'], 4)}"
         )
     for name, block in arms.items():
-        reads = block["measurement"]["reads"]
+        reads = block["measurement"].get("reads")
+        if reads is None:
+            print(f"  [{name}] the ablation map was not computed in this run")
+            continue
         linked = reads["label_linked_vs_other"]
         formulaic = reads["formulaic_vs_topical"]
         falsification = block["measurement"]["falsification"]
@@ -1022,6 +1073,184 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
     return 0
 
 
+def _hitmap_surrogate_block(
+    setup: EvalSetup,
+    decider: Any,
+    arm: DecisionArm,
+    *,
+    decision: Any,
+    units: Sequence[Sequence[Any]],
+    labels: Sequence[str],
+    gold: np.ndarray,
+    hitmap: Any,
+    sample: UprDecisionSample,
+) -> dict[str, Any]:
+    """The **surrogate attribution** (the map's mode C) and its validation.
+
+    A ridge surrogate of the decision model's own probability: the text's words
+    in, the model's confidence out, fitted on the **train** split (the CS-9b
+    run's fit side — every call a cache hit) and read on the val split. Its
+    per-topic coefficients are the map's per-topic word attribution.
+
+    Three validations ride along: the surrogate's **out-of-sample quality**
+    (does it track the model at all?), the **topic-faithfulness** check (are
+    the top words the topic's own name words, and does the label-blind
+    counterpart's attribution follow the *shifted* topic instead?), and the
+    **agreement with the causal map** (do the surrogate's top words fall inside
+    the clause the ablation identified as the carrier?).
+    """
+    train_texts = [record.text for record in setup.train_records]
+    fit_sample = UprDecisionSample(
+        texts=tuple(train_texts),
+        labels=tuple(labels),
+        gold=build_label_matrix(setup.train_records, list(labels)),
+        rows=tuple(range(len(train_texts))),
+    )
+    train_matrix, train_cost = score_upr_grid(
+        fit_sample,
+        decider,
+        arm,
+        max_questions_per_call=decision.max_questions_per_call,
+    )
+    train_blind, _ = score_upr_grid(
+        fit_sample,
+        decider,
+        arm,
+        max_questions_per_call=decision.max_questions_per_call,
+        mismatched=True,
+    )
+    val_matrix, _ = score_upr_grid(
+        sample,
+        decider,
+        arm,
+        max_questions_per_call=decision.max_questions_per_call,
+    )
+    val_blind, _ = score_upr_grid(
+        sample,
+        decider,
+        arm,
+        max_questions_per_call=decision.max_questions_per_call,
+        mismatched=True,
+    )
+
+    vocabulary = build_vocabulary(train_texts, min_document_frequency=hitmap.surrogate_min_df)
+    train_design = build_design_matrix(train_texts, vocabulary)
+    val_design = build_design_matrix(list(sample.texts), vocabulary)
+    fit = fit_ridge_surrogate(train_design, train_matrix, ridge_lambda=hitmap.surrogate_lambda)
+    blind_fit = fit_ridge_surrogate(train_design, train_blind, ridge_lambda=hitmap.surrogate_lambda)
+    quality = surrogate_quality(surrogate_predictions(fit, val_design), val_matrix)
+    blind_quality = surrogate_quality(surrogate_predictions(blind_fit, val_design), val_blind)
+    attribution = topic_attribution(
+        fit, vocabulary, list(labels), top_words=hitmap.surrogate_top_words
+    )
+    blind_attribution = topic_attribution(
+        blind_fit, vocabulary, list(labels), top_words=hitmap.surrogate_top_words
+    )
+
+    # the topic-faithfulness check: the real attribution's top words should be
+    # the topic's own name words, and the blind counterpart's should follow the
+    # *shifted* topic instead
+    n_labels = len(labels)
+    real_own: list[float] = []
+    blind_own: list[float] = []
+    blind_control: list[float] = []
+    for index, label in enumerate(labels):
+        share = name_word_share(
+            attribution[index], label, list(labels), top_words=hitmap.surrogate_top_words
+        )
+        if share is not None:
+            real_own.append(share)
+        shifted = labels[(index + 1) % n_labels]
+        share = name_word_share(
+            blind_attribution[index],
+            shifted,
+            list(labels),
+            top_words=hitmap.surrogate_top_words,
+        )
+        if share is not None:
+            blind_own.append(share)
+        share = name_word_share(
+            blind_attribution[index],
+            label,
+            list(labels),
+            top_words=hitmap.surrogate_top_words,
+        )
+        if share is not None:
+            blind_control.append(share)
+
+    # the cross-check with the causal map: the carrier clause per (text, topic)
+    carriers: dict[tuple[int, int], str] = {}
+    for row, row_units in enumerate(units):
+        if len(row_units) < 2:
+            continue
+        for column in np.flatnonzero(gold[row]):
+            linked = label_linked_units(row_units, labels[int(column)])
+            if linked:
+                carriers[(row, int(column))] = row_units[linked[0]].text
+    agreement = agreement_with_carrier(
+        attribution,
+        carriers,
+        top_words=hitmap.surrogate_top_words,
+        text_words=dict(enumerate(sample.texts)),
+    )
+
+    return {
+        "method": (
+            "a ridge surrogate of the decision model's own probability: the "
+            "text's content words in, the model's confidence out. It is an "
+            "ATTRIBUTION (which words predict the model's score), never a "
+            "causal claim -- the causal half of the map is the ablation, and "
+            "the two are cross-checked against each other here."
+        ),
+        "fit": {
+            "side": "the train split (no val text and no val label enters the fit)",
+            "n_texts": len(train_texts),
+            "n_topics": n_labels,
+            "n_features": len(vocabulary),
+            "ridge_lambda": hitmap.surrogate_lambda,
+            "min_document_frequency": hitmap.surrogate_min_df,
+            "feature": "the word's presence in the text (not its count)",
+            "note": (
+                "the vocabulary is the train corpus's words: a word that only "
+                "appears in val never becomes a feature"
+            ),
+        },
+        "cost": {
+            "train_calls_planned": train_cost["n_calls_planned"],
+            "note": (
+                "the fit side's calls are the CS-9b run's fit-side cache hits, "
+                "so the surrogate costs no new model call"
+            ),
+        },
+        "quality": quality,
+        "per_topic": attribution,
+        "topic_faithfulness": {
+            "the real attribution's own-name share": round(float(np.mean(real_own)), 6)
+            if real_own
+            else None,
+            "the blind counterpart's own-name share": round(float(np.mean(blind_own)), 6)
+            if blind_own
+            else None,
+            "the blind counterpart's share of the asked topic": round(
+                float(np.mean(blind_control)), 6
+            )
+            if blind_control
+            else None,
+            "note": (
+                "the real attribution's top words should be the topic's own "
+                "name words; the label-blind counterpart is asked about the "
+                "*shifted* topic, so its top words should be that topic's words "
+                "and NOT the asked one -- the attribution follows the pairing"
+            ),
+        },
+        "agreement_with_the_causal_map": agreement,
+        "label_blind_counterpart": {
+            "quality": blind_quality,
+            "per_topic": blind_attribution,
+        },
+    }
+
+
 def _hitmap_upr_row(
     block: dict[str, Any],
     *,
@@ -1030,25 +1259,37 @@ def _hitmap_upr_row(
     unit: str,
     text_set: dict[str, Any],
     lexical_block: dict[str, Any] | None,
+    text_side_block: dict[str, Any] | None,
     seconds: float,
 ) -> dict[str, Any]:
     """One table row of the hit map (the run's arm)."""
-    reads = block["measurement"]["reads"]
-    blind = block["measurement"]["label_blind_counterpart"]
-    falsification = block["measurement"]["falsification"]
-    linked = reads["label_linked_vs_other"]
-    formulaic = reads["formulaic_vs_topical"]
-    gold = reads["gold_vs_background"]
-    blind_linked = blind["label_linked_vs_other"]
-    blind_formulaic = blind["formulaic_vs_topical"]
+    reads = block["measurement"].get("reads") or {}
+    blind = block["measurement"].get("label_blind_counterpart") or {}
+    falsification = block["measurement"].get("falsification") or {}
+    linked = reads.get("label_linked_vs_other") or {}
+    formulaic = reads.get("formulaic_vs_topical") or {}
+    gold = reads.get("gold_vs_background") or {}
+    blind_linked = blind.get("label_linked_vs_other") or {}
+    blind_formulaic = blind.get("formulaic_vs_topical") or {}
     held_out = (lexical_block or {}).get("held_out_labels") or {}
     concentration = (lexical_block or {}).get("concentration") or {}
+    text_side = text_side_block or {}
+    surrogate = block.get("surrogate") or {}
+    surrogate_quality = surrogate.get("quality") or {}
+    faithfulness = surrogate.get("topic_faithfulness") or {}
+    agreement = surrogate.get("agreement_with_the_causal_map") or {}
 
     def _interval(read: dict[str, Any]) -> str | None:
         interval = read.get("interval")
         if not interval:
             return None
         return f"[{interval[0]:+.4f}, {interval[1]:+.4f}]"
+
+    def _flag(name: str) -> str:
+        block_ = falsification.get(name) or {}
+        if "holds" not in block_:
+            return "n/a"  # the flag was not measured in this run
+        return "yes" if block_.get("holds") else "no"
 
     return {
         "run_id": run_id,
@@ -1073,11 +1314,23 @@ def _hitmap_upr_row(
         "gold_minus_background": _fmt(gold.get("difference"), 4),
         "blind_linked_minus_other": _fmt(blind_linked.get("difference"), 4),
         "blind_formulaic_minus_topical": _fmt(blind_formulaic.get("difference"), 4),
-        "linked_ok": "yes" if falsification["label_linked_drop_greater"]["holds"] else "no",
-        "formulaic_ok": "yes" if falsification["formulaic_drop_smaller"]["holds"] else "no",
-        "label_driven": "yes" if falsification["label_driven"]["holds"] else "no",
+        "linked_ok": _flag("label_linked_drop_greater"),
+        "formulaic_ok": _flag("formulaic_drop_smaller"),
+        "label_driven": _flag("label_driven"),
         "heldout_generic_share": _fmt(held_out.get("generic_share"), 4),
         "top1_word_share": _fmt(concentration.get("top1_word_share"), 4),
+        "text_side_exactness": _fmt((text_side.get("exactness") or {}).get("max_abs_error"), 6),
+        "text_side_top1_share": _fmt(
+            (text_side.get("concentration") or {}).get("top1_word_share"), 4
+        ),
+        "surrogate_r": _fmt(surrogate_quality.get("mean_correlation"), 4),
+        "surrogate_own_name_share": _fmt(
+            faithfulness.get("the real attribution's own-name share"), 4
+        ),
+        "surrogate_carrier_agreement": _fmt(
+            agreement.get("share_inside_among_the_words_in_the_text"), 4
+        ),
+        "surrogate_chance_level": _fmt(agreement.get("chance_level"), 4),
         "seconds": seconds,
     }
 
