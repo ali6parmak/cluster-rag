@@ -620,7 +620,7 @@ per change set, so a reader can always tell *moved* from *lost*:
 - **§7.1.3** (the reviewer's decisions of 2026-10-27, the reranker round) → executed → the
   archive's §7.1.3.
 
-The one change set still open:
+The change sets still open:
 
 - [ ] **CS-17 — the *fine-tuned* cross-encoder (PLAN Phase 6's second step;
   acknowledged, NOT scheduled here).** The zero-shot measurement of CS-15 /
@@ -634,6 +634,116 @@ The one change set still open:
   data) and a decision on the training target (pairwise vs. listwise). The
   checkbox stays open and unticked: the round that measures it is not this
   one.
+
+### 7.1 The hit map (CS-18)
+
+- [ ] **CS-18 — the hit map: which words carry the signal.** A colleague asked for
+  it: a map of the words (or word pairs) that actually carry the ranking signal, so
+  the method's story can be read off a picture instead of a table of AUCs.
+
+  **The mechanism — three versions, and the plan is to measure the first two and say
+  plainly that the third is not where the value is.**
+
+  - **Version A (exact, ~free) — the lexical feature's own per-word decomposition.**
+    `lex_label_coverage` is already the *average over the label's words* of how much
+    of each word appears in the text, so the per-word contribution of one of a
+    label's words to a cell's feature is **exact**, not an approximation. It maps
+    the **label side**: which of a label's words the pack actually keys on.
+  - **Version B (the interesting one, cheap) — the decision model's sentence-level
+    ablation.** The decision model reads the paragraph as its state and asks about
+    all 68 labels in one batched call, so the cost is **per text, not per cell**:
+    removing one sentence and re-asking costs the same ~2 calls per text. It maps
+    the **text side**, and it is the only one of the three that *perturbs* the
+    input — so it is the only one that says anything causal.
+  - **Version C (expensive, and not where the story is) — the embedding model's own
+    attribution.** Everything measured so far says the embedding geometry contributes
+    almost nothing to the ranking, so it is **out of scope**; if it is ever measured
+    it is a separate change set with its own cost.
+
+  **The three questions the map must answer.**
+
+  1. Does it **confirm** the statistical finding that the **lexical block** is the
+     ranking signal?
+  2. Does it **explain** why the *specific* held-out labels are found and the
+     *generic* ones are not?
+  3. **Does the decision model key on the right words or on boilerplate?** — the one
+     worth knowing before someone else finds it.
+
+  *Pre-registered falsification:*
+
+  - **Version B (question 3) is falsified** if the sentence ablation's effect is
+    **not** concentrated on the sentences that carry the topical content — e.g. if
+    removing a formulaic opener ("Continue to ensure that …") moves the
+    probabilities as much as removing the topical sentence does. The measure is the
+    per-sentence drop in the decision probability for the cell's gold labels, read
+    against the **label-blind counterpart** (the same ablation with the wrong
+    pairing). If the counterpart's pattern is the same, the attribution is not
+    label-driven and the map says nothing about the labels.
+  - **Version A (question 2) is falsified** if the held-out labels' per-word
+    contributions are carried by their **generic** words ("rights", "human",
+    "recommendation") rather than by their own distinctive ones — i.e. if the map
+    says the name transfers because of the word every label has, not because of the
+    label's own topic word. The measure is the per-word contribution split between
+    the held-out labels and the generic catch-alls ("General", "Other").
+  - **A null is a legitimate outcome** and is reported as one: the map may show the
+    signal is *distributed* and that no single word carries it.
+  - The per-word numbers must **not** be read out of the **boosted-tree ensemble**:
+    a tree ensemble has no per-word attribution, and the pack's importances are per
+    *feature*, not per word. The map is of the **feature's own definition**, and it
+    must be labelled as such.
+
+  *Cost:*
+
+  - **Version A: ~free.** A pure computation over inputs the pack already has. It
+    needs one small, pure addition to the lexical feature's own module (expose the
+    per-word decomposition as a pure function) and **no model call**.
+  - **Version B: 2 decision calls per (text, sentence-removed) variant**, so the
+    round's total is **2 × Σ_text (the text's sentence count)** — the same ~2 calls
+    per text the CS-13 feature cost, times the number of sentences. **Measure the
+    sentence count before scheduling**: UPR texts average ~152 characters, so most
+    have one or two sentences, and a single-sentence text has **no** ablation — it
+    is reported as "not ablatable", never silently dropped. The **label-blind
+    counterpart** runs beside it, so the round's cost is **4 × Σ_text s_text**. The
+    **fit side is not needed**: the map is a measurement, not a fitted model.
+  - **Version C:** out of scope.
+
+  *Leakage:*
+
+  - The map is a **measurement, not a feature**: nothing is fitted, nothing enters
+    a model, and the pack and the combiner are untouched.
+  - The decision model is frozen (id **and** digest pinned) and carries no UPR
+    label; it is the same `tev1` the CS-13 feature used, so the map and the
+    feature are read against the same model.
+  - The **label-blind counterpart** runs beside every arm — the track's own rule,
+    and the only thing that makes the attribution label-driven rather than the
+    model's own prior.
+  - The **text set** must be **pre-registered** (or the whole val split used): a
+    set chosen after looking at the results is cherry-picking.
+  - The **fit side is not touched at all** (nothing is fitted). **`test` is not
+    touched**: val only, as everywhere in this track.
+  - The two negative subsets are never pooled, and the map is over the judged
+    pairs.
+
+  *Caveats to carry into the write-up:*
+
+  - **Attribution is not causation unless you perturb** — so for the decision model
+    the answer comes from **Version B** (the ablation), not from Version A (a
+    decomposition of a feature's own definition).
+  - **A pack hit map is a map of the *word-overlap* feature, not of the embedding
+    model**, and must be labelled as such wherever it is shown.
+  - **Do not read per-word attributions out of the boosted-tree ensemble.**
+  - **The sampled text set must be pre-registered**, or it is cherry-picking.
+
+  *Runs:* the sweep file, the run ids and the log section are fixed in the round's
+  own pre-registration, before the first call.
+
+  *Exit:* the map is in the track log with its numbers beside it, and it answers —
+  or explicitly fails to answer — each of the three questions, with the
+  falsification conditions read out one by one.
+
+  *(pre-registered 2026-10-29; the round itself is scheduled for a later session —
+  this one was reserved for the repo cleanup. The checkbox stays open and unticked
+  until the round runs.)*
 
 ## 8. The durable deliverable (named, so it is not lost)
 
