@@ -334,7 +334,8 @@ class AnalyzeOmctCell(_LabelledCell):
     """One ``analyze-omct`` cell: the models to score with + the control design.
 
     The text-processing track's Stage-0 artifact
-    (TEXT_PROCESSING_PLAN.md section 3, Stage 0.1): the per-pair scores of
+    (TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md,
+    section 3, Stage 0.1): the per-pair scores of
     the judged pairs, the control set (a seeded, proportional sample of the
     *unjudged* same-document cells), the per-document strata and the
     negative-enrichment measurement. ``analysis`` is the whole
@@ -361,7 +362,8 @@ class DecideOmctCell(_LabelledCell):
     """One ``decide-omct`` cell: the decision models and their prompt grid.
 
     The text-processing track's Stage-3.5 probe
-    (TEXT_PROCESSING_PLAN.md section 3, Stage 3.5.1): the decision models
+    (TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md,
+    section 3, Stage 3.5.1): the decision models
     score the reviewed OMCT pairs, and the artifact carries the measurement
     blocks beside the synthetic competence control. ``analysis`` is the whole
     :class:`~cluster_rag.config.AnalysisConfig` — the decision section (the
@@ -387,7 +389,8 @@ class AnalyzeUprCell(_LabelledCell):
     """One ``analyze-upr`` cell: the reference predictor + the track's arms.
 
     The text-processing track's UPR artifact
-    (TEXT_PROCESSING_PLAN.md section 7, CS-8a): the whole-text **reference
+    (TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md,
+    section 7, CS-8a): the whole-text **reference
     arm** (the main pipeline's own scoring of the split, which must reproduce
     the matching ``evaluate`` run field by field) beside the track's chunked
     arms, with the UPR-side diagnostics (the non-gold labels as the
@@ -470,7 +473,8 @@ class DecideUprCell(_LabelledCell):
     """One ``decide-upr`` cell: the decision models and the prompt grid.
 
     The text-processing track's UPR decision probe
-    (TEXT_PROCESSING_PLAN.md section 7, CS-9): the decision models answer the
+    (TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md,
+    section 7, CS-9): the decision models answer the
     UPR-native question ("is this text about *<label>*?") per label, and the
     probe measures what their probability buys. They are **measurement
     instruments** — they never enter the pipeline.
@@ -542,7 +546,8 @@ class RerankUprCell(_LabelledCell):
     """One ``rerank-upr`` cell: the rerankers and the candidate set.
 
     The text-processing track's UPR reranker probe
-    (TEXT_PROCESSING_PLAN.md, section 7.1, CS-15): the zero-shot rerankers
+    (TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md,
+    section 7.1, CS-15): the zero-shot rerankers
     **re-order** a candidate set, and the run compares their ordering with the
     ordering that produced the set. The cell carries the decision rule (the
     probe's decision view) and the two embedding runs (the probe runs beside

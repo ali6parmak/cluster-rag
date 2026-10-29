@@ -340,7 +340,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text-processing track: the Stage-0 pair-score artifact (analyze-omct).",
         description=(
             "The text-processing track's Stage-0 artifact "
-            "(TEXT_PROCESSING_PLAN.md, Stage 0.1): score every judged OMCT pair "
+            "(TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md, "
+            "Stage 0.1): score every judged OMCT pair "
             "and a seeded, proportional sample of the *unjudged* same-document "
             "cells (the control, subset B) with the configured models, and report "
             "the per-document strata, the score distributions per label and the "
@@ -366,7 +367,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text-processing track: the decision-model probe (Stage 3.5).",
         description=(
             "The text-processing track's Stage 3.5 probe "
-            "(TEXT_PROCESSING_PLAN.md, Stage 3.5.1): score the reviewed OMCT "
+            "(TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md, "
+            "Stage 3.5.1): score the reviewed OMCT "
             "pairs (and the unjudged-proxy control) with the configured "
             "decision models — Ollama's decision-model type, answered with "
             "probabilities — and report the pair AUC, the within-document AUC, "
@@ -394,7 +396,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text-processing track: the UPR analysis artifact (analyze-upr).",
         description=(
             "The text-processing track's UPR artifact "
-            "(TEXT_PROCESSING_PLAN.md, CS-8a): score the evaluated split with the "
+            "(TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md, "
+            "CS-8a): score the evaluated split with the "
             "main pipeline's own predictor (the whole-text reference arm) and "
             "report the UPR-side diagnostics — the gold cells' rank percentiles "
             "inside their own text's label list, the hit@1 / hit@10, the non-gold "
@@ -421,7 +424,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text-processing track: the UPR decision-model probe (decide-upr).",
         description=(
             "The text-processing track's UPR decision probe "
-            "(TEXT_PROCESSING_PLAN.md, CS-9): the decision models answer the "
+            "(TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md, "
+            "CS-9): the decision models answer the "
             "UPR-native question ('is this text about <label>?') per label, and "
             "the probe measures what their probability buys — the decision view "
             "and the ranking view, the gold side and the background side, the "
@@ -446,7 +450,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Text-processing track: the UPR zero-shot reranker probe (rerank-upr).",
         description=(
             "The text-processing track's UPR reranker probe "
-            "(TEXT_PROCESSING_PLAN.md, CS-15): the zero-shot rerankers RE-ORDER "
+            "(TEXT_PROCESSING_PLAN.md → the archive docs/text_processing_plan_archive.md, "
+            "CS-15): the zero-shot rerankers RE-ORDER "
             "an existing candidate set (the decision model's top-k, the union's "
             "top-k, or the champion's top-k as the control), and the run compares "
             "their ordering with the ordering that produced the set — the same "

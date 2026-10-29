@@ -18,6 +18,8 @@ Build a system that suggests topic labels for short texts (e.g. UPR-style human-
 
 The text-processing layer — how text is chunked, segmented and structured before it is embedded — is the thinnest, least-explored layer of this pipeline. It is studied in a **satellite plan**: `TEXT_PROCESSING_PLAN.md` (revised 2026-10-23), OMCT-first, then a port of what survives to UPR.
 
+The track's plan is split in two (2026-10-29): the **live** plan holds the open work, and `docs/text_processing_plan_archive.md` holds the executed pre-registrations and the questions they answered — moved verbatim, append-only. A tombstone in the live plan points at the archive for every moved block.
+
 - **PLAN.md stays master.** A track result adopted downstream gets a note in the relevant phase here (e.g. the Phase 6 reranker slot, the Phase 9 fine-tuning pairs).
 - The track's runs are logged in `docs/experiments_text_processing.md` and compared in `docs/experiments_table_text_processing_omct.md` / `..._upr.md` — the command → (dataset, track) mapping decides the file, so track rows never mix with the tables below.
 - **OMCT findings annotate method choice; they are never a UPR metric.** The track's own leakage rules (no corpus-level question statistics, no document-identity feature, no pooling the two negative subsets) are stricter than the main plan's and bind every track artifact that is reused downstream.
@@ -156,96 +158,13 @@ Follow-up to Phase 3.5, settled with the reviewer 2026-10-20: dataset-scoped com
 
 ### Phase 4 opening: embedding-pool widening (settled with the reviewer 2026-10-20)
 
-Decided, not re-litigated: the candidate pool widens from the recorded 6 to **14
-single-vector text embedders** (bi-encoders only — the no-LLM ruling also excludes
-generative and multi-vector/late-interaction models from the pool; multi-vector
-rerankers remain a Phase 6 topic). New entries with card-verified prefixes, pinned
-HF revisions / Ollama digests at run time: `embeddinggemma-2` (Ollama; v1 task
-templates), `nomic-embed-text-v2-moe` (Ollama; `search_query: ` / `search_document: `
-required, ctx 512), `jinaai/jina-embeddings-v5-text-small` (cc-by-nc-4.0 accepted for
-research; ST config prompts `Query: ` / `Document: ` + `default_task`),
-`voyageai/voyage-4-nano` (Apache-2.0; retrieval prompts, 2048d default MRL),
-`ibm-granite/granite-embedding-english-r2` (no prefixes, 768d, ctx 8192),
-`codefuse-ai/F2LLM-v2-80M` (Instruct query prompt, bare documents, 320d MRL),
-`intfloat/e5-large-v2` (e5 prefixes, **1024d** — the earlier 768d note was a slip),
-`sentence-transformers/all-mpnet-base-v2` (no prefixes, ctx 128 — truncates long OMCT
-paragraphs; UPR texts fit). Work order, one checkbox per change set:
-
-- [ ] **A. OMCT probe sweep widened to the 14-model pool.** Extend
-  `experiments/omct_probe_sweep.py` with the 8 new `ProbeCell`s (label
-  `probe2-<detail>`, card-verified `PrefixesConfig`, revisions pinned / digests
-  recorded at run time). Wiring accommodations for the new models (small, in
-  `embed/` + `config.py`): `embed.model_kwargs` passthrough for jina-v5's
-  required `default_task`; Ollama dimension = trust a set `embed.dimension`
-  over a disagreeing `/api/show embedding_length` (embeddinggemma-2 reports its
-  pre-projection 512, serves 768d) with the encode-time contract check still
-  hard-failing; `embed.context_tokens` explicit context override for honest
-  truncation diagnostics (embeddinggemma-2's `/api/show` reports the 256K
-  loader context, text window is 8K). Run the per-model exactly-once prefix
-  sanity checks, then `cluster-rag sweep --file experiments/omct_probe_sweep.py`
-  → `omct-probe2-*` rows (6 warm, 8 fresh) and the log note.
-  *(done 2026-10-20, code committed `b5b1e96`, runs executed + verified
-  2026-10-20: 14/14 cells → `omct-probe2-*`; the 6 re-run cells digit-for-digit
-  identical vs the 3.6-era table (embeddinggemma digest drift `3a2d26…`→`82f0…`
-  noted — cache served identical vectors); 204/204 artifact checks; log notes
-  in `docs/experiments.md`; peft added for jina-v5's own loading mechanism)*
-- [ ] **B. Typed embedding kinds + full UPR kind sweep.** `EmbedCell` gains a
-  validated `kinds` field (default stays `("document",)`; the resolved config
-  carries it so the frozen config.yaml tells the whole run). New UPR sweep
-  embedding kinds `document,query` for all 14 pool models
-  (`upr-embed-<detail>`; the two existing embed runs refresh their meta.json
-  kinds lists, document side warm). Verify + log note.
-  *(done 2026-10-20, code committed `167f44e`, sweep executed + verified
-  2026-10-20: 14 runs × `document,query`, matrices (3000, d) float32
-  unit-norm, dims as listed in the log; e5-base-v2/arctic2 refresh in place
-  (document warm), no-prefix models' shared-key cache reuse verified correct;
-  204/204 artifact checks; log note in `docs/experiments.md`)*
-- [x] **C. Val-driven cut of the pool to 3–4 semifinalists.** kNN, prototype
-  and per-label max-similarity evidence on UPR val across the pool BEFORE any
-  fusion/preprocess weight grids ("embed all, ablate few" — no 14³ factorial).
-  *(done + verified 2026-10-20: 98/98 sweep cells `upr-eval-*` (knn k∈{1,3,5,
-  10,20} × prototype × max-sim × 14 models) on val, decision top_k k=2; all
-  three candidate families measured — reviewer's family note satisfied: the
-  cut ranks by best micro-F1 across a model's 7 cells, tie-broken by best tail
-  macro-F1. **Semifinalists {embeddinggemma, jina-v5, voyage-4-nano, arctic2}**;
-  slot 4 is a measured near-tie (arctic2 0.5372 wins the tail tiebreak vs
-  e5-large-v2 0.5372/0.5625; embeddinggemma2 0.5365 best-balanced tail) with a
-  one-tuple swap protocol in the fusion sweep. Findings: k rises to the grid
-  edge everywhere; prototype tail macro beats best-knn tail macro 14/14 while
-  micro-F1 ties it; **max-sim below both families on all buckets (the
-  "complements the mean for tail labels" prior did not hold on UPR val)**;
-  kNN shortlist R@50 0.89–0.96 vs proto ~0.73 flat; unseen coverage 0 as
-  designed. Evidence + decision table in `docs/experiments.md` Phase 4 pool-cut
-  section; all rows in the auto table `## UPR — pool_cut`; OMCT corroboration
-  noted as a separate line)*
-- [x] **D. Eval ↔ embedding-artifact wiring.** Proposal first (schema change:
-  explain and wait for the reviewer per AGENTS.md §3), then implement — how an
-  `evaluate` config points at a prior `embed` run's artifact.
-  *(settled + done 2026-10-20: reviewer picked the run-level key among
-  {run-level key, predictor params-bag, raw path} — `EvalCell.embedding_run`
-  lands as `eval.embedding_run_id` (validated `upr-embed-` reference at config
-  time; existence checked at run time). Sub-decisions with the reviewer:
-  embedding-free predictors warn-and-ignore a set run id (never silently);
-  the UPR evaluate table gained an auto-appended `embedding` column (detail of
-  the run id; full lineage in metrics.json). `evaluate` resolves and
-  hard-validates `results/<run_id>/{embeddings.npz, meta.json}` (command=embed,
-  source-sha vs current data, required kinds, float32 unit-norm, id alignment);
-  only train document vectors reach the predictor's construction context, only
-  the eval split's query vectors reach score(). Lineage (model + digest +
-  prefixes + preprocess) recorded in the eval run's metrics.json
-  `embedding_run` block. Module `embed_artifact.py`; 39 new unit tests incl. a
-  fake-embedder CLI e2e; real-artifact smoke via a throwaway /tmp copy of
-  `upr-embed-e5-base-v2` (nothing in results/ or the log))*
-- [x] **E. Repo config cleanup (housekeeping).** The 9 authored experiment
-  YAMLs in `configs/experiments/` are deleted: every experiment since Phase
-  2.5 is defined in Python sweep files, nothing (code/tests/sweeps) reads the
-  stale copies, and every past run's settings stay reproducible from its
-  frozen `results/<run_id>/config.yaml`. `configs/base.yaml` remains (the
-  `define_sweep` base + the stats/split standalone entry). *(done 2026-10-20:
-  9 files deleted — 6 `probe_*`, 2 `embed_*`, `eval_baseline_most_frequent`;
-  docstring/help references in `config.py`/`cli.py` and the stale migration
-  comment reworded; AGENTS.md layout + "Running things" examples moved to
-  sweeps; 191 unit + 12 integration tests green, ruff clean)*
+**Executed 2026-10-20** — the pool widened from the recorded 6 to **14 single-vector text
+embedders** (bi-encoders only), the typed embedding kinds landed, the val-driven cut chose
+the semifinalists **{embeddinggemma, jina-v5, voyage-4-nano, arctic2}**, the eval ↔
+embedding-artifact wiring landed, and the stale experiment YAMLs were deleted. The full
+record — the reviewer's decisions, the 14 models with their card-verified prefixes and
+revisions, and all five change sets — is in `docs/text_processing_plan_archive.md` §PLAN,
+moved verbatim on 2026-10-29. The pool itself is live in `experiments/embedder_pool.py`.
 
 ### Phase 4: Retrieval baselines (no clustering yet)
 - [x] **kNN voting:** top-k neighbors in the Example Index, with labels scored by similarity-weighted votes (optionally sim^p or softmax with temperature). *(needs per-model UPR embeddings of both kinds — `--kinds document,query`: query-side for the text being classified, document-side for labeled examples; asymmetric models' document matrices are no query substitute; done 2026-10-20: `predictors/knn.py` (port) over the pure core `retrieve/knn.py` — votes = Σ max(cos,0)^p over the top-k train examples, p configurable (softmax-with-temperature deliberately deferred until a grid needs it), ties → earlier train row, k clamped to n_train; consumes the Phase 4 wiring (train-only document vectors at construction); fake-embedder unit tests incl. hand-computed votes, tie and clipping cases; val evidence arrives with Phase 4 opening C)*
@@ -278,7 +197,7 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
 *Track input, not yet delivered:* the text-processing track's named deliverable is a **characterized pair-relevance benchmark on OMCT** (the reviewer-verified hard negatives, the unjudged-proxy control and the per-document strata) plus a combiner/feature scorer — i.e. exactly the negative-pair source this phase lacks today. See `TEXT_PROCESSING_PLAN.md` §8; nothing is adopted before its artifact lands in `results/`.
 
 *Track input, delivered 2026-10-27 (the text-processing track's CS-15/CS-16,
-`TEXT_PROCESSING_PLAN.md` §7.1.3):* the **zero-shot** half of this phase is
+`TEXT_PROCESSING_PLAN.md` §7.1.3 → `docs/text_processing_plan_archive.md` §7.1.3):* the **zero-shot** half of this phase is
 measured, on the UPR val split, with three Hugging Face rerankers (a 278M
 cross-encoder, a 1B yes/no head and a 0.6B **listwise** reranker — the last
 one is not a multi-vector model, it reads a whole candidate list in one

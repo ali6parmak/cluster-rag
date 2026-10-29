@@ -1,6 +1,75 @@
 # AGENTS.md
 
-Instructions for AI coding agents (and humans) working in this repo. Read `PLAN.md` first, since it defines the phases and the current scope.
+Instructions for AI coding agents (and humans) working in this repo. **Read the "START HERE" section below first** — it indexes the measured numbers and the file that answers each question, so a single question never costs a whole-file read. Then read `PLAN.md`, which defines the phases and the current scope.
+
+## START HERE
+
+**The one-paragraph version.** The pipeline embeds a text, retrieves similar labeled examples and candidate labels, fuses their scores and suggests labels; feedback updates the system online and an active learner picks what a human should review next. Two tracks run side by side: the **main pipeline** (`PLAN.md`) and the **text-processing / segmentation track** (`TEXT_PROCESSING_PLAN.md`). The track's evidence trail is `docs/experiments_text_processing.md` (34 sections, append-only) and its curated tables are `docs/experiments_table_text_processing_omct.md` and `docs/experiments_table_text_processing_upr.md`. The track's plan is split in two: the **live** plan holds the open work, and `docs/text_processing_plan_archive.md` holds the executed pre-registrations and the questions they answered (moved verbatim, append-only).
+
+**The two datasets — never mix them.** A `upr-` run is the **UPR** human-rights recommendation data (train / val / test; the text-processing track has only ever touched **val** — `test` is reserved). An `omct-` run is the **auxiliary OMCT pairwise data** (1,520 reviewed pairs plus a seeded 4,000-cell unjudged control): it is method-choice evidence and **never** a UPR metric.
+
+### The headline numbers
+
+Every row names the dataset, the split, the value, the artifact it comes from and the log section that explains it. All of them are reproduced by the two final sweeps (`experiments_text_processing/omct_final_sweep.py`, `experiments_text_processing/upr_final_sweep.py`).
+
+| # | what | dataset / split | number | artifact | log § |
+|---|---|---|---|---|---|
+| U1 | The **standing champion** — the pipeline's own whole-text scoring — micro-F1 | UPR **val** | **0.5479** | `results/upr-analyze-final-champion/analysis.json` | §CS-8a |
+| U2 | The **best UPR number** — the learned feature pack + the decision model's probability: micro-F1 / unseen bucket / shortlist R@50 | UPR **val** | **0.5965** / **0.5697** / **0.9856** | `results/upr-analyze-final-decision-feature/analysis.json` | §CS-13 |
+| U3 | The **decision model alone** (`tev1`, the paragraph shape, the `noul` question): micro-F1 / shortlist R@50 / recall@10 | UPR **val** | 0.5502 / 0.9987 / 0.8845 | `results/upr-decide-tev1-paragraph-noul-grid/decisions.json` | §CS-9b |
+| U4 | The **union candidate generator** — a *measurement, not a component*: recall@10 / its unseen bucket's micro-F1 | UPR **val** | 0.9120 / 0.2540 (the decision model's own 0.5267) | `results/upr-decide-tev1-paragraph-noul-grid-union/decisions.json` | §CS-14 |
+| U5 | The **learned pack** alone, without the decision feature: shortlist R@50 / micro-F1 | UPR **val** | 0.8909 / 0.4818 | `results/upr-analyze-final-learned/analysis.json` | §CS-8d, §CS-8e |
+| U6 | The **label catalog's channels** (the description + the parent) against the same pack without them: Δ micro-F1 | UPR **val** | **+0.0258 [+0.0091, +0.0433]** | `results/upr-analyze-final-catalog/analysis.json` | §CS-11 |
+| U7 | **Chunking the long texts** (the 300+ character bucket): Δ micro-F1 — the chunkers that do not split UPR's texts give exactly 0 in every bucket | UPR **val** | **+0.109 … +0.127** | `results/upr-analyze-ladder/analysis.json` | §CS-8b |
+| U8 | The **pure zero-shot geometry** as a *candidate generator*: shortlist R@50 (the champion's 0.7423) | UPR **val** | **0.8691** | `results/upr-analyze-final-ladder/analysis.json` | §CS-8b |
+| M1 | The **decision model** on the same-document grid: **within-document** AUC (the pooled AUC 0.7688 goes beside it, never alone) | OMCT | **0.7701** | `results/omct-analyze-final-*/analysis.json` | §Stage 3.5.2 |
+| M2 | The plain full-text cosine, for comparison | OMCT | 0.5020–0.5632 | same | §Stage 3.5.2 |
+| M3 | The **learned feature pack**: within-document AUC | OMCT | 0.6472–0.6723 | same | §Stage 3.1 |
+| M4 | The **safe-negative rule** (the fit-side threshold): reach over the unjudged grid / harm on the verified positives | OMCT | **0.8313 / 0.1851** | same | §Stage 3.5.2 |
+| M5 | …the **label-blind counterpart's** harm at the same reach — so the harm is label-driven | OMCT | 0.4147 | same | §Stage 3.5.2 |
+| M6 | The **shortlist rerank**: the positives' hit@1 (the cosine's own hit@1) | OMCT | **0.1565** (arctic2, K=10) / 0.1050 | same | §Stage 3.5.3 |
+| M7 | The **late chunking**: Δ within-document AUC — voyage-4-nano only (it needs token-level embeddings) | OMCT | **+0.0859** | `results/omct-analyze-final-voyage-4-nano/analysis.json` | §Stage 2.7 |
+
+`§CS-n` = the section of `docs/experiments_text_processing.md`; `§Stage n` = the same log's OMCT sections.
+
+### Question → file → section
+
+| question | where to look |
+|---|---|
+| What is this project, and what state is it in? | `PLAN.md` §1 and §4 · `AGENTS.md` "Project summary" |
+| What is the best number on UPR, and what produces it? | the table above → `docs/experiments_text_processing.md` §CS-13 |
+| What exactly is the champion config (the pipeline's own scoring)? | `results/upr-analyze-final-champion/config.yaml` → §CS-8a |
+| Where do run artifacts live, and what is inside one? | `AGENTS.md` "Runs and where things live" |
+| What does a `run_id` mean, and how do I find a run's log entry? | `AGENTS.md` "Runs and where things live" |
+| How do I run an experiment? | `AGENTS.md` "Running things" → `experiments_text_processing/{omct,upr}_final_sweep.py` |
+| Where are the curated result tables? | `docs/experiments_table_text_processing_{omct,upr}.md` → `## OMCT — final_results`, `## UPR — final_results` |
+| Where is the full research trail (all 34 log sections)? | `docs/experiments_text_processing.md` → its table of contents, at the top |
+| Where is the track's pre-registration record (the executed plan)? | `docs/text_processing_plan_archive.md` — the moved, verbatim plan: §0.1, §3's stages, §5's answered questions, §7's change sets, and PLAN.md's Phase-4 sweep record |
+| What did chunking / segmentation show? (OMCT) | §Stage 2, §Stage 2 — the verdict, §Stage 2.6, §Stage 2.7 |
+| What did chunking / segmentation show? (UPR) | §CS-8b, §CS-8c |
+| Is the embedding model the lever, or are the features? | §Stage 3.1b (OMCT) · §CS-8d, §CS-8e (UPR) |
+| What is the learned feature pack, and what are its three floors? | §CS-8d · `src/cluster_rag/text_processors/combining/` |
+| What are the decision models, and what do they buy? | §Stage 3.5 (the probe) · §CS-9 (UPR) · §CS-9b (the full-val grid) |
+| What is the safe-negative rule — the track's deliverable? | §Stage 3.5.2 · §CS-9b · §CS-14 · `TEXT_PROCESSING_PLAN.md` §8 |
+| What is the label catalog? | §CS-11 · `catalogs/upr_labels.jsonl` (+ `catalogs/upr_labels.meta.json`) |
+| What did the zero-shot rerankers do? | §CS-15 (as scorers) · §CS-16 (as a pack feature) |
+| What is still open, and what is the next step? | `TEXT_PROCESSING_PLAN.md` §5 (the unanswered questions) and §7 (CS-17) · `PLAN.md` §7 |
+| What are the main pipeline's phases, and which are done? | `PLAN.md` §4 |
+| What are the coding rules and the pure-core boundary? | `AGENTS.md` "Coding conventions" · `TEXT_PROCESSING_PLAN.md` §2 and §4 |
+| How is leakage prevented? | `AGENTS.md` "Data and evaluation discipline" · `TEXT_PROCESSING_PLAN.md` §4 |
+| How do I add a command or a sweep? | `AGENTS.md` "Running things" · `src/cluster_rag/sweep.py` · `src/cluster_rag/cli.py` |
+| How do I check that a run reproduced? | `tools/verify_analysis_baseline.py` · `tools/verify_upr_baseline.py` |
+
+### The house rules in one screen
+
+The full text lives in the sections below; these are the ones that get broken by accident.
+
+- **Every number comes from an artifact in `results/` first**, then the log. No hand-written tables.
+- **The logs are append-only** and the comparison tables are auto-appended by the CLI commands — **never hand-edit a table row**.
+- **The two negative subsets are never pooled** (A = the reviewer-verified hard negatives, B = the unjudged control), and **OMCT is never a UPR metric**.
+- **UPR `test` is reserved.** The text-processing track has only ever touched `val`.
+- **Raw data is read-only**; an LLM may score, never relabel.
+- **Small, focused changes**, one change set per commit; explain before a large one (new dependency, schema change, or a refactor over three modules) and wait.
 
 ## Project summary
 Retrieval-augmented multi-label topic classification. Texts are embedded (Hugging Face or Ollama models), similar labeled examples and candidate labels are retrieved (optionally routed through clusters), scores are fused or reranked, and labels are suggested. User feedback updates the system online, and active learning chooses which items to review.
@@ -37,7 +106,8 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── experiments_table_omct.md # OMCT comparison tables, auto-appended by CLI commands
     │   ├── experiments_text_processing.md            # text-processing track log (append-only)
     │   ├── experiments_table_text_processing_omct.md  # track tables, auto-appended
-    │   └── experiments_table_text_processing_upr.md   # track tables (UPR stage)
+    │   ├── experiments_table_text_processing_upr.md   # track tables (UPR stage)
+    │   └── text_processing_plan_archive.md  # the track plan's executed pre-registrations (append-only)
     ├── notebooks/               # exploration only, no logic that others import
     ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
     ├── experiments_text_processing/  # the text-processing track's sweep files
