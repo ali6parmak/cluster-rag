@@ -75,6 +75,7 @@ research record and are **not** indexed here.
 | [CS-16 — the reranker's score as a **pack feature**](#cs-16--the-rerankers-score-as-a-pack-feature-2026-10-27) | thirteen `upr-analyze-learned-rerank-*` runs | the listwise model's score lifts the pack 0.5965 → **0.6117** (+0.0152 [+0.0015, +0.0280]) — the best UPR number — but the pre-registered **+0.02 margin is not met**, so the slot decision is the reviewer's | the CS-16 runs |
 | [CS-18 — the hit map: which words carry the signal](#cs-18--the-hit-map-which-words-carry-the-signal-2026-10-29) | two `upr-hitmap-*` runs (the lexical map + the decision model's ablation) | the map answers question 3 with a **yes and a no**: the decision model keys on the label's own words (the label-linked clause's drop 0.2687 against 0.0918, the label-blind counterpart flat) **and** it leans on the recommendation's opening clause (the formulaic drop is *larger*, +0.0489 [+0.0139, +0.0849]); the lexical map's exactness is 0.0 and the held-out labels' coverage is carried by their own distinctive words (the generic share 0.3105) | `results/upr-hitmap-{sentence,clause}/hitmap.json` |
 | [CS-19 — the hit map's two cheap modes](#cs-19--the-hit-maps-two-cheap-modes-the-text-side-word-map-and-the-surrogate-attribution-2026-10-29) | two `upr-hitmap-*` runs (the text-side word map + the surrogate attribution) | the **text side** of the word map (the pack's second lexical feature, exact: the deviation 0.0) says the matching words are the UPR register ("rights" 0.2260, "human" 0.0597), not the topics; the **surrogate** of the model's own probability reads each topic correctly (the out-of-sample correlation 0.6933; the blind counterpart's attribution follows the *shifted* topic, 0.0806 against 0.0090) and **agrees with the causal map** (its words land in the carrier clause 83.4% of the time against a 48.4% chance level) | `results/upr-hitmap-{text,surrogate}/hitmap.json` |
+| [CS-20 — the hit map's terminal viewer](#cs-20--the-hit-maps-terminal-viewer-2026-10-29) | no run (a **tool**): the offline mode reads the CS-19 artifacts, the live mode the model's cached grid, the what-if mode a re-asked grid | one text on screen: the words and what each contributes, who the words say it is, what the model says, what is true — and, behind a flag, what happens if a word is removed; the **attribution/causation** distinction is in the output itself | the CS-19 artifacts (read, not re-measured) |
 
 ## Change sets
 
@@ -5382,3 +5383,172 @@ instrument (~1k–26k calls) and it needs its own pre-registration; nothing
 about the **embedding model's** attribution (out of scope since CS-18); and
 nothing about the 312 val texts the clause arm cannot ablate (reported as "not
 ablatable", never dropped).
+
+## CS-20 — the hit map's terminal viewer (2026-10-29)
+
+**The run: none.** The viewer is a **tool**, not a measurement — it has no run id,
+writes no artifact and appends no table row. It *reads* the CS-19 runs' artifacts
+(`results/upr-hitmap-text/hitmap.json`, `results/upr-hitmap-surrogate/hitmap.json`),
+the data and the split, and it asks the decision model only when it is told to.
+The tool is `tools/hitmap_view.py`; the pre-registration is in the plan archive's
+§7.1.6.
+
+**The three modes and their costs** (fixed in the pre-registration, before the
+first call):
+
+| mode | what it reads | the cost |
+|---|---|---|
+| **offline** (the default) | the two artifacts + the data + the split | **0 model calls** |
+| **live** (`--live`) | the same, plus the model's grid for that text | **2 calls per text** — and for the val texts both are **cache hits** of the CS-9b run |
+| **what-if** (`--what-if word`) | the same, plus one re-scored grid per word | **2 real calls per word** (~1 s each) |
+
+The live mode asks **the same call the CS-9b grid run asked** (the same state,
+the same question specs and the same question names — the grid's own cell
+index), so the val texts' answers come from the decision cache; the tool prints
+the cache's own counters, so "free" is a measurement and not a claim.
+
+**How to use it** (from the repository's root):
+
+    uv run python tools/hitmap_view.py --sample --seed 7
+    uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7
+    uv run python tools/hitmap_view.py --sample --seed 7 --what-if ratification,migrant
+
+`--topic` picks the topic to focus on (the default is the gold label whose own
+words the text carries the most), `--top-k` the size of the rankings, and
+`--no-colour` the plain-text fallback (the default when the output is piped).
+
+### What it shows (the example output, quoted from the tool's own run)
+
+The text below is the val text `0000000000000047d5d150d7` (row 4 of 660), and the
+run is `--live --what-if workers,protection` (the offline numbers are the
+artifacts' own; the live and what-if numbers are the tool's own readings; the
+"…" lines are where the screen was shortened for the log):
+
+```
+HIT MAP VIEWER — UPR val (660 texts, 68 labels, 1312 gold cells)
+text: 0000000000000047d5d150d7 (row 4 of 660) · picked by --text 0000000000000047d5d150d7 · artifacts: upr-hitmap-text, upr-hitmap-surrogate
+================================================================================================
+
+THE TEXT
+  "Take further concrete steps towards the ratification of the International Convention on the Protection of the Rights of All Migrant Workers and Members of Their Families and towards upholding the rights of migrant workers, in line with the Global Compact for Migration, which Lebanon also joined"
+
+WHAT IS TRUE — the gold labels of this text (UPR val)
+  International instruments · Labour rights · Migrants
+
+THE FOCUS TOPIC: "Migrants"
+  (chosen: the gold label whose own words the text carries the most)
+  the topic's own name words (mode A, attribution): migrants
+
+THE WORDS AND WHAT EACH CONTRIBUTES — ATTRIBUTION (mode B: lex_text_coverage, the feature's own exact decomposition)
+  word                 n   contribution   bar                         surrogate (mode C)
+  migrant              2        0.0686   ████████████████████████        +0.564
+  migration            1        0.0178   ██████                          +0.229
+  rights               2        0.0133   █████                                —
+  compact              1        0.0000                                        —
+  …
+  workers              2        0.0000                                   +0.126
+  the surrogate's coefficient is stored for a topic's top words only: '—' means 'not stored', never zero.
+
+WHO THE WORDS SAY IT IS — ATTRIBUTION (the lexical map's own ranking)
+  the text's words against the topic's name (mode B, lex_text_coverage)
+    1  National Human Rights Institution        0.1733  
+    2  Human rights education and training      0.1638  
+    3  Human rights violations by state agents   0.1465  
+  …
+  the topic's words against the text (mode A, lex_label_coverage)
+    1  Migrants                                 0.8750 ★
+    2  Right to education                       0.6778  
+    3  Detention                                0.6667  
+  …
+   (★ = a gold label of this text)
+
+WHAT THE MODEL SAYS — the decision model's own ranking (live)
+  tev1:latest (digest 7954dce22bc6…) · the tool's own reading, not an artifact's number
+    1  Migrants                                 0.8926 ★
+    2  International instruments                0.8681 ★
+    3  Labour rights                            0.8076 ★
+    4  General                                  0.6463  
+  …
+  the calls: 2 (the decision cache: 2 hits, 0 misses, 0 stored)
+
+THE THREE SIDE BY SIDE
+  topic                                   the words say  the model says the truth
+  International instruments                  9 (0.1042)      2 (0.8681)      gold
+  Labour rights                             28 (0.0800)      3 (0.8076)      gold
+  Migrants                                  11 (0.0997)      1 (0.8926)      gold
+  …
+  National Human Rights Institution          1 (0.1733)     24 (0.1543)          
+  Human rights education and training        2 (0.1638)     36 (0.0585)          
+
+WHAT IF THIS WORD IS REMOVED — CAUSAL (the model is asked again)
+  the word "workers" occurs 2 time(s); the model is asked about the text without it
+  topic                                    intact   without     delta
+  Migrants                                 0.8926    0.9081    0.0155
+  International instruments                0.8681    0.8515   -0.0166
+  Labour rights                            0.8076    0.2899   -0.5177
+  the intact top-1: Migrants (0.8926) -> the new top-1: Migrants (0.9081)
+  the calls: 2 (the decision cache: 2 hits, 0 misses, 0 stored)
+
+  the word "protection" occurs 1 time(s); the model is asked about the text without it
+  topic                                    intact   without     delta
+  Migrants                                 0.8926    0.8947    0.0021
+  International instruments                0.8681    0.8571   -0.0110
+  Labour rights                            0.8076    0.8104    0.0028
+  the intact top-1: Migrants (0.8926) -> the new top-1: Migrants (0.8947)
+  the calls: 2 (the decision cache: 0 hits, 2 misses, 2 stored)
+
+  NOTE: the decision model is NOT deterministic (the CS-7a precedent): the same call re-run
+  moves the probability by ~0.001-0.003, so a delta of that size is noise and not a signal.
+  the what-if calls in total: 4
+```
+
+### What the example already shows (the reader's three lessons)
+
+1. **The lexical map ranks the register, not the topic.** The text-side map's
+   top-1 for this text is "National Human Rights Institution" (0.1733) — a label
+   whose name is the UPR register — while the text's own gold labels sit at the
+   ranks **9, 28 and 11**. The topic-side map (mode A) sees it the other way
+   round: "Migrants" 0.8750, the topic whose own word the text carries. This is
+   CS-19's corpus-level finding ("rights" 0.2260, "human" 0.0597) seen on one
+   document.
+2. **The model's own reading is the truth here.** The live top-3 is exactly the
+   three gold labels (0.8926 / 0.8681 / 0.8076), and it is in no artifact: it is
+   the tool's own reading of the model, named with the model's id and digest.
+3. **The what-if separates the signal from the noise.** Removing "workers" drops
+   "Labour rights" by **0.5177** — the word that carries the label's own name —
+   while removing "protection" moves the three probabilities by **-0.0110 /
+   +0.0021 / +0.0028**, inside the model's own noise of ~0.001-0.003. The two
+   cache lines show the cost model in the same screen: "workers" had already
+   been asked (**2 hits**), "protection" was new (**2 misses** = 2 real calls).
+   (This is the interactive mode E, one word at a time; the corpus-level round
+   is CS-22 and has its own pre-registration.)
+
+### The discipline
+
+- **The tool is a tool, not a number source.** The offline numbers are the
+  artifacts' own; the live and what-if numbers are printed as the tool's own
+  readings. Anything that becomes a claim lands in an artifact first.
+- **The attribution/causation distinction is in the output itself**: the lexical
+  and the surrogate columns are labelled **ATTRIBUTION**, and only the what-if
+  block is labelled **CAUSAL**. The surrogate's coefficients are read where the
+  artifact stores them (a topic's top words) and printed as "—" elsewhere —
+  never as zero.
+- **The stale-artifact guard.** The viewer recomputes the map with the very same
+  pure function the map's run used and compares its own numbers with the
+  artifact's (the text's top label and every gold cell's value); a disagreement
+  is printed at the top of the screen and the tool exits **1**.
+- **The seeds are explicit** (`--seed`, printed in the header) and the text set
+  is the **val** split. `test` is not touched.
+- **The track's pure-core boundary is untouched**: the tool lives at the edge
+  (`tools/`), next to the verification scripts, and it imports no new dependency
+  (the colours are raw ANSI escape codes with a plain-text fallback).
+
+### What this change set does not say
+
+Nothing new was measured: the numbers on the screen are the CS-18 and CS-19
+artifacts' (offline) and the tool's own readings of the model (live and
+what-if); nothing about `test`; nothing about the corpus-level word ablation
+(CS-22); nothing about the OMCT map (CS-21); and nothing about the surrogate's
+per-text prediction — the artifact stores only each topic's top 15 positive and
+15 negative coefficients, not the full vector, so a per-text surrogate prediction
+cannot be computed from it (and a partial sum would not be one).

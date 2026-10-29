@@ -3129,3 +3129,139 @@ line). The verdict and the numbers are the track log's §CS-19.*
   - **The word-level causal ablation (mode E) is not in this change set** — it
     is the expensive instrument (~1k–26k calls) and it needs its own
     pre-registration.
+
+## The hit map's terminal viewer (CS-20) — the pre-registration and the verdict
+
+*Added on 2026-10-29, when the round was executed: the live plan's §7.1 block
+moved here **verbatim** (the archive's convention: an executed change set's
+pre-registration moves here and the live plan keeps one tombstone line). The
+verdict and the numbers are the track log's §CS-20.*
+
+### 7.1 The hit map's terminal viewer (CS-20)
+
+- [x] **CS-20 — the hit map's *terminal viewer* (the interactive map).** The map
+  exists as four modes (CS-18's topic-side map + causal ablation, CS-19's
+  text-side map + surrogate attribution) and all four live in artifacts. What is
+  missing is the **per-document** view: one command, one text on screen, and
+  (a) the text's words with **what each contributes**, (b) **who the words say
+  it is** — the top-k the cheap modes predict, (c) **what the model says** — its
+  own top-k, live, (d) **what is true** — the gold labels, so (b), (c) and (d)
+  sit side by side, and (e) behind a flag, **what happens if a specific word is
+  removed** — the causal one (the text minus the word → the model is asked
+  again → the new probability, the new top-k, the delta).
+
+  **The mechanism.** A repo tool (`tools/hitmap_view.py`, next to the
+  verification scripts) with **no new dependency**: the colours are raw ANSI
+  escape codes with a plain-text fallback. Three modes and their costs: the
+  **offline** mode (the default) reads only the artifacts — the text-side map,
+  the surrogate's per-topic coefficients, the gold matrix — and costs **0 model
+  calls**; the **live** mode re-scores the text through the cached calls (the
+  machinery in `commands/upr.py`) to show the model's own top-k, which is in no
+  artifact — cache hits, free for the val texts; the **what-if** mode spends
+  **2 real calls per word** (~1 s) and must say that the decision model is
+  **not deterministic** (the CS-7a precedent).
+
+  **The discipline.** The viewer is a **tool, not a number source**: anything it
+  shows that becomes a claim lands in an artifact first. The seeds are explicit
+  and the text set is the val split. The **attribution/causation distinction is
+  visible in the output** (the lexical and surrogate columns are attributions,
+  the what-if column is the causal one) — the lesson of CS-18 and CS-19 is
+  exactly that difference, and a viewer that blurs it would teach the wrong
+  thing. The track's pure-core boundary is untouched (the tool lives at the
+  edge).
+
+  **What it is not.** No new measurement, so no run id, no artifact and no
+  table row; the track log gets a short section (what the tool shows and how to
+  use it, with an example output quoted from the tool's own run). The run-level
+  details are fixed before the first call, as they were for CS-18 and CS-19.
+
+  **The pre-registration (written before the first call, 2026-10-29).**
+
+  - **The runs: none.** The viewer is a **tool**, not a measurement: it has no
+    run id, writes no artifact and appends no table row. It *reads* the CS-19
+    runs' artifacts — `results/upr-hitmap-text/hitmap.json` (the text-side map)
+    and `results/upr-hitmap-surrogate/hitmap.json` (the surrogate's per-topic
+    coefficients) — plus the data, the split and the CS-9b run's decision
+    cache. The log section is **`## CS-20 — the hit map's terminal viewer`** in
+    `docs/experiments_text_processing.md`.
+  - **The texts: the val split** (the track's split; `test` is not touched). A
+    text is picked by its **record id** (`--text <id>`) or by a **seeded draw**
+    (`--sample --seed N` — the seed is explicit and printed). The text is never
+    chosen after looking at the results.
+  - **The three modes and their costs**, fixed here:
+
+    | mode | what it reads | the cost |
+    |---|---|---|
+    | **offline** (the default) | the two artifacts + the data + the split | **0 model calls** |
+    | **live** (`--live`) | the same, plus the decision model's own grid for that text | **2 calls per text** (68 labels, 64 questions per call), and for the val texts both are **cache hits** of the CS-9b run — the tool prints the hits and the misses, so "free" is a measurement, not a claim |
+    | **what-if** (`--what-if word[,word]`) | the same, plus one re-scored grid per word | **2 real calls per word** (~1 s); the model is **not deterministic** (the CS-7a precedent) and the output says so |
+
+  - **The cache discipline (what makes the live mode free).** The live mode
+    asks the model **the same call the CS-9b run asked**: the same state, the
+    same question specs and the same question names (the grid's own cell
+    index), so the answer comes from the decision cache. A cache miss is
+    reported (the hits/misses line), never hidden.
+  - **The numbers the tool prints.** The offline numbers are the artifacts'
+    own (the map's exact per-word decomposition and the surrogate's stored
+    coefficients). The live and what-if numbers are the **tool's own readings**
+    of the model (its probability and the delta), printed with the model's id
+    and digest — they are **tool output, not claims**: anything that becomes a
+    claim lands in an artifact first (the track's own rule).
+  - **The exit criteria.**
+    1. The tool runs on the **tiny fixture dataset** and on the **real val
+       split**.
+    2. The **offline mode's numbers are pinned by a test against the
+       artifacts**: the viewer's recomputed top label and its per-cell values
+       must equal the artifact's (`per_text_top_label`, `per_gold_cell`), and a
+       **stale artifact fails loudly** — the tool reports the mismatch and the
+       test exercises that path.
+    3. The **live and what-if modes are exercised against a fake decider** (no
+       server in the tests).
+    4. The **attribution/causation distinction is visible in the output** (every
+       column says which of the two it is) and the what-if mode prints the
+       **not-deterministic** note.
+    5. `pytest` and `ruff` are clean; the two verify tools and the two final
+       sweeps still reproduce.
+  - **The falsification.** A tool has no result to falsify; what it must not
+    do is **blur the attribution/causation distinction** (the lesson of CS-18
+    and CS-19) or **print a number it did not measure**. Both are checked by
+    the output itself (the column labels and the provenance line).
+
+  *(pre-registered 2026-10-29; **executed 2026-10-29** — the tool is
+  `tools/hitmap_view.py`, its tests are `tests/test_hitmap_view.py`, the log
+  section is `## CS-20 — the hit map's terminal viewer` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen.** The change set has **no run**: the
+  viewer is a tool, so there is no artifact and no table row. What the tool
+  shows on the UPR **val** split (660 texts, 68 labels, 1,312 gold cells) for
+  the text `0000000000000047d5d150d7` (row 4), quoted from the tool's own run:
+
+  - the **offline** numbers are the CS-19 artifacts' own: the text-side map's
+    exact decomposition (the largest deviation **0.0** over all 44,880 cells)
+    and the surrogate's stored coefficients. For this text the text-side
+    ranking's top-1 is "National Human Rights Institution" (**0.1733**) — the
+    UPR register, not the topic — while the topic-side map puts "Migrants" at
+    **0.8750** and the text's three gold labels sit at the text-side ranks
+    **9, 28 and 11**.
+  - the **live** numbers are the **tool's own reading** of the model (never a
+    claim): the model's top-3 for this text is exactly the three gold labels
+    (**0.8926 / 0.8681 / 0.8076**), read from **2 cache hits** of the CS-9b
+    run's grid (the tool prints the cache's counters: 2 hits, 0 misses).
+  - the **what-if** numbers are the tool's own readings too, and they are
+    **causal**: removing "workers" drops "Labour rights" by **0.5177** — the
+    word that carries the label's own name — while removing "protection" moves
+    the three probabilities by **-0.0110 / +0.0021 / +0.0028**, inside the
+    model's own noise of ~0.001-0.003. The cost: **2 real calls per word** (the
+    cache's misses; a variant that was already asked is a cache hit, and the
+    tool prints the counters).
+  - the **exit criteria**: the tool runs on the tiny fixture dataset and on the
+    real val split; the offline numbers are pinned by a test against the
+    artifacts and a **stale artifact fails loudly** (the tool exits 1); the live
+    and what-if modes are exercised against a **fake decider** (no server in
+    the tests); the attribution/causation distinction is in the output itself
+    (the lexical and surrogate columns say ATTRIBUTION, the what-if block says
+    CAUSAL) and the what-if prints the not-deterministic note.
+  - the **gate**: `pytest` **678 passed**, `ruff` clean, the two verify tools
+    OK (110 + 45 runs) and both final sweeps reproduce their artifacts field
+    for field (only the wall-clock fields move).

@@ -1,0 +1,952 @@
+"""The hit map's **terminal viewer** (the track's CS-20).
+
+One command, one text on screen: the text's words and **what each contributes**,
+**who the words say it is**, **what the model says** (live), **what is true**
+(the gold labels) and — behind a flag — **what happens if this word is removed**
+(the causal mode E, one word at a time).
+
+The map exists as four modes (CS-18's topic-side map + causal ablation, CS-19's
+text-side map + surrogate attribution) and all four live in artifacts. This tool
+is the **per-document view** over them: it reads the artifacts and the data, and
+it perturbs nothing unless it is asked to.
+
+The three modes and their costs:
+
+- **offline** (the default): the two artifacts + the data + the split —
+  **0 model calls**;
+- **live** (``--live``): the model, re-scored through the cached calls —
+  2 calls per text, and cache hits for the val texts;
+- **what-if** (``--what-if word``): one re-scored grid per word —
+  **2 real calls per word**, and the model is **not deterministic**.
+
+Usage:
+
+    uv run python tools/hitmap_view.py --sample --seed 7
+    uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7
+    uv run python tools/hitmap_view.py --sample --seed 7 --what-if ratification,migrant
+
+**The tool is a tool, not a number source.** The offline numbers are the
+artifacts' own (the map's exact per-word decomposition and the surrogate's
+stored coefficients), and the live and what-if numbers are printed as the
+tool's own readings, with the model and its digest named. Anything that becomes
+a claim lands in an artifact first (the track's own rule).
+
+**The attribution/causation distinction is visible in the output.** The lexical
+and the surrogate columns are *attributions* (a decomposition of a feature's own
+definition and a ridge surrogate's coefficients); only the what-if column
+perturbs the input, so only it is *causal*. The lesson of CS-18 and CS-19 is
+exactly that difference, and a viewer that blurs it would teach the wrong thing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from cluster_rag.commands.upr import build_upr_decider
+from cluster_rag.config import (
+    AppConfig,
+    DecisionModelConfig,
+    UprAnalysisConfig,
+    UprDecisionConfig,
+    load_config,
+)
+from cluster_rag.data import (
+    Record,
+    build_label_matrix,
+    load_jsonl,
+    load_split_ids,
+    select_records_by_ids,
+)
+from cluster_rag.decision.base import answer_probability
+from cluster_rag.omct_decision import DecisionArm
+from cluster_rag.text_processors.decision.probe import plan_calls
+from cluster_rag.text_processors.decision.upr_probe import build_upr_cells
+from cluster_rag.text_processors.features.lexical_map import (
+    cell_coverage,
+    label_word_contributions,
+    text_side_coverage,
+    text_word_contributions,
+)
+
+# The defaults (the tool's own configuration surface; every one of them is a CLI
+# flag, so nothing is hard-coded in the logic).
+DEFAULT_CONFIG = Path("configs/base.yaml")
+DEFAULT_SPLIT = "val"
+DEFAULT_SEED = 42
+DEFAULT_TOP_K = 5
+DEFAULT_MAX_QUESTIONS = 64
+TEXT_MAP_RUN = "upr-hitmap-text"
+SURROGATE_RUN = "upr-hitmap-surrogate"
+
+# The artifacts' values are rounded to six decimals, so the cross-check's
+# tolerance is the rounding (plus a hair).
+VALUE_TOLERANCE = 1e-6
+
+# The ANSI palette (raw escape codes: no dependency).
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+
+
+def paint(text: str, code: str, *, colour: bool) -> str:
+    """Wrap a text in an ANSI code (or leave it alone in the plain fallback)."""
+    return f"{code}{text}{RESET}" if colour else text
+
+
+def _bar(value: float, maximum: float, width: int = 24) -> str:
+    """A bar for a value, scaled by the table's maximum."""
+    if maximum <= 0.0 or value <= 0.0:
+        return ""
+    filled = int(round(width * min(value, maximum) / maximum))
+    return "█" * max(filled, 1)
+
+
+@dataclass(frozen=True)
+class ViewerContext:
+    """Everything the viewer reads: the split, the label space and the artifacts.
+
+    Attributes:
+        config: The resolved app config (the paths).
+        split: The split on screen (``val`` — the track's split).
+        records: The split's records, in the split's own order (the grid's rows).
+        labels: The label space (the grid's columns), sorted.
+        gold: The split's gold matrix (rows x labels).
+        text_map: The text-side map's artifact (CS-19's ``upr-hitmap-text``).
+        surrogate: The surrogate's artifact (CS-19's ``upr-hitmap-surrogate``).
+        text_map_run: The text-side map's run id (the provenance).
+        surrogate_run: The surrogate's run id (the provenance).
+    """
+
+    config: AppConfig
+    split: str
+    records: tuple[Record, ...]
+    labels: tuple[str, ...]
+    gold: np.ndarray
+    text_map: dict[str, Any]
+    surrogate: dict[str, Any]
+    text_map_run: str
+    surrogate_run: str
+
+
+def load_artifact(path: Path) -> dict[str, Any]:
+    """One run's artifact.
+
+    Raises:
+        FileNotFoundError: If the artifact does not exist.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"no artifact at {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_context(
+    config: AppConfig,
+    *,
+    split: str,
+    text_map_run: str,
+    surrogate_run: str,
+    results: Path,
+) -> ViewerContext:
+    """Read everything the viewer needs: the split, the gold matrix, the artifacts.
+
+    The label space is the **whole dataset's** (the harness's own space, not the
+    split's), and the rows are the split's ids in their own order — the grid the
+    map's rows and the decision cache's cell indexes are built on.
+
+    Raises:
+        FileNotFoundError: If an artifact is missing.
+        ValueError: If an artifact was measured on another split.
+    """
+    report = load_jsonl(config.paths.data_raw)
+    ids, _ = load_split_ids(config.paths.data_splits, split)
+    records = select_records_by_ids(report.records, ids)
+    labels = sorted({label for record in report.records for label in record.labels})
+    gold = build_label_matrix(records, labels)
+    text_map = load_artifact(results / text_map_run / "hitmap.json")
+    surrogate = load_artifact(results / surrogate_run / "hitmap.json")
+    for name, artifact in ((text_map_run, text_map), (surrogate_run, surrogate)):
+        if artifact.get("split") != split:
+            raise ValueError(
+                f"the artifact {name} was measured on the split {artifact.get('split')!r}, "
+                f"not {split!r}: the viewer's rows would not line up with it"
+            )
+    return ViewerContext(
+        config=config,
+        split=split,
+        records=tuple(records),
+        labels=tuple(labels),
+        gold=gold,
+        text_map=text_map,
+        surrogate=surrogate,
+        text_map_run=text_map_run,
+        surrogate_run=surrogate_run,
+    )
+
+
+def pick_row(records: Sequence[Record], *, text_id: str | None, sample: bool, seed: int) -> int:
+    """The row of the text on screen: by its record id, or by a seeded draw.
+
+    The seeded draw is the track's own convention (``sample_texts``): a
+    permutation of the split's rows, and its first element — so the same seed
+    picks the same text as the track's own draws.
+
+    Raises:
+        ValueError: If neither a record id nor a sample is asked for, or the
+            record is not in the split.
+    """
+    if text_id:
+        for index, record in enumerate(records):
+            if record.id == text_id:
+                return index
+        raise ValueError(f"the record {text_id!r} is not in the split")
+    if sample:
+        generator = np.random.default_rng(seed)
+        return int(generator.permutation(len(records))[0])
+    raise ValueError("pick a text with --text <record id> or --sample --seed <n>")
+
+
+def lexical_ranking(text: str, labels: Sequence[str]) -> list[tuple[str, float]]:
+    """The text-side map's own ranking: the text's words against every label.
+
+    ``lex_text_coverage`` — "the text's words, how much of each is in the
+    label's name" — for every label, strongest first. The tie-break is the
+    label space's own order, exactly as the map's pass breaks it.
+    """
+    values = [(label, text_side_coverage(text, label)) for label in labels]
+    return sorted(values, key=lambda item: (-item[1], item[0]))
+
+
+def topic_ranking(text: str, labels: Sequence[str]) -> list[tuple[str, float]]:
+    """The topic-side map's own ranking: every label's words against the text.
+
+    ``lex_label_coverage`` — "the label's words, how much of each is in the
+    text" — for every label, strongest first (CS-18's mode A).
+    """
+    values = [(label, cell_coverage(text, label)) for label in labels]
+    return sorted(values, key=lambda item: (-item[1], item[0]))
+
+
+def word_rows(text: str, label: str) -> list[dict[str, Any]]:
+    """The text's words and their exact contribution toward one label.
+
+    The text side of the word-overlap feature's own definition (mode B): a word
+    that occurs twice is **one** row with its occurrences counted and its
+    contributions added — the feature averages over the token occurrences, so
+    grouping them changes neither the sum nor the share.
+    """
+    grouped: dict[str, dict[str, float]] = {}
+    for contribution in text_word_contributions(text, label):
+        row = grouped.setdefault(
+            contribution.word,
+            {"coverage": 0.0, "contribution": 0.0, "n": 0.0},
+        )
+        row["coverage"] += contribution.coverage
+        row["contribution"] += contribution.contribution
+        row["n"] += 1.0
+    rows = [
+        {
+            "word": word,
+            "n_occurrences": int(row["n"]),
+            "coverage": row["coverage"] / row["n"],
+            "contribution": row["contribution"],
+        }
+        for word, row in grouped.items()
+    ]
+    rows.sort(key=lambda row: (-float(row["contribution"]), str(row["word"])))
+    return rows
+
+
+def topic_words(text: str, label: str) -> list[str]:
+    """The topic's own content words (the topic side of the map, mode A)."""
+    return [contribution.word for contribution in label_word_contributions(text, label)]
+
+
+def surrogate_block(
+    artifact: Mapping[str, Any], arm_name: str | None
+) -> tuple[str, dict[str, Any]]:
+    """The surrogate's block of one arm (the arm's name and its block).
+
+    Raises:
+        KeyError: If the artifact has no surrogate block.
+    """
+    arms = artifact.get("ablation_map", {}).get("arms", {})
+    if arm_name:
+        block = arms.get(arm_name)
+        if block is None:
+            raise KeyError(f"the artifact has no arm {arm_name!r}; it has {sorted(arms)}")
+        chosen = arm_name
+    else:
+        chosen, block = next(iter(arms.items()))
+    surrogate = block.get("surrogate")
+    if not surrogate:
+        raise KeyError(f"the arm {chosen!r} carries no surrogate block")
+    return chosen, dict(surrogate)
+
+
+def surrogate_coefficients(surrogate: Mapping[str, Any], topic: str) -> dict[str, float]:
+    """One topic's stored coefficients (the surrogate's per-word attribution).
+
+    The artifact stores each topic's **top** positive and negative words only,
+    so a word that is not in either list has **no stored coefficient** — it is
+    never read as zero.
+    """
+    for row in surrogate.get("per_topic", []):
+        if row.get("topic") != topic:
+            continue
+        coefficients: dict[str, float] = {}
+        for side in ("top_positive_words", "top_negative_words"):
+            for entry in row.get(side, []):
+                coefficients[str(entry["word"])] = float(entry["coefficient"])
+        return coefficients
+    return {}
+
+
+def cross_check(context: ViewerContext, row: int, text: str) -> list[str]:
+    """Compare the viewer's own numbers with the artifacts' (the stale-artifact guard).
+
+    The viewer recomputes the text-side map with the very same pure function the
+    map's run used, so the artifact's own rows are the reference: the text's top
+    label and every gold cell's value. A mismatch means the artifact and the
+    data disagree — a **stale artifact** — and it is reported, never smoothed
+    over.
+    """
+    problems: list[str] = []
+    labels = context.labels
+    ranking = lexical_ranking(text, labels)
+    stored = context.text_map.get("text_side_map", {}).get("per_text_top_label", [])
+    if row < len(stored):
+        entry = stored[row]
+        if entry.get("label") != ranking[0][0]:
+            problems.append(
+                f"the artifact's top label for row {row} is {entry.get('label')!r}, "
+                f"the viewer's is {ranking[0][0]!r}"
+            )
+        if abs(float(entry.get("value", 0.0)) - ranking[0][1]) > VALUE_TOLERANCE:
+            problems.append(
+                f"the artifact's top value for row {row} is {entry.get('value')}, "
+                f"the viewer's is {ranking[0][1]:.6f}"
+            )
+    else:
+        problems.append(f"the artifact has no per-text row {row}")
+    for cell in context.text_map.get("text_side_map", {}).get("per_gold_cell", []):
+        if int(cell.get("text_row", -1)) != row:
+            continue
+        expected = text_side_coverage(text, str(cell.get("label")))
+        if abs(float(cell.get("value", 0.0)) - expected) > VALUE_TOLERANCE:
+            problems.append(
+                f"the artifact's gold cell {cell.get('label')!r} for row {row} is "
+                f"{cell.get('value')}, the viewer's is {expected:.6f}"
+            )
+    expected_gold = int(context.gold.sum())
+    stored_gold = context.text_map.get("text_set", {}).get("n_gold_cells")
+    if stored_gold is not None and int(stored_gold) != expected_gold:
+        problems.append(
+            f"the artifact holds {stored_gold} gold cells, the split has {expected_gold}"
+        )
+    return problems
+
+
+def remove_word(text: str, word: str) -> tuple[str, int]:
+    """The text without a word: every occurrence of it, and how many there were.
+
+    The removal is the **causal** one: the word is taken out of the text and the
+    model is asked again, so the word's effect is read from a perturbed input.
+
+    Raises:
+        ValueError: If the word is not in the text.
+    """
+    pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", re.IGNORECASE)
+    stripped, count = pattern.subn(" ", text)
+    if count == 0:
+        raise ValueError(f"the word {word!r} is not in the text")
+    return " ".join(stripped.split()), count
+
+
+def build_decider(
+    context: ViewerContext,
+    arm_name: str | None,
+) -> tuple[Any, DecisionArm, str, dict[str, Any]]:
+    """The decision model client, built from the **artifact's own** pinned config.
+
+    The viewer has no model of its own: it reads the very model the map used
+    (the id, the pinned digest, the prompt and the prompt version), so the live
+    mode is read against the same instrument as the map.
+
+    Returns:
+        The decider (the cache in front of the client), the arm, the arm's name
+        and the model's provenance block.
+    """
+    chosen, surrogate = surrogate_block(context.surrogate, arm_name)
+    arms = context.surrogate.get("ablation_map", {}).get("arms", {})
+    model_info = dict(arms[chosen].get("model", {}))
+    models = [dict(model) for model in context.surrogate.get("config", {}).get("models", [])]
+    model_dict = next((model for model in models if model.get("name") == chosen), None)
+    if model_dict is None:
+        if not models:
+            raise KeyError(f"the artifact {chosen!r} names no model to read")
+        model_dict = models[0]
+    model_config = DecisionModelConfig(**model_dict)
+    decision = UprDecisionConfig(
+        models=(model_config,),
+        host=str(model_info.get("host") or ""),
+        prompt_version=str(model_info.get("prompt_version") or "v1"),
+        max_questions_per_call=DEFAULT_MAX_QUESTIONS,
+    )
+    analysis = UprAnalysisConfig(decision=decision)
+    config = context.config.model_copy(update={"upr_analysis": analysis})
+    decider = build_upr_decider(model_config, config)
+    arm = DecisionArm(
+        name=model_config.name,
+        state=model_config.state,
+        question_type=model_config.question_type,
+        instructions=model_config.instructions,
+        options=tuple(model_config.options),
+        criteria=dict(model_config.criteria),
+        positive_option=model_config.positive_option,
+        max_input_tokens=model_config.max_input_tokens,
+    )
+    return decider, arm, chosen, model_info
+
+
+def score_grid(
+    decider: Any,
+    arm: DecisionArm,
+    text: str,
+    labels: Sequence[str],
+    *,
+    name_base: int,
+    max_questions_per_call: int = DEFAULT_MAX_QUESTIONS,
+) -> tuple[np.ndarray, int]:
+    """Score one text against every label: the probabilities and the calls' count.
+
+    The call is the **same call the CS-9b grid run made**: the same state, the
+    same question specs and the same question names (the grid's own cell index),
+    so the val texts' answers come from the decision cache. The names are
+    rebuilt from ``name_base`` — the text's row in the grid — which is what
+    makes the cache hit.
+    """
+    cells = build_upr_cells([text], labels, np.zeros((1, len(labels)), dtype=bool))
+    calls = plan_calls(
+        cells,
+        state_shape=arm.state,
+        instructions=arm.instructions,
+        question_type=arm.question_type,
+        options=arm.options,
+        criteria=arm.criteria,
+        max_questions_per_call=max_questions_per_call,
+        max_input_tokens=arm.max_input_tokens,
+    )
+    probabilities: list[float | None] = [None] * len(cells)
+    for call in calls:
+        names = tuple(f"c{name_base + index}" for index in call.cell_indexes)
+        answers = decider.decide(call.state, dict(zip(names, call.specs, strict=True)))
+        for name, index in zip(names, call.cell_indexes, strict=True):
+            answer = answers.get(name)
+            if answer is None:
+                raise RuntimeError(f"the decision call returned no answer for {name!r}")
+            probabilities[index] = answer_probability(answer, arm.positive_option)
+    missing = [index for index, value in enumerate(probabilities) if value is None]
+    if missing:
+        raise RuntimeError(f"{len(missing)} cells were not scored by the decision model")
+    return np.asarray(probabilities, dtype=np.float64), len(calls)
+
+
+def _ranking_rows(
+    ranking: Sequence[tuple[str, float]],
+    limit: int,
+) -> list[tuple[int, str, float]]:
+    """The ranking's rows: the rank, the label and the value."""
+    return [(index + 1, label, value) for index, (label, value) in enumerate(ranking[:limit])]
+
+
+def _cache_line(cache: Mapping[str, int] | None) -> str:
+    """The cache's own counters, so "free" is a measurement and not a claim."""
+    if not cache:
+        return ""
+    return (
+        f"(the decision cache: {int(cache.get('hits', 0))} hits, "
+        f"{int(cache.get('misses', 0))} misses, {int(cache.get('stored', 0))} stored)"
+    )
+
+
+def _cache_counters(decider: Any) -> dict[str, int]:
+    """The decision cache's own counters (the hits, the misses, the stored)."""
+    return {
+        "hits": int(getattr(decider, "cache_hits", 0)),
+        "misses": int(getattr(decider, "cache_misses", 0)),
+        "stored": int(getattr(decider, "n_stored", 0)),
+    }
+
+
+def _default_focus(record: Record, labels: Sequence[str]) -> tuple[str, str]:
+    """The topic the view focuses on when none is asked for.
+
+    The gold label whose **own words the text carries the most** (the map's
+    topic-side measure, ``lex_label_coverage``): the topic the text is really
+    about, and not the catch-all that happens to be listed first. The tie-break
+    is the record's own label order, so the choice is deterministic.
+    """
+    candidates = [label for label in record.labels if label in labels]
+    if not candidates:
+        return (labels[0] if labels else ""), "the label space's first label"
+    scores = [(label, cell_coverage(record.text, label)) for label in candidates]
+    best = max(score for _, score in scores)
+    focus = next(label for label, score in scores if score == best)
+    return focus, "the gold label whose own words the text carries the most"
+
+
+def render(
+    context: ViewerContext,
+    row: int,
+    *,
+    focus: str,
+    focus_rule: str = "",
+    picked: str = "",
+    top_k: int,
+    colour: bool,
+    live: np.ndarray | None = None,
+    live_calls: int = 0,
+    live_info: Mapping[str, Any] | None = None,
+    cache: Mapping[str, int] | None = None,
+    what_if: Sequence[tuple[str, str, int, np.ndarray, int, Mapping[str, int]]] = (),
+    what_if_baseline: np.ndarray | None = None,
+    what_if_calls: int = 0,
+    problems: Sequence[str] = (),
+) -> str:
+    """The whole screen, as text (the tool's own output).
+
+    The columns say which of the two they are: the lexical and the surrogate
+    numbers are **attributions**, the what-if block is the **causal** one.
+    """
+    record = context.records[row]
+    text = record.text
+    labels = context.labels
+    gold_labels = list(record.labels)
+    text_ranking = lexical_ranking(text, labels)
+    topic_ranking_rows = topic_ranking(text, labels)
+    coefficients = surrogate_coefficients(surrogate_block(context.surrogate, None)[1], focus)
+    rows = word_rows(text, focus)
+    maximum = max((float(entry["contribution"]) for entry in rows), default=0.0)
+    lines: list[str] = []
+    add = lines.append
+
+    add(paint("=" * 96, BOLD, colour=colour))
+    add(
+        paint(
+            f"HIT MAP VIEWER — UPR {context.split} "
+            f"({len(context.records)} texts, {len(labels)} labels, "
+            f"{int(context.gold.sum())} gold cells)",
+            BOLD,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            f"text: {record.id} (row {row} of {len(context.records)}) · picked by {picked}"
+            f" · artifacts: {context.text_map_run}, {context.surrogate_run}",
+            DIM,
+            colour=colour,
+        )
+    )
+    if problems:
+        add(
+            paint(
+                "!! THE ARTIFACTS AND THE DATA DISAGREE — the numbers below may be stale",
+                RED,
+                colour=colour,
+            )
+        )
+        for problem in problems:
+            add(f"   - {problem}")
+    add(paint("=" * 96, BOLD, colour=colour))
+    add("")
+    add(paint("THE TEXT", BOLD, colour=colour))
+    add(f'  "{text}"')
+    add("")
+    add(paint("WHAT IS TRUE — the gold labels of this text (UPR val)", BOLD, colour=colour))
+    add("  " + " · ".join(gold_labels))
+    add("")
+    add(paint(f'THE FOCUS TOPIC: "{focus}"', BOLD, colour=colour))
+    if focus_rule:
+        add(paint(f"  (chosen: {focus_rule})", DIM, colour=colour))
+    own_words = topic_words(text, focus)
+    add(f"  the topic's own name words (mode A, attribution): {', '.join(own_words) or '—'}")
+    add("")
+
+    add(
+        paint(
+            "THE WORDS AND WHAT EACH CONTRIBUTES — ATTRIBUTION "
+            "(mode B: lex_text_coverage, the feature's own exact decomposition)",
+            BOLD,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            f"  {'word':<20}{'n':>2}   {'contribution':>11}   {'bar':<28}{'surrogate (mode C)'}",
+            DIM,
+            colour=colour,
+        )
+    )
+    for entry in rows:
+        contribution = float(entry["contribution"])
+        colour_code = GREEN if contribution > 0.0 else DIM
+        surrogate = coefficients.get(str(entry["word"]))
+        surrogate_text = f"{surrogate:+.3f}" if surrogate is not None else "—"
+        surrogate_colour = (
+            RED
+            if surrogate is not None and surrogate < 0.0
+            else (GREEN if surrogate is not None else DIM)
+        )
+        add(
+            "  "
+            + paint(f"{str(entry['word']):<20}", colour_code, colour=colour)
+            + f"{int(entry['n_occurrences']):>2}   {contribution:>11.4f}   "
+            + paint(f"{_bar(contribution, maximum):<28}", colour_code, colour=colour)
+            + paint(f"{surrogate_text:>10}", surrogate_colour, colour=colour)
+        )
+    add(
+        paint(
+            "  the surrogate's coefficient is stored for a topic's top words only: "
+            "'—' means 'not stored', never zero.",
+            DIM,
+            colour=colour,
+        )
+    )
+    add("")
+    add(
+        paint(
+            "WHO THE WORDS SAY IT IS — ATTRIBUTION (the lexical map's own ranking)",
+            BOLD,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            "  the text's words against the topic's name (mode B, lex_text_coverage)",
+            DIM,
+            colour=colour,
+        )
+    )
+    for rank, label, value in _ranking_rows(text_ranking, top_k):
+        mark = " ★" if label in gold_labels else "  "
+        add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+    add(
+        paint(
+            "  the topic's words against the text (mode A, lex_label_coverage)",
+            DIM,
+            colour=colour,
+        )
+    )
+    for rank, label, value in _ranking_rows(topic_ranking_rows, top_k):
+        mark = " ★" if label in gold_labels else "  "
+        add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+    add(paint("   (★ = a gold label of this text)", DIM, colour=colour))
+    add("")
+
+    if live is not None:
+        add(
+            paint(
+                "WHAT THE MODEL SAYS — the decision model's own ranking (live)",
+                BOLD,
+                colour=colour,
+            )
+        )
+        name = str((live_info or {}).get("model_id", "?"))
+        digest = str((live_info or {}).get("digest", "?"))[:12]
+        add(
+            paint(
+                f"  {name} (digest {digest}…) · the tool's own reading, not an artifact's number",
+                DIM,
+                colour=colour,
+            )
+        )
+        order = np.argsort(-np.asarray(live, dtype=np.float64))
+        for rank, column in enumerate(order[:top_k], start=1):
+            label = labels[int(column)]
+            value = float(live[int(column)])
+            mark = " ★" if label in gold_labels else "  "
+            add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+        add(paint(f"  the calls: {live_calls} {_cache_line(cache)}", DIM, colour=colour))
+        add("")
+
+    add(paint("THE THREE SIDE BY SIDE", BOLD, colour=colour))
+    add(
+        paint(
+            f"  {'topic':<38}{'the words say':>15}{'the model says':>16}{'the truth':>10}",
+            DIM,
+            colour=colour,
+        )
+    )
+    text_rank = {label: index + 1 for index, (label, _) in enumerate(text_ranking)}
+    model_rank: dict[str, int] = {}
+    if live is not None:
+        order = np.argsort(-np.asarray(live, dtype=np.float64))
+        model_rank = {labels[int(column)]: index + 1 for index, column in enumerate(order)}
+    shown: list[str] = []
+    for label in gold_labels:
+        shown.append(label)
+    for label, _ in text_ranking[:top_k]:
+        if label not in shown:
+            shown.append(label)
+    for label in list(model_rank)[:top_k]:
+        if label not in shown:
+            shown.append(label)
+    for label in shown:
+        cells = [
+            f"{text_rank[label]:>2} ({text_side_coverage(text, label):.4f})"
+            if label in text_rank
+            else "—",
+            f"{model_rank[label]:>2} ({live[labels.index(label)]:.4f})"
+            if live is not None and label in model_rank
+            else "—",
+            "gold" if label in gold_labels else "",
+        ]
+        add(f"  {label:<38}{cells[0]:>15}{cells[1]:>16}{cells[2]:>10}")
+    add("")
+
+    if what_if:
+        add(
+            paint(
+                "WHAT IF THIS WORD IS REMOVED — CAUSAL (the model is asked again)",
+                BOLD,
+                colour=colour,
+            )
+        )
+        for word, _variant, count, scores, calls, word_cache in what_if:
+            add(
+                paint(
+                    f'  the word "{word}" occurs {count} time(s); the model is asked about the '
+                    "text without it",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            assert what_if_baseline is not None
+            tracked = list(dict.fromkeys([focus, *gold_labels]))
+            add(
+                paint(
+                    f"  {'topic':<38}{'intact':>9}{'without':>10}{'delta':>10}",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            for label in tracked:
+                column = labels.index(label)
+                intact = float(what_if_baseline[column])
+                without = float(scores[column])
+                delta = without - intact
+                code = RED if delta < -0.01 else (GREEN if delta > 0.01 else DIM)
+                add(
+                    f"  {label:<38}{intact:>9.4f}{without:>10.4f}"
+                    + paint(f"{delta:>10.4f}", code, colour=colour)
+                )
+            intact_order = int(np.argmax(what_if_baseline))
+            without_order = int(np.argmax(scores))
+            intact_top = labels[intact_order]
+            without_top = labels[without_order]
+            add(
+                f"  the intact top-1: {intact_top} "
+                f"({float(what_if_baseline[intact_order]):.4f})"
+                f" -> the new top-1: {without_top} ({float(scores[without_order]):.4f})"
+            )
+            add(paint(f"  the calls: {calls} {_cache_line(word_cache)}", DIM, colour=colour))
+            add("")
+        add(
+            paint(
+                "  NOTE: the decision model is NOT deterministic (the CS-7a precedent): the same "
+                "call re-run",
+                YELLOW,
+                colour=colour,
+            )
+        )
+        add(
+            paint(
+                "  moves the probability by ~0.001-0.003, so a delta of that size is noise and "
+                "not a signal.",
+                YELLOW,
+                colour=colour,
+            )
+        )
+        add(paint(f"  the what-if calls in total: {what_if_calls}", DIM, colour=colour))
+        add("")
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """View one text of the split (the CLI's entry point)."""
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help="the config with the paths (default: configs/base.yaml)",
+    )
+    parser.add_argument("--split", default=DEFAULT_SPLIT, help="the split to view (default: val)")
+    parser.add_argument("--text", default=None, help="the record id of the text to view")
+    parser.add_argument(
+        "--sample", action="store_true", help="view a seeded random text of the split"
+    )
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="the seed of the drawn text")
+    parser.add_argument(
+        "--topic", default=None, help="the label to focus on (default: the first gold label)"
+    )
+    parser.add_argument(
+        "--top-k", type=int, default=DEFAULT_TOP_K, help="how many labels the rankings show"
+    )
+    parser.add_argument(
+        "--live", action="store_true", help="also show the decision model's own ranking"
+    )
+    parser.add_argument(
+        "--what-if", default=None, help="the words to remove, comma separated (causal)"
+    )
+    parser.add_argument(
+        "--arm", default=None, help="the decision arm to read (default: the artifact's first)"
+    )
+    parser.add_argument(
+        "--max-questions-per-call",
+        type=int,
+        default=DEFAULT_MAX_QUESTIONS,
+        help="the questions one call may carry (the API's cap is 64)",
+    )
+    parser.add_argument(
+        "--results",
+        type=Path,
+        default=None,
+        help="the results folder (default: the config's paths.results)",
+    )
+    parser.add_argument("--text-map-run", default=TEXT_MAP_RUN, help="the text-side map's run id")
+    parser.add_argument("--surrogate-run", default=SURROGATE_RUN, help="the surrogate's run id")
+    parser.add_argument("--no-colour", action="store_true", help="plain text (no ANSI colours)")
+    args = parser.parse_args(argv)
+
+    colour = not args.no_colour and sys.stdout.isatty()
+    try:
+        config = load_config(args.config)
+        results = args.results if args.results is not None else Path(config.paths.results)
+        context = load_context(
+            config,
+            split=args.split,
+            text_map_run=args.text_map_run,
+            surrogate_run=args.surrogate_run,
+            results=results,
+        )
+        row = pick_row(context.records, text_id=args.text, sample=args.sample, seed=args.seed)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"hitmap_view: {exc}", file=sys.stderr)
+        return 1
+
+    record = context.records[row]
+    if args.topic:
+        focus = args.topic
+        focus_rule = "asked for"
+    else:
+        focus, focus_rule = _default_focus(record, context.labels)
+    if focus not in context.labels:
+        print(f"hitmap_view: {focus!r} is not a label of the split", file=sys.stderr)
+        return 1
+
+    problems = cross_check(context, row, record.text)
+    picked = f"--text {args.text}" if args.text else f"--sample --seed {args.seed}"
+    live: np.ndarray | None = None
+    live_calls = 0
+    live_info: dict[str, Any] = {}
+    what_if: list[tuple[str, str, int, np.ndarray, int, Mapping[str, int]]] = []
+    what_if_calls = 0
+    baseline: np.ndarray | None = None
+    decider: Any = None
+    arm: DecisionArm | None = None
+    cache: dict[str, int] = {}
+
+    if args.live or args.what_if:
+        try:
+            decider, arm, _arm_name, live_info = build_decider(context, args.arm)
+            live, live_calls = score_grid(
+                decider,
+                arm,
+                record.text,
+                context.labels,
+                name_base=row * len(context.labels),
+                max_questions_per_call=args.max_questions_per_call,
+            )
+            baseline = live
+            cache = _cache_counters(decider)
+        except (RuntimeError, ValueError) as exc:
+            print(f"hitmap_view: {exc}", file=sys.stderr)
+            return 1
+
+    if args.what_if:
+        assert decider is not None and arm is not None
+        for word in [item.strip() for item in args.what_if.split(",") if item.strip()]:
+            try:
+                variant, count = remove_word(record.text, word)
+            except ValueError as exc:
+                print(f"hitmap_view: {exc}", file=sys.stderr)
+                return 1
+            before = _cache_counters(decider)
+            scores, calls = score_grid(
+                decider,
+                arm,
+                variant,
+                context.labels,
+                name_base=row * len(context.labels),
+                max_questions_per_call=args.max_questions_per_call,
+            )
+            after = _cache_counters(decider)
+            what_if.append(
+                (
+                    word,
+                    variant,
+                    count,
+                    scores,
+                    calls,
+                    {key: after[key] - before.get(key, 0) for key in after},
+                )
+            )
+            what_if_calls += calls
+
+    try:
+        print(
+            render(
+                context,
+                row,
+                focus=focus,
+                focus_rule=focus_rule,
+                picked=picked,
+                top_k=args.top_k,
+                colour=colour,
+                live=live if args.live else None,
+                live_calls=live_calls,
+                live_info=live_info,
+                cache=cache,
+                what_if=what_if,
+                what_if_baseline=baseline,
+                what_if_calls=what_if_calls,
+                problems=problems,
+            )
+        )
+    except KeyError as exc:
+        print(f"hitmap_view: the artifact is missing a block: {exc}", file=sys.stderr)
+        return 1
+    # a stale artifact is a loud failure: the screen is still shown (it says so
+    # at the top), but the exit code says the numbers are not to be trusted
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

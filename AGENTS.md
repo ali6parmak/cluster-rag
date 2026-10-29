@@ -54,6 +54,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | What is the label catalog? | §CS-11 · `catalogs/upr_labels.jsonl` (+ `catalogs/upr_labels.meta.json`) |
 | What did the zero-shot rerankers do? | §CS-15 (as scorers) · §CS-16 (as a pack feature) |
 | What did the hit map show (which words carry the signal)? | the track log's §CS-18 (the topic-side map + the causal ablation) · §CS-19 (the text-side map + the surrogate attribution) · the archive's §7.1.4 / §7.1.5 |
+| How do I see the hit map for **one text**? | `tools/hitmap_view.py` (the terminal viewer: the words, who the words say it is, what the model says, what is true, and what if a word is removed) → the track log's §CS-20 |
 | What is still open, and what is the next step? | `TEXT_PROCESSING_PLAN.md` §5 (the unanswered questions) and §7 (CS-17 and the hit map's next round, CS-20 … CS-22) · `PLAN.md` §7 |
 | What are the main pipeline's phases, and which are done? | `PLAN.md` §4 |
 | What are the coding rules and the pure-core boundary? | `AGENTS.md` "Coding conventions" · `TEXT_PROCESSING_PLAN.md` §2 and §4 |

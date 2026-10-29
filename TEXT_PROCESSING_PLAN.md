@@ -624,6 +624,8 @@ per change set, so a reader can always tell *moved* from *lost*:
 - **CS-19** (the hit map's two cheap modes: the text-side word map and the
   surrogate attribution) → executed 2026-10-29 → the archive's §7.1.5 and the
   track log's §CS-19.
+- **CS-20** (the hit map's terminal viewer: the interactive map) → executed
+  2026-10-29 → the archive's §7.1.6 and the track log's §CS-20.
 
 The change sets still open:
 
@@ -656,42 +658,6 @@ asks.
 **The order:** CS-20 (the viewer) → CS-21 (the OMCT map) → CS-22 (mode E at
 corpus scale). The viewer comes first because it is the cheapest thing that
 teaches the most, and because it tells us what mode E should even measure.
-
-- [ ] **CS-20 — the hit map's *terminal viewer* (the interactive map).** The map
-  exists as four modes (CS-18's topic-side map + causal ablation, CS-19's
-  text-side map + surrogate attribution) and all four live in artifacts. What is
-  missing is the **per-document** view: one command, one text on screen, and
-  (a) the text's words with **what each contributes**, (b) **who the words say
-  it is** — the top-k the cheap modes predict, (c) **what the model says** — its
-  own top-k, live, (d) **what is true** — the gold labels, so (b), (c) and (d)
-  sit side by side, and (e) behind a flag, **what happens if a specific word is
-  removed** — the causal one (the text minus the word → the model is asked
-  again → the new probability, the new top-k, the delta).
-
-  **The mechanism.** A repo tool (`tools/hitmap_view.py`, next to the
-  verification scripts) with **no new dependency**: the colours are raw ANSI
-  escape codes with a plain-text fallback. Three modes and their costs: the
-  **offline** mode (the default) reads only the artifacts — the text-side map,
-  the surrogate's per-topic coefficients, the gold matrix — and costs **0 model
-  calls**; the **live** mode re-scores the text through the cached calls (the
-  machinery in `commands/upr.py`) to show the model's own top-k, which is in no
-  artifact — cache hits, free for the val texts; the **what-if** mode spends
-  **2 real calls per word** (~1 s) and must say that the decision model is
-  **not deterministic** (the CS-7a precedent).
-
-  **The discipline.** The viewer is a **tool, not a number source**: anything it
-  shows that becomes a claim lands in an artifact first. The seeds are explicit
-  and the text set is the val split. The **attribution/causation distinction is
-  visible in the output** (the lexical and surrogate columns are attributions,
-  the what-if column is the causal one) — the lesson of CS-18 and CS-19 is
-  exactly that difference, and a viewer that blurs it would teach the wrong
-  thing. The track's pure-core boundary is untouched (the tool lives at the
-  edge).
-
-  **What it is not.** No new measurement, so no run id, no artifact and no
-  table row; the track log gets a short section (what the tool shows and how to
-  use it, with an example output quoted from the tool's own run). The run-level
-  details are fixed before the first call, as they were for CS-18 and CS-19.
 
 - [ ] **CS-21 — the hit map for the **OMCT** data (the auxiliary pair-relevance
   data).** The same map on the other dataset: which words carry the signal there.
