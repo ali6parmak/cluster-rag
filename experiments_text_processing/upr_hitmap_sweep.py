@@ -1,6 +1,6 @@
 """The track's **hit map** on the UPR val split (the track's CS-18).
 
-`TEXT_PROCESSING_PLAN.md` section 7.1 (CS-18) pre-registers the round: the
+The plan archive's section 7.1.4 (CS-18) pre-registers the round: the
 lexical feature's own per-word decomposition (Version A, exact and free) and
 the decision model's sentence-level ablation (Version B, the only version that
 perturbs the input and therefore the only one that says anything causal).

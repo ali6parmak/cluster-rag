@@ -16,7 +16,7 @@ repo, and the round's two arms differ only in the unit.
 **What the ablation measures.** For every variant (a text with one unit
 removed) the model's probability for every label is compared with its
 probability for the intact text. The **drop** is the difference. Three reads
-come out of it, all pre-registered in `TEXT_PROCESSING_PLAN.md` §7.1:
+come out of it, all pre-registered in the plan archive's §7.1.4:
 
 - the **label-linked unit** — the unit whose content words overlap the gold
   label's name the most — against the other units: does the probability fall

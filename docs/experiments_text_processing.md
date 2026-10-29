@@ -73,6 +73,7 @@ research record and are **not** indexed here.
 | [CS-14 — the union candidate generator, as a number](#cs-14--the-union-candidate-generator-as-a-number-2026-10-27) | one run (`upr-decide-tev1-paragraph-noul-grid-union`) | a **measurement, not a component**: recall@10 0.9120, and the unseen bucket falls to 0.2540 (the decision model's own 0.5267) | `results/upr-decide-tev1-paragraph-noul-grid-union/decisions.json` |
 | [CS-15 — the zero-shot rerankers on UPR, as **scorers**](#cs-15--the-zero-shot-rerankers-on-upr-as-scorers-2026-10-27) | nine `upr-rerank-<model>-<candidate set>` runs | a null as a re-ordering: the best arm **+0.0091 [−0.0122, +0.0294]**; the label-blind counterpart is catastrophic (−0.27…−0.38) → the signal is label-driven and the *ordering* is the weak part | the CS-15 runs |
 | [CS-16 — the reranker's score as a **pack feature**](#cs-16--the-rerankers-score-as-a-pack-feature-2026-10-27) | thirteen `upr-analyze-learned-rerank-*` runs | the listwise model's score lifts the pack 0.5965 → **0.6117** (+0.0152 [+0.0015, +0.0280]) — the best UPR number — but the pre-registered **+0.02 margin is not met**, so the slot decision is the reviewer's | the CS-16 runs |
+| [CS-18 — the hit map: which words carry the signal](#cs-18--the-hit-map-which-words-carry-the-signal-2026-10-29) | two `upr-hitmap-*` runs (the lexical map + the decision model's ablation) | the map answers question 3 with a **yes and a no**: the decision model keys on the label's own words (the label-linked clause's drop 0.2687 against 0.0918, the label-blind counterpart flat) **and** it leans on the recommendation's opening clause (the formulaic drop is *larger*, +0.0489 [+0.0139, +0.0849]); the lexical map's exactness is 0.0 and the held-out labels' coverage is carried by their own distinctive words (the generic share 0.3105) | `results/upr-hitmap-{sentence,clause}/hitmap.json` |
 
 ## Change sets
 
@@ -5028,3 +5029,199 @@ the track's harness); nothing about the **order** or the **label side** in
 the feature form (only the pre-registered primary was measured: the
 description, the text first); and nothing about the listwise model's
 *re-ordering* being useful on its own (CS-15 says it is not).
+
+## CS-18 — the hit map: which words carry the signal (2026-10-29)
+
+**The runs.** Two, both on the UPR **val** split (660 texts, 68 labels, 1,312
+gold cells), the **text set pre-registered as the whole split** (never a sample
+chosen after looking at the results), the decision model the very same pinned
+`tev1` the CS-13 feature used (the CS-9b run's arm: id, digest and prompt),
+and the **label-blind counterpart** beside every read:
+
+| run | the ablation unit | the text set | the variants | the calls (real + blind) |
+|---|---|---|---|---|
+| `upr-hitmap-sentence` | the plan's **sentence** unit | 7 ablatable, **653 not ablatable** (98.94%) | 15 | 30 + 30 |
+| `upr-hitmap-clause` | the amendment's **clause** unit | 348 ablatable, 312 not ablatable (47.3%) | 975 | 1,946 + 1,946 |
+
+**The cost:** the clause arm planned **3,892 calls** (1,946 per arm) and **3,669
+of them were new**; the wall time was **1,970 s**. The intact-text baselines
+were **CS-9b's cache hits** (1,320 of 1,320 planned calls were already cached,
+checked before the first call), so the round paid for the ablations only. The
+sentence arm cost 60 calls.
+
+The two arms exist because the pre-registration asked for the val split's
+sentence count to be measured *before* scheduling: **653 of the 660 texts are a
+single sentence**, and four of the seven that are not are false splits at
+"decree No. 170", so the sentence-level arm can ablate **three genuinely
+multi-sentence texts**. It runs as pre-registered and its near-null is reported
+as a near-null; the **clause-level** arm (the plan's amendment of 2026-10-29,
+written before the first call) is the one that can answer the round's questions.
+The pre-registration and its amendment are in the plan archive's **§7.1.4**
+(verbatim, with the round's numbers).
+
+### Version A — the lexical map (the label side; exact and free)
+
+`lex_label_coverage` is the *average* over a label name's content words of how
+much of each word the text has, so each word's contribution is **exact** — and
+the artifact checks it: over all **44,880 cells the largest deviation between
+the per-word contributions' sum and the feature's own value is 0.0**.
+
+**The map (val, the whole grid): the 106 words of the 68 label names, ranked by
+the contribution they carry.**
+
+| the word | its share of the grid's total coverage | the labels that own it |
+|---|---|---|
+| rights | 0.1939 | 18 |
+| right | 0.0986 | 9 |
+| human | 0.0440 | 8 |
+| discrimination | 0.0338 | 2 |
+| detention | 0.0260 | 1 |
+| international | 0.0242 | 2 |
+| freedom | 0.0201 | 6 |
+| general | 0.0175 | 3 |
+
+**The concentration:** the top word carries **0.1939** of the grid's total
+per-word contribution, the top five **0.3962**, the top twenty **0.6359** — so
+the signal is **distributed**, not carried by one word. The generic words (the
+ones another label owns too) carry **0.5096** of the grid's total; the
+distinctive ones **0.4904**.
+
+### Question 1 — does the map confirm that the lexical block is the ranking signal?
+
+**It confirms the lexical block's *mechanism*, and it does not confirm that the
+lexical block is the ranking signal on UPR — because on UPR it never was.**
+CS-8e measured it: the embedding block alone reaches the shortlist recall
+0.4460 against the lexical block alone's 0.3837, and CS-13's random-vector
+floor says the same from the other side (the pack with noise embeddings keeps
+0.5798 against the real arm's 0.5965). The **ranking signal on UPR is the
+decision model's own label reading**, not the word overlap and not the
+geometry. The OMCT finding ("the lexical block is the lever", Stage 3.1b) does
+not transfer to UPR, and the map says the same thing from the word side: the
+lexical feature is a word-overlap detector whose coverage is spread over 106
+words, half of it generic.
+
+### Question 2 — does the map explain why the held-out labels are found and the generic ones are not?
+
+**Yes on the lexical side, and the pre-registered falsification does *not* fire.**
+A label's word is **distinctive** when no other label in the 68-label space
+contains it and **generic** otherwise; the measure is the held-out labels'
+per-word contribution split between the two.
+
+| the held-out label (all eight are the "unseen" bucket) | its gold cells | its mean coverage | its words (distinctive / generic, with the contribution) |
+|---|---|---|---|
+| Special procedures | 36 | 0.6169 | *special* 13.86, *procedures* 8.35 — **both distinctive** |
+| Freedom of association and peaceful assembly | 38 | 0.5981 | *association* 6.59, *peaceful* 4.13 (distinctive); *freedom* 6.61, *assembly* 5.41 (generic) |
+| Asylum-seekers - refugees | 36 | 0.5441 | *refugees* 8.00, *seekers* 5.81, *asylum* 5.78 — **all distinctive** |
+| Freedom of religion and belief | 40 | 0.5360 | *religion* 11.42, *belief* 4.83 (distinctive); *freedom* 5.19 (generic) |
+| Gender-based violence | 39 | 0.5041 | *violence* 9.79, *based* 4.53 (distinctive); *gender* 5.33 (generic) |
+| ESC rights - general | 36 | 0.2967 | *esc* 0.56 (distinctive); *rights* 7.56, *general* 2.57 (generic) |
+| **General** (the catch-all) | 38 | **0.1316** | *general* 5.00 (generic) |
+| **Other** (the catch-all) | 36 | **0.0000** | *other* — **no content word at all** |
+
+**The held-out labels' coverage is 0.3105 generic and 0.6895 distinctive** — the
+name transfers because of the label's **own** topic word ("special procedures",
+"refugees", "religion"), **not** because of the word every label has. The
+pre-registered falsification ("the generic words carry the held-out labels'
+coverage") does **not** fire.
+
+**And the generic catch-alls are not found for a structural reason, which the
+map makes visible:** "Other" has **no content word at all** ("other" is a
+stopword of the coverage), so its lexical feature is **0.0 in every cell by
+definition** — the word-overlap feature can never find it; and "General" is
+carried by a single generic word ("general"), so it is found only when the text
+says "general" (the mean gold-cell coverage 0.1316). The catch-alls are not
+"missed"; they are **outside the feature's reach**.
+
+### Version B — the ablation map (the text side; the only perturbing version)
+
+Removing one unit of the text and asking again costs the same ~2 calls per
+text, so the ablation is per text, not per cell. The **drop** is the intact
+probability minus the ablated one; the reads are paired over the texts
+(the resampling unit is the text) and the **label-blind counterpart** runs
+beside every one of them.
+
+**The three reads (val, the clause arm: 348 ablatable texts, 287 of them with a
+label-linked unit, 214 with both a formulaic and a topical unit).**
+
+| read | the real arm | the label-blind counterpart |
+|---|---|---|
+| the **label-linked** unit's drop vs another unit's | **0.2687** vs 0.0918 → **+0.1769 [+0.1501, +0.2025]** | −0.0107 vs 0.0071 → −0.0179 [−0.0354, +0.0005] |
+| a **formulaic** unit's drop vs a **topical** unit's | **0.1782** vs 0.1293 → **+0.0489 [+0.0139, +0.0849]** | −0.0228 vs −0.0025 → −0.0203 [−0.0437, +0.0038] |
+| the **gold** cells' drop vs the **background** cells' | **0.1511** vs −0.0160 → **+0.1672 [+0.1552, +0.1789]** | −0.0030 vs −0.0108 → +0.0077 [−0.0005, +0.0160] |
+
+### Question 3 — does the decision model key on the right words or on boilerplate?
+
+**Both, and the second is the finding worth knowing.**
+
+- **It keys on the right words.** The clause that carries the gold label's own
+  name is the strongest carrier of the probability: removing it drops the gold
+  cells' probability by **0.2687** against **0.0918** for any other clause
+  (**+0.1769 [+0.1501, +0.2025]**, 287 texts, every resample positive) — and in
+  **151 of those 287 texts it is also the single top carrier** of the drop. The
+  label-blind counterpart's same read is **flat** (−0.0179, the interval
+  straddling zero), so the attribution is **label-driven**, not the model's own
+  prior. The fall is also concentrated on the **gold** labels: the background
+  cells' probability does not fall when a clause is removed (it even rises
+  slightly, −0.0160), against the gold cells' 0.1511 — and the counterpart's
+  gold-vs-background read is an order of magnitude smaller and straddles zero.
+- **And it also leans on the opening clause.** Removing a clause that opens
+  with one of the config's formulaic openers moves the probabilities **more**
+  than removing a topical clause (**+0.0489 [+0.0139, +0.0849]**), so the
+  pre-registered falsification for question 3 **fires on that clause**. The
+  effect survives the stricter cut: restricted to the **contentless** openers
+  ("continue to…", "ensure that the…", "take all necessary measures to…") the
+  opener's mean drop is **0.1831** against their own texts' topical units'
+  **0.1252** (+0.0578, 167 texts).
+
+  **The instrument's own limit, stated plainly.** The clause splitter cuts at
+  commas, so in UPR the boilerplate and the topic live in the *same* clause
+  ("Continue to ensure that the child mortality rate is reduced"): removing the
+  clause removes the frame **and** the content together. The map therefore says
+  that the model's confidence leans on the **opening of the recommendation** —
+  the frame and its content together — at least as much as on a topical clause;
+  it **cannot** say how much of that is the frame. What it *can* say, causally,
+  is the first bullet: the label's own words carry the most.
+
+**The concrete picture** (the artifact's per-text block; the drop of the gold
+cells' probability when that clause is removed):
+
+| text | the clause | the drop |
+|---|---|---|
+| "Increase its efforts to ensure access to basic services, **as well as freedom of movement**, for all residents" (gold: Freedom of movement) | the label-linked clause | **0.8775** |
+| the same text | the other two clauses | 0.0068 / −0.0049 |
+| "**Continue to give greater prominence to gender equality** and ensure the National Women's Institute is adequately resourced" (gold: Women's rights) | the opener clause | **0.8703** |
+| the same text | the second clause | 0.0103 |
+| "Look into the need for concrete measures on the basis of detailed statistical data, **to reduce the duration of preventive detention**" (gold: Detention) | the label-linked clause | **0.8474** |
+| the same text | the other two clauses | 0.0450 / 0.0089 |
+
+### The falsification conditions, read out one by one
+
+1. **Version B, question 3** — "the label-linked drop is larger than the other
+   units' drop": **holds** (+0.1769 [+0.1501, +0.2025]). "a formulaic unit's
+   drop is smaller than a topical unit's drop": **does not hold**
+   (+0.0489 [+0.0139, +0.0849] — the wrong sign). "the label-blind counterpart's
+   pattern is not the real arm's": **holds** (the counterpart is flat). So the
+   version is **falsified on the boilerplate clause and confirmed on the other
+   two**: the model reads the label's own words, the attribution is label-driven,
+   and the model's confidence also leans on the recommendation's opening clause.
+2. **Version A, question 2** — "the held-out labels' coverage is carried by
+   their generic words": **does not fire** (the generic share is 0.3105, the
+   distinctive share 0.6895).
+3. **Both** — the per-word contributions sum to the feature's value exactly
+   (the largest deviation 0.0 over 44,880 cells), and **a null was a legitimate
+   outcome**: the concentration readout is one (the top word carries 0.1939 of
+   the grid's contribution over 106 words), so on the label side the signal is
+   **distributed**, not one word.
+
+### What this change set does not say
+
+Nothing about `test` (only **val** was touched); nothing about the
+**embedding model's** attribution (Version C — out of scope: everything
+measured says the geometry contributes almost nothing to the ranking, and it
+would be a separate change set with its own cost); nothing about a **per-word
+attribution read out of the boosted-tree ensemble** (a tree ensemble has no
+per-word attribution: the map above is of the **feature's own definition** — the
+pack's lexical block — and is labelled as such wherever it is shown); nothing
+about the **frame and the content apart** (the clause splitter cannot separate
+them in this corpus); and nothing about the 312 val texts the clause arm cannot
+ablate (they are reported as "not ablatable", never dropped).

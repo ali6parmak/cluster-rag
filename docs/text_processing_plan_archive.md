@@ -2754,3 +2754,252 @@ paragraphs; UPR texts fit). Work order, one checkbox per change set:
   docstring/help references in `config.py`/`cli.py` and the stale migration
   comment reworded; AGENTS.md layout + "Running things" examples moved to
   sweeps; 191 unit + 12 integration tests green, ruff clean)*
+
+---
+
+## The hit map (CS-18) — the pre-registration, the amendment and the verdict
+
+*Added on 2026-10-29, when the round was executed: the live plan's §7.1
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-18.*
+
+### 7.1 The hit map (CS-18)
+
+- [x] **CS-18 — the hit map: which words carry the signal.** A colleague asked for
+  it: a map of the words (or word pairs) that actually carry the ranking signal, so
+  the method's story can be read off a picture instead of a table of AUCs.
+
+  **The mechanism — three versions, and the plan is to measure the first two and say
+  plainly that the third is not where the value is.**
+
+  - **Version A (exact, ~free) — the lexical feature's own per-word decomposition.**
+    `lex_label_coverage` is already the *average over the label's words* of how much
+    of each word appears in the text, so the per-word contribution of one of a
+    label's words to a cell's feature is **exact**, not an approximation. It maps
+    the **label side**: which of a label's words the pack actually keys on.
+  - **Version B (the interesting one, cheap) — the decision model's sentence-level
+    ablation.** The decision model reads the paragraph as its state and asks about
+    all 68 labels in one batched call, so the cost is **per text, not per cell**:
+    removing one sentence and re-asking costs the same ~2 calls per text. It maps
+    the **text side**, and it is the only one of the three that *perturbs* the
+    input — so it is the only one that says anything causal.
+  - **Version C (expensive, and not where the story is) — the embedding model's own
+    attribution.** Everything measured so far says the embedding geometry contributes
+    almost nothing to the ranking, so it is **out of scope**; if it is ever measured
+    it is a separate change set with its own cost.
+
+  **The three questions the map must answer.**
+
+  1. Does it **confirm** the statistical finding that the **lexical block** is the
+     ranking signal?
+  2. Does it **explain** why the *specific* held-out labels are found and the
+     *generic* ones are not?
+  3. **Does the decision model key on the right words or on boilerplate?** — the one
+     worth knowing before someone else finds it.
+
+  *Pre-registered falsification:*
+
+  - **Version B (question 3) is falsified** if the sentence ablation's effect is
+    **not** concentrated on the sentences that carry the topical content — e.g. if
+    removing a formulaic opener ("Continue to ensure that …") moves the
+    probabilities as much as removing the topical sentence does. The measure is the
+    per-sentence drop in the decision probability for the cell's gold labels, read
+    against the **label-blind counterpart** (the same ablation with the wrong
+    pairing). If the counterpart's pattern is the same, the attribution is not
+    label-driven and the map says nothing about the labels.
+  - **Version A (question 2) is falsified** if the held-out labels' per-word
+    contributions are carried by their **generic** words ("rights", "human",
+    "recommendation") rather than by their own distinctive ones — i.e. if the map
+    says the name transfers because of the word every label has, not because of the
+    label's own topic word. The measure is the per-word contribution split between
+    the held-out labels and the generic catch-alls ("General", "Other").
+  - **A null is a legitimate outcome** and is reported as one: the map may show the
+    signal is *distributed* and that no single word carries it.
+  - The per-word numbers must **not** be read out of the **boosted-tree ensemble**:
+    a tree ensemble has no per-word attribution, and the pack's importances are per
+    *feature*, not per word. The map is of the **feature's own definition**, and it
+    must be labelled as such.
+
+  *Cost:*
+
+  - **Version A: ~free.** A pure computation over inputs the pack already has. It
+    needs one small, pure addition to the lexical feature's own module (expose the
+    per-word decomposition as a pure function) and **no model call**.
+  - **Version B: 2 decision calls per (text, sentence-removed) variant**, so the
+    round's total is **2 × Σ_text (the text's sentence count)** — the same ~2 calls
+    per text the CS-13 feature cost, times the number of sentences. **Measure the
+    sentence count before scheduling**: UPR texts average ~152 characters, so most
+    have one or two sentences, and a single-sentence text has **no** ablation — it
+    is reported as "not ablatable", never silently dropped. The **label-blind
+    counterpart** runs beside it, so the round's cost is **4 × Σ_text s_text**. The
+    **fit side is not needed**: the map is a measurement, not a fitted model.
+  - **Version C:** out of scope.
+
+  *Leakage:*
+
+  - The map is a **measurement, not a feature**: nothing is fitted, nothing enters
+    a model, and the pack and the combiner are untouched.
+  - The decision model is frozen (id **and** digest pinned) and carries no UPR
+    label; it is the same `tev1` the CS-13 feature used, so the map and the
+    feature are read against the same model.
+  - The **label-blind counterpart** runs beside every arm — the track's own rule,
+    and the only thing that makes the attribution label-driven rather than the
+    model's own prior.
+  - The **text set** must be **pre-registered** (or the whole val split used): a
+    set chosen after looking at the results is cherry-picking.
+  - The **fit side is not touched at all** (nothing is fitted). **`test` is not
+    touched**: val only, as everywhere in this track.
+  - The two negative subsets are never pooled, and the map is over the judged
+    pairs.
+
+  *Caveats to carry into the write-up:*
+
+  - **Attribution is not causation unless you perturb** — so for the decision model
+    the answer comes from **Version B** (the ablation), not from Version A (a
+    decomposition of a feature's own definition).
+  - **A pack hit map is a map of the *word-overlap* feature, not of the embedding
+    model**, and must be labelled as such wherever it is shown.
+  - **Do not read per-word attributions out of the boosted-tree ensemble.**
+  - **The sampled text set must be pre-registered**, or it is cherry-picking.
+
+  *Runs:* the sweep file, the run ids and the log section are fixed in the round's
+  own pre-registration, before the first call.
+
+  **The amendment of 2026-10-29 — written before the first call, after the
+  sentence count was measured.** The pre-registration asks for the sentence count
+  to be measured *before* scheduling. Measured on the UPR **val** split (660
+  texts, the track's own `split_sentences`):
+
+  | sentences | 1 | 2 | 3 |
+  |---|---|---|---|
+  | texts | 653 | 6 | 1 |
+
+  mean 1.012, median 1, Σ_text s_text = 668. **653 of the 660 texts (98.94%) have
+  no sentence-level ablation** — they are reported as "not ablatable", never
+  dropped. Of the seven texts with two or three "sentences", **four are false
+  splits**: the splitter cuts at "decree No. 170" ("No." is not in its
+  abbreviation list), so only **three val texts (0.45%) are genuinely
+  multi-sentence** (eight gold cells between them). A sentence-level map on this
+  corpus therefore rests on three texts: it cannot answer question 3.
+
+  **What the amendment does.** It adds a **second ablation unit** beside the
+  plan's, and fixes the runs. The plan's sentence-level arm still runs, exactly
+  as pre-registered, and its near-null is reported as a near-null.
+
+  - **The clause-level arm.** The track's own atom chunker
+    (`AtomChunker(split_clauses=True)` — the CS-2/CS-3 atoms, a deterministic
+    rule-based splitter already in the repo, no new dependency) cuts a UPR text
+    at its clause separators. Measured on val: the clause counts are 1 (312
+    texts), 2 (190), 3 (84), 4 (47), 5 (14), 6 (9), 7 (2), 8 (1), 9 (1) — mean
+    1.95, median 2, Σ = 1,287. **348 texts (52.7%) are ablatable and hold 799
+    gold cells**; the other 312 are "not ablatable" and reported as such. 205
+    texts (31.1%) open with a formulaic opener clause ("Continue to ensure that
+    …") — the pre-registration's own falsification example.
+
+  **The fixed runs** (the "*Runs:*" clause, discharged):
+
+  | what | run id | artifact | new calls |
+  |---|---|---|---|
+  | the sentence-level arm (the plan's unit) + Version A | `upr-hitmap-sentence` | `results/upr-hitmap-sentence/hitmap.json` | 60 |
+  | the clause-level arm (the amendment) + Version A | `upr-hitmap-clause` | `results/upr-hitmap-clause/hitmap.json` | 3,900 |
+
+  The sweep file is `experiments_text_processing/upr_hitmap_sweep.py` (sweep
+  label `upr_hitmap`, so the comparison table's section is `## UPR — upr_hitmap`);
+  the log section is **`## CS-18 — the hit map: which words carry the signal
+  (2026-10-29)`** in `docs/experiments_text_processing.md`.
+
+  **The text set is the whole val split** (660 texts), pre-registered — not a
+  sample chosen after looking at the results.
+
+  **The cost, corrected.** A text with *k* units yields *k* variants (one per
+  removable unit: removing a unit leaves the other *k − 1*), and a text with
+  **one** unit yields **none** — removing it would leave nothing to ask about,
+  so it is not ablatable and is reported as such. The round's new calls are
+  therefore 4 × Σ over the **ablatable** texts of their unit count (2 calls per
+  variant: the real pairing and the label-blind counterpart): **60** for the
+  sentence arm (15 variants over the 7 ablatable texts) and **3,900** for the
+  clause arm (975 variants over the 348 ablatable texts). The plan's own
+  formula (2 × Σ_text s_text) is an upper bound: it counts the not-ablatable
+  texts' meaningless variants too. The full-text baselines are **CS-9b's cache
+  hits** (the same tev1 id and digest, the same prompt, the same cell layout —
+  checked: 1,320 of 1,320 planned calls are already cached), so the round pays
+  for the ablations only.
+
+  **The falsification readouts, made concrete** (the pre-registration states the
+  conditions; this fixes the numbers):
+
+  - *Version B, question 3.* For every gold cell the **label-linked unit** is
+    the unit whose content tokens overlap the gold label's name the most (ties:
+    the earliest). The measure: the mean drop in the decision probability of the
+    gold cells when the **label-linked** unit is removed, against the mean drop
+    when a **non-linked** unit is removed, with the **label-blind counterpart's**
+    two drops beside them. The second measure: the mean drop of the **formulaic**
+    units (a unit that starts with one of the config's `preprocess.strip_openers`)
+    against the **topical** units'. The third: the mean drop over the **gold**
+    cells against the mean drop over the **background** cells. **Falsified** if
+    the label-linked drop is not larger than the non-linked drop, or if the
+    formulaic drop is not smaller than the topical drop, or if the label-blind
+    counterpart's pattern is the same as the real arm's (the attribution would
+    then not be label-driven).
+  - *Version A, question 2.* A label's word is **distinctive** when no other
+    label in the 68-label space contains it, and **generic** otherwise. The
+    measure: the held-out labels' per-word contributions split between the
+    generic and the distinctive words, with the generic catch-alls ("General",
+    "Other", "ESC rights - general" — all three are themselves held out) beside
+    them. **Falsified** if the generic words carry the held-out labels' coverage.
+  - *Both.* The per-word contributions must sum to `lex_label_coverage` exactly
+    (the artifact records the largest deviation). A null is a legitimate outcome
+    and is reported as one.
+
+  *Exit:* the map is in the track log with its numbers beside it, and it answers —
+  or explicitly fails to answer — each of the three questions, with the
+  falsification conditions read out one by one.
+
+  *(pre-registered 2026-10-29; **executed 2026-10-29** — the two runs are
+  `upr-hitmap-sentence` and `upr-hitmap-clause`, the log section is
+  `## CS-18 — the hit map: which words carry the signal (2026-10-29)` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR val, 660 texts, 68 labels, 1,312
+  gold cells; the text set = the whole val split, pre-registered).**
+
+  - **Version A (the lexical map, exact and free).** The per-word contributions
+    sum to `lex_label_coverage` with the largest deviation **0.0** over all
+    **44,880 cells**. The signal is **distributed**: the top word ("rights",
+    18 labels) carries **0.1939** of the grid's total contribution, the top five
+    **0.3962**, the top twenty **0.6359** (over 106 words). The generic words
+    carry **0.5096** of the grid's total.
+  - **Question 2 (the held-out labels) — the falsification does *not* fire.** The
+    eight held-out labels' coverage is **0.3105 generic / 0.6895 distinctive**:
+    the name transfers through the label's **own** topic word ("special
+    procedures", "refugees", "religion"), not through the word every label has.
+    The generic catch-alls are **outside the feature's reach**: "Other" has no
+    content word at all ("other" is a stopword of the coverage), so its feature
+    is 0.0 in every cell **by definition**; "General" is carried by its single
+    generic word (the mean gold-cell coverage **0.1316**).
+  - **Question 3 (the decision model) — a yes and a no.** The **label-linked**
+    clause (the one carrying the gold label's own name) is the strongest
+    carrier: its drop **0.2687** against **0.0918** for any other clause,
+    **+0.1769 [+0.1501, +0.2025]** over 287 texts; the **label-blind
+    counterpart** is flat (**−0.0179 [−0.0354, +0.0005]**), so the attribution is
+    label-driven; the fall is concentrated on the **gold** cells (**0.1511**
+    against the background's **−0.0160**). **But** a **formulaic** clause's drop
+    is *larger* than a topical clause's (**0.1782** vs **0.1293**,
+    **+0.0489 [+0.0139, +0.0849]**) — the pre-registered falsification **fires on
+    that clause**: the model's confidence leans on the recommendation's opening
+    clause at least as much as on a topical one. The instrument's own limit: the
+    clause splitter cannot separate the frame from the content in this corpus
+    ("Continue to ensure that X" is one clause), so the map says the model leans
+    on the **opening**, not how much of that is boilerplate.
+  - **Question 1 (the lexical block as the ranking signal) — not confirmed, and
+    the map says why not.** On UPR the lexical block was never the ranking
+    signal (CS-8e: the embedding block alone 0.4460 against the lexical block
+    alone 0.3837; CS-13's random-vector floor says the same from the other
+    side). The ranking signal on UPR is the decision model's own label reading —
+    and Version B is what says what *it* keys on.
+  - **The cost.** The clause arm planned **3,892 calls** (3,669 of them new) and
+    took **1,970 s**; the intact-text baselines were **CS-9b's cache hits**
+    (1,320 of 1,320 planned calls already cached). The sentence arm cost 60
+    calls and rests on **three genuinely multi-sentence texts** (653 of the 660
+    val texts are a single sentence) — it is reported as the near-null it is.

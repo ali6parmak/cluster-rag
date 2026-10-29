@@ -547,7 +547,7 @@ class DecideUprCell(_LabelledCell):
 class HitMapUprCell(_LabelledCell):
     """One ``hitmap-upr`` cell: the hit map's ablation unit.
 
-    The text-processing track's hit map (TEXT_PROCESSING_PLAN.md section 7.1,
+    The text-processing track's hit map (the plan archive's section 7.1.4,
     CS-18): the **lexical map** (Version A — the lexical feature's own per-word
     decomposition, a pure computation) and the **ablation map** (Version B — the
     decision model's own sentence- or clause-level ablation, the only version
