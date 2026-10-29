@@ -690,7 +690,9 @@ def ablatable_summary(
     histogram = unit_histogram(units)
     n_texts = len(units)
     n_ablatable = sum(1 for row_units in units if len(row_units) >= 2)
-    n_variants = sum(max(0, len(row_units) - 1) for row_units in units)
+    # a text with k units yields k variants (one per removable unit); a text
+    # with one unit yields none, so it is not ablatable
+    n_variants = sum(len(row_units) for row_units in units if len(row_units) >= 2)
     return {
         "n_texts": n_texts,
         "unit_histogram": histogram,

@@ -2998,8 +2998,12 @@ line). The verdict and the numbers are the track log's §CS-18.*
     alone 0.3837; CS-13's random-vector floor says the same from the other
     side). The ranking signal on UPR is the decision model's own label reading —
     and Version B is what says what *it* keys on.
-  - **The cost.** The clause arm planned **3,892 calls** (3,669 of them new) and
-    took **1,970 s**; the intact-text baselines were **CS-9b's cache hits**
-    (1,320 of 1,320 planned calls already cached). The sentence arm cost 60
-    calls and rests on **three genuinely multi-sentence texts** (653 of the 660
-    val texts are a single sentence) — it is reported as the near-null it is.
+  - **The cost.** The clause arm planned **3,892 calls** (1,946 per arm, all of
+    them new) and took **2,186 s**; the sentence arm's 60 calls took 34.7 s; the
+    intact-text baselines were **CS-9b's cache hits** (2,640 hits, 0 misses).
+    The round reproduces: a cold re-run of the whole sweep (the round's own
+    ablation calls deleted from the cache) returned **every number identical**
+    to the sixth decimal. The **sentence** arm rests on **three genuinely
+    multi-sentence texts** (653 of the 660 val texts are a single sentence) —
+    it is reported as the near-null it is, and the clause arm is the one that
+    answers the round's questions.

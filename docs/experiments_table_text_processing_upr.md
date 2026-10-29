@@ -551,3 +551,10 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-hitmap-sentence | 2026-10-29 | val | sentence | tev1-paragraph-noul | 660 | 7 | 0.9894 | 15 | 30 | 0.3869 | 0.0453 | 0.3415 | [+0.1439, +0.5475] | 0.3898 | 0.2544 | 0.1354 | 0.2081 | 0.0030 | 0.2051 | 0.0532 | 0.0462 | yes | no | yes | 0.3105 | 0.1939 | 1.329 |
 | upr-hitmap-clause | 2026-10-29 | val | clause | tev1-paragraph-noul | 660 | 348 | 0.4727 | 975 | 1946 | 0.2687 | 0.0918 | 0.1769 | [+0.1501, +0.2025] | 0.1782 | 0.1293 | 0.0489 | 0.1511 | -0.0160 | 0.1672 | -0.0179 | -0.0203 | yes | no | yes | 0.3105 | 0.1939 | 1969.734 |
+
+## UPR — upr_hitmap
+
+| run_id | date | split | unit | model | n_texts | n_ablatable | share_not_ablatable | n_variants | n_calls | linked_drop | other_drop | linked_minus_other | linked_ci | formulaic_drop | topical_drop | formulaic_minus_topical | gold_drop | background_drop | gold_minus_background | blind_linked_minus_other | blind_formulaic_minus_topical | linked_ok | formulaic_ok | label_driven | heldout_generic_share | top1_word_share | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-hitmap-sentence | 2026-10-29 | val | sentence | tev1-paragraph-noul | 660 | 7 | 0.9894 | 15 | 30 | 0.3869 | 0.0453 | 0.3415 | [+0.1439, +0.5475] | 0.3898 | 0.2544 | 0.1354 | 0.2081 | 0.0030 | 0.2051 | 0.0532 | 0.0462 | yes | no | yes | 0.3105 | 0.1939 | 34.696 |
+| upr-hitmap-clause | 2026-10-29 | val | clause | tev1-paragraph-noul | 660 | 348 | 0.4727 | 975 | 1946 | 0.2687 | 0.0918 | 0.1769 | [+0.1501, +0.2025] | 0.1782 | 0.1293 | 0.0489 | 0.1511 | -0.0160 | 0.1672 | -0.0179 | -0.0203 | yes | no | yes | 0.3105 | 0.1939 | 2186.178 |

@@ -164,6 +164,8 @@ def test_a_one_unit_text_is_not_ablatable() -> None:
     assert summary["n_ablatable"] == 1
     assert summary["n_not_ablatable"] == 1
     assert summary["share_not_ablatable"] == pytest.approx(0.5)
+    # the variant count is the one the variants themselves carry
+    assert summary["n_variants"] == len(variants)
 
 
 def test_the_label_linked_unit_is_the_one_that_names_the_label() -> None:

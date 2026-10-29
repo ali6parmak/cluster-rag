@@ -5043,11 +5043,11 @@ and the **label-blind counterpart** beside every read:
 | `upr-hitmap-sentence` | the plan's **sentence** unit | 7 ablatable, **653 not ablatable** (98.94%) | 15 | 30 + 30 |
 | `upr-hitmap-clause` | the amendment's **clause** unit | 348 ablatable, 312 not ablatable (47.3%) | 975 | 1,946 + 1,946 |
 
-**The cost:** the clause arm planned **3,892 calls** (1,946 per arm) and **3,669
-of them were new**; the wall time was **1,970 s**. The intact-text baselines
-were **CS-9b's cache hits** (1,320 of 1,320 planned calls were already cached,
-checked before the first call), so the round paid for the ablations only. The
-sentence arm cost 60 calls.
+**The cost:** the clause arm planned **3,892 calls** (1,946 per arm) and **all
+3,892 were new**; its wall time was **2,186 s**. The sentence arm's 60 calls
+took 34.7 s. The intact-text baselines were **CS-9b's cache hits** (2,640 hits,
+0 misses — 1,320 of the 1,320 planned calls were already cached, checked
+before the first call), so the round paid for the ablations only.
 
 The two arms exist because the pre-registration asked for the val split's
 sentence count to be measured *before* scheduling: **653 of the 660 texts are a
