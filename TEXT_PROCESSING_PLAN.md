@@ -640,6 +640,111 @@ The change sets still open:
   checkbox stays open and unticked: the round that measures it is not this
   one.
 
+### 7.1 The hit map's next round (CS-20 … CS-22)
+
+**The stop rule (the reviewer's, 2026-10-29 — it binds every session).** One
+change set at a time, and a **stop between them**: when a change set is done
+(the pre-registration written, the code and its tests in, the run's numbers in
+an artifact, the log section written, the box ticked with the numbers, the
+pre-registration moved to the archive, the commit made and the gate green), the
+work **stops and reports** — what was built, the numbers with the falsification
+conditions read out, what the reviewer has to decide, what the next change set
+would be. **The next change set starts only on the reviewer's word.** The same
+applies inside a change set: if it turns out to need a decision, it stops and
+asks.
+
+**The order:** CS-20 (the viewer) → CS-21 (the OMCT map) → CS-22 (mode E at
+corpus scale). The viewer comes first because it is the cheapest thing that
+teaches the most, and because it tells us what mode E should even measure.
+
+- [ ] **CS-20 — the hit map's *terminal viewer* (the interactive map).** The map
+  exists as four modes (CS-18's topic-side map + causal ablation, CS-19's
+  text-side map + surrogate attribution) and all four live in artifacts. What is
+  missing is the **per-document** view: one command, one text on screen, and
+  (a) the text's words with **what each contributes**, (b) **who the words say
+  it is** — the top-k the cheap modes predict, (c) **what the model says** — its
+  own top-k, live, (d) **what is true** — the gold labels, so (b), (c) and (d)
+  sit side by side, and (e) behind a flag, **what happens if a specific word is
+  removed** — the causal one (the text minus the word → the model is asked
+  again → the new probability, the new top-k, the delta).
+
+  **The mechanism.** A repo tool (`tools/hitmap_view.py`, next to the
+  verification scripts) with **no new dependency**: the colours are raw ANSI
+  escape codes with a plain-text fallback. Three modes and their costs: the
+  **offline** mode (the default) reads only the artifacts — the text-side map,
+  the surrogate's per-topic coefficients, the gold matrix — and costs **0 model
+  calls**; the **live** mode re-scores the text through the cached calls (the
+  machinery in `commands/upr.py`) to show the model's own top-k, which is in no
+  artifact — cache hits, free for the val texts; the **what-if** mode spends
+  **2 real calls per word** (~1 s) and must say that the decision model is
+  **not deterministic** (the CS-7a precedent).
+
+  **The discipline.** The viewer is a **tool, not a number source**: anything it
+  shows that becomes a claim lands in an artifact first. The seeds are explicit
+  and the text set is the val split. The **attribution/causation distinction is
+  visible in the output** (the lexical and surrogate columns are attributions,
+  the what-if column is the causal one) — the lesson of CS-18 and CS-19 is
+  exactly that difference, and a viewer that blurs it would teach the wrong
+  thing. The track's pure-core boundary is untouched (the tool lives at the
+  edge).
+
+  **What it is not.** No new measurement, so no run id, no artifact and no
+  table row; the track log gets a short section (what the tool shows and how to
+  use it, with an example output quoted from the tool's own run). The run-level
+  details are fixed before the first call, as they were for CS-18 and CS-19.
+
+- [ ] **CS-21 — the hit map for the **OMCT** data (the auxiliary pair-relevance
+  data).** The same map on the other dataset: which words carry the signal there.
+
+  **The mechanism, and why it is not just CS-20 with another dataset.** The
+  OMCT pack already has **both** lexical directions (`lex_question_coverage` and
+  `lex_paragraph_coverage`), so the two cheap modes are the same code with the
+  **question** playing the label's role: per pair, the map is "which words of the
+  paragraph matched which words of the question" — the **word pairs** view. The
+  causal arm is affordable because the OMCT decision arms use the **paragraph
+  shape**, so a call is per *paragraph*, not per pair: the reviewed set is
+  **1,520 pairs over only 225 paragraphs** (3 documents; the same-document grid
+  is 44,467 cells; the unjudged control is 4,000 cells), so the whole clause
+  ablation is 225 paragraphs × ~3 clauses × 2 calls × 2 (the label-blind
+  counterpart) ≈ **2,700 calls ≈ 25 minutes**.
+
+  **The discipline.** The two negative subsets are **never pooled**: the fit side
+  is the reviewed set (A) and the unjudged control (B) stays a control. Every
+  OMCT number is an OMCT number (never a UPR metric), the run ids carry the
+  `omct-` prefix, and the log section names the dataset.
+
+  **What it is not.** The **surrogate** (mode C) does not transfer: its unit is
+  the "topic" and its fit needs many cells per topic, while on OMCT the topics
+  are *questions*, each appearing in only a handful of paragraphs — a
+  per-question fit is hopeless and a global fit (the paragraph's words → the
+  model's probability, with a per-question intercept) measures the model's
+  prior, not the pair. A **word-pair** surrogate (the features = the
+  paragraph-word × question-word matches) is the workable version, and it would
+  be its own change set.
+
+- [ ] **CS-22 — mode E at corpus scale (the word-level causal ablation).** The
+  leave-one-**word**-out ablation: remove one word from a text, ask again, read
+  the drop — the same instrument as the clause-level ablation, one level finer.
+
+  **The mechanism.** Over a **pre-registered** subsample (the plan's candidate:
+  150 texts × ~20 words × 2 calls × 2 for the label-blind counterpart ≈
+  **12,000 calls ≈ 2 hours**), with the paired reads and the blind counterpart
+  exactly as CS-18 did them, and the resampling unit the text.
+
+  **The precondition.** The viewer's interactive what-if should show *what* to
+  measure (the topical clause's words? the boilerplate's? the topic's own name
+  words?) **before** the pre-registration is written — a pre-registration
+  written before that exploration would be a guess. The open questions for that
+  pre-registration: the removal unit (the word, or the word **pair** — the
+  plan's own phrase "words or word pairs"), the subsample's size and how it is
+  drawn, and the falsification conditions (the analogue of CS-18's "the
+  label-linked unit's drop is larger" and "the boilerplate's drop is not
+  smaller").
+
+  **What it is not.** It does not ship in the same change set as the viewer: the
+  viewer's what-if is the *interactive* mode E (one text at a time), and this
+  is the *corpus-level* one.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
