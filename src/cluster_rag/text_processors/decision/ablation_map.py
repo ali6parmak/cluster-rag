@@ -421,30 +421,17 @@ def measure_ablation(
             linked = label_linked_units(row_units, labels[int(column)], stopwords=stopwords)
             if not linked:
                 continue
-            linked_drops.append(float(np.mean(unit_gold_drops[linked])))
-            other_drops.append(
-                float(
-                    np.mean(
-                        [
-                            unit_gold_drops[index]
-                            for index in range(len(row_units))
-                            if index not in linked
-                        ]
-                    )
-                )
-            )
+            other_indices = [index for index in range(len(row_units)) if index not in linked]
+            if not other_indices:
+                # every unit is label-linked: the "other" side is undefined for
+                # this cell, so the text carries no linked-vs-other pair
+                continue
+            linked_drops.append(float(np.mean(unit_gold_drops[list(linked)])))
+            other_drops.append(float(np.mean([unit_gold_drops[index] for index in other_indices])))
             if blind_unit_gold_drops is not None:
-                blind_linked_drops.append(float(np.mean(blind_unit_gold_drops[linked])))
+                blind_linked_drops.append(float(np.mean(blind_unit_gold_drops[list(linked)])))
                 blind_other_drops.append(
-                    float(
-                        np.mean(
-                            [
-                                blind_unit_gold_drops[index]
-                                for index in range(len(row_units))
-                                if index not in linked
-                            ]
-                        )
-                    )
+                    float(np.mean([blind_unit_gold_drops[index] for index in other_indices]))
                 )
         linked_mean = float(np.mean(linked_drops)) if linked_drops else float("nan")
         other_mean = float(np.mean(other_drops)) if other_drops else float("nan")
@@ -480,7 +467,7 @@ def measure_ablation(
             if blind_unit_gold_drops is not None and (~formulaic).any()
             else float("nan")
         )
-        if not np.isnan(linked_mean):
+        if not np.isnan(linked_mean) and not np.isnan(other_mean):
             linked_means.append(linked_mean)
             other_means.append(other_mean)
         if not np.isnan(gold_mean):
@@ -489,7 +476,7 @@ def measure_ablation(
         if not np.isnan(formulaic_mean) and not np.isnan(topical_mean):
             formulaic_means.append(formulaic_mean)
             topical_means.append(topical_mean)
-        if not np.isnan(blind_linked_mean):
+        if not np.isnan(blind_linked_mean) and not np.isnan(blind_other_mean):
             blind_linked_means.append(blind_linked_mean)
             blind_other_means.append(blind_other_mean)
         if not np.isnan(blind_gold_mean):
