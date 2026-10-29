@@ -69,6 +69,7 @@ COMMAND_TARGETS: dict[str, TableTarget] = {
     "analyze-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
     "decide-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
     "rerank-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
+    "hitmap-upr": TableTarget("upr", TEXT_PROCESSING_TRACK),
 }
 
 
@@ -579,6 +580,50 @@ RERANK_UPR_KEY_COLUMNS: tuple[str, ...] = (
     "label_document",
     "label_blind",
 )
+
+# The text-processing track's **hit map** (the `hitmap-upr` command, CS-18): one
+# row per run (one ablation unit). The row carries the **text set's shape**
+# first (how many texts are ablatable at all — the sentence unit can ablate
+# almost nothing on UPR, and the texts it cannot ablate are reported, never
+# dropped), then the **cost** (the variants and the calls), then the three
+# **paired reads** of the ablation — the label-linked unit against the other
+# units, the formulaic units against the topical ones, the gold cells against
+# the background ones — with their intervals, then the **label-blind
+# counterpart's** reads beside them (the yardstick that says whether the
+# attribution is label-driven), the three **falsification flags**, and finally
+# the **lexical map's** two headline numbers (the held-out labels' generic share
+# and the feature's concentration).
+HITMAP_UPR_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "split",
+    "unit",
+    "model",
+    "n_texts",
+    "n_ablatable",
+    "share_not_ablatable",
+    "n_variants",
+    "n_calls",
+    "linked_drop",
+    "other_drop",
+    "linked_minus_other",
+    "linked_ci",
+    "formulaic_drop",
+    "topical_drop",
+    "formulaic_minus_topical",
+    "gold_drop",
+    "background_drop",
+    "gold_minus_background",
+    "blind_linked_minus_other",
+    "blind_formulaic_minus_topical",
+    "linked_ok",
+    "formulaic_ok",
+    "label_driven",
+    "heldout_generic_share",
+    "top1_word_share",
+    "seconds",
+)
+HITMAP_UPR_KEY_COLUMNS: tuple[str, ...] = ("run_id", "unit", "model")
 
 
 def _cell(value: Any) -> str:

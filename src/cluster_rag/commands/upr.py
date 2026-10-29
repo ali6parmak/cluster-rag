@@ -1,9 +1,10 @@
 """The UPR-side commands: ``evaluate``, ``analyze-upr``, ``decide-upr``,
-``rerank-upr``.
+``rerank-upr``, ``hitmap-upr``.
 
 ``evaluate`` is the Phase-3 harness (any predictor on a fixed val/test
-split); the other three are the text-processing track's UPR artifacts — the
-analysis, the decision probe and the zero-shot reranker probe.
+split); the other four are the text-processing track's UPR artifacts — the
+analysis, the decision probe, the zero-shot reranker probe and the **hit map**
+(CS-18: which words carry the signal).
 """
 
 from __future__ import annotations
@@ -62,12 +63,14 @@ from cluster_rag.experiment_table import (
     DECIDE_UPR_KEY_COLUMNS,
     EVALUATE_COLUMNS,
     EVALUATE_KEY_COLUMNS,
+    HITMAP_UPR_COLUMNS,
+    HITMAP_UPR_KEY_COLUMNS,
     RERANK_UPR_COLUMNS,
     RERANK_UPR_KEY_COLUMNS,
 )
 from cluster_rag.label_catalog import LabelEntry
 from cluster_rag.omct_analysis import BASELINE_ARM
-from cluster_rag.omct_decision import DecisionArm
+from cluster_rag.omct_decision import DecisionArm, score_cells
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
@@ -75,9 +78,23 @@ from cluster_rag.rerank.base import KIND_LISTWISE
 from cluster_rag.text_processors.aggregation import aggregate_chunk_similarities
 from cluster_rag.text_processors.chunkers import build_chunker
 from cluster_rag.text_processors.combining import build_combiner
+from cluster_rag.text_processors.decision.ablation_map import (
+    ablatable_summary,
+    build_ablation_cells,
+    build_variants,
+    label_bucket_map,
+    measure_ablation,
+    text_units,
+)
 from cluster_rag.text_processors.decision.upr_probe import measure_upr_arm
 from cluster_rag.text_processors.decision.upr_union import z_max_union
 from cluster_rag.text_processors.features import ProfileUnits
+from cluster_rag.text_processors.features.lexical_map import (
+    aggregate_lexical_map,
+    build_lexical_map,
+    exactness_check,
+    label_word_classes,
+)
 from cluster_rag.text_processors.features.upr_backoff import (
     control_labels,
     sibling_backoff,
@@ -697,6 +714,372 @@ class EvalSetup:
     train_counts: Counter[str]
     context: PredictorContext
     query_vectors: np.ndarray | None
+
+
+def _cmd_hitmap_upr(config: AppConfig) -> int:
+    """Run hitmap-upr: the track's hit map (CS-18).
+
+    Two versions, one run:
+
+    - **Version A — the lexical map.** The lexical feature's own per-word
+      decomposition: ``lex_label_coverage`` is the *average* over a label
+      name's content words of how much of each word the text has, so each
+      word's contribution is **exact**. This maps the **label side** and it is
+      a map of the *word-overlap feature*, never of the embedding model and
+      never of the boosted-tree ensemble.
+    - **Version B — the ablation map.** The decision model's own
+      sentence- or clause-level ablation: one unit of the text is removed and
+      the model is asked again. This maps the **text side**, and it is the only
+      version that **perturbs** the input, so it is the only one that says
+      anything causal. The **label-blind counterpart** runs beside it.
+
+    The decision model is the very same pinned model as the CS-13 feature (the
+    ``upr_analysis.decision`` section), so the map and the feature are read
+    against one model and the intact-text calls are that run's cache hits.
+
+    Writes ``results/<run_id>/{config.yaml, hitmap.json}``: the text set's
+    shape (how many texts are ablatable at all), the lexical map and its
+    aggregates, the ablation's three paired reads with their intervals, the
+    label-blind counterpart beside each, the falsification flags and the cost.
+    """
+    started = time.perf_counter()
+    run_id = _require_run_id(config)
+    _warn_upr_prefix(run_id)
+    if config.upr_analysis is None:
+        raise ValueError("the upr_analysis: section is required for the `hitmap-upr` command")
+    if config.eval is None:
+        raise ValueError("the eval: section is required for the `hitmap-upr` command")
+    analysis = config.upr_analysis
+    hitmap = analysis.hitmap
+    decision = analysis.decision
+    if not decision.models:
+        raise ValueError(
+            "the upr_analysis.decision: section carries no model: the hit map "
+            "reads the same pinned decision model as the CS-13 feature, so it "
+            "needs one"
+        )
+    setup = _prepare_evaluation(config, config.eval.split)
+    texts = [record.text for record in setup.records]
+    labels = list(setup.labels)
+    gold = setup.gold
+    buckets = setup.buckets
+    # The held-out labels: the bucket's "unseen" ones (the fit side never saw
+    # them), which is where the CS-18 question-2 split is read.
+    held_out = [label for label in labels if buckets.get(label) == "unseen"]
+    openers = tuple(config.preprocess.strip_openers)
+    bootstrap_seed = hitmap.bootstrap.seed if hitmap.bootstrap.seed is not None else config.seed
+
+    # -- Version A: the lexical map (pure, no model call) --------------------------
+    lexical_block: dict[str, Any] | None = None
+    if hitmap.include_lexical_map:
+        map_cells = build_lexical_map(texts, labels)
+        word_classes = label_word_classes(labels)
+        lexical_block = aggregate_lexical_map(
+            map_cells,
+            labels=labels,
+            gold=gold,
+            buckets=buckets,
+            word_classes=word_classes,
+            held_out_labels=held_out,
+            catch_all_labels=tuple(hitmap.catch_all_labels),
+        )
+        lexical_block["exactness"] = exactness_check(map_cells, texts, labels)
+        lexical_block["label_buckets"] = label_bucket_map(buckets, labels)
+
+    # -- Version B: the ablation map (the decision model's own ablation) ----------
+    units = tuple(text_units(text, unit=hitmap.unit, openers=openers) for text in texts)
+    text_set = ablatable_summary(units)
+    variants = build_variants(texts, units)
+    sample = UprDecisionSample(
+        texts=tuple(texts),
+        labels=tuple(labels),
+        gold=gold,
+        rows=tuple(range(len(texts))),
+    )
+    arms: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    for model_config in decision.models:
+        decider = build_upr_decider(model_config, config)
+        arm = DecisionArm(
+            name=model_config.name,
+            state=model_config.state,
+            question_type=model_config.question_type,
+            instructions=model_config.instructions,
+            options=model_config.options,
+            criteria=model_config.criteria,
+            positive_option=model_config.positive_option,
+            max_input_tokens=model_config.max_input_tokens,
+        )
+        # The intact texts: the same grid as the CS-9b run, so these calls are
+        # that run's cache hits.
+        full_matrix, full_cost = score_upr_grid(
+            sample,
+            decider,
+            arm,
+            max_questions_per_call=decision.max_questions_per_call,
+        )
+        blind_matrix, blind_cost = score_upr_grid(
+            sample,
+            decider,
+            arm,
+            max_questions_per_call=decision.max_questions_per_call,
+            mismatched=True,
+        )
+        # The ablated texts: one variant per removable unit.
+        cells = build_ablation_cells(variants, labels)
+        probabilities, truncated, n_calls = score_cells(
+            decider,
+            cells,
+            arm,
+            max_questions_per_call=decision.max_questions_per_call,
+        )
+        ablated = np.asarray(probabilities, dtype=np.float64).reshape(len(variants), len(labels))
+        blind_cells = build_ablation_cells(variants, labels, mismatched=True)
+        blind_probabilities, blind_truncated, blind_calls = score_cells(
+            decider,
+            blind_cells,
+            arm,
+            max_questions_per_call=decision.max_questions_per_call,
+        )
+        blind_ablated = np.asarray(blind_probabilities, dtype=np.float64).reshape(
+            len(variants), len(labels)
+        )
+        measurement = measure_ablation(
+            texts=texts,
+            labels=labels,
+            gold=gold,
+            units=units,
+            variants=variants,
+            full_scores=full_matrix,
+            ablated_scores=ablated,
+            blind_full_scores=blind_matrix,
+            blind_ablated_scores=blind_ablated,
+            resamples=hitmap.bootstrap.resamples,
+            seed=bootstrap_seed,
+        )
+        info = decider.info
+        block = {
+            "model": {
+                "name": model_config.name,
+                "model_id": info.model_id,
+                "digest": info.digest,
+                "backend": info.backend,
+                "host": info.host,
+                "prompt_version": decision.prompt_version,
+                "extra": info.extra,
+            },
+            "arm": {
+                "state": arm.state,
+                "question_type": arm.question_type,
+                "instructions": arm.instructions,
+                "positive_option": arm.positive_option,
+                "max_input_tokens": arm.max_input_tokens,
+            },
+            "cost": {
+                "intact_texts": {
+                    "n_cells": full_cost["n_cells"],
+                    "n_calls_planned": full_cost["n_calls_planned"],
+                    "n_truncated": full_cost["truncation"]["n_truncated"],
+                    "note": (
+                        "the intact texts' calls: the same grid and the same "
+                        "prompt as the CS-9b run, so they are that run's cache "
+                        "hits"
+                    ),
+                },
+                "ablations": {
+                    "n_variants": len(variants),
+                    "n_calls_planned": n_calls,
+                    "n_truncated": int(sum(truncated)),
+                },
+                "label_blind_ablations": {
+                    "n_variants": len(variants),
+                    "n_calls_planned": blind_calls,
+                    "n_truncated": int(sum(blind_truncated)),
+                },
+                "cache": {
+                    "hits": getattr(decider, "cache_hits", 0),
+                    "misses": getattr(decider, "cache_misses", 0),
+                    "stored": getattr(decider, "n_stored", 0),
+                },
+                "usage": dict(getattr(decider, "usage", {})),
+                "blind_intact_cost": blind_cost,
+            },
+            "measurement": measurement,
+        }
+        arms[model_config.name] = block
+        rows.append(
+            _hitmap_upr_row(
+                block,
+                run_id=run_id,
+                split=setup.split,
+                unit=hitmap.unit,
+                text_set=text_set,
+                lexical_block=lexical_block,
+                seconds=round(time.perf_counter() - started, 3),
+            )
+        )
+
+    results_dir = config.paths.results / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+    _write_resolved_config(results_dir, config)
+    payload = {
+        "run_id": run_id,
+        "command": "hitmap-upr",
+        "split": setup.split,
+        "source": str(config.paths.data_raw),
+        "source_sha256": setup.source_sha256,
+        "text_set": {
+            "scope": "the whole evaluated split (pre-registered: the text set "
+            "is never chosen after looking at the results)",
+            "split": setup.split,
+            "n_texts": len(texts),
+            "n_labels": len(labels),
+            "n_gold_cells": int(gold.sum()),
+            "unit": hitmap.unit,
+            **text_set,
+            "held_out_labels": held_out,
+            "label_buckets": label_bucket_map(buckets, labels),
+        },
+        "lexical_map": lexical_block,
+        "ablation_map": {"arms": arms},
+        "config": {
+            "unit": hitmap.unit,
+            "include_lexical_map": hitmap.include_lexical_map,
+            "include_label_blind": hitmap.include_label_blind,
+            "catch_all_labels": list(hitmap.catch_all_labels),
+            "bootstrap": {
+                "resamples": hitmap.bootstrap.resamples,
+                "seed": bootstrap_seed,
+            },
+            "openers": list(openers),
+            "models": [model.model_dump() for model in decision.models],
+            "reference_arm": {
+                "predictor": setup.predictor.describe(),
+                "note": (
+                    "the pipeline's own scoring of the same texts, so the map's "
+                    "reference arm is the pipeline's numbers and not a "
+                    "re-implementation of them"
+                ),
+            },
+            "notes": [
+                "a pack hit map is a map of the WORD-OVERLAP feature, not of the embedding model.",
+                "no per-word attribution is read out of the boosted-tree "
+                "ensemble: a tree ensemble has no per-word attribution.",
+                "the decision model is frozen (id and digest pinned) and "
+                "carries no UPR label: it is the same tev1 the CS-13 feature "
+                "used, so the map and the feature are read against one model.",
+                "attribution is not causation unless you perturb: the causal "
+                "read comes from the ablation (Version B), never from the "
+                "feature's own decomposition (Version A).",
+            ],
+        },
+        "total_seconds": round(time.perf_counter() - started, 3),
+    }
+    (results_dir / "hitmap.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    _append_command_rows(
+        config,
+        "hitmap-upr",
+        columns=HITMAP_UPR_COLUMNS,
+        key_columns=HITMAP_UPR_KEY_COLUMNS,
+        rows=rows,
+    )
+
+    print(f"UPR hit map (CS-18): {run_id}")
+    print(
+        f"  unit: {hitmap.unit}; {len(texts)} texts, {text_set['n_ablatable']} ablatable, "
+        f"{text_set['n_not_ablatable']} not ablatable, {len(variants)} variants"
+    )
+    if lexical_block is not None:
+        held_out_block = lexical_block["held_out_labels"]
+        print(
+            f"  lexical map: the held-out labels' generic share "
+            f"{_fmt(held_out_block['generic_share'], 4)}, the top word's share "
+            f"{_fmt(lexical_block['concentration']['top1_word_share'], 4)}"
+        )
+    for name, block in arms.items():
+        reads = block["measurement"]["reads"]
+        linked = reads["label_linked_vs_other"]
+        formulaic = reads["formulaic_vs_topical"]
+        falsification = block["measurement"]["falsification"]
+        print(
+            f"  [{name}] the label-linked drop {_fmt(linked.get('left_mean'), 4)} against "
+            f"{_fmt(linked.get('right_mean'), 4)} (the difference "
+            f"{_fmt(linked.get('difference'), 4)}); the formulaic drop "
+            f"{_fmt(formulaic.get('left_mean'), 4)} against the topical "
+            f"{_fmt(formulaic.get('right_mean'), 4)}"
+        )
+        print(
+            "      falsification: the label-linked drop larger "
+            f"{'yes' if falsification['label_linked_drop_greater']['holds'] else 'no'}, "
+            "the formulaic drop smaller "
+            f"{'yes' if falsification['formulaic_drop_smaller']['holds'] else 'no'}, "
+            "the attribution label-driven "
+            f"{'yes' if falsification['label_driven']['holds'] else 'no'}"
+        )
+    print(f"Report written to {results_dir / 'hitmap.json'}")
+    return 0
+
+
+def _hitmap_upr_row(
+    block: dict[str, Any],
+    *,
+    run_id: str,
+    split: str,
+    unit: str,
+    text_set: dict[str, Any],
+    lexical_block: dict[str, Any] | None,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the hit map (the run's arm)."""
+    reads = block["measurement"]["reads"]
+    blind = block["measurement"]["label_blind_counterpart"]
+    falsification = block["measurement"]["falsification"]
+    linked = reads["label_linked_vs_other"]
+    formulaic = reads["formulaic_vs_topical"]
+    gold = reads["gold_vs_background"]
+    blind_linked = blind["label_linked_vs_other"]
+    blind_formulaic = blind["formulaic_vs_topical"]
+    held_out = (lexical_block or {}).get("held_out_labels") or {}
+    concentration = (lexical_block or {}).get("concentration") or {}
+
+    def _interval(read: dict[str, Any]) -> str | None:
+        interval = read.get("interval")
+        if not interval:
+            return None
+        return f"[{interval[0]:+.4f}, {interval[1]:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "split": split,
+        "unit": unit,
+        "model": block["model"]["name"],
+        "n_texts": text_set.get("n_texts"),
+        "n_ablatable": text_set.get("n_ablatable"),
+        "share_not_ablatable": _fmt(text_set.get("share_not_ablatable"), 4),
+        "n_variants": block["cost"]["ablations"]["n_variants"],
+        "n_calls": block["cost"]["ablations"]["n_calls_planned"],
+        "linked_drop": _fmt(linked.get("left_mean"), 4),
+        "other_drop": _fmt(linked.get("right_mean"), 4),
+        "linked_minus_other": _fmt(linked.get("difference"), 4),
+        "linked_ci": _interval(linked),
+        "formulaic_drop": _fmt(formulaic.get("left_mean"), 4),
+        "topical_drop": _fmt(formulaic.get("right_mean"), 4),
+        "formulaic_minus_topical": _fmt(formulaic.get("difference"), 4),
+        "gold_drop": _fmt(gold.get("left_mean"), 4),
+        "background_drop": _fmt(gold.get("right_mean"), 4),
+        "gold_minus_background": _fmt(gold.get("difference"), 4),
+        "blind_linked_minus_other": _fmt(blind_linked.get("difference"), 4),
+        "blind_formulaic_minus_topical": _fmt(blind_formulaic.get("difference"), 4),
+        "linked_ok": "yes" if falsification["label_linked_drop_greater"]["holds"] else "no",
+        "formulaic_ok": "yes" if falsification["formulaic_drop_smaller"]["holds"] else "no",
+        "label_driven": "yes" if falsification["label_driven"]["holds"] else "no",
+        "heldout_generic_share": _fmt(held_out.get("generic_share"), 4),
+        "top1_word_share": _fmt(concentration.get("top1_word_share"), 4),
+        "seconds": seconds,
+    }
 
 
 def _cmd_rerank_upr(config: AppConfig) -> int:

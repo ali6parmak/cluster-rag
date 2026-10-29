@@ -10,7 +10,10 @@ Commands: stats (--omct for the OMCT pairwise data), split, embed
 the zero-shot label-text artifact), probe-omct (Phase 2: the
 OMCT pairwise embedding probe), analyze-omct (the text-processing track's
 Stage-0 pair-score artifact), decide-omct (the track's Stage-3.5 decision
-probe), analyze-upr (the track's UPR-side analysis artifact), evaluate
+probe), analyze-upr (the track's UPR-side analysis artifact), decide-upr (the
+track's UPR-side decision probe), rerank-upr (the track's zero-shot reranker
+probe), hitmap-upr (the track's hit map: which words carry the signal),
+evaluate
 (Phase 3: any predictor on a fixed val/test split), sweep (Phases 2.5+: run a
 Python sweep file's resolved cells). Run from the repository root so relative
 paths in the config resolve. Commands write their artifacts to
@@ -51,6 +54,7 @@ from cluster_rag.commands.upr import (
     _cmd_analyze_upr,
     _cmd_decide_upr,
     _cmd_evaluate,
+    _cmd_hitmap_upr,
     _cmd_rerank_upr,
 )
 from cluster_rag.config import load_config
@@ -315,6 +319,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "experiments_text_processing/*.py sweeps).",
     )
 
+    hitmap_upr = subparsers.add_parser(
+        "hitmap-upr",
+        help="Text-processing track: the hit map (hitmap-upr, CS-18).",
+        description=(
+            "The text-processing track's hit map "
+            "(TEXT_PROCESSING_PLAN.md section 7.1, CS-18): which words carry "
+            "the signal. Two versions in one run — the LEXICAL map (the "
+            "lexical feature's own exact per-word decomposition, which maps the "
+            "label side and costs no model call) and the ABLATION map (the "
+            "decision model's own sentence- or clause-level ablation: one unit "
+            "of the text is removed and the model is asked again, which maps "
+            "the text side and is the only version that perturbs the input, so "
+            "the only one that says anything causal). The decision model is "
+            "the same pinned model as the CS-13 feature, and the label-blind "
+            "counterpart runs beside the ablation. Writes results/<run_id>/"
+            "hitmap.json; the row goes to the track's own UPR table."
+        ),
+    )
+    hitmap_upr.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to the YAML config with eval: and upr_analysis: sections (or "
+        "sweep-resolved configs; experiment values live in "
+        "experiments_text_processing/*.py sweeps).",
+    )
+
     evaluate = subparsers.add_parser(
         "evaluate",
         help="Evaluate any predictor on val or test (Phase 3 metrics).",
@@ -404,8 +435,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_decide_upr(config)
         if args.command == "rerank-upr":
             return _cmd_rerank_upr(config)
-        if args.command == "sweep":
-            return _cmd_sweep(args.file)
+        if args.command == "hitmap-upr":
+            return _cmd_hitmap_upr(config)
     except FileNotFoundError as exc:
         logger.error("File not found: %s", exc.filename or exc)
         return 1

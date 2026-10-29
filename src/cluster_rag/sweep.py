@@ -71,6 +71,7 @@ UPR_COMMANDS: tuple[str, ...] = (
     "analyze-upr",
     "decide-upr",
     "rerank-upr",
+    "hitmap-upr",
 )
 OMCT_COMMANDS: tuple[str, ...] = (
     "stats-omct",
@@ -92,6 +93,7 @@ COMMANDS: tuple[str, ...] = (
     "analyze-upr",
     "decide-upr",
     "rerank-upr",
+    "hitmap-upr",
 )
 
 # The one base config every sweep resolves over (PLAN.md section 5); relative
@@ -524,6 +526,79 @@ class DecideUprCell(_LabelledCell):
     def command(self) -> str:
         """The command this cell resolves to (constant for typed cells)."""
         return "decide-upr"
+
+    @property
+    def overrides(self) -> dict[str, Any]:
+        """The cell's config overrides (the ``eval`` section + ``upr_analysis``)."""
+        decision = self.decision or EvalDecisionConfig(rule="top_k", k=self.k)
+        payload: dict[str, Any] = {
+            "eval": {
+                "predictor": {"name": "fusion", "params": {"a": 0.5, "b": 1.0, "c": 1.0, "k": 10}},
+                "decision": decision.model_dump(mode="python"),
+                "split": self.split,
+                "embedding_run_id": self.embedding_run,
+                "label_embedding_run_id": self.label_embedding_run,
+            },
+            "upr_analysis": self.analysis.model_dump(mode="python"),
+        }
+        return payload
+
+
+class HitMapUprCell(_LabelledCell):
+    """One ``hitmap-upr`` cell: the hit map's ablation unit.
+
+    The text-processing track's hit map (TEXT_PROCESSING_PLAN.md section 7.1,
+    CS-18): the **lexical map** (Version A — the lexical feature's own per-word
+    decomposition, a pure computation) and the **ablation map** (Version B — the
+    decision model's own sentence- or clause-level ablation, the only version
+    that perturbs the input and therefore the only one that says anything
+    causal).
+
+    The decision model is **not** configured here: the map reads the
+    ``upr_analysis.decision`` section, so it uses the very same pinned model as
+    the CS-13 feature and the map and the feature are read against one model.
+    The cell therefore carries the same ``eval`` and ``analysis`` sections as
+    :class:`DecideUprCell` (the decision rule, the two embedding runs for the
+    pipeline's own reference arm, and the analysis section).
+    """
+
+    decision: EvalDecisionConfig | None = None
+    k: int | None = Field(default=None, ge=1)
+    split: Literal["val", "test"] = "val"
+    embedding_run: str
+    label_embedding_run: str | None = None
+    analysis: UprAnalysisConfig
+
+    @field_validator("embedding_run")
+    @classmethod
+    def _embedding_run_is_valid(cls, value: str) -> str:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        return validate_embedding_run_id(value)
+
+    @field_validator("label_embedding_run")
+    @classmethod
+    def _label_embedding_run_is_valid(cls, value: str | None) -> str | None:
+        """Syntactic check at authoring time (the loader checks existence later)."""
+        return validate_label_embedding_run_id(value)
+
+    @model_validator(mode="after")
+    def _decision_xor_k(self) -> HitMapUprCell:
+        """``decision`` and the ``k`` shorthand are exactly one thing."""
+        if self.decision is not None and self.k is not None:
+            raise ValueError(
+                f"HitMapUprCell {self.label!r}: give decision= or the top_k shorthand k=, not both"
+            )
+        if self.decision is None and self.k is None:
+            raise ValueError(
+                f"HitMapUprCell {self.label!r}: needs a decision rule — pass the top_k "
+                "shorthand k= or a full decision="
+            )
+        return self
+
+    @property
+    def command(self) -> str:
+        """The command this cell resolves to (constant for typed cells)."""
+        return "hitmap-upr"
 
     @property
     def overrides(self) -> dict[str, Any]:

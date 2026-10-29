@@ -1322,6 +1322,46 @@ class UprDecisionRuleConfig(BaseModel):
         return value
 
 
+class UprHitMapConfig(BaseModel):
+    """The **hit map**'s settings (the track's CS-18).
+
+    The map has two versions: the **lexical map** (Version A — the lexical
+    feature's own per-word decomposition, a pure computation over the inputs the
+    pack already has) and the **ablation map** (Version B — the decision model's
+    own sentence- or clause-level ablation, the only version that perturbs the
+    input and therefore the only one that says anything causal).
+
+    The decision model is **not** configured here: the map uses the very same
+    pinned model as the CS-13 feature (the ``upr_analysis.decision.models``
+    entry), so the map and the feature are read against the same model.
+
+    Attributes:
+        unit: The ablation unit — ``"sentence"`` (the track's own sentence
+            splitter) or ``"clause"`` (the track's atom chunker with the clause
+            splitting on). The clause unit is the finer one: the val split's
+            texts average ~152 characters and 98.9% of them are a single
+            sentence, so the sentence unit can ablate almost nothing.
+        include_lexical_map: Whether the run computes the **lexical map**
+            (Version A). It is free, so it is on by default.
+        include_label_blind: Whether the **label-blind counterpart** runs
+            beside the ablation (the yardstick that says whether the
+            attribution is label-driven). Off by default would make the map
+            say nothing, so it is on by default.
+        catch_all_labels: The generic catch-alls the map reports beside the
+            held-out labels.
+        bootstrap: The paired bootstrap's settings (the resampling unit is the
+            text).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit: Literal["sentence", "clause"] = "clause"
+    include_lexical_map: bool = True
+    include_label_blind: bool = True
+    catch_all_labels: tuple[str, ...] = ("General", "Other")
+    bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
+
+
 class UprListwiseConfig(BaseModel):
     """The **listwise** second decision stage (the track's CS-12).
 
@@ -1892,6 +1932,10 @@ class UprAnalysisConfig(BaseModel):
             artifact keeps its exact content.
         decision: The **decision probe** (CS-9): the models, the prompt grid
             and the scope. Off by default (no models = no probe).
+        hitmap: The **hit map** (CS-18): the ablation unit and the map's own
+            knobs. Off by default is expressed by the decision probe's own
+            absence (the map has no model of its own: it reads the decision
+            probe's pinned model).
         rerank: The **rerankers** (CS-15): the models, the candidate set they
             re-order and the label side's variants. Off by default, so the
             earlier runs' artifacts keep their exact content.
@@ -1909,6 +1953,7 @@ class UprAnalysisConfig(BaseModel):
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
     learned: UprLearnedConfig = Field(default_factory=UprLearnedConfig)
     decision: UprDecisionConfig = Field(default_factory=UprDecisionConfig)
+    hitmap: UprHitMapConfig = Field(default_factory=UprHitMapConfig)
     rerank: UprRerankConfig = Field(default_factory=UprRerankConfig)
 
     @field_validator("length_buckets")
