@@ -1191,6 +1191,72 @@ port only.
   **The cost.** About a day and a half (the pack's group machinery, the
   cross-fit, the controls, the report block).
 
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The feature.** A new **feature group** `corpus_map` in the UPR pack's
+    `UPR_FEATURE_GROUP_PREFIXES` (the prefix `cmap_`), with **one** column:
+    the map's **per-cell score** under the z-scored arm
+    (`sum_zscore_positive` — the arm CS-31's fit side selected). The pack
+    does **not** compute it: the map is built at the edge (from the train
+    split) and its score matrix is passed in, exactly like the decision
+    probability (CS-13) and the reranker's score (CS-16) — so the column is
+    **cell-local** by construction (no document identity, no length).
+  - **The gating.** The group is **gated like the catalog groups**: it can
+    only be selected when the map is available, and a run without it records
+    the gap in its artifact. The map's availability is the config's
+    `upr_analysis.learned.corpus_map_feature.enabled` (off by default, so
+    every earlier run's artifact keeps its exact content) — and the group's
+    selection is refused without it, the same contract the catalog groups
+    have.
+  - **The guard (not optional).** The pack is fitted on **train** and the map
+    is built from **train**, so on the fit side the map has already seen the
+    cells it scores — the feature would be optimistically biased exactly
+    where the combiner learns its weight. The **fit side's map is
+    cross-fit**: **5 folds** over the train split, each fold's cells scored
+    against a map built from the **other** folds (CS-31's
+    `cross_fit_scores`, the same shape as the fit-side threshold's cross-fit
+    in CS-9b). The **evaluated** split is scored with the **full** train map.
+    The artifact records the folds and the cross-fit's seed.
+  - **The three floors, and the control is the point.**
+    1. the **control**: the same pack with the group **removed** — fitted and
+       scored **in the same run**, so the Δ is paired by construction;
+    2. the **random-vector floor**: unchanged (the pack's own);
+    3. the **label-blind control**: the same pack, but the map is built with
+       the **labels permuted** among the train records (the per-label counts
+       are preserved, only the assignment changes — the track's own
+       permutation discipline). If the label-blind map buys the same Δ as the
+       real one, the "gain" is the map's *construction*, not the corpus's
+       word↔label association — the failure mode the track's control-role
+       floor was built to catch.
+  - **The run.** One: `upr-analyze-cmap`, the `analyze-upr` command with the
+    learned arm's groups `embedding + lexical + chunk_profile + corpus_map`
+    (the CS-13 pack's groups plus the new one), the combiner the CS-13 pack's
+    (the gradient-boosted one), `top_k` k=2 on the **val** split. The sweep
+    file `experiments_text_processing/upr_learned_cmap_sweep.py` (the sweep
+    label `upr_learned_cmap`, so the table's section is
+    `## UPR — upr_learned_cmap`); the artifact
+    `results/upr-analyze-cmap/analysis.json`. The label-blind counterpart
+    rides in the **same run** (the CS-13 precedent).
+  - **The measurement and its falsification.** The **paired** Δ micro-F1
+    (the real arm minus the control) with its CI over the texts (the
+    resampling unit), plus the per-bucket breakdown, plus the label-blind
+    arm's Δ beside it. The **unseen bucket is expected flat**: the map's
+    table for the eight held-out labels is empty, so the feature cannot help
+    there. The falsification: the Δ's CI must **exclude zero** *and* the
+    label-blind control's Δ must be **materially smaller**. If the Δ is
+    inside the noise, the corpus's word statistics add **nothing** that the
+    label-name overlap features (`lex_label_coverage`, `lex_text_coverage`)
+    do not already carry — a null, reported as a null. "Materially smaller"
+    is read as: the label-blind Δ's interval includes zero (the blind map
+    buys nothing measurable) while the real Δ's excludes it.
+  - **The exit criteria.** The artifact holds the Δs with their intervals, the
+    folds and the three floors; the table row is auto-appended; the log
+    section reads the numbers out with the falsification conditions; the gate
+    green (ruff over `src`/`tests`/`experiments`, the full pytest suite, the
+    two verify tools, and both final sweeps reproducing their artifacts field
+    for field).
+
 - [ ] **CS-33 — the word-class readout: what kind of words affect the label, in
   which way.** The reviewer's part-of-speech question, answered first **without a
   new dependency**. The map's own structure gives every (label, word) pair three
