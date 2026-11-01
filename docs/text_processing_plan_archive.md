@@ -3563,3 +3563,67 @@ line). The verdict and the numbers are the track log's §CS-25.*
     name words in cyan, the two ramps on the positive and the negative numbers,
     the notes dim), and the gate is green (700 tests, ruff clean, the two
     verify tools OK, both final sweeps reproducing field for field).
+
+---
+
+## The gold labels are always visible (CS-27) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.3
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-27.*
+
+### 7.1 The gold labels are always visible (CS-27)
+
+- [x] **CS-27 — the gold labels are always visible, and the in-text row keeps
+  its shade.** Two presentation fixes in the viewer; the numbers do not move.
+
+  **The mechanism.**
+
+  - the two ranking blocks show the top-k **and**, below them, the **gold
+    labels the top-k did not show** — each with its true rank and the ★
+    marker, so the truth is readable whatever its rank is;
+  - the corpus map's row for a word that is **in this text** keeps the ramp's
+    shade and takes the bold on top of it (the counts stay dim and the "★ in
+    this text" marker stays), so the log-odds' size stays readable on that row.
+
+  **The cost.** Presentation only; **0 model calls**. **No run, no artifact and
+  no table row** — the viewer is a tool (as in CS-20 and CS-25).
+
+  **The exit criteria.** The plain output still carries every number and every
+  marker (CS-25's strip-and-compare test); a gold label below the top-k
+  appears in the ranking with its rank; the in-text row's shade is the ramp's;
+  the gate green.
+
+  **The runs.** None (a tool change). The log section is `## CS-27 — the gold
+  labels are always visible` in `docs/experiments_text_processing.md`.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the change set is a
+  **tool** change: the viewer changes, it writes no artifact and appends no
+  table row, and it costs **0 model calls**. The log section is
+  `## CS-27 — the gold labels are always visible` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (the tool's own `--sample --seed 7`
+  draw on the UPR **val** split; every number on it is the artifacts' or the
+  tool's own reading of the model).**
+
+  - **The ranking blocks** show the top-k **and**, below them, the gold labels
+    the top-k did not show, each with its true rank and the ★ marker. On the
+    seed-7 draw the text-side ranking ends with `17 ESC rights - general
+    0.0804 ★` and `27 Labour rights 0.0714 ★`, and the topic-side ranking with
+    `11 Labour rights 0.5000 ★` and `27 ESC rights - general 0.3810 ★`.
+  - **The corpus map's in-text row** keeps the ramp's shade and takes the bold
+    on top of it (the counts stay dim, the "★ in this text" marker stays), so
+    the log-odds' size stays readable on that row.
+  - **No number moved**: the rankings are the same numbers in the same order,
+    and the two added rows are rows that were already in the artifact's
+    ranking (the viewer recomputes the whole ranking, it just printed only its
+    head).
+  - **The exit criteria.** The plain output still carries every number and
+    every marker (CS-25's strip-and-compare test); a gold label below the
+    top-k appears in the ranking with its rank (a unit test of the ranking
+    helper and a screen test on the fixture); the in-text row's shade is the
+    ramp's (a test on the coloured output); and the gate is green (703 tests,
+    ruff clean, the two verify tools OK, both final sweeps reproducing field
+    for field).

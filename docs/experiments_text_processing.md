@@ -79,6 +79,7 @@ research record and are **not** indexed here.
 | [CS-23 — the corpus map](#cs-23--the-corpus-map-2026-11-01) | one `upr-hitmap-corpus` run (the train split's own word↔label association; **0 new model calls**, 1.3 s) | the plain statistics of the corpus, at last: **18,707** (label, word) pairs over 1,676 train texts; the plan's pre-read expectation is reproduced **digit for digit** ("Detention" ← detention 16.90, "Migrants" ← migrant 27.86); the log-odds and the lift pick a **different head word for 55 of the 60 labels** (the lift's head is a hapax); the label's own name word heads **33** of the tables; the register ("rights") is in **all 60** | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-24 — the surrogate's full vector](#cs-24--the-surrogates-full-vector-2026-11-01) | the CS-19 sweep re-run (`upr-hitmap-surrogate` + `upr-hitmap-text`; **0 new model calls**, 16.6 s) | the surrogate's **whole** fitted vector (68 topics × 1,203 features = **81,804** numbers, 1.37 MB) now sits beside the top-15 lists; every number CS-19 reported is **reproduced unchanged**, and the viewer's surrogate column is complete (a word outside the model's vocabulary reads "not in the model's vocabulary", never zero) | `results/upr-hitmap-surrogate/hitmap.json` |
 | [CS-25 — a clearer screen, and the colour](#cs-25--a-clearer-screen-and-the-colour-2026-11-01) | no run (a **tool**): the viewer's headings, blocks and palette | every block names **the question it answers** (the mode letters leave the headings), the two instruments that shared one table now have their own blocks, the topic side of the feature is on the screen at all, and the screen has **colour** — with the rule that the coloured screen stripped of its codes is the plain screen, so `--no-colour` loses nothing | the CS-19/CS-23 artifacts (read, not re-measured) |
+| [CS-27 — the gold labels are always visible](#cs-27--the-gold-labels-are-always-visible-2026-11-01) | no run (a **tool**): the viewer's two ranking blocks and the corpus map's in-text row | a gold label below the top-5 is now listed with its **true rank** in both rankings (the text-side 17 and 27, the topic-side 11 and 27 on the seed-7 draw), and the corpus map's in-text row keeps its ramp's shade under the bold — **no number moved** | the CS-19/CS-23 artifacts (read, not re-measured) |
 
 ## Change sets
 
@@ -5941,6 +5942,84 @@ blocks); nothing about `test`; nothing about the corpus-level word ablation
 (CS-22); nothing about the OMCT map (CS-21); and nothing about the clause
 ablation in the viewer — its heading is fixed here, but the block itself is
 CS-26's.
+
+## CS-27 — the gold labels are always visible (2026-11-01)
+
+**The run: none.** A **tool** change, like CS-20 and CS-25: the viewer changes,
+it writes no artifact and appends no table row, and it costs **0 model calls**
+(the numbers on the screen are the CS-19/CS-23 artifacts' and the tool's own
+readings, exactly as before).
+
+**What prompted it.** The review session after CS-25 asked what the viewer's
+numbers **are** — how the contributions, the surrogate's coefficients, the
+corpus map's log-odds and the side-by-side's ranks are computed — and two
+things came out of it:
+
+1. **a gold label was visible only if it ranked in the top five.** The
+   side-by-side table did list the gold labels, but the two **ranking** blocks
+   showed only the top-k: a gold label below it was missing from the ranking,
+   and its topic-side rank was never shown at all;
+2. **the corpus map's row for a word that is in the text lost its ramp shade**
+   (it was printed bold), so the log-odds' size was unreadable on that row.
+
+**What changed.** The two ranking blocks show the top-k **and**, below them, the
+**gold labels the top-k did not show** — each with its true rank and the ★
+marker; the order is the rank's, so the list never lies about where a label
+sits. And the corpus map's in-text row keeps the ramp's shade and takes the
+bold **on top of** it (the counts stay dim, the "★ in this text" marker stays).
+
+The example (the viewer's own `--sample --seed 7` draw, the UPR **val** split):
+
+```
+  the text's words against the topic's name (lex_text_coverage)
+    1  Human rights education and training      0.2008
+    2  Minority rights                          0.1464 ★
+    3  National Human Rights Institution        0.1429
+    4  Right to education                       0.1333 ★
+    5  Technical assistance and cooperation     0.1213
+   17  ESC rights - general                     0.0804 ★
+   27  Labour rights                            0.0714 ★
+  the topic's words against the text (lex_label_coverage)
+    1  Right to education                       0.9000 ★
+    2  Minority rights                          0.8750 ★
+    3  Right to land                            0.6500
+    4  Women's rights                           0.6000
+    5  Human rights education and training      0.5625
+   11  Labour rights                            0.5000 ★
+   27  ESC rights - general                     0.3810 ★
+   (★ = a gold label of this text; the gold labels are always shown, even below the top-5)
+```
+
+The truth is now readable whatever its rank is — and the two gold labels that
+the top-5 left out are visible in **both** directions, with their own ranks
+(the text-side 17 and 27, the topic-side 11 and 27).
+
+### The exit criteria, read out one by one
+
+1. **The plain output still carries every number and every marker** — **holds**:
+   CS-25's strip-and-compare test (the coloured screen stripped of its codes
+   is the plain screen, character for character) still passes: the two changes
+   move no number and drop no marker.
+2. **A gold label below the top-k appears in the ranking with its rank** —
+   **holds**: a unit test of the ranking helper (the top-k, then the gold
+   labels it left out, each with its true rank, and never twice) and a screen
+   test on the fixture (every gold label of the text is in the ranking block).
+3. **The in-text row's shade is the ramp's** — **holds**: the coloured output's
+   row for a word that is in this text carries the bold **on top of** its
+   ramp's shade (the test puts a word of the text on top of the focus label's
+   table on purpose, and checks the codes on that row).
+4. **The gate green** — 703 tests, ruff clean, the two verify tools OK and both
+   final sweeps reproducing field for field.
+
+### What this change set does not say
+
+Nothing new was measured and **no number moved**: the rankings are the same
+numbers in the same order, and the two added rows are rows that were already
+in the artifact's ranking (the viewer recomputes the whole ranking, it just
+printed only its head); nothing about the model (the viewer is still the tool,
+not a number source); nothing about `test`; and nothing about the clause
+ablation in the viewer — that block is CS-26's.
+
 
 
 

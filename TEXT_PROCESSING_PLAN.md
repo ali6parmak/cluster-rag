@@ -777,28 +777,9 @@ computed), and two things came out of it:
 2. **the corpus map's row for a word that is in the text lost its ramp shade**
    — it was printed bold, so the log-odds' size was unreadable on that row.
 
-- [ ] **CS-27 — the gold labels are always visible, and the in-text row keeps
-  its shade.** Two presentation fixes in the viewer; the numbers do not move.
-
-  **The mechanism.**
-
-  - the two ranking blocks show the top-k **and**, below them, the **gold
-    labels the top-k did not show** — each with its true rank and the ★
-    marker, so the truth is readable whatever its rank is;
-  - the corpus map's row for a word that is **in this text** keeps the ramp's
-    shade and takes the bold on top of it (the counts stay dim and the "★ in
-    this text" marker stays), so the log-odds' size stays readable on that row.
-
-  **The cost.** Presentation only; **0 model calls**. **No run, no artifact and
-  no table row** — the viewer is a tool (as in CS-20 and CS-25).
-
-  **The exit criteria.** The plain output still carries every number and every
-  marker (CS-25's strip-and-compare test); a gold label below the top-k
-  appears in the ranking with its rank; the in-text row's shade is the ramp's;
-  the gate green.
-
-  **The runs.** None (a tool change). The log section is `## CS-27 — the gold
-  labels are always visible` in `docs/experiments_text_processing.md`.
+- **CS-27** (the gold labels are always visible, and the in-text row keeps its shade) →
+  executed 2026-11-01 → the archive's §7.1 (the gold labels are always visible) and the
+  track log's §CS-27.
 
 ## 8. The durable deliverable (named, so it is not lost)
 

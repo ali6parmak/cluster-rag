@@ -716,6 +716,28 @@ def _ranking_rows(
     return [(index + 1, label, value) for index, (label, value) in enumerate(ranking[:limit])]
 
 
+def _ranking_rows_with_gold(
+    ranking: Sequence[tuple[str, float]],
+    limit: int,
+    gold_labels: Sequence[str],
+) -> list[tuple[int, str, float]]:
+    """The ranking's rows: the top ones **and** the gold labels it did not show.
+
+    A label that is true for the text must be readable whatever its rank is
+    (CS-27), so the gold labels the top-k left out follow it, each with its
+    true rank. The order is the rank's, so the list never lies about where a
+    label sits.
+    """
+    rows = _ranking_rows(ranking, limit)
+    shown = {label for _, label, _ in rows}
+    extras = [
+        (rank, label, value)
+        for rank, (label, value) in enumerate(ranking, start=1)
+        if label in gold_labels and label not in shown
+    ]
+    return rows + extras
+
+
 def _cache_line(cache: Mapping[str, int] | None) -> str:
     """The cache's own counters, so "free" is a measurement and not a claim."""
     if not cache:
@@ -1035,7 +1057,7 @@ def render(
             colour=colour,
         )
     )
-    for rank, label, value in _ranking_rows(text_ranking, top_k):
+    for rank, label, value in _ranking_rows_with_gold(text_ranking, top_k, gold_labels):
         mark = " ★" if label in gold_labels else "  "
         add(f"   {rank:>2}  {label_cell(label, 38)}{value:>9.4f}{mark}")
     add(
@@ -1045,10 +1067,17 @@ def render(
             colour=colour,
         )
     )
-    for rank, label, value in _ranking_rows(topic_ranking_rows, top_k):
+    for rank, label, value in _ranking_rows_with_gold(topic_ranking_rows, top_k, gold_labels):
         mark = " ★" if label in gold_labels else "  "
         add(f"   {rank:>2}  {label_cell(label, 38)}{value:>9.4f}{mark}")
-    add(paint("   (★ = a gold label of this text)", DIM, colour=colour))
+    add(
+        paint(
+            "   (★ = a gold label of this text; the gold labels are always shown, even "
+            "below the top-5)",
+            DIM,
+            colour=colour,
+        )
+    )
     add("")
 
     if corpus:
@@ -1118,7 +1147,9 @@ def render(
                     "  "
                     + paint(
                         f"{word:<20}",
-                        BOLD if in_text else code,
+                        # the word that is in this text is bold on top of its
+                        # ramp's shade, so the log-odds' size stays readable
+                        (BOLD + code) if in_text else code,
                         colour=colour,
                     )
                     + paint(

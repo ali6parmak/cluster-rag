@@ -732,3 +732,107 @@ def test_the_noise_band_marks_the_deltas(
     out = capsys.readouterr().out
     assert "noise" in out
     assert f"±{viewer_module.NOISE_BAND:g}" in out
+
+
+# --- the gold labels are always visible (CS-27) ---
+
+
+def test_the_gold_labels_below_the_top_k_are_still_listed(viewer_module: Any) -> None:
+    """A gold label is readable whatever its rank is — and never twice."""
+    ranking = [("A", 0.9), ("B", 0.8), ("C", 0.7), ("D", 0.6), ("E", 0.5), ("F", 0.4)]
+    rows = viewer_module._ranking_rows_with_gold(ranking, 3, ["C", "F"])
+    # the top three, then the gold label the top three left out, with its rank
+    assert [(rank, label) for rank, label, _ in rows] == [(1, "A"), (2, "B"), (3, "C"), (6, "F")]
+    # a gold label that is already in the top-k is not repeated
+    labels_only = [label for _, label, _ in rows]
+    assert len(labels_only) == len(set(labels_only))
+    # without gold labels the ranking is the plain top-k
+    assert viewer_module._ranking_rows_with_gold(ranking, 3, []) == [
+        (1, "A", 0.9),
+        (2, "B", 0.8),
+        (3, "C", 0.7),
+    ]
+
+
+def test_the_screen_shows_the_gold_labels_in_the_ranking(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every gold label of the text is in the ranking blocks, with its rank."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    record = context.records[0]
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "the gold labels are always shown, even below the top-5" in out
+    # the ranking block: from its heading to the note under it
+    start = out.index("the text's words against the topic's name")
+    end = out.index("(★ = a gold label of this text")
+    block = out[start:end]
+    for label in record.labels:
+        assert label in block, f"the gold label {label!r} is missing from the ranking"
+
+
+def test_the_in_text_corpus_row_keeps_its_shade(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The word that is in this text is bold **on top of** its ramp's shade.
+
+    The artifact is tampered on purpose (a word of the text is put on top of the
+    focus label's table), so the stale-artifact guard fires — the row is still
+    rendered, and the guard's own failure is asserted too.
+    """
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    record = context.records[0]
+    focus, _rule = viewer_module._default_focus(record, context.labels)
+    word = next(
+        word
+        for word in viewer_module.content_tokens(record.text)
+        if word not in {"take", "measures", "reduce"}
+    )
+    source = fixture_artifacts["results"] / fixture_artifacts["corpus_run"] / "hitmap.json"
+    payload = json.loads(source.read_text("utf-8"))
+    row = next(r for r in payload["corpus_map"]["per_label"] if r["label"] == focus)
+    row["words"] = [{"word": word, "n_with": 1, "df": 1, "lift": 1.0, "log_odds": 0.5}]
+    run = "upr-hitmap-fixture-corpus-tampered"
+    target = fixture_artifacts["results"] / run
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "hitmap.json").write_text(json.dumps(payload), encoding="utf-8")
+    args = [
+        "--config",
+        str(fixture_artifacts["config"]),
+        "--text-map-run",
+        str(fixture_artifacts["text_run"]),
+        "--surrogate-run",
+        str(fixture_artifacts["surrogate_run"]),
+        "--corpus-map-run",
+        run,
+        "--colour",
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+    ]
+    # the tampered artifact is stale: the guard says so and the exit code says 1
+    assert viewer_module.main(args) == 1
+    out = capsys.readouterr().out
+    rows = [line for line in out.splitlines() if "★ in this text" in line]
+    assert rows, "the in-text row is not on the screen"
+    for row_text in rows:
+        assert viewer_module.BOLD in row_text
+        assert any(
+            code in row_text for code in (*viewer_module.GREEN_RAMP, *viewer_module.RED_RAMP)
+        )
