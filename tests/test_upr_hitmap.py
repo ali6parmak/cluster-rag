@@ -15,6 +15,7 @@ Covers the two versions' pure sides and the CLI command:
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +36,11 @@ from cluster_rag.text_processors.decision.ablation_map import (
     measure_ablation,
     remove_unit,
     text_units,
+)
+from cluster_rag.text_processors.features.corpus_map import (
+    build_corpus_map,
+    corpus_map_block,
+    log_odds,
 )
 from cluster_rag.text_processors.features.lexical_map import (
     WORD_DISTINCTIVE,
@@ -454,9 +460,10 @@ def test_the_sweep_cell_resolves_the_hitmap_command() -> None:
 def test_the_pure_core_stays_pure() -> None:
     """The map's modules import no model client (the track's boundary rule)."""
     import cluster_rag.text_processors.decision.ablation_map as ablation_map
+    import cluster_rag.text_processors.features.corpus_map as corpus_map
     import cluster_rag.text_processors.features.lexical_map as lexical_map
 
-    for module in (ablation_map, lexical_map):
+    for module in (ablation_map, lexical_map, corpus_map):
         source = Path(module.__file__).read_text("utf-8")
         for forbidden in ("httpx", "sqlite3", "torch", "sentence_transformers"):
             assert forbidden not in source
@@ -628,3 +635,177 @@ def test_hitmap_upr_runs_the_text_side_mode(
     assert payload["text_side_map"]["exactness"]["max_abs_error"] == pytest.approx(0.0)
     arm = next(iter(payload["ablation_map"]["arms"].values()))
     assert arm["measurement"]["applicable"] is False
+
+
+# --- the corpus map (CS-23): the train split's own word<->label association ---
+
+
+def test_the_corpus_map_counts_and_measures_are_hand_computed() -> None:
+    """The four measures over a hand-computed 2x2 table."""
+    texts = ["Alpha beta gamma", "Alpha delta", "Beta epsilon", "Zeta eta theta"]
+    label_sets = [["L1"], ["L1"], ["L2"], ["L2"]]
+    corpus = build_corpus_map(texts, label_sets, ["L1", "L2"])
+    rows = {pair.word: pair for pair in corpus.topic_rows("L1")}
+    # "alpha" is in both of L1's texts and in no other text: a = 2, b = 0,
+    # c = 0, d = 2. The lift is 2.0 (the word doubles the label's rate) and
+    # the smoothed log-odds is log(5) + log(5).
+    alpha = rows["alpha"]
+    assert (alpha.n_with, alpha.df) == (2, 2)
+    assert alpha.lift == pytest.approx(2.0)
+    assert alpha.log_odds == pytest.approx(math.log(25.0))
+    # "beta" is in one of L1's two texts and in one of L2's: a = 1, b = 1,
+    # c = 1, d = 1. The lift is 1.0 and the log-odds is 0.0 — the word says
+    # nothing about the label.
+    beta = rows["beta"]
+    assert (beta.n_with, beta.df) == (1, 2)
+    assert beta.lift == pytest.approx(1.0)
+    assert beta.log_odds == pytest.approx(0.0)
+    # a word that only ever appears with another label is not in this table
+    assert "epsilon" not in rows
+    # the reverse table is the same data read the other way
+    reverse = {pair.label: pair for pair in corpus.word_rows("beta")}
+    assert set(reverse) == {"L1", "L2"}
+    assert reverse["L2"].n_with == 1
+
+
+def test_the_log_odds_is_the_smoothed_two_by_two_table() -> None:
+    """The score is the 2x2 table's log-ratio, with the 0.5 smoothing."""
+    # a = 30, b = 5, c = 55, d = 1586
+    assert log_odds(n_with=30, df=35, n_label=85, n_texts=1676) == pytest.approx(
+        math.log(30.5 / 5.5) + math.log(1586.5 / 55.5)
+    )
+    # a word that is in every text and never with the label is negative:
+    # a = 2, b = 98, c = 0, d = 0
+    assert log_odds(n_with=2, df=100, n_label=2, n_texts=100) == pytest.approx(math.log(2.5 / 98.5))
+    # counts that do not form a 2x2 table are refused, never silently smoothed
+    with pytest.raises(ValueError):
+        log_odds(n_with=1, df=100, n_label=2, n_texts=100)
+
+
+def test_a_label_without_a_train_example_has_an_empty_table() -> None:
+    """The held-out labels' tables are empty by construction, never fabricated."""
+    texts = ["Alpha beta", "Beta gamma"]
+    corpus = build_corpus_map(texts, [["L1"], ["L1"]], ["L1", "L2"])
+    assert corpus.topic_rows("L2") == ()
+    assert corpus.labels_without_examples() == ("L2",)
+    assert corpus.word_rows("alpha")
+    block = corpus_map_block(corpus, split="train")
+    empty = next(row for row in block["per_label"] if row["label"] == "L2")
+    assert empty["n_corpus_texts"] == 0
+    assert empty["words"] == []
+    assert "no train example" in empty["note"]
+    assert block["corpus"]["labels_without_examples"] == ["L2"]
+
+
+def test_the_corpus_map_never_sees_a_val_text() -> None:
+    """The map is built from the train split alone (the leakage rule)."""
+    train_texts = ["Alpha beta"]
+    val_texts = ["Zeta omega"]
+    corpus = build_corpus_map(train_texts, [["L1"]], ["L1"])
+    assert "zeta" not in corpus.per_word
+    assert corpus.n_texts == 1
+    # the val text would have added a word and a label: it must not appear
+    with_val = build_corpus_map(train_texts + val_texts, [["L1"], ["L2"]], ["L1", "L2"])
+    assert "zeta" in with_val.per_word
+    assert with_val.n_texts == 2
+
+
+def test_the_corpus_map_flag_is_on_by_default() -> None:
+    """The new mode is on by default (the reviewer's decision of 2026-11-01)."""
+    assert UprHitMapConfig().include_corpus_map is True
+    assert UprHitMapConfig(include_corpus_map=False).include_corpus_map is False
+
+
+def test_hitmap_upr_writes_the_corpus_map_block(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """The corpus-map mode writes its block: the corpus, the measures, the tables."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_lexical_map: false
+    include_text_side_map: false
+    include_surrogate: false
+    include_ablation: false
+    include_corpus_map: true
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-corpus-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-corpus-test" / "hitmap.json").read_text("utf-8")
+    )
+    corpus = payload["corpus_map"]
+    assert corpus["corpus"]["split"] == "train"
+    assert corpus["corpus"]["n_texts"] > 0
+    assert corpus["corpus"]["n_words"] > 0
+    assert corpus["corpus"]["n_pairs"] > 0
+    # every pair is stored, with the counts behind it
+    per_label = corpus["per_label"]
+    assert len(per_label) == payload["text_set"]["n_labels"]
+    for row in per_label:
+        for word in row["words"]:
+            assert set(word) == {"word", "n_with", "df", "lift", "log_odds"}
+            assert word["n_with"] <= word["df"]
+    # the reverse table holds the same pairs
+    assert sum(len(row["labels"]) for row in corpus["per_word"]) == corpus["corpus"]["n_pairs"]
+    # the corpus is the train split: a word that only a val text has is absent
+    words = {row["word"] for row in corpus["per_word"]}
+    assert "malnutrition" not in words
+    assert "programmes" not in words
+
+
+def test_the_corpus_map_can_be_turned_off(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """A run that asks for no corpus map carries none (the flag stays a switch)."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_lexical_map: false
+    include_text_side_map: true
+    include_surrogate: false
+    include_ablation: false
+    include_corpus_map: false
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-no-corpus-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-no-corpus-test" / "hitmap.json").read_text("utf-8")
+    )
+    assert payload["corpus_map"] is None
+
+
+def test_the_corpus_map_is_computed_without_being_asked_for(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """The default is on: a run that says nothing about the map still carries it."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_lexical_map: false
+    include_text_side_map: true
+    include_surrogate: false
+    include_ablation: false
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-default-corpus-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-default-corpus-test" / "hitmap.json").read_text("utf-8")
+    )
+    assert payload["corpus_map"] is not None
+    assert payload["corpus_map"]["corpus"]["n_pairs"] > 0

@@ -592,7 +592,8 @@ RERANK_UPR_KEY_COLUMNS: tuple[str, ...] = (
 # counterpart's** reads beside them (the yardstick that says whether the
 # attribution is label-driven), the three **falsification flags**, and finally
 # the **lexical map's** two headline numbers (the held-out labels' generic share
-# and the feature's concentration).
+# and the feature's concentration) and the **corpus map's** shape (CS-23: the
+# train corpus's texts, words, (label, word) pairs and labelled rows).
 HITMAP_UPR_COLUMNS: tuple[str, ...] = (
     "run_id",
     "date",
@@ -627,6 +628,10 @@ HITMAP_UPR_COLUMNS: tuple[str, ...] = (
     "surrogate_own_name_share",
     "surrogate_carrier_agreement",
     "surrogate_chance_level",
+    "corpus_map_train_texts",
+    "corpus_map_words",
+    "corpus_map_pairs",
+    "corpus_map_labels_with_examples",
     "seconds",
 )
 HITMAP_UPR_KEY_COLUMNS: tuple[str, ...] = ("run_id", "unit", "model")

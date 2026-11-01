@@ -73,6 +73,16 @@ SURROGATE_MODE_EXTRA = (
 """
 )
 
+CORPUS_MODE_EXTRA = (
+    BASE_EXTRA
+    + """    include_lexical_map: false
+    include_text_side_map: false
+    include_surrogate: false
+    include_ablation: false
+    include_corpus_map: true
+"""
+)
+
 
 def _load(name: str) -> Any:
     """Import a tool module from the repository's tools folder."""
@@ -145,7 +155,8 @@ def fixture_artifacts(sample_jsonl, tmp_path, monkeypatch) -> dict[str, Any]:
 
     The runs are the CS-19 pair (the text-side map and the surrogate), executed
     on the fixture dataset with a **fake decider** — so the whole fixture path
-    needs no server and no model.
+    needs no server and no model. The **corpus map** (CS-23) is a third run, on
+    the same fixture.
     """
     from cluster_rag.commands import upr as upr_commands
 
@@ -166,12 +177,21 @@ def fixture_artifacts(sample_jsonl, tmp_path, monkeypatch) -> dict[str, Any]:
         SURROGATE_MODE_EXTRA,
     )
     assert main(["hitmap-upr", "--config", str(surrogate_config)]) == 0
+    corpus_config = _config(
+        tmp_path / "corpus.yaml",
+        sample_jsonl,
+        tmp_path,
+        "upr-hitmap-fixture-corpus",
+        CORPUS_MODE_EXTRA,
+    )
+    assert main(["hitmap-upr", "--config", str(corpus_config)]) == 0
     ids = json.loads((tmp_path / "splits" / "val_ids.json").read_text("utf-8"))["ids"]
     return {
         "config": tmp_path / "text.yaml",
         "results": tmp_path / "results",
         "text_run": "upr-hitmap-fixture-text",
         "surrogate_run": "upr-hitmap-fixture-surrogate",
+        "corpus_run": "upr-hitmap-fixture-corpus",
         "val_ids": ids,
     }
 
@@ -185,6 +205,8 @@ def _view_args(artifacts: dict[str, Any], *extra: str) -> list[str]:
         str(artifacts["text_run"]),
         "--surrogate-run",
         str(artifacts["surrogate_run"]),
+        "--corpus-map-run",
+        str(artifacts["corpus_run"]),
         "--no-colour",
         *extra,
     ]
@@ -374,6 +396,7 @@ def test_the_output_separates_the_attributions_from_the_causal_column(
         text_map_run=str(fixture_artifacts["text_run"]),
         surrogate_run=str(fixture_artifacts["surrogate_run"]),
         results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
     )
     word = context.records[0].text.split()[0]
     args = _view_args(fixture_artifacts, "--text", record_id, "--live", "--what-if", word)
@@ -382,3 +405,128 @@ def test_the_output_separates_the_attributions_from_the_causal_column(
     assert "ATTRIBUTION (mode B" in out
     assert "ATTRIBUTION (the lexical map's own ranking)" in out
     assert "CAUSAL (the model is asked again)" in out
+
+
+# --- the corpus map (CS-23) on the screen ---
+
+
+def test_the_viewer_shows_the_two_corpus_blocks(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The corpus map's two blocks are on the screen: the topic's words and the
+    text's words."""
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" in out
+    assert "THIS TEXT'S WORDS AND THE LABELS THEY LEAN TO" in out
+    # the counts sit next to the numbers (the noise is visible)
+    assert "n_with" in out
+    assert "log-odds" in out
+
+
+def test_the_viewers_corpus_numbers_are_the_artifacts_own(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The viewer's corpus rows are the artifact's, and the guard finds nothing."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    focus, _rule = viewer_module._default_focus(context.records[0], context.labels)
+    words = list(dict.fromkeys(viewer_module.content_tokens(context.records[0].text)))
+    assert viewer_module.corpus_cross_check(context, focus, words) == []
+    # the screen shows the artifact's own counts for the topic's first word
+    stored = viewer_module.corpus_topic_rows(context.corpus_map, focus)
+    assert stored
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert str(stored[0]["word"]) in out
+    assert f"{int(stored[0]['n_with'])}" in out
+
+
+def test_a_stale_corpus_artifact_fails_loudly(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A corpus map that disagrees with the data is reported, not smoothed over."""
+    path = fixture_artifacts["results"] / fixture_artifacts["corpus_run"] / "hitmap.json"
+    payload = json.loads(path.read_text("utf-8"))
+    payload["corpus_map"]["per_label"][0]["words"][0]["n_with"] = 999
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 1
+    out = capsys.readouterr().out
+    assert "THE ARTIFACTS AND THE DATA DISAGREE" in out
+
+
+def test_the_min_df_filter_only_changes_the_display(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The filter is a display-time filter: the artifact keeps every pair."""
+    topic = "Children"  # a label with train examples in the fixture
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    stored = viewer_module.corpus_topic_rows(context.corpus_map, topic)
+    assert stored
+    assert viewer_module.corpus_topic_rows(context.corpus_map, topic, min_df=1000) == []
+    args = _view_args(
+        fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]), "--topic", topic
+    )
+    assert viewer_module.main(args) == 0
+    unfiltered = capsys.readouterr().out
+    assert str(stored[0]["word"]) in unfiltered
+    args = _view_args(
+        fixture_artifacts,
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+        "--topic",
+        topic,
+        "--min-df",
+        "1000",
+    )
+    assert viewer_module.main(args) == 0
+    filtered = capsys.readouterr().out
+    assert "filter hides every row" in filtered
+    # the artifact itself is untouched: every pair that occurs is still stored
+    payload = json.loads(
+        (fixture_artifacts["results"] / fixture_artifacts["corpus_run"] / "hitmap.json").read_text(
+            "utf-8"
+        )
+    )
+    assert payload["corpus_map"]["corpus"]["n_pairs"] > 0
+
+
+def test_the_viewer_runs_without_the_corpus_map(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The corpus map is optional: the screen says so and the tool still works."""
+    args = [
+        "--config",
+        str(fixture_artifacts["config"]),
+        "--text-map-run",
+        str(fixture_artifacts["text_run"]),
+        "--surrogate-run",
+        str(fixture_artifacts["surrogate_run"]),
+        "--corpus-map-run",
+        "upr-hitmap-a-run-that-does-not-exist",
+        "--no-colour",
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+    ]
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "has not been made" in out
+    assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" not in out

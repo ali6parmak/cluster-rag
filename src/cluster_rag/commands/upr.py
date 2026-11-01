@@ -90,6 +90,10 @@ from cluster_rag.text_processors.decision.ablation_map import (
 from cluster_rag.text_processors.decision.upr_probe import measure_upr_arm
 from cluster_rag.text_processors.decision.upr_union import z_max_union
 from cluster_rag.text_processors.features import ProfileUnits
+from cluster_rag.text_processors.features.corpus_map import (
+    build_corpus_map,
+    corpus_map_block,
+)
 from cluster_rag.text_processors.features.lexical_map import (
     aggregate_lexical_map,
     build_lexical_map,
@@ -801,6 +805,22 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
     if hitmap.include_text_side_map:
         text_side_block = build_text_side_map(texts, labels, gold)
 
+    # -- the corpus map (CS-23): the train split's own word<->label association --
+    # A description of the DATA, not a measurement of the model: it needs no
+    # model call, and it is built from the **train** split only (no val text
+    # and no val label enters the counts; test is not touched).
+    corpus_block: dict[str, Any] | None = None
+    if hitmap.include_corpus_map:
+        train_records = setup.train_records
+        corpus_block = corpus_map_block(
+            build_corpus_map(
+                [record.text for record in train_records],
+                [record.labels for record in train_records],
+                labels,
+            ),
+            split="train",
+        )
+
     # -- Version B: the ablation map (the decision model's own ablation) ----------
     units = tuple(text_units(text, unit=hitmap.unit, openers=openers) for text in texts)
     text_set = ablatable_summary(units)
@@ -962,6 +982,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
                 text_set=text_set,
                 lexical_block=lexical_block,
                 text_side_block=text_side_block,
+                corpus_block=corpus_block,
                 seconds=round(time.perf_counter() - started, 3),
             )
         )
@@ -989,11 +1010,13 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
         },
         "lexical_map": lexical_block,
         "text_side_map": text_side_block,
+        "corpus_map": corpus_block,
         "ablation_map": {"arms": arms},
         "config": {
             "unit": hitmap.unit,
             "include_lexical_map": hitmap.include_lexical_map,
             "include_label_blind": hitmap.include_label_blind,
+            "include_corpus_map": hitmap.include_corpus_map,
             "catch_all_labels": list(hitmap.catch_all_labels),
             "bootstrap": {
                 "resamples": hitmap.bootstrap.resamples,
@@ -1045,6 +1068,14 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             f"  lexical map: the held-out labels' generic share "
             f"{_fmt(held_out_block['generic_share'], 4)}, the top word's share "
             f"{_fmt(lexical_block['concentration']['top1_word_share'], 4)}"
+        )
+    if corpus_block is not None:
+        corpus = corpus_block["corpus"]
+        print(
+            f"  corpus map (CS-23): the train split's {corpus['n_texts']} texts, "
+            f"{corpus['n_words']} words, {corpus['n_pairs']} (label, word) pairs; "
+            f"{corpus['labels_with_examples']} of {corpus['n_labels']} labels have "
+            "a train example"
         )
     for name, block in arms.items():
         reads = block["measurement"].get("reads")
@@ -1260,6 +1291,7 @@ def _hitmap_upr_row(
     text_set: dict[str, Any],
     lexical_block: dict[str, Any] | None,
     text_side_block: dict[str, Any] | None,
+    corpus_block: dict[str, Any] | None,
     seconds: float,
 ) -> dict[str, Any]:
     """One table row of the hit map (the run's arm)."""
@@ -1278,6 +1310,7 @@ def _hitmap_upr_row(
     surrogate_quality = surrogate.get("quality") or {}
     faithfulness = surrogate.get("topic_faithfulness") or {}
     agreement = surrogate.get("agreement_with_the_causal_map") or {}
+    corpus = (corpus_block or {}).get("corpus") or {}
 
     def _interval(read: dict[str, Any]) -> str | None:
         interval = read.get("interval")
@@ -1331,6 +1364,10 @@ def _hitmap_upr_row(
             agreement.get("share_inside_among_the_words_in_the_text"), 4
         ),
         "surrogate_chance_level": _fmt(agreement.get("chance_level"), 4),
+        "corpus_map_train_texts": corpus.get("n_texts"),
+        "corpus_map_words": corpus.get("n_words"),
+        "corpus_map_pairs": corpus.get("n_pairs"),
+        "corpus_map_labels_with_examples": corpus.get("labels_with_examples"),
         "seconds": seconds,
     }
 

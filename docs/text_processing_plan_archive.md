@@ -3265,3 +3265,128 @@ verdict and the numbers are the track log's §CS-20.*
   - the **gate**: `pytest` **678 passed**, `ruff` clean, the two verify tools
     OK (110 + 45 runs) and both final sweeps reproduce their artifacts field
     for field (only the wall-clock fields move).
+
+---
+
+## The corpus map (CS-23) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.2
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-23.*
+
+### 7.1 The corpus map (CS-23)
+
+- [x] **CS-23 — the corpus map: the train split's own word↔label
+  association.** For every label and every word of the **training** corpus: how
+  strongly does this word go with this label? The plain statistics of the data
+  — the map's neighbour, and the one thing the map never measured.
+
+  **The measures** (every one stored with the counts behind it, so any number
+  can be recomputed and audited):
+
+  - `n_with` — the train texts that contain the word **and** carry the label;
+  - `df` — the train texts that contain the word at all;
+  - `lift` = `P(label | word present) / P(label)` — how much likelier a text
+    with this word is to carry the label; 1.0 = the word says nothing, > 1 =
+    it pulls the label, < 1 = it pushes it away;
+  - `log-odds` = `log((a+0.5)/(b+0.5)) + log((d+0.5)/(c+0.5))` over the 2×2
+    table (`a` word+label, `b` word+no label, `c` no word+label, `d` neither),
+    the 0.5-smoothed signed version: > 0 with the label, < 0 against it, 0
+    nothing. It is preferred to lift because lift explodes on rare words (a
+    word in 2 of 2 texts gives lift 57 and means nothing).
+
+  **No thresholds.** The reviewer's instruction: **all** words for **all**
+  labels. Every (label, word) pair that occurs is stored, with the four counts;
+  the noise is handled at **display** time (the counts sit next to the number,
+  and the viewer offers a `--min-df` filter, default off), never by dropping
+  data.
+
+  **The mechanism.**
+
+  - a new **pure function** in the track's pure core: the train records + the
+    label space → the per-label word tables and the per-word reverse tables
+    (the same data read the other way);
+  - a new **mode on the existing `hitmap-upr` command**: the optional bool
+    `upr_analysis.hitmap.include_corpus_map` — a **config-schema change**
+    (AGENTS §3, explain-first; the reviewer's decision of 2026-11-01: *add it
+    to the existing command*, not a new one);
+  - the **viewer**: two new blocks — *"the corpus's own words for this topic"*
+    (the topic's word list by log-odds, with the counts, the words that are
+    **in this text** marked) and *"this text's words and the labels they lean
+    to"*.
+
+  **The cost.** **0 model calls**, ~2 s of CPU; the artifact grows by a few MB.
+
+  **Leakage.** The **train** split only: no val text and no val label enters
+  the counts. The eight **held-out** labels have no train examples at all, so
+  their tables are empty **by construction** — reported as empty, never
+  fabricated. `test` is not touched.
+
+  **What it is expected to say** (measured read-only on 2026-11-01, so the
+  numbers are known before the run): "Detention" ← detention (lift 16.90),
+  conditions (9.04), torture (8.03), treatment (5.63), disappearance (5.38);
+  "Migrants" ← migrant (27.86), workers (20.75), families (20.47), members
+  (16.18); "Women's rights" ← women (5.92), men (5.76), equality (5.52), girls
+  (5.34), violence (4.21).
+
+  **The exit criteria.** The counts/lift/log-odds pinned by a hand-computed
+  unit test; a test that the train side never touches a val text; the viewer's
+  numbers pinned against the artifact (the stale-artifact guard); the fixture
+  and the real val split; the gate green.
+
+  **The runs** (fixed before the first call): the run id `upr-hitmap-corpus`,
+  the artifact `results/upr-hitmap-corpus/hitmap.json` (the block
+  `corpus_map`), the sweep cell in a new sweep file
+  `experiments_text_processing/upr_hitmap_corpus_sweep.py` (the sweep label
+  `upr_hitmap_corpus`, so the table's section is `## UPR — upr_hitmap_corpus`),
+  and the log section `## CS-23 — the corpus map` in
+  `docs/experiments_text_processing.md`.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the run is
+  `upr-hitmap-corpus` (the artifact `results/upr-hitmap-corpus/hitmap.json`, the
+  block `corpus_map`), the log section is `## CS-23 — the corpus map` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **train**: 1,676 texts, 68 labels;
+  the corpus is the train split, so no val text and no val label enters the
+  counts and `test` is not touched).**
+
+  - **The cost.** **0 new model calls** (the intact texts' grid is the CS-9b
+    run's cache hits: 2,640 hits, 0 misses, 0 stored) and **1.3 s** of wall
+    time; the artifact is 6.4 MB.
+  - **The map's shape.** **18,707** (label, word) pairs over **3,049** distinct
+    words; **60 of 68** labels have a train example and **8** have an empty
+    table **by construction** (the held-out ones). The per-label table's size:
+    min 11, median 268, max 1,125. **No thresholds**: every pair that occurs
+    is stored — 2,540 of them (13.6%) rest on a hapax word (df = 1) and 1,749
+    (9.4%) have a negative log-odds.
+  - **The pre-registered expectation is reproduced digit for digit.**
+    "Detention" ← detention (lift **16.90**), conditions (9.04), torture
+    (8.03), treatment (5.63), disappearance (5.38); "Migrants" ← migrant
+    (**27.86**), workers (20.75), families (20.47), members (16.18);
+    "Women's rights" ← women (**5.92**), men (5.76), equality (5.52), girls
+    (5.34), violence (4.21).
+  - **The two measures rank differently, and that is the point.** The lift's
+    head word and the log-odds' head word **differ for 55 of the 60 labels**:
+    the lift's head is a hapax almost every time (every word in a label's
+    texts has the same lift), while the log-odds' head is a topical word (only
+    4 of the 60 labels have a hapax there).
+  - **The corpus's own topical vocabulary**: *hiv* (log-odds **12.034**, "HIV -
+    Aids"), *trafficking* (10.636), *defenders* (10.263), *impunity* (9.540),
+    *corruption* (9.434). **And the register is the other end of the same
+    table**: *rights* is in **all 60** labels' tables (df 485), *human* in 58 —
+    the UPR register, now measured on the train side with the corpus's own
+    statistics.
+  - **The label's own name word** is in its own table for **59 of the 60**
+    labels (at rank 1 for **33**, in the top 10 for **45**); the exception is
+    "SDGs", whose name is the abbreviation (the train texts say "sustainable
+    development goals").
+  - **The exit criteria.** The counts / lift / log-odds are pinned by a
+    hand-computed unit test (and counts that do not form a 2×2 table are
+    refused); the train side never touches a val text (the fixture run's
+    artifact holds neither of the fixture's two val-only words); the viewer's
+    numbers are pinned against the artifact and a **stale artifact fails
+    loudly** (the tool exits 1); the fixture and the real val split both run.
+  - **The gate.** 690 tests, ruff clean, the two verify tools OK and both final
+    sweeps reproducing field for field.

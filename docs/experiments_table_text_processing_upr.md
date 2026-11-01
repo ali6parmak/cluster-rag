@@ -558,3 +558,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-hitmap-text | 2026-10-29 | val | clause | tev1-paragraph-noul | 660 | 348 | 0.4727 | 975 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 0.000000 | 0.2260 | n/a | n/a | n/a | n/a | 1.638 |
 | upr-hitmap-surrogate | 2026-10-29 | val | clause | tev1-paragraph-noul | 660 | 348 | 0.4727 | 975 | 1946 | 0.2687 | 0.0918 | 0.1769 | [+0.1501, +0.2025] | 0.1782 | 0.1293 | 0.0489 | 0.1511 | -0.0160 | 0.1672 | -0.0179 | -0.0203 | yes | no | yes | n/a | n/a | n/a | n/a | 0.6933 | 0.0786 | 0.8338 | 0.4839 | 3.824 |
+
+## UPR — upr_hitmap_corpus
+
+| run_id | date | split | unit | model | n_texts | n_ablatable | share_not_ablatable | n_variants | n_calls | linked_drop | other_drop | linked_minus_other | linked_ci | formulaic_drop | topical_drop | formulaic_minus_topical | gold_drop | background_drop | gold_minus_background | blind_linked_minus_other | blind_formulaic_minus_topical | linked_ok | formulaic_ok | label_driven | heldout_generic_share | top1_word_share | text_side_exactness | text_side_top1_share | surrogate_r | surrogate_own_name_share | surrogate_carrier_agreement | surrogate_chance_level | corpus_map_train_texts | corpus_map_words | corpus_map_pairs | corpus_map_labels_with_examples | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-hitmap-corpus | 2026-11-01 | val | clause | tev1-paragraph-noul | 660 | 348 | 0.4727 | 975 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 1676 | 3049 | 18707 | 60 | 1.24 |

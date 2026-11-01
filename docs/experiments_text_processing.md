@@ -76,6 +76,7 @@ research record and are **not** indexed here.
 | [CS-18 — the hit map: which words carry the signal](#cs-18--the-hit-map-which-words-carry-the-signal-2026-10-29) | two `upr-hitmap-*` runs (the lexical map + the decision model's ablation) | the map answers question 3 with a **yes and a no**: the decision model keys on the label's own words (the label-linked clause's drop 0.2687 against 0.0918, the label-blind counterpart flat) **and** it leans on the recommendation's opening clause (the formulaic drop is *larger*, +0.0489 [+0.0139, +0.0849]); the lexical map's exactness is 0.0 and the held-out labels' coverage is carried by their own distinctive words (the generic share 0.3105) | `results/upr-hitmap-{sentence,clause}/hitmap.json` |
 | [CS-19 — the hit map's two cheap modes](#cs-19--the-hit-maps-two-cheap-modes-the-text-side-word-map-and-the-surrogate-attribution-2026-10-29) | two `upr-hitmap-*` runs (the text-side word map + the surrogate attribution) | the **text side** of the word map (the pack's second lexical feature, exact: the deviation 0.0) says the matching words are the UPR register ("rights" 0.2260, "human" 0.0597), not the topics; the **surrogate** of the model's own probability reads each topic correctly (the out-of-sample correlation 0.6933; the blind counterpart's attribution follows the *shifted* topic, 0.0806 against 0.0090) and **agrees with the causal map** (its words land in the carrier clause 83.4% of the time against a 48.4% chance level) | `results/upr-hitmap-{text,surrogate}/hitmap.json` |
 | [CS-20 — the hit map's terminal viewer](#cs-20--the-hit-maps-terminal-viewer-2026-10-29) | no run (a **tool**): the offline mode reads the CS-19 artifacts, the live mode the model's cached grid, the what-if mode a re-asked grid | one text on screen: the words and what each contributes, who the words say it is, what the model says, what is true — and, behind a flag, what happens if a word is removed; the **attribution/causation** distinction is in the output itself | the CS-19 artifacts (read, not re-measured) |
+| [CS-23 — the corpus map](#cs-23--the-corpus-map-2026-11-01) | one `upr-hitmap-corpus` run (the train split's own word↔label association; **0 new model calls**, 1.3 s) | the plain statistics of the corpus, at last: **18,707** (label, word) pairs over 1,676 train texts; the plan's pre-read expectation is reproduced **digit for digit** ("Detention" ← detention 16.90, "Migrants" ← migrant 27.86); the log-odds and the lift pick a **different head word for 55 of the 60 labels** (the lift's head is a hapax); the label's own name word heads **33** of the tables; the register ("rights") is in **all 60** | `results/upr-hitmap-corpus/hitmap.json` |
 
 ## Change sets
 
@@ -5552,3 +5553,192 @@ what-if); nothing about `test`; nothing about the corpus-level word ablation
 per-text prediction — the artifact stores only each topic's top 15 positive and
 15 negative coefficients, not the full vector, so a per-text surrogate prediction
 cannot be computed from it (and a partial sum would not be one).
+
+## CS-23 — the corpus map (2026-11-01)
+
+**The run.** One: `upr-hitmap-corpus` — the **train** split's own word↔label
+association, every word for every label, with the counts behind it, the lift
+and the 0.5-smoothed log-odds. **0 new model calls** (the intact texts' grid is
+the CS-9b run's cache hits: 2,640 hits, 0 misses, 0 stored) and **1.3 s** of
+wall time; the artifact is 6.4 MB. The sweep file is
+`experiments_text_processing/upr_hitmap_corpus_sweep.py` (the sweep label
+`upr_hitmap_corpus`, so the table's section is `## UPR — upr_hitmap_corpus`),
+the artifact is `results/upr-hitmap-corpus/hitmap.json` (the block
+`corpus_map`), and the config-schema change is the one bool
+`upr_analysis.hitmap.include_corpus_map` (**on** by default).
+
+**The reviewer's decision (2026-11-01, before the push).** The corpus map is
+**on by default**: `upr_analysis.hitmap.include_corpus_map` defaults to `True`,
+so every `hitmap-upr` run computes it and the flag stays a switch for the runs
+that want it off. The consequence, stated plainly: a **re-run** of the earlier
+sweeps (CS-18's sentence and clause arms, CS-19's text and surrogate runs)
+now carries the corpus-map block as well, and the artifacts grow by a few MB.
+The runs that produced the numbers below were made with the flag off, and
+**nothing in their numbers changes** — the corpus map is a description of the
+data and enters no measurement.
+
+### The map's shape (UPR **train**: 1,676 texts, 68 labels)
+
+| | |
+|---|---|
+| the train texts | **1,676** |
+| the distinct words | **3,049** |
+| the (label, word) pairs stored | **18,707** |
+| the labels with a train example | **60 of 68** |
+| the labels with an empty table, **by construction** | **8** (the held-out ones: "Asylum-seekers - refugees", "ESC rights - general", "Freedom of association and peaceful assembly", "Freedom of religion and belief", "Gender-based violence", "General", "Other", "Special procedures") |
+| the per-label table's size | min 11, median 268, max 1,125 |
+
+**No thresholds: every pair that occurs is stored**, with the four counts
+behind it. The noise is visible, not removed: **2,540 of the 18,707 pairs
+(13.6%)** rest on a word that occurs in **one** train text, and **1,749 (9.4%)**
+have a **negative** log-odds — the word goes with the label *less often than
+chance*. The log-odds is the **stricter** of the two measures: another **798**
+pairs have a lift below 1.0 and a non-negative log-odds (the smoothing of the
+small counts pulls them back).
+
+### The three labels the plan named — the pre-registered expectation, digit for digit
+
+The plan's §7.2 read the map off the data before the run ("measured read-only on
+2026-11-01"). The run reproduces it **exactly**:
+
+| the label | the word | n_with | df | lift | log-odds |
+|---|---|---|---|---|---|
+| Detention | detention | 30 | 35 | **16.90** | 5.0659 |
+| Detention | conditions | 11 | 24 | **9.04** | 2.8931 |
+| Detention | torture | 22 | 54 | **8.03** | 2.8334 |
+| Detention | treatment | 10 | 35 | **5.63** | 2.1452 |
+| Detention | disappearance | 6 | 22 | **5.38** | 2.0550 |
+| Migrants | migrant | 27 | 28 | **27.86** | 6.8474 |
+| Migrants | workers | 28 | 39 | **20.75** | 4.8723 |
+| Migrants | families | 17 | 24 | **20.47** | 4.5065 |
+| Migrants | members | 14 | 25 | **16.18** | 3.8187 |
+| Women's rights | women | 193 | 196 | **5.92** | 6.7927 |
+| Women's rights | men | 23 | 24 | **5.76** | 4.4461 |
+| Women's rights | equality | 34 | 37 | **5.52** | 4.0252 |
+| Women's rights | girls | 32 | 36 | **5.34** | 3.7053 |
+| Women's rights | violence | 77 | 110 | **4.21** | 2.7465 |
+
+### The two measures rank differently, and that is the point
+
+The plan preferred the **log-odds** to the lift "because lift explodes on rare
+words". Measured over the whole map: **the two measures' head word differs for
+55 of the 60 labels**. The lift's head is a hapax almost every time ("133" for
+four labels, "1998" for three — the lift is the same 19.72 for every word in a
+label's texts, because a word in 11 of 11 texts has the same lift as a word in
+1 of 1). The log-odds' head is a **topical** word, and only **4** of the 60
+labels have a hapax at the head of their log-odds table:
+
+| the label | the log-odds head | n_with / df | log-odds | the lift head |
+|---|---|---|---|---|
+| Detention | prison | 11 / 11 | 6.197 | 1969, 2003, abducted … (all lift 19.72) |
+| Migrants | migrant | 27 / 28 | 6.847 | 1737, accompanied, acquire … (all lift 28.90) |
+| Women's rights | women | 193 / 196 | 6.793 | 034, 120, 1325 … (all lift 6.01) |
+| Torture and other CID treatment | torture | 52 / 54 | 6.904 | 2003, 226, abductions … (all lift 19.72) |
+
+So the map's **own** order (the log-odds) puts the topic's word at the top of
+the topic's table, while the lift's order puts the noise there. That is why the
+viewer's list is ordered by the log-odds and why the counts sit next to the
+number.
+
+### The corpus's own topical vocabulary (the strongest word↔label pairs)
+
+| the word | the label it belongs to | df | lift | log-odds |
+|---|---|---|---|---|
+| hiv | HIV - Aids | 25 | 67.04 | **12.034** |
+| trafficking | Trafficking | 71 | 22.05 | 10.636 |
+| defenders | Human rights defenders | 30 | 50.79 | 10.263 |
+| impunity | Impunity | 27 | 50.79 | 9.540 |
+| corruption | Corruption | 29 | 53.94 | 9.434 |
+| aids | HIV - Aids | 20 | 67.04 | 9.418 |
+| indigenous | Indigenous peoples | 32 | 40.88 | 9.323 |
+| older | Rights for older people | 17 | 76.18 | 9.262 |
+| extrajudicial | Extrajudicial executions | 17 | 76.18 | 9.262 |
+| food | Right to food | 29 | 49.04 | 8.644 |
+
+**And the register is the other end of the same table** — the words that sit in
+*every* label's table and therefore say nothing about any of them:
+
+| the word | df | how many labels' tables it is in |
+|---|---|---|
+| rights | 485 | **60** (every label with a train example) |
+| including | 178 | 59 |
+| continue | 319 | 58 |
+| ensure | 254 | 58 |
+| human | 337 | 58 |
+| measures | 235 | 57 |
+
+This is CS-19's corpus-level finding ("the text-side map's head is the UPR
+register: *rights* 0.2260, *human* 0.0597") re-measured on the **train** side
+and with the **corpus's own statistics** instead of a feature's decomposition:
+the register is in every label's table, the topic's word in one.
+
+**The label's own name word is in its own table**: for **59 of the 60** labels
+with a table the label's own content word occurs in it — at **rank 1** for **33**
+of them and in the **top 10** for **45**. The one exception is **SDGs**: its name
+is the *abbreviation*, and the train texts say "sustainable development goals"
+(*sustainable* 7.462, *agenda* 6.838, *goals* 6.645) — the words, not the
+acronym.
+
+### The viewer: two new blocks, and what one text shows
+
+The viewer (CS-20's tool) reads the corpus map's artifact and shows it in both
+directions: *"the corpus's own words for this topic"* (the topic's table by
+log-odds, the words **in this text** marked) and *"this text's words and the
+labels they lean to"*. For the CS-20 example text (`0000000000000047d5d150d7`,
+the "ratification … migrant workers" recommendation) the corpus's own
+statistics read the text the way the model reads it:
+
+| the word | the labels it leans to (the corpus's log-odds) |
+|---|---|
+| migrant | Migrants **+6.847** · Labour rights +4.411 · International instruments +2.295 |
+| workers | Labour rights **+5.454** · Migrants +4.872 · International instruments +2.084 |
+| ratification | International instruments **+6.049** · CP rights - general +2.378 |
+| convention | International instruments **+5.459** · Enforced disappearances +2.243 |
+| protection | Migrants +2.242 · Enforced disappearances +2.184 · Labour rights +1.892 |
+| take / further / steps / towards | no coherent topic — each leans to a different label, none above +2.41 |
+
+The bold rows are the CS-20 lesson repeated from the data's side: the word that
+carries the label's own name ("workers" → "Labour rights") is the word whose
+removal moved the model's probability the most (**−0.5177**), and the
+recommendation's formulaic opening leans to a *different* label for each of its
+words — no coherent topic, and nothing above +2.41. **This is an observation on
+one text, not a measurement** — the map itself says nothing about the model.
+
+The `--min-df` filter is a **display-time** filter (default off): the artifact
+keeps every pair, the filter only hides the rows.
+
+### The exit criteria, read out one by one
+
+1. **The counts / lift / log-odds pinned by a hand-computed unit test** —
+   **holds**: a four-text corpus with a hand-computed 2×2 table (`a` = 2, `b` = 0,
+   `c` = 0, `d` = 2 → the lift 2.0 and the log-odds log 25 ≈ 3.2189; `a` = 1,
+   `b` = 1, `c` = 1, `d` = 1 → the lift 1.0 and the log-odds 0.0), and the counts
+   that do not form a 2×2 table are **refused**, never silently smoothed.
+2. **The train side never touches a val text** — **holds**: the map is built
+   from the train records only, and the fixture run's artifact holds neither
+   "malnutrition" nor "programmes" (the two val-only words of the tiny
+   fixture).
+3. **The viewer's numbers pinned against the artifact (the stale-artifact
+   guard)** — **holds**: the viewer recomputes the map with the same pure
+   function and compares the topic's table and the reverse table's rows; a
+   disagreement is printed at the top of the screen and the tool exits **1**.
+4. **The fixture and the real val split** — **holds**: the fixture's three runs
+   (the text map, the surrogate, the corpus map) with a fake decider, and the
+   real run on the UPR **val** split (660 texts, 68 labels, 1,312 gold cells),
+   whose artifact the viewer reads with **0 model calls** (0.96 s).
+5. **The gate green** — 690 tests, ruff clean, the two verify tools OK and both
+   final sweeps reproducing field for field.
+
+### What this change set does not say
+
+Nothing **causal**: the map is a description of the corpus, and the model's
+reading of a text is not inferred from it (the one text above is an
+observation); nothing about `test` (only the train corpus's counts and the val
+split's display were touched); nothing about the **held-out** labels beyond
+"their tables are empty by construction" — the map says nothing about what
+those labels *would* associate with, because it has no example of them; nothing
+about a **threshold** (there is none: the map stores every pair and the filter
+is display-time); nothing about the **embedding model**; and nothing about the
+map's own **predictive** power — the corpus map is not a classifier and was
+never measured as one.
+

@@ -10,9 +10,15 @@ text-side map + surrogate attribution) and all four live in artifacts. This tool
 is the **per-document view** over them: it reads the artifacts and the data, and
 it perturbs nothing unless it is asked to.
 
+CS-23 added a fifth block to the screen: the **corpus map** — the train
+split's own word↔label association (the data's own statistics, not the model's
+and not a feature's). It shows in two directions: the topic's own words by
+log-odds (the words that are **in this text** marked), and this text's words
+with the labels they lean to.
+
 The three modes and their costs:
 
-- **offline** (the default): the two artifacts + the data + the split —
+- **offline** (the default): the artifacts + the data + the split —
   **0 model calls**;
 - **live** (``--live``): the model, re-scored through the cached calls —
   2 calls per text, and cache hits for the val texts;
@@ -24,6 +30,7 @@ Usage:
     uv run python tools/hitmap_view.py --sample --seed 7
     uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7
     uv run python tools/hitmap_view.py --sample --seed 7 --what-if ratification,migrant
+    uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7 --min-df 3
 
 **The tool is a tool, not a number source.** The offline numbers are the
 artifacts' own (the map's exact per-word decomposition and the surrogate's
@@ -36,6 +43,7 @@ and the surrogate columns are *attributions* (a decomposition of a feature's own
 definition and a ridge surrogate's coefficients); only the what-if column
 perturbs the input, so only it is *causal*. The lesson of CS-18 and CS-19 is
 exactly that difference, and a viewer that blurs it would teach the wrong thing.
+The **corpus map** is neither: it is a description of the *data*, and it says so.
 """
 
 from __future__ import annotations
@@ -70,11 +78,16 @@ from cluster_rag.decision.base import answer_probability
 from cluster_rag.omct_decision import DecisionArm
 from cluster_rag.text_processors.decision.probe import plan_calls
 from cluster_rag.text_processors.decision.upr_probe import build_upr_cells
+from cluster_rag.text_processors.features.corpus_map import build_corpus_map
 from cluster_rag.text_processors.features.lexical_map import (
     cell_coverage,
     label_word_contributions,
     text_side_coverage,
     text_word_contributions,
+)
+from cluster_rag.text_processors.features.pair_features import (
+    DEFAULT_STOPWORDS,
+    content_tokens,
 )
 
 # The defaults (the tool's own configuration surface; every one of them is a CLI
@@ -86,6 +99,10 @@ DEFAULT_TOP_K = 5
 DEFAULT_MAX_QUESTIONS = 64
 TEXT_MAP_RUN = "upr-hitmap-text"
 SURROGATE_RUN = "upr-hitmap-surrogate"
+CORPUS_MAP_RUN = "upr-hitmap-corpus"
+
+# How many labels a text's word "leans to" in the corpus map's reverse table.
+CORPUS_WORD_LABELS = 3
 
 # The artifacts' values are rounded to six decimals, so the cross-check's
 # tolerance is the rounding (plus a hair).
@@ -127,6 +144,11 @@ class ViewerContext:
         surrogate: The surrogate's artifact (CS-19's ``upr-hitmap-surrogate``).
         text_map_run: The text-side map's run id (the provenance).
         surrogate_run: The surrogate's run id (the provenance).
+        corpus_map: The corpus map's artifact (CS-23's ``upr-hitmap-corpus``) —
+            ``None`` when the run has not been made.
+        corpus_map_run: The corpus map's run id (the provenance).
+        train_records: The **train** split's records (the corpus map's corpus:
+            the map is built from the train texts alone).
     """
 
     config: AppConfig
@@ -138,6 +160,9 @@ class ViewerContext:
     surrogate: dict[str, Any]
     text_map_run: str
     surrogate_run: str
+    corpus_map: dict[str, Any] | None
+    corpus_map_run: str
+    train_records: tuple[Record, ...]
 
 
 def load_artifact(path: Path) -> dict[str, Any]:
@@ -158,12 +183,17 @@ def load_context(
     text_map_run: str,
     surrogate_run: str,
     results: Path,
+    corpus_map_run: str = CORPUS_MAP_RUN,
 ) -> ViewerContext:
     """Read everything the viewer needs: the split, the gold matrix, the artifacts.
 
     The label space is the **whole dataset's** (the harness's own space, not the
     split's), and the rows are the split's ids in their own order — the grid the
     map's rows and the decision cache's cell indexes are built on.
+
+    The **corpus map** (CS-23) is optional: the run may not have been made, and
+    the viewer says so on the screen rather than refusing to start. The **train**
+    split is read for it, because the map's corpus is the train texts.
 
     Raises:
         FileNotFoundError: If an artifact is missing.
@@ -182,6 +212,12 @@ def load_context(
                 f"the artifact {name} was measured on the split {artifact.get('split')!r}, "
                 f"not {split!r}: the viewer's rows would not line up with it"
             )
+    corpus_map: dict[str, Any] | None = None
+    corpus_path = results / corpus_map_run / "hitmap.json"
+    if corpus_path.is_file():
+        corpus_map = load_artifact(corpus_path)
+    train_ids, _ = load_split_ids(config.paths.data_splits, "train")
+    train_records = select_records_by_ids(report.records, train_ids)
     return ViewerContext(
         config=config,
         split=split,
@@ -192,6 +228,9 @@ def load_context(
         surrogate=surrogate,
         text_map_run=text_map_run,
         surrogate_run=surrogate_run,
+        corpus_map=corpus_map,
+        corpus_map_run=corpus_map_run,
+        train_records=tuple(train_records),
     )
 
 
@@ -355,6 +394,142 @@ def cross_check(context: ViewerContext, row: int, text: str) -> list[str]:
         problems.append(
             f"the artifact holds {stored_gold} gold cells, the split has {expected_gold}"
         )
+    return problems
+
+
+def corpus_block(artifact: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The corpus map's block from the artifact (the run's own block).
+
+    An artifact without the block (the run was made before CS-23) gives an
+    empty block: the screen says the map is not there, it never invents it.
+    """
+    if not artifact:
+        return {}
+    block = artifact.get("corpus_map")
+    return dict(block) if isinstance(block, Mapping) else {}
+
+
+def corpus_topic_rows(
+    artifact: Mapping[str, Any] | None,
+    label: str,
+    *,
+    min_df: int = 0,
+) -> list[dict[str, Any]]:
+    """One label's word rows, strongest log-odds first (the stored order).
+
+    The rows are the artifact's own: the map stores **every** pair that
+    occurs, and the ``min_df`` filter is a **display-time** filter (the counts
+    sit next to the number, so a reader can judge the noise).
+    """
+    block = corpus_block(artifact)
+    for row in block.get("per_label", []):
+        if row.get("label") != label:
+            continue
+        rows = [dict(word) for word in row.get("words", [])]
+        if min_df > 0:
+            rows = [row for row in rows if int(row.get("df", 0)) >= min_df]
+        return rows
+    return []
+
+
+def corpus_word_rows(
+    artifact: Mapping[str, Any] | None,
+    word: str,
+    *,
+    limit: int = CORPUS_WORD_LABELS,
+) -> list[dict[str, Any]]:
+    """One word's label rows (the reverse table), strongest log-odds first."""
+    block = corpus_block(artifact)
+    for row in block.get("per_word", []):
+        if row.get("word") != word:
+            continue
+        return [dict(entry) for entry in row.get("labels", [])][:limit]
+    return []
+
+
+def corpus_cross_check(
+    context: ViewerContext,
+    label: str,
+    words: Sequence[str] = (),
+) -> list[str]:
+    """The corpus map's numbers against the artifact's (the stale-artifact guard).
+
+    The viewer recomputes the map with the very same pure function the run used
+    and compares its own rows with the artifact's: the topic's word table (the
+    counts and the two measures) and the reverse table's rows for the words of
+    the text on screen. A mismatch means the artifact and the data disagree — a
+    **stale artifact** — and it is reported, never smoothed over.
+    """
+    problems: list[str] = []
+    artifact = context.corpus_map
+    if not artifact:
+        return problems
+    corpus = build_corpus_map(
+        [record.text for record in context.train_records],
+        [record.labels for record in context.train_records],
+        context.labels,
+    )
+    stored_labels = {
+        row.get("label"): row for row in artifact.get("corpus_map", {}).get("per_label", [])
+    }
+    mine = corpus.topic_rows(label)
+    theirs = [dict(word) for word in (stored_labels.get(label) or {}).get("words", [])]
+    if len(mine) != len(theirs):
+        problems.append(
+            f"the artifact holds {len(theirs)} words for {label!r}, the viewer's map has "
+            f"{len(mine)}"
+        )
+    for pair, row in zip(mine, theirs, strict=False):
+        if row.get("word") != pair.word:
+            problems.append(
+                f"the artifact's word {row.get('word')!r} for {label!r} is not the viewer's "
+                f"{pair.word!r}"
+            )
+            break
+        if int(row.get("n_with", -1)) != pair.n_with or int(row.get("df", -1)) != pair.df:
+            problems.append(
+                f"the artifact's counts for {label!r}/{pair.word!r} are "
+                f"n_with={row.get('n_with')}, df={row.get('df')}, the viewer's are "
+                f"n_with={pair.n_with}, df={pair.df}"
+            )
+            break
+        if abs(float(row.get("lift", 0.0)) - pair.lift) > VALUE_TOLERANCE:
+            problems.append(
+                f"the artifact's lift for {label!r}/{pair.word!r} is {row.get('lift')}, "
+                f"the viewer's is {pair.lift:.6f}"
+            )
+            break
+        if abs(float(row.get("log_odds", 0.0)) - pair.log_odds) > VALUE_TOLERANCE:
+            problems.append(
+                f"the artifact's log-odds for {label!r}/{pair.word!r} is {row.get('log_odds')}, "
+                f"the viewer's is {pair.log_odds:.6f}"
+            )
+            break
+    stored_words = {
+        row.get("word"): row for row in artifact.get("corpus_map", {}).get("per_word", [])
+    }
+    for word in words:
+        mine_rows = corpus.word_rows(word)
+        their_rows = [dict(entry) for entry in (stored_words.get(word) or {}).get("labels", [])]
+        if len(mine_rows) != len(their_rows):
+            problems.append(
+                f"the artifact holds {len(their_rows)} labels for the word {word!r}, "
+                f"the viewer's map has {len(mine_rows)}"
+            )
+            continue
+        for pair, row in zip(mine_rows, their_rows, strict=False):
+            if row.get("label") != pair.label:
+                problems.append(
+                    f"the artifact's label {row.get('label')!r} for the word {word!r} is "
+                    f"not the viewer's {pair.label!r}"
+                )
+                break
+            if abs(float(row.get("log_odds", 0.0)) - pair.log_odds) > VALUE_TOLERANCE:
+                problems.append(
+                    f"the artifact's log-odds for {word!r}/{pair.label!r} is "
+                    f"{row.get('log_odds')}, the viewer's is {pair.log_odds:.6f}"
+                )
+                break
     return problems
 
 
@@ -523,12 +698,14 @@ def render(
     what_if: Sequence[tuple[str, str, int, np.ndarray, int, Mapping[str, int]]] = (),
     what_if_baseline: np.ndarray | None = None,
     what_if_calls: int = 0,
+    min_df: int = 0,
     problems: Sequence[str] = (),
 ) -> str:
     """The whole screen, as text (the tool's own output).
 
     The columns say which of the two they are: the lexical and the surrogate
-    numbers are **attributions**, the what-if block is the **causal** one.
+    numbers are **attributions**, the what-if block is the **causal** one, and
+    the corpus map's block is a description of the **data** (neither).
     """
     record = context.records[row]
     text = record.text
@@ -539,6 +716,11 @@ def render(
     coefficients = surrogate_coefficients(surrogate_block(context.surrogate, None)[1], focus)
     rows = word_rows(text, focus)
     maximum = max((float(entry["contribution"]) for entry in rows), default=0.0)
+    # the text's own content words, in the text's order (the corpus map's unit)
+    text_words: list[str] = []
+    for word in content_tokens(text, DEFAULT_STOPWORDS):
+        if word not in text_words:
+            text_words.append(word)
     lines: list[str] = []
     add = lines.append
 
@@ -552,10 +734,13 @@ def render(
             colour=colour,
         )
     )
+    artifacts = f"{context.text_map_run}, {context.surrogate_run}"
+    if context.corpus_map is not None:
+        artifacts += f", {context.corpus_map_run}"
     add(
         paint(
             f"text: {record.id} (row {row} of {len(context.records)}) · picked by {picked}"
-            f" · artifacts: {context.text_map_run}, {context.surrogate_run}",
+            f" · artifacts: {artifacts}",
             DIM,
             colour=colour,
         )
@@ -655,6 +840,133 @@ def render(
         add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
     add(paint("   (★ = a gold label of this text)", DIM, colour=colour))
     add("")
+
+    corpus = corpus_block(context.corpus_map)
+    if corpus:
+        add(
+            paint(
+                "THE CORPUS'S OWN WORDS FOR THIS TOPIC — the train corpus's own "
+                "word<->label association (CS-23; the data's statistics, not the model's)",
+                BOLD,
+                colour=colour,
+            )
+        )
+        corpus_info = corpus.get("corpus", {})
+        corpus_texts = corpus_info.get("n_texts", "?")
+        corpus_words = corpus_info.get("n_words", "?")
+        corpus_pairs = corpus_info.get("n_pairs", "?")
+        add(
+            paint(
+                f"  the corpus: the {corpus_info.get('split', 'train')} split's "
+                f"{corpus_texts} texts, {corpus_words} words, "
+                f"{corpus_pairs} (label, word) pairs",
+                DIM,
+                colour=colour,
+            )
+        )
+        topic_rows_all = corpus_topic_rows(context.corpus_map, focus)
+        topic_rows = corpus_topic_rows(context.corpus_map, focus, min_df=min_df)
+        if not topic_rows_all:
+            add(
+                paint(
+                    f"  {focus!r} has no train example: its table is empty by construction",
+                    DIM,
+                    colour=colour,
+                )
+            )
+        elif not topic_rows:
+            add(
+                paint(
+                    f"  the --min-df {min_df} filter hides every row of this topic's table "
+                    f"({len(topic_rows_all)} rows in the artifact)",
+                    DIM,
+                    colour=colour,
+                )
+            )
+        else:
+            add(
+                paint(
+                    f"  {'word':<20}{'n_with':>8}{'df':>6}{'lift':>9}{'log-odds':>11}",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            for row in topic_rows[:top_k]:
+                in_text = str(row["word"]) in text_words
+                mark = "  ★ in this text" if in_text else ""
+                add(
+                    f"  {str(row['word']):<20}{int(row['n_with']):>8}{int(row['df']):>6}"
+                    f"{float(row['lift']):>9.2f}{float(row['log_odds']):>11.3f}"
+                    + paint(f"{mark}", BOLD if in_text else DIM, colour=colour)
+                )
+            add(
+                paint(
+                    "  the rows are the corpus's own (by log-odds); the counts sit next to the "
+                    "number, so the noise is visible.",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            if min_df > 0:
+                add(
+                    paint(
+                        f"  the --min-df {min_df} filter is display-time: the artifact keeps "
+                        "every pair.",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+        add("")
+        add(
+            paint(
+                "THIS TEXT'S WORDS AND THE LABELS THEY LEAN TO — the same association, "
+                "read the other way (CS-23)",
+                BOLD,
+                colour=colour,
+            )
+        )
+        add(
+            paint(
+                f"  {'word':<20}{'df':>6}   the labels it leans to (the corpus's log-odds)",
+                DIM,
+                colour=colour,
+            )
+        )
+        for word in text_words:
+            rows = corpus_word_rows(context.corpus_map, word, limit=CORPUS_WORD_LABELS)
+            df = next(
+                (
+                    int(row.get("df", 0))
+                    for row in corpus.get("per_word", [])
+                    if row.get("word") == word
+                ),
+                0,
+            )
+            if not rows:
+                add(
+                    f"  {word:<20}{'—':>6}   "
+                    + paint("not in the training corpus", DIM, colour=colour)
+                )
+                continue
+            leans = " · ".join(
+                f"{str(entry['label'])} {float(entry['log_odds']):+.3f}" for entry in rows
+            )
+            below = min_df > 0 and df < min_df
+            line = f"  {word:<20}{df:>6}   {leans}"
+            if below:
+                line += paint("  (below the --min-df filter)", DIM, colour=colour)
+            add(paint(line, DIM, colour=colour) if below else line)
+        add("")
+    elif context.corpus_map is None:
+        add(
+            paint(
+                f"THE CORPUS'S OWN WORDS — not shown: the run {context.corpus_map_run!r} "
+                "has not been made (the map's block is in its hitmap.json)",
+                DIM,
+                colour=colour,
+            )
+        )
+        add("")
 
     if live is not None:
         add(
@@ -832,6 +1144,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--text-map-run", default=TEXT_MAP_RUN, help="the text-side map's run id")
     parser.add_argument("--surrogate-run", default=SURROGATE_RUN, help="the surrogate's run id")
+    parser.add_argument(
+        "--corpus-map-run",
+        default=CORPUS_MAP_RUN,
+        help="the corpus map's run id (CS-23; optional — the block is skipped when absent)",
+    )
+    parser.add_argument(
+        "--min-df",
+        type=int,
+        default=0,
+        help="the display-time filter: only the words with at least this df (0 = off)",
+    )
     parser.add_argument("--no-colour", action="store_true", help="plain text (no ANSI colours)")
     args = parser.parse_args(argv)
 
@@ -845,6 +1168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             text_map_run=args.text_map_run,
             surrogate_run=args.surrogate_run,
             results=results,
+            corpus_map_run=args.corpus_map_run,
         )
         row = pick_row(context.records, text_id=args.text, sample=args.sample, seed=args.seed)
     except (FileNotFoundError, ValueError) as exc:
@@ -862,6 +1186,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     problems = cross_check(context, row, record.text)
+    if context.corpus_map is not None:
+        text_words = list(dict.fromkeys(content_tokens(record.text, DEFAULT_STOPWORDS)))
+        problems += corpus_cross_check(context, focus, text_words)
     picked = f"--text {args.text}" if args.text else f"--sample --seed {args.seed}"
     live: np.ndarray | None = None
     live_calls = 0
@@ -937,6 +1264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 what_if=what_if,
                 what_if_baseline=baseline,
                 what_if_calls=what_if_calls,
+                min_df=args.min_df,
                 problems=problems,
             )
         )

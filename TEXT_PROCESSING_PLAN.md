@@ -626,6 +626,9 @@ per change set, so a reader can always tell *moved* from *lost*:
   track log's §CS-19.
 - **CS-20** (the hit map's terminal viewer: the interactive map) → executed
   2026-10-29 → the archive's §7.1.6 and the track log's §CS-20.
+- **CS-23** (the corpus map: the train split's own word↔label association) →
+  executed 2026-11-01 → the archive's §7.1 (the corpus map) and the track log's
+  §CS-23.
 
 The change sets still open:
 
@@ -733,72 +736,9 @@ viewer). One change set at a time, with a **stop and a report between them**
 (the stop rule of §7.1 — the next change set starts only on the reviewer's
 word). CS-21 and CS-22 stay untouched and unscheduled.
 
-- [ ] **CS-23 — the corpus map: the train split's own word↔label
-  association.** For every label and every word of the **training** corpus: how
-  strongly does this word go with this label? The plain statistics of the data
-  — the map's neighbour, and the one thing the map never measured.
-
-  **The measures** (every one stored with the counts behind it, so any number
-  can be recomputed and audited):
-
-  - `n_with` — the train texts that contain the word **and** carry the label;
-  - `df` — the train texts that contain the word at all;
-  - `lift` = `P(label | word present) / P(label)` — how much likelier a text
-    with this word is to carry the label; 1.0 = the word says nothing, > 1 =
-    it pulls the label, < 1 = it pushes it away;
-  - `log-odds` = `log((a+0.5)/(b+0.5)) + log((d+0.5)/(c+0.5))` over the 2×2
-    table (`a` word+label, `b` word+no label, `c` no word+label, `d` neither),
-    the 0.5-smoothed signed version: > 0 with the label, < 0 against it, 0
-    nothing. It is preferred to lift because lift explodes on rare words (a
-    word in 2 of 2 texts gives lift 57 and means nothing).
-
-  **No thresholds.** The reviewer's instruction: **all** words for **all**
-  labels. Every (label, word) pair that occurs is stored, with the four counts;
-  the noise is handled at **display** time (the counts sit next to the number,
-  and the viewer offers a `--min-df` filter, default off), never by dropping
-  data.
-
-  **The mechanism.**
-
-  - a new **pure function** in the track's pure core: the train records + the
-    label space → the per-label word tables and the per-word reverse tables
-    (the same data read the other way);
-  - a new **mode on the existing `hitmap-upr` command**: the optional bool
-    `upr_analysis.hitmap.include_corpus_map` — a **config-schema change**
-    (AGENTS §3, explain-first; the reviewer's decision of 2026-11-01: *add it
-    to the existing command*, not a new one);
-  - the **viewer**: two new blocks — *"the corpus's own words for this topic"*
-    (the topic's word list by log-odds, with the counts, the words that are
-    **in this text** marked) and *"this text's words and the labels they lean
-    to"*.
-
-  **The cost.** **0 model calls**, ~2 s of CPU; the artifact grows by a few MB.
-
-  **Leakage.** The **train** split only: no val text and no val label enters
-  the counts. The eight **held-out** labels have no train examples at all, so
-  their tables are empty **by construction** — reported as empty, never
-  fabricated. `test` is not touched.
-
-  **What it is expected to say** (measured read-only on 2026-11-01, so the
-  numbers are known before the run): "Detention" ← detention (lift 16.90),
-  conditions (9.04), torture (8.03), treatment (5.63), disappearance (5.38);
-  "Migrants" ← migrant (27.86), workers (20.75), families (20.47), members
-  (16.18); "Women's rights" ← women (5.92), men (5.76), equality (5.52), girls
-  (5.34), violence (4.21).
-
-  **The exit criteria.** The counts/lift/log-odds pinned by a hand-computed
-  unit test; a test that the train side never touches a val text; the viewer's
-  numbers pinned against the artifact (the stale-artifact guard); the fixture
-  and the real val split; the gate green.
-
-  **The runs** (fixed before the first call): the run id `upr-hitmap-corpus`,
-  the artifact `results/upr-hitmap-corpus/hitmap.json` (the block
-  `corpus_map`), the sweep cell in a new sweep file
-  `experiments_text_processing/upr_hitmap_corpus_sweep.py` (the sweep label
-  `upr_hitmap_corpus`, so the table's section is `## UPR — upr_hitmap_corpus`),
-  and the log section `## CS-23 — the corpus map` in
-  `docs/experiments_text_processing.md`.
-
+- **CS-23** (the corpus map: the train split's own word↔label association) →
+  executed 2026-11-01 → the archive's §7.1 (the corpus map) and the track log's
+  §CS-23.
 - [ ] **CS-24 — the surrogate's full coefficient vector.** The viewer's
   surrogate column must be complete: every word of the text gets its
   coefficient instead of "—".

@@ -1360,6 +1360,14 @@ class UprHitMapConfig(BaseModel):
             beside the ablation (the yardstick that says whether the
             attribution is label-driven). Off by default would make the map
             say nothing, so it is on by default.
+        include_corpus_map: Whether the run computes the **corpus map**
+            (CS-23): the **train** split's own word↔label association — every
+            word for every label, with the counts (``n_with``, ``df``), the
+            lift and the 0.5-smoothed log-odds. It is a description of the
+            data, not a measurement of the model, so it needs no model call of
+            its own; it is **on** by default (the reviewer's decision of
+            2026-11-01), so every ``hitmap-upr`` run carries it and a re-run
+            of the earlier sweeps grows the artifact by a few MB.
         catch_all_labels: The generic catch-alls the map reports beside the
             held-out labels.
         surrogate_lambda: The ridge penalty of the surrogate (the larger, the
@@ -1380,6 +1388,7 @@ class UprHitMapConfig(BaseModel):
     include_surrogate: bool = True
     include_ablation: bool = True
     include_label_blind: bool = True
+    include_corpus_map: bool = True
     catch_all_labels: tuple[str, ...] = ("General", "Other")
     surrogate_lambda: float = Field(default=1.0, ge=0.0)
     surrogate_min_df: int = Field(default=3, ge=1)
