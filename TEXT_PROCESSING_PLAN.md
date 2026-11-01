@@ -796,6 +796,293 @@ computed), and three things came out of it:
   archive's §7.1 (the viewer shows every gold label) and the track log's
   §CS-28.
 
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+**What prompted it (2026-11-01).** A literature sweep on *lexical* label inference
+— label→word lexicon mining, label embeddings built from corpus-mined words, the
+state of the art on "infer the label from the text only", and the measurement of
+word-level attribution — plus the reviewer's four ideas from the same session:
+**try the corpus map as a classifier**; **compose the corpus map with the learned
+pack**; **mine a label→word lexicon from a corpus**; and **use part-of-speech
+tagging to see what kind of words affect the label in which way**.
+
+**What the sweep established, in one paragraph.** The corpus map (CS-23) *already
+is* the label→word lexicon — 18,707 (label, word) pairs over 3,049 distinct
+content words, with the counts behind every one — so there is nothing to mine
+again; what the literature adds is a **better estimator** for it and two **new
+uses** of it (as a label-side channel, and as the only lexical route to a label
+that has no train examples). And the reference point for the whole round is
+external: the **Danish Institute for Human Rights** runs a purely *lexical*
+classifier (their "TC8") on UN human-rights recommendations in this very genre,
+with a per-category dictionary of weighted terms, and publishes per-category F1
+(0.87–0.99 on most categories; the Danish Institute's `Performance_HuRi_SDG.pdf`).
+Those are *their* categories on *their* corpus with human-annotated ground truth,
+so they are **not** comparable to our numbers — but they establish that a
+lexical system on this genre is a serious thing to beat.
+
+**The order:** CS-29 (the lexical floor) → CS-30 (the map as a classifier) →
+CS-31 (the map's estimator) → CS-32 (the map in the pack) → CS-33 (the word-class
+readout) → CS-34 (real POS) → CS-35 (the lexicon as a label-side channel).
+
+**The reviewer's decisions of 2026-11-01 (they bind the change sets below).**
+
+1. **The batch is authorised.** The reviewer: *"let's put the things you think are
+   useful in the PLAN and after the implementations I'll try to understand what's
+   going on."* So the change sets run in order, each one complete and committed on
+   its own (its own pre-registration, artifact, log section, ticked box, archive
+   move and green gate), and the report comes at the end rather than between each.
+   **The stop rule's other half still holds: a change set that turns out to need
+   a decision stops and asks.** Nothing about the *order* changes without the
+   reviewer's word.
+2. **CS-34 and CS-35 are gated** on the two approvals named below (a new
+   dependency and a model download; a schema change). They are pre-registered and
+   costed so that the approval is one word each.
+3. **Every number this round produces is a UPR *val* number** and never a UPR
+   *test* number. The test split stays untouched.
+4. **The corpus map's existing block is not renamed or reshaped**; the new measures
+   are added *beside* the current ones (CS-31), so every number CS-23 reported
+   stays reproducible from its artifact.
+
+**The directory.** The new lexical machinery goes to
+**`src/cluster_rag/text_processors/lexical/`** — a new sibling of `chunkers/`,
+`features/`, `combining/`, `decision/` and `rerank/`. It is **not** a
+repo-root directory: everything importable lives under `src/cluster_rag/`, and the
+track's **pure-core guard test** only scans `text_processors/`, so a root-level
+directory would be unguarded and the "numpy only, scikit-learn only in the
+combiner" rule unenforceable. Two things are deliberately **not** moved:
+`text_processors/features/corpus_map.py` stays where it is (four modules import it;
+a move is a refactor over more than three modules, which AGENTS.md §3 says to
+explain first), and the POS tagger — a *model client*, since it downloads a model
+— goes to `src/cluster_rag/pos/` next to `embed/`, `decision/` and `rerank/`, with
+a `base.py` port and an `nltk_tagger.py` backend; the track's package imports the
+port only.
+
+- [ ] **CS-29 — the lexical floor: TF-IDF + one-vs-rest.** A new predictor kind
+  (`lexical_tfidf`): TF-IDF (word 1–2 grams, sublinear tf) over the **train**
+  split, one-vs-rest logistic regression per label, scored on the evaluated split.
+  It uses the same `Predictor` port as every other predictor, so the existing
+  `evaluate` command measures it with the existing metric code and the existing
+  decision rules.
+
+  **Why it is first.** It is the measurement that says whether the pipeline's
+  numbers are good, and every later change set is read against it. The reviewer
+  did not propose it; the sweep did.
+
+  **The cost.** Half a day. **No new dependency** — scikit-learn is already a
+  core dependency. One precedent to record: `predictors/` has never imported
+  scikit-learn (it is numpy-only today); scikit-learn is not a model client (no
+  download, no network, no I/O) and is not on AGENTS.md's forbidden list for the
+  pure cores, so this is allowed — but it is a first, and the pre-registration
+  says so.
+
+  **The run.** `upr-eval-lexical-tfidf-val`, the operating point `top_k` k=2 (the
+  champion's own). `evaluate` is a main-pipeline command, so the row lands in the
+  **main** UPR table (`docs/experiments_table_upr.md`, the `baselines` section)
+  and the narrative in the track log.
+
+  **The falsification, registered in advance.** The **unseen bucket is 0.0000 by
+  construction** — the eight held-out labels have no train examples, so a
+  supervised model cannot predict them. That is a structural fact, not a result
+  (and the champion's unseen bucket is 0.0000 too, so the two *are* comparable
+  there; the decision-model run's 0.5697 is the one that is not). If the pooled
+  micro-F1 is **≥ 0.5479** (the champion's), the champion's advantage is not real
+  and PLAN's Phase 6/9 priorities change — report it loudly. If it is **≤ 0.30**,
+  the lexical route is closed as a standalone and only the map-as-feature route
+  (CS-32) remains. The band we expect is **0.35–0.50**, and the reason is
+  external rather than hopeful: on *ECtHR* (human-rights legal text, multi-label)
+  LexGLUE's leaderboard puts `TFIDF+SVM` at **64.7 micro-F1**, and Clavié &
+  Alphonsus (2021) measure the gap between a plain linear SVM and a fine-tuned
+  legal transformer at only **15.1 %** error reduction on that task (against
+  85.1 % on general-domain text).
+
+  **The exit criteria.** The run's artifact holds the number; the table row is
+  auto-appended; the log section reads the numbers out with the falsification
+  conditions; the gate green.
+
+- [ ] **CS-30 — the corpus map as a classifier.** A new predictor kind
+  (`corpus_map`): every (text, label) cell is scored from the corpus map's own
+  weights, and is measured by the same harness as CS-29. The scorer lives in
+  `text_processors/lexical/corpus_map_score.py`; the adapter in
+  `src/cluster_rag/predictors/corpus_map.py`.
+
+  **The scoring function**, with its alternatives pre-registered (all four are
+  cheap, so all four are measured, and the choice is made on the **fit side**,
+  never on val): `sum_logodds` (the sum of the map's log-odds over the text's
+  words, a word missing from the label's table contributing 0), `sum_positive`
+  (the same over the words whose log-odds is positive — the "evidence **for**"
+  score), `max_logodds` (the single best word — the "is the label's own word
+  here" score) and `support_count` (how many of the label's table words the text
+  contains, unweighted — the measure-free control).
+
+  **The discipline.** The map is built from the **train** split only; the
+  evaluated split is scored with it, so no val text and no val label enters the
+  map. The operating point is `top_k` k=2, so nothing is fitted on the evaluated
+  split at all.
+
+  **The falsification, registered in advance.** The **unseen bucket is 0.0000 by
+  construction** — the map's table for the eight held-out labels is empty (CS-23
+  measures this), so the map cannot see a label it has no examples of. The
+  interesting read is the **seen-bucket** number and the map's **own measure
+  ablation**: does the log-odds weighting beat `support_count`? If a *count* of
+  the label's table words is as good as the log-odds weighting, then the map's
+  careful measure work (CS-23) buys nothing predictive. And if the pooled
+  micro-F1 comes **within 0.02 of the champion's 0.5479**, the
+  retrieval-plus-decision pipeline is buying little over a corpus statistic — a
+  finding to report, not to bury.
+
+  **The cost.** Half a day to a day. **No new dependency.**
+
+- [ ] **CS-31 — the corpus map's estimator, and the lexicon as a first-class
+  artifact.** Two parts, one change set, because the second is measured with the
+  first.
+
+  1. **The estimator.** Beside the current log-odds, the map gains the
+     **informative-prior log-odds** (Monroe, Colaresi & Quinn 2008: the word's
+     global frequency as the pseudo-count) and its **z-score** (δ over the
+     standard error); a **significance** per pair, so "this word goes with this
+     label" can be stated with a p-value instead of only a size (Fisher's exact
+     or the G² statistic on the same 2×2 table — the same table, so nearly
+     free); and the **conditional smoothing** variant (0.5 only where a cell is
+     actually zero), with the share of pairs whose *sign* flips under it reported.
+     The reason to change it: our fixed 0.5 on all four cells is the variant the
+     statistics literature criticises (Jackson et al., *JRSS-M* 2021: adding 0.5
+     to *every* cell of *every* table performs **worse** than adding it only to
+     the tables that actually have a zero cell; Agresti recommends a much smaller
+     constant for sparse data).
+  2. **The lexicon artifact.** The map's words, per label, with the new measures
+     and the counts — reusable by CS-32, CS-33, CS-35 and the viewer, so it is
+     written once. It goes into `text_processors/lexical/lexicon.py` (the
+     estimator, pure) and `text_processors/features/corpus_map.py` (the artifact
+     block, so the existing CS-23 shape is preserved and the viewer keeps
+     reading one block).
+
+  **The reference implementations** are used as *test oracles*, not as runtime
+  dependencies (the track's package stays numpy-only): `logodds` on PyPI (MIT, no
+  dependencies, and it takes the informative prior directly), `tidylo::bind_log_odds()`
+  in R (the same method with an empirical-Bayes prior) and
+  `quanteda.textstats::textstat_keyness()` (the chi² / Fisher / G² / PMI family,
+  with p-values).
+
+  **The falsification, registered in advance.** The head word changes for a
+  measurable number of labels: CS-23 measured the **lift**'s head as a hapax for
+  **55 of the 60** labelled tables and the log-odds's head as a hapax for only
+  **4**, so the z-score's head should be a hapax for **few** labels — the prior
+  is supposed to demote the single-document words. **If the z-scored head word is
+  unchanged for ≥ 55 of the 60 labels, the prior does nothing here and the metric
+  upgrade is a null**; report it as a null. And CS-30's classifier is re-measured
+  with the z-scored weights: if the pooled micro-F1 does not move, the better
+  measure is a better *description*, not a better *model*.
+
+  **The cost.** About a day. **No new dependency.**
+
+- [ ] **CS-32 — the corpus map in the learned pack.** The map's per-cell score
+  becomes a feature of the UPR pack, so the learned combiner can use it beside the
+  embedding and lexical features: a new group in `UPR_FEATURE_GROUP_PREFIXES`
+  (e.g. `cmap_`), gated like the catalog groups (the group is only selectable when
+  the map is available, and a run without it records the gap in its artifact).
+
+  **The guard, and it is not optional.** The pack is fitted on **train**; the map
+  is built from **train**. On the fit side the map has already seen the cells it
+  scores, so the feature is optimistically biased exactly where the combiner
+  learns its weight. The fit side's map must be **cross-fit** — K folds over
+  train, each fold's cells scored against a map built from the other folds — the
+  same shape as the fit-side threshold's cross-fit (CS-9b). The artifact records
+  the folds.
+
+  **The control, which is the point of the change set.** Three floors, as the
+  track already does: the **control** (the same pack with the group removed); the
+  **random-vector floor** (unchanged); and the **label-blind control** (the same
+  pack, but the map is built with the labels **permuted**). If the label-blind
+  map buys the same Δ as the real one, the "gain" is the map's construction, not
+  the corpus's word↔label association — the exact failure mode the track's own
+  control-role floor was built to catch.
+
+  **The measurement and its falsification.** The paired Δ micro-F1 against the
+  control, with its CI, over the texts (the resampling unit), plus the per-bucket
+  breakdown. The unseen bucket is expected flat: the map is empty for the eight
+  held-out labels, so this feature cannot help there. The Δ's CI must exclude
+  zero **and** the label-blind control's Δ must be materially smaller. If the Δ is
+  inside the noise, the corpus's word statistics add nothing that the
+  label-name overlap features (`lex_label_coverage`, `lex_text_coverage`) do not
+  already carry.
+
+  **The cost.** About a day and a half (the pack's group machinery, the
+  cross-fit, the controls, the report block).
+
+- [ ] **CS-33 — the word-class readout: what kind of words affect the label, in
+  which way.** The reviewer's part-of-speech question, answered first **without a
+  new dependency**. The map's own structure gives every (label, word) pair three
+  word classes for free: **generic** (the word sits in many labels' tables —
+  CS-23: "rights" in 60, "include" in 59), **distinctive** (one or two tables) and
+  **name word** (the word is in the label's own name). Crossed with the **sign**
+  (the map's log-odds: up = with the label, down = against), that is the
+  reviewer's exact question in the map's own vocabulary: *which kind of word
+  pushes the label up, and which kind pushes it down* — per label, and for the
+  **model's** own habits too (the surrogate's per-topic coefficients, split the
+  same way).
+
+  **And the payoff, not only the readout.** If the distinctive words are
+  systematically one class and the generic ones another, then a **class-restricted
+  map** should beat the full map as a classifier — measured by re-running CS-30's
+  arms with the restricted map. That is a number, not a story.
+
+  **The falsification, registered in advance, and it decides CS-34.** If the word
+  class does **not** separate the label-carrying words from the register words —
+  i.e. the generic and the distinctive words have the same class profile — then
+  the readout is a null, no class-restricted map is worth building, and **CS-34
+  (the POS dependency) is cancelled**.
+
+  **Where.** `text_processors/lexical/word_class.py` (the pure classification) and
+  a new block in the map's artifact; the viewer gets one more block (the viewer's
+  own pattern: a block names the question it answers).
+
+  **The cost.** About a day.
+
+- [ ] **CS-34 — real part-of-speech tags.** *Gated on the reviewer's OK: a new
+  dependency and a model download (AGENTS.md §3).* Tag the corpus with a real POS
+  tagger and redo CS-33's readout with the grammatical class, plus the
+  class-restricted map's number.
+
+  **The dependency, stated plainly.** `nltk` (MIT) plus its
+  `averaged_perceptron_tagger_eng` model; the install and the tagger's run over
+  our 3,000-text corpus (0.64 s) were checked, and 4,089 distinct words come back
+  of which **16.3 %** take more than one tag across the corpus — so the readout
+  must report the per-word tag *distribution*, not a single tag, or it will lie.
+  The tagger is a **model client** (it downloads a model), so it lives at the
+  edge: `src/cluster_rag/pos/` with a `base.py` port and an `nltk_tagger.py`
+  backend; the track's package imports the port only. The model download needs a
+  cache and a recorded digest, like the embedder's and the decision model's. One
+  line in AGENTS.md's pure-core rule (the `cluster_rag.pos.base` port).
+
+  **The falsification.** The same as CS-33's, now with the grammatical class: if
+  the class does not separate the label-carrying words from the register words,
+  the whole POS line is a null and the dependency is not worth keeping.
+
+  **The cost.** About a day, plus the dependency.
+
+- [ ] **CS-35 — the label→word lexicon as a label-side channel.** *Gated on the
+  reviewer's OK: a schema change (AGENTS.md §3).* The lexicon's biggest use: a
+  **label-side representation built from the corpus-mined words** rather than from
+  the name and the description — the PIFA idea (X-Transformer, KDD 2020: the
+  label's embedding is the TF-IDF centroid of its positive instances) — and the
+  **label-expansion route for the eight labels with no examples** (the label's
+  *name* matched against the corpus, with no labels involved).
+
+  **Why it is gated.** It touches the label-embedding path and the label
+  catalog's schema, and it has a **label-holdout** consequence to settle before
+  any code: a label's mined words come from its **train** examples, so the channel
+  is available for the sixty labelled labels and **empty for the eight held-out
+  ones**, exactly like the catalog's channels are today. The expansion route is
+  the only lexical path to the eight — and it must not use val text.
+
+  **The falsification.** The mined-words channel must beat the name+description
+  channel (CS-11's Δ was **+0.0258 [+0.0091, +0.0433]** micro-F1) on the seen
+  buckets, with the same paired-CI discipline. If it does not, the lexicon's
+  value stays confined to the readout (CS-31) and the classifier (CS-30) and it
+  should **not** become a catalog channel.
+
+  **The cost.** About two days, plus the schema decision.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
