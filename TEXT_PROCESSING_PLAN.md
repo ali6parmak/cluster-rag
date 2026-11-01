@@ -763,6 +763,43 @@ word). CS-21 and CS-22 stay untouched and unscheduled.
   **The exit criteria.** The viewer's numbers match the artifact's per-text
   rows; the "not ablatable" case is covered by a test; the gate green.
 
+### 7.3 The viewer's round three (CS-27)
+
+**What prompted it (2026-11-01).** The review session after CS-25 asked what
+the viewer's numbers **are** (how the contributions, the surrogate's
+coefficients, the corpus map's log-odds and the side-by-side's ranks are
+computed), and two things came out of it:
+
+1. **a gold label was visible only if it ranked in the top five** — the
+   side-by-side table did list the gold labels, but the two **ranking** blocks
+   showed only the top-k, so a gold label below it was missing from the
+   ranking, and its topic-side rank was not shown at all;
+2. **the corpus map's row for a word that is in the text lost its ramp shade**
+   — it was printed bold, so the log-odds' size was unreadable on that row.
+
+- [ ] **CS-27 — the gold labels are always visible, and the in-text row keeps
+  its shade.** Two presentation fixes in the viewer; the numbers do not move.
+
+  **The mechanism.**
+
+  - the two ranking blocks show the top-k **and**, below them, the **gold
+    labels the top-k did not show** — each with its true rank and the ★
+    marker, so the truth is readable whatever its rank is;
+  - the corpus map's row for a word that is **in this text** keeps the ramp's
+    shade and takes the bold on top of it (the counts stay dim and the "★ in
+    this text" marker stays), so the log-odds' size stays readable on that row.
+
+  **The cost.** Presentation only; **0 model calls**. **No run, no artifact and
+  no table row** — the viewer is a tool (as in CS-20 and CS-25).
+
+  **The exit criteria.** The plain output still carries every number and every
+  marker (CS-25's strip-and-compare test); a gold label below the top-k
+  appears in the ranking with its rank; the in-text row's shade is the ramp's;
+  the gate green.
+
+  **The runs.** None (a tool change). The log section is `## CS-27 — the gold
+  labels are always visible` in `docs/experiments_text_processing.md`.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
