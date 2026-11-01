@@ -929,11 +929,23 @@ port only.
     text contains") says so.
   - **The empty tables.** A label with **no train example** has an empty table
     (CS-23 measures it: 8 of the 68 labels), so there is no evidence at all
-    about it: those labels score the **floor `-inf`** and can never enter a
-    top-k. That is what makes the unseen bucket **0.0000 by construction**, and
-    it is the reason the floor is `-inf` and not a finite number: the two
-    signed arms (`sum_logodds`, `max_logodds`) are unbounded below, so only
-    `-inf` is strictly below every seen label's score on every text.
+    about it: those labels are ranked **last in every row** and can never
+    enter a top-k. That is what makes the unseen bucket **0.0000 by
+    construction**. *Amended before the first call (2026-11-01):* the floor
+    was first written as `-inf`, but the harness **rejects non-finite
+    scores** (`eval/multilabel.py`: "scores must be finite (NaN/inf would
+    corrupt every ranking"), so the floor is **finite and per row**: the
+    smallest score among the labels that *do* have a table, minus one. The
+    floor touches the empty tables alone — the seen labels' scores and their
+    order are untouched — and it is strictly below every seen label's score
+    whatever the arm's scale, which the two signed arms need (they are
+    unbounded below). *One reading note, registered with it:* the unseen
+    bucket's **decision** view (the F1 and the coverage) and the **global**
+    shortlist are the honest numbers (0.0000); the bucket's **ranking**
+    metrics *inside* the restricted view are an artefact of the tie (the
+    harness ranks equal scores by the column order, so the eight tied columns
+    are ordered alphabetically) and are not read as evidence. The same
+    artefact is in CS-29's run.
   - **The choice is made on the fit side, and the fit side is cross-fit.** The
     plan says the choice between the four arms is made on the fit side, never
     on val. The **fit-side number is the out-of-fold train micro-F1 at the same
