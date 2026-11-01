@@ -899,6 +899,69 @@ port only.
   auto-appended; the log section reads the numbers out with the falsification
   conditions; the gate green.
 
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The predictor.** A new registry entry `lexical_tfidf`, behind the same
+    `Predictor` port as every other predictor: the `evaluate` command builds
+    it, scores the split and measures it with the **existing** metric code and
+    the **existing** decision rules. Nothing about the measurement changes.
+  - **Where the code lives.** `src/cluster_rag/predictors/lexical_tfidf.py` —
+    the adapter **and** the scikit-learn fit, because the vectorizer and the
+    logistic regression are scikit-learn's own and the track's pure package
+    may not import scikit-learn outside its combiners
+    (`TEXT_PROCESSING_PLAN.md` §2). It is the same "adapter in `predictors/`"
+    shape as CS-30's corpus-map predictor.
+  - **The fit is train-only.** The TF-IDF **vectorizer is fitted on the train
+    split** (its vocabulary and its idf), and so is every logistic regression
+    (the train texts' matrix against the train labels' indicator). The
+    evaluated split is only ever **transformed**. No val text and no val label
+    enters the fit; `test` is not touched.
+  - **The vectorizer.** Word analyzer, **1–2 grams** (`ngram_range=(1, 2)`),
+    **sublinear tf** (`1 + log(tf)`), scikit-learn's default token pattern
+    (2+ word characters) and its default **lowercasing**, **no stop-word
+    removal** (`stop_words=None` — no list is a config value here, and the idf
+    weighting already neutralises the register: "rights" is in all 60 of the
+    corpus map's tables), `min_df=1` (every word the train split has),
+    L2-normalized rows.
+  - **The classifier.** One **one-vs-rest logistic regression per label**:
+    `LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs",
+    class_weight=None)` — scikit-learn's defaults, untuned. `max_iter` is
+    raised from the default 100 so the fit converges (the run records whether
+    a convergence warning was raised).
+  - **The score.** The positive-class **probability**
+    (`predict_proba()[:, 1]`) — a bounded [0, 1] scale.
+  - **The eight held-out labels.** A label with no train example cannot be
+    fitted, so it scores **0.0** for every text; and since a fitted label's
+    probability is strictly above 0, the eight always rank **last** and never
+    enter a top-2. That is what makes the unseen bucket **0.0000 by
+    construction** — comparable with the champion's own 0.0000, and with the
+    decision-model run's 0.5697 the one number that is not comparable.
+  - **The parameters** (all in `eval.predictor.params`, all recorded in the
+    run's `predictor` block): `ngram_max` (2), `min_df` (1),
+    `sublinear_tf` (true), `lowercase` (true), `stop_words` (null), `C` (1.0),
+    `max_iter` (1000), `class_weight` (null). **The run uses the defaults**;
+    the knobs exist so a later change set can vary one thing at a time
+    without editing code.
+  - **The precedent, recorded.** `predictors/` has never imported
+    scikit-learn (it was numpy-only until now). Scikit-learn is not a model
+    client — no download, no network, no I/O — and it is **not** on AGENTS.md's
+    forbidden list for the pure cores, so this is allowed; but it is a first,
+    and it is recorded here.
+  - **The run.** `upr-eval-lexical-tfidf-val`, the **val** split, the
+    operating point **`top_k` k=2** (the champion's own). `evaluate` is a
+    main-pipeline command, so the row lands in the **main** UPR table
+    (`docs/experiments_table_upr.md`, the `baselines` section) and the
+    narrative in the track log (`docs/experiments_text_processing.md`, the
+    section `## CS-29 — the lexical floor`).
+  - **The sweep.** `experiments/lexical_tfidf_sweep.py` — one cell, the sweep
+    label `baselines` (the section the block above names).
+  - **The exit criteria.** The run's artifact holds the number; the table row
+    is auto-appended; the log section reads the numbers out with the
+    falsification conditions; the gate green (ruff over `src`/`tests`/
+    `experiments`, the full pytest suite, the two verify tools, and both final
+    sweeps reproducing their artifacts field for field).
+
 - [ ] **CS-30 — the corpus map as a classifier.** A new predictor kind
   (`corpus_map`): every (text, label) cell is scored from the corpus map's own
   weights, and is measured by the same harness as CS-29. The scorer lives in
