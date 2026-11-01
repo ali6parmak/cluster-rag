@@ -629,6 +629,8 @@ per change set, so a reader can always tell *moved* from *lost*:
 - **CS-23** (the corpus map: the train split's own word↔label association) →
   executed 2026-11-01 → the archive's §7.1 (the corpus map) and the track log's
   §CS-23.
+- **CS-24** (the surrogate's full coefficient vector) → executed 2026-11-01 → the
+  archive's §7.1 (the surrogate's full vector) and the track log's §CS-24.
 
 The change sets still open:
 
@@ -739,32 +741,8 @@ word). CS-21 and CS-22 stay untouched and unscheduled.
 - **CS-23** (the corpus map: the train split's own word↔label association) →
   executed 2026-11-01 → the archive's §7.1 (the corpus map) and the track log's
   §CS-23.
-- [ ] **CS-24 — the surrogate's full coefficient vector.** The viewer's
-  surrogate column must be complete: every word of the text gets its
-  coefficient instead of "—".
-
-  **The mechanism.** The surrogate artifact stores the **full** per-topic
-  coefficient vector beside the existing top-15 lists (which stay, for the
-  log): 68 topics × 1,203 features = **81,804** numbers, ~1.5 MB of JSON. The
-  viewer then prints the coefficient of every word of the text; a word outside
-  the model's vocabulary (the train corpus's words with df ≥ 3) reads **"not in
-  the model's vocabulary"** — a different and more useful statement than "not
-  stored".
-
-  **The cost.** **0 model calls** (the surrogate's re-run is all cache hits);
-  the artifact grows ~1.5 MB.
-
-  **The discipline.** The log is append-only: CS-19's section is **not**
-  edited; the re-run's section is appended, and the top-15 lists (the numbers
-  CS-19 reported) are unchanged.
-
-  **The exit criteria.** The stored vector matches the fitted one (a test); the
-  artifact's numbers reproduce; the viewer shows a number for every word of the
-  text; the gate green.
-
-  **The runs.** The run id `upr-hitmap-surrogate` (re-run; the artifact's shape
-  changes) and the log section `## CS-24 — the surrogate's full vector`.
-
+- **CS-24** (the surrogate's full coefficient vector) → executed 2026-11-01 → the
+  archive's §7.1 (the surrogate's full vector) and the track log's §CS-24.
 - [ ] **CS-25 — a clearer screen, and the colour.** Every block says **which
   question it answers**, in plain words; the mode letters leave the viewer's
   headings (they stay in the plan and the log, where the history lives); and

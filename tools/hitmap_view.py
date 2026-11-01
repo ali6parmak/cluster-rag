@@ -334,13 +334,43 @@ def surrogate_block(
     return chosen, dict(surrogate)
 
 
-def surrogate_coefficients(surrogate: Mapping[str, Any], topic: str) -> dict[str, float]:
-    """One topic's stored coefficients (the surrogate's per-word attribution).
+def surrogate_full_vector(surrogate: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The artifact's **full** coefficient vector (CS-24), if it is there.
 
-    The artifact stores each topic's **top** positive and negative words only,
-    so a word that is not in either list has **no stored coefficient** — it is
-    never read as zero.
+    The block carries a shared vocabulary and one row of numbers per topic, so
+    the words are stored once and every word of the model's vocabulary has a
+    coefficient. An artifact without the block (the CS-19 shape) gives
+    ``None``: the viewer then reads the top-15 lists and says so.
     """
+    vector = surrogate.get("full_vector")
+    if not isinstance(vector, Mapping):
+        return None
+    vocabulary = [str(word) for word in (vector.get("vocabulary") or [])]
+    topics = [str(topic) for topic in (vector.get("topics") or [])]
+    rows = list(vector.get("coefficients") or [])
+    per_topic: dict[str, dict[str, float]] = {}
+    for index, topic in enumerate(topics):
+        if index >= len(rows):
+            continue
+        row = rows[index]
+        if not isinstance(row, list) or len(row) != len(vocabulary):
+            # a malformed row is not read: the guard reports the disagreement
+            continue
+        per_topic[topic] = {word: float(value) for word, value in zip(vocabulary, row, strict=True)}
+    return {"vocabulary": vocabulary, "topics": topics, "rows": per_topic}
+
+
+def surrogate_coefficients(surrogate: Mapping[str, Any], topic: str) -> dict[str, float]:
+    """One topic's stored coefficients.
+
+    The **full** vector when the artifact carries it (CS-24: every word of the
+    model's vocabulary has a number), and the **top-15 lists** otherwise (the
+    CS-19 artifact's shape, where a word outside the lists has no stored
+    coefficient — never a coefficient of zero).
+    """
+    vector = surrogate_full_vector(surrogate)
+    if vector is not None:
+        return dict(vector["rows"].get(topic, {}))
     for row in surrogate.get("per_topic", []):
         if row.get("topic") != topic:
             continue
@@ -713,7 +743,9 @@ def render(
     gold_labels = list(record.labels)
     text_ranking = lexical_ranking(text, labels)
     topic_ranking_rows = topic_ranking(text, labels)
-    coefficients = surrogate_coefficients(surrogate_block(context.surrogate, None)[1], focus)
+    _arm_name, surrogate = surrogate_block(context.surrogate, None)
+    coefficients = surrogate_coefficients(surrogate, focus)
+    vector = surrogate_full_vector(surrogate)
     rows = word_rows(text, focus)
     maximum = max((float(entry["contribution"]) for entry in rows), default=0.0)
     # the text's own content words, in the text's order (the corpus map's unit)
@@ -788,28 +820,48 @@ def render(
     for entry in rows:
         contribution = float(entry["contribution"])
         colour_code = GREEN if contribution > 0.0 else DIM
-        surrogate = coefficients.get(str(entry["word"]))
-        surrogate_text = f"{surrogate:+.3f}" if surrogate is not None else "—"
-        surrogate_colour = (
-            RED
-            if surrogate is not None and surrogate < 0.0
-            else (GREEN if surrogate is not None else DIM)
-        )
+        word = str(entry["word"])
+        surrogate = coefficients.get(word)
+        if surrogate is not None:
+            # the rounding is at the display's precision, and a value that
+            # rounds to zero never shows a sign ("-0.000" would be a artefact)
+            shown = round(float(surrogate), 3) + 0.0
+            surrogate_cell = f"{shown:+.3f}"
+            surrogate_colour = RED if shown < 0.0 else GREEN
+        elif vector is not None:
+            # the word is outside the model's vocabulary (CS-24): a different
+            # and more useful statement than "not stored"
+            surrogate_cell = "not in the model's vocabulary"
+            surrogate_colour = DIM
+        else:
+            surrogate_cell = "—"
+            surrogate_colour = DIM
         add(
             "  "
-            + paint(f"{str(entry['word']):<20}", colour_code, colour=colour)
+            + paint(f"{word:<20}", colour_code, colour=colour)
             + f"{int(entry['n_occurrences']):>2}   {contribution:>11.4f}   "
             + paint(f"{_bar(contribution, maximum):<28}", colour_code, colour=colour)
-            + paint(f"{surrogate_text:>10}", surrogate_colour, colour=colour)
+            + paint(f"{surrogate_cell:>10}", surrogate_colour, colour=colour)
         )
-    add(
-        paint(
-            "  the surrogate's coefficient is stored for a topic's top words only: "
-            "'—' means 'not stored', never zero.",
-            DIM,
-            colour=colour,
+    if vector is not None:
+        add(
+            paint(
+                "  the surrogate's coefficient is the model's own for every word of its "
+                "vocabulary (the train corpus's words with df ≥ 3); a word outside it reads "
+                "'not in the model's vocabulary' — never zero.",
+                DIM,
+                colour=colour,
+            )
         )
-    )
+    else:
+        add(
+            paint(
+                "  the surrogate's coefficient is stored for a topic's top words only: "
+                "'—' means 'not stored', never zero.",
+                DIM,
+                colour=colour,
+            )
+        )
     add("")
     add(
         paint(

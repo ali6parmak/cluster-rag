@@ -292,6 +292,63 @@ def topic_attribution(
     return rows
 
 
+def full_coefficient_vector(
+    fit: SurrogateFit,
+    vocabulary: Sequence[str],
+    topics: Sequence[str],
+    *,
+    decimals: int = 6,
+) -> dict[str, object]:
+    """The fitted **full** per-topic coefficient vector, one number per feature.
+
+    The top-15 lists (:func:`topic_attribution`) are a reading convenience: a
+    word outside them has **no stored coefficient**, which is not the same as a
+    coefficient of zero. This function stores the **whole** vector — every
+    feature of every topic — so a reader can look any word up and know what
+    the surrogate actually fitted.
+
+    The shape is a **shared vocabulary** plus one row of numbers per topic
+    (the row's order is the vocabulary's), so the words are stored once and the
+    numbers are stored once each.
+
+    Args:
+        fit: The fitted surrogate (its coefficients' rows are the topics').
+        vocabulary: The features' names, in the coefficients' column order.
+        topics: The topics, in the coefficients' row order.
+        decimals: How many decimals the stored numbers carry.
+
+    Returns:
+        The vector block (JSON-friendly).
+
+    Raises:
+        ValueError: If the fit's shape does not match the vocabulary and the
+            topics.
+    """
+    coefficients = fit.coefficients
+    if coefficients.shape[0] != len(topics):
+        raise ValueError(
+            f"the fit has {coefficients.shape[0]} topic rows and {len(topics)} topics were given"
+        )
+    if coefficients.shape[1] != len(vocabulary):
+        raise ValueError(
+            f"the fit has {coefficients.shape[1]} feature columns and "
+            f"{len(vocabulary)} features were given"
+        )
+    return {
+        "note": (
+            "the fitted per-topic coefficient vector: one number per feature, "
+            "in the vocabulary's order. It is an ATTRIBUTION (which words "
+            "predict the model's score), never a causal claim."
+        ),
+        "vocabulary": list(vocabulary),
+        "topics": list(topics),
+        "coefficients": [
+            [round(float(value), decimals) for value in coefficients[index]]
+            for index in range(coefficients.shape[0])
+        ],
+    }
+
+
 def name_word_share(
     attribution: Mapping[str, object],
     topic: str,

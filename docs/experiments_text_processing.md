@@ -77,6 +77,7 @@ research record and are **not** indexed here.
 | [CS-19 — the hit map's two cheap modes](#cs-19--the-hit-maps-two-cheap-modes-the-text-side-word-map-and-the-surrogate-attribution-2026-10-29) | two `upr-hitmap-*` runs (the text-side word map + the surrogate attribution) | the **text side** of the word map (the pack's second lexical feature, exact: the deviation 0.0) says the matching words are the UPR register ("rights" 0.2260, "human" 0.0597), not the topics; the **surrogate** of the model's own probability reads each topic correctly (the out-of-sample correlation 0.6933; the blind counterpart's attribution follows the *shifted* topic, 0.0806 against 0.0090) and **agrees with the causal map** (its words land in the carrier clause 83.4% of the time against a 48.4% chance level) | `results/upr-hitmap-{text,surrogate}/hitmap.json` |
 | [CS-20 — the hit map's terminal viewer](#cs-20--the-hit-maps-terminal-viewer-2026-10-29) | no run (a **tool**): the offline mode reads the CS-19 artifacts, the live mode the model's cached grid, the what-if mode a re-asked grid | one text on screen: the words and what each contributes, who the words say it is, what the model says, what is true — and, behind a flag, what happens if a word is removed; the **attribution/causation** distinction is in the output itself | the CS-19 artifacts (read, not re-measured) |
 | [CS-23 — the corpus map](#cs-23--the-corpus-map-2026-11-01) | one `upr-hitmap-corpus` run (the train split's own word↔label association; **0 new model calls**, 1.3 s) | the plain statistics of the corpus, at last: **18,707** (label, word) pairs over 1,676 train texts; the plan's pre-read expectation is reproduced **digit for digit** ("Detention" ← detention 16.90, "Migrants" ← migrant 27.86); the log-odds and the lift pick a **different head word for 55 of the 60 labels** (the lift's head is a hapax); the label's own name word heads **33** of the tables; the register ("rights") is in **all 60** | `results/upr-hitmap-corpus/hitmap.json` |
+| [CS-24 — the surrogate's full vector](#cs-24--the-surrogates-full-vector-2026-11-01) | the CS-19 sweep re-run (`upr-hitmap-surrogate` + `upr-hitmap-text`; **0 new model calls**, 16.6 s) | the surrogate's **whole** fitted vector (68 topics × 1,203 features = **81,804** numbers, 1.37 MB) now sits beside the top-15 lists; every number CS-19 reported is **reproduced unchanged**, and the viewer's surrogate column is complete (a word outside the model's vocabulary reads "not in the model's vocabulary", never zero) | `results/upr-hitmap-surrogate/hitmap.json` |
 
 ## Change sets
 
@@ -5741,4 +5742,111 @@ about a **threshold** (there is none: the map stores every pair and the filter
 is display-time); nothing about the **embedding model**; and nothing about the
 map's own **predictive** power — the corpus map is not a classifier and was
 never measured as one.
+
+## CS-24 — the surrogate's full vector (2026-11-01)
+
+**The runs.** The CS-19 sweep re-run
+(`experiments_text_processing/upr_hitmap_words_sweep.py`): the surrogate run
+`upr-hitmap-surrogate` — the artifact's shape changes — and, alongside it, the
+text run `upr-hitmap-text`. The second run comes with the first because **the
+sweep owns the comparison table's section**: the corpus map is on by default
+now (CS-23's review), so that section's columns grew, and a section's rows must
+all carry one shape. **0 new model calls** (6,532 cache hits, 0 misses, 0
+stored) and 16.6 s for the two runs.
+
+### The vector
+
+The surrogate's **full** per-topic coefficient vector now sits beside the
+top-15 lists: a shared vocabulary (the train corpus's words with df ≥ 3) and
+one row of numbers per topic.
+
+| | |
+|---|---|
+| the topics | **68** |
+| the features (the model's vocabulary) | **1,203** |
+| the coefficients stored | **81,804** (the plan's number, exactly) |
+| the vector's JSON | **1.37 MB** |
+| the non-zero coefficients | **81,803 of 81,804** — the ridge shrinks, it does not zero |
+| the positive / negative / exactly zero | 35,034 / 46,769 / 1 |
+| the range | **+0.7529 … −0.2467** |
+
+The artifact `results/upr-hitmap-surrogate/hitmap.json` is now 9.6 MB: the
+vector's 1.37 MB, the corpus map's 5.8 MB (the default flip) and the rest the
+run already carried.
+
+### The top-15 lists are unchanged — every number CS-19 reported, reproduced
+
+| the check | CS-19's number | this re-run |
+|---|---|---|
+| the out-of-sample correlation with the model's own val probability | 0.6933 (the per-topic range 0.2920–0.8783) | **0.6933** (0.2920–0.8783) |
+| the out-of-sample R² | 0.4466 | **0.4466** |
+| the asked topic's own-name share (the topic-faithfulness yardstick) | 0.0786 | **0.0786** |
+| the blind counterpart's share of the **asked** topic | 0.0090 | **0.0090** |
+| the blind counterpart's share of the **shifted** topic | 0.0806 | **0.0806** |
+| the surrogate's top words inside the carrier clause | 0.8338 (the chance level 0.4839) | **0.8338** (0.4839) |
+
+The per-topic examples are the same too ("Access to justice" ← *judiciary*
+0.367, *justice* 0.361, *courts* 0.281, *impunity* 0.253, *legal* 0.252;
+"Corruption" ← *corruption* 0.635, *transparent* 0.201; "Gender-based violence"
+← *violence* 0.400, *rape* 0.276, *cedaw* 0.249, *women* 0.206). The vector
+is **added** to the artifact; nothing that was there changed.
+
+### The viewer: the surrogate column is complete
+
+The column used to print "—" for every word outside a topic's top 15 — which
+is most of a text's words. It now prints the **fitted coefficient** for every
+word of the model's vocabulary, and a word outside the vocabulary reads
+**"not in the model's vocabulary"** — a different and more useful statement
+than "not stored" (and never a zero).
+
+For the CS-20 example text (`0000000000000047d5d150d7`, the focus topic
+"Migrants"), the 21 content words split into **16 with a number** and **5
+outside the vocabulary** ("upholding", "global", "compact", "lebanon",
+"joined" — the words the train corpus's df ≥ 3 does not hold):
+
+| the word | the surrogate's coefficient for "Migrants" |
+|---|---|
+| migrant | **+0.564** |
+| migration | **+0.229** |
+| workers | **+0.126** |
+| families | **+0.056** |
+| take / further / steps / towards | +0.030 / +0.015 / −0.013 / +0.011 — the boilerplate is flat |
+| ratification / convention / international | −0.029 / −0.002 / −0.011 — another topic's words |
+| rights | +0.000 — the register says nothing about *this* topic |
+
+So the complete column reads the topic's own words as the topic's and the
+register as flat — the same picture the top-15 lists gave, but now without the
+"not stored" holes. The viewer's note says exactly what the column is: "the
+surrogate's coefficient is the model's own for every word of its vocabulary (the
+train corpus's words with df ≥ 3); a word outside it reads 'not in the model's
+vocabulary' — never zero."
+
+### The exit criteria, read out one by one
+
+1. **The stored vector matches the fitted one** — **holds**: a unit test fits a
+   surrogate on a tiny corpus and compares the stored vector with the fit's own
+   coefficients, number for number (and the top-15 lists with the same vector);
+   a mismatched shape (the topics or the vocabulary against the fit) is
+   **refused**, never silently realigned.
+2. **The artifact's numbers reproduce** — **holds**: the re-run reproduces
+   every number CS-19 reported (the table above), and the artifact's vector
+   agrees with its own top-15 lists.
+3. **The viewer shows a number for every word of the text** — **holds**: the
+   fixture's screen shows a number for every word the vocabulary holds and
+   "not in the model's vocabulary" for the ones it does not; the old
+   "— means 'not stored'" note is gone.
+4. **The gate green** — 694 tests, ruff clean, the two verify tools OK and both
+   final sweeps reproducing field for field.
+
+### What this change set does not say
+
+Nothing **causal**: the surrogate is an *attribution* (which words predict the
+model's probability), and the causal half of the map is still CS-18's
+ablation; nothing about the model's own reading (the coefficients are the
+surrogate's, not the model's); nothing about `test`; nothing about the
+**embedding model**; and nothing **new** about the surrogate's quality — the
+correlation, the R², the topic-faithfulness and the carrier agreement are
+CS-19's numbers, reproduced, not new evidence. The vector is a **reading**
+convenience: the fit is the same fit.
+
 

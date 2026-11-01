@@ -124,6 +124,7 @@ from cluster_rag.text_processors.surrogate import (
     build_design_matrix,
     build_vocabulary,
     fit_ridge_surrogate,
+    full_coefficient_vector,
     name_word_share,
     surrogate_predictions,
     surrogate_quality,
@@ -1255,6 +1256,7 @@ def _hitmap_surrogate_block(
         },
         "quality": quality,
         "per_topic": attribution,
+        "full_vector": full_coefficient_vector(fit, vocabulary, list(labels)),
         "topic_faithfulness": {
             "the real attribution's own-name share": round(float(np.mean(real_own)), 6)
             if real_own

@@ -530,3 +530,81 @@ def test_the_viewer_runs_without_the_corpus_map(
     out = capsys.readouterr().out
     assert "has not been made" in out
     assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" not in out
+
+
+# --- the surrogate's full coefficient vector (CS-24) ---
+
+
+def test_the_surrogate_column_has_a_number_for_every_word(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the full vector, every word of the model's vocabulary has a number."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    _arm, surrogate = viewer_module.surrogate_block(context.surrogate, None)
+    vector = viewer_module.surrogate_full_vector(surrogate)
+    assert vector is not None, "the artifact carries no full vector"
+    topic = context.records[0].labels[0]
+    coefficients = viewer_module.surrogate_coefficients(surrogate, topic)
+    assert coefficients, "the topic has no coefficients"
+    # the vector's vocabulary is the model's vocabulary
+    assert set(vector["vocabulary"]) == set(coefficients)
+    text_words = {
+        str(row["word"]) for row in viewer_module.word_rows(context.records[0].text, topic)
+    }
+    in_vocabulary = text_words & set(vector["vocabulary"])
+    assert in_vocabulary, "none of the text's words is in the model's vocabulary"
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    # the old fallback note is gone: the column is complete
+    assert "—' means 'not stored'" not in out
+    assert "the model's own for every word of its vocabulary" in out
+    # a word the vocabulary holds shows its number
+    sample = sorted(in_vocabulary)[0]
+    assert f"{coefficients[sample]:+.3f}" in out
+    # a word it does not hold says so (the fixture's val-only words)
+    assert "not in the model's vocabulary" in out
+
+
+def test_a_word_outside_the_vocabulary_says_so(
+    viewer_module: Any,
+    fixture_artifacts: dict[str, Any],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A word the surrogate's vocabulary does not hold reads "not in the model's vocabulary"."""
+    source = fixture_artifacts["results"] / fixture_artifacts["surrogate_run"] / "hitmap.json"
+    payload = json.loads(source.read_text("utf-8"))
+    arm = next(iter(payload["ablation_map"]["arms"].values()))
+    vector = arm["surrogate"]["full_vector"]
+    # a narrower vocabulary: only the first three features
+    vector["vocabulary"] = vector["vocabulary"][:3]
+    vector["coefficients"] = [row[:3] for row in vector["coefficients"]]
+    narrow_run = "upr-hitmap-fixture-surrogate-narrow"
+    target = fixture_artifacts["results"] / narrow_run
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "hitmap.json").write_text(json.dumps(payload), encoding="utf-8")
+    args = [
+        "--config",
+        str(fixture_artifacts["config"]),
+        "--text-map-run",
+        str(fixture_artifacts["text_run"]),
+        "--surrogate-run",
+        narrow_run,
+        "--corpus-map-run",
+        str(fixture_artifacts["corpus_run"]),
+        "--no-colour",
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+    ]
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "not in the model's vocabulary" in out
+    assert "never zero" in out

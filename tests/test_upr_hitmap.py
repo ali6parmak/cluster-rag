@@ -60,6 +60,7 @@ from cluster_rag.text_processors.surrogate import (
     build_design_matrix,
     build_vocabulary,
     fit_ridge_surrogate,
+    full_coefficient_vector,
     surrogate_predictions,
     surrogate_quality,
     topic_attribution,
@@ -577,6 +578,50 @@ def test_the_surrogate_is_fitted_on_the_train_side_only() -> None:
     assert vocabulary == ("expression", "freedom", "labour", "rights")
 
 
+# --- mode C: the surrogate's full coefficient vector (CS-24) ---
+
+
+def test_the_full_vector_matches_the_fit() -> None:
+    """The stored vector is the fitted one, number for number."""
+    texts = [
+        "freedom of expression",
+        "migrant workers",
+        "expression online",
+        "workers rights",
+    ]
+    vocabulary = build_vocabulary(texts, min_document_frequency=1)
+    design = build_design_matrix(texts, vocabulary)
+    targets = np.asarray([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8]])
+    fit = fit_ridge_surrogate(design, targets, ridge_lambda=1e-6)
+    vector = full_coefficient_vector(fit, vocabulary, ["Freedom", "Migrants"])
+    assert vector["vocabulary"] == list(vocabulary)
+    assert vector["topics"] == ["Freedom", "Migrants"]
+    assert len(vector["coefficients"]) == 2
+    for index in range(2):
+        assert len(vector["coefficients"][index]) == len(vocabulary)
+        for position in range(len(vocabulary)):
+            assert vector["coefficients"][index][position] == pytest.approx(
+                fit.coefficients[index][position], abs=1e-6
+            )
+    # the top-15 lists and the full vector agree (the lists are a reading of it)
+    attribution = topic_attribution(fit, vocabulary, ["Freedom", "Migrants"])
+    for entry in attribution[0]["top_positive_words"]:
+        position = list(vocabulary).index(entry["word"])
+        assert vector["coefficients"][0][position] == pytest.approx(entry["coefficient"], abs=1e-6)
+
+
+def test_the_full_vector_refuses_a_mismatched_shape() -> None:
+    """The vector's shape must match the fit (a silent misalignment is refused)."""
+    texts = ["freedom of expression", "labour rights"]
+    vocabulary = build_vocabulary(texts, min_document_frequency=1)
+    design = build_design_matrix(texts, vocabulary)
+    fit = fit_ridge_surrogate(design, np.asarray([[0.9, 0.1], [0.1, 0.9]]), ridge_lambda=1.0)
+    with pytest.raises(ValueError):
+        full_coefficient_vector(fit, vocabulary, ["only one topic"])
+    with pytest.raises(ValueError):
+        full_coefficient_vector(fit, vocabulary[:-1], ["A", "B"])
+
+
 # --- the CLI: the two new modes ---
 
 
@@ -609,6 +654,22 @@ def test_hitmap_upr_runs_the_surrogate_mode(
     assert len(surrogate["per_topic"]) == payload["text_set"]["n_labels"]
     # the topic-faithfulness yardstick is reported beside the attribution
     assert "the real attribution's own-name share" in surrogate["topic_faithfulness"]
+    # the full coefficient vector (CS-24): every topic's whole row
+    vector = surrogate["full_vector"]
+    assert len(vector["topics"]) == payload["text_set"]["n_labels"]
+    assert len(vector["coefficients"]) == len(vector["topics"])
+    n_features = surrogate["fit"]["n_features"]
+    assert len(vector["vocabulary"]) == n_features
+    assert all(len(row) == n_features for row in vector["coefficients"])
+    # the top-15 lists are a reading of the same vector
+    words = list(vector["vocabulary"])
+    for row in vector["coefficients"][:5]:
+        assert all(isinstance(value, float) for value in row)
+    first = vector["coefficients"][0]
+    stored = surrogate["per_topic"][0]
+    for entry in stored["top_positive_words"]:
+        position = words.index(entry["word"])
+        assert first[position] == pytest.approx(entry["coefficient"], abs=1e-6)
 
 
 def test_hitmap_upr_runs_the_text_side_mode(

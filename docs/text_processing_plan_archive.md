@@ -3390,3 +3390,75 @@ line). The verdict and the numbers are the track log's §CS-23.*
     loudly** (the tool exits 1); the fixture and the real val split both run.
   - **The gate.** 690 tests, ruff clean, the two verify tools OK and both final
     sweeps reproducing field for field.
+
+---
+
+## The surrogate's full vector (CS-24) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.2
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-24.*
+
+### 7.1 The surrogate's full vector (CS-24)
+
+- [x] **CS-24 — the surrogate's full coefficient vector.** The viewer's
+  surrogate column must be complete: every word of the text gets its
+  coefficient instead of "—".
+
+  **The mechanism.** The surrogate artifact stores the **full** per-topic
+  coefficient vector beside the existing top-15 lists (which stay, for the
+  log): 68 topics × 1,203 features = **81,804** numbers, ~1.5 MB of JSON. The
+  viewer then prints the coefficient of every word of the text; a word outside
+  the model's vocabulary (the train corpus's words with df ≥ 3) reads **"not in
+  the model's vocabulary"** — a different and more useful statement than "not
+  stored".
+
+  **The cost.** **0 model calls** (the surrogate's re-run is all cache hits);
+  the artifact grows ~1.5 MB.
+
+  **The discipline.** The log is append-only: CS-19's section is **not**
+  edited; the re-run's section is appended, and the top-15 lists (the numbers
+  CS-19 reported) are unchanged.
+
+  **The exit criteria.** The stored vector matches the fitted one (a test); the
+  artifact's numbers reproduce; the viewer shows a number for every word of the
+  text; the gate green.
+
+  **The runs.** The run id `upr-hitmap-surrogate` (re-run; the artifact's shape
+  changes) and the log section `## CS-24 — the surrogate's full vector`.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the CS-19 sweep was
+  re-run (`upr-hitmap-surrogate` and, alongside it, `upr-hitmap-text`: the sweep
+  owns the comparison table's section, so its rows must share one shape and the
+  corpus map is on by default now), the log section is
+  `## CS-24 — the surrogate's full vector` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (the UPR **val** split: 660 texts, 68
+  labels, 1,312 gold cells; the surrogate is fitted on the **train** split).**
+
+  - **The cost.** **0 new model calls** (6,532 cache hits, 0 misses, 0 stored)
+    and 16.6 s for the two runs.
+  - **The vector.** **68** topics × **1,203** features = **81,804** coefficients
+    (the plan's number, exactly), **1.37 MB** of JSON. It is **dense**: 81,803
+    of the 81,804 coefficients are non-zero (the ridge shrinks, it does not
+    zero); 35,034 positive, 46,769 negative, 1 exactly zero; the range is
+    **+0.7529 … −0.2467**.
+  - **The top-15 lists are unchanged** — every number CS-19 reported is
+    reproduced: the out-of-sample correlation **0.6933** (the per-topic range
+    0.2920–0.8783), the R² **0.4466**, the asked topic's own-name share
+    **0.0786** against the blind counterpart's **0.0090** (and **0.0806** for
+    the shifted topic), and the surrogate's top words inside the carrier clause
+    **0.8338** against the chance level **0.4839**.
+  - **The viewer.** The surrogate column is complete: every word of the model's
+    vocabulary shows its fitted coefficient, and a word outside the vocabulary
+    reads **"not in the model's vocabulary"** (never zero). On the CS-20 example
+    text the 21 content words split into 16 with a number and 5 outside the
+    vocabulary; the topic's own words carry the positive coefficients
+    (*migrant* +0.564, *migration* +0.229, *workers* +0.126, *families* +0.056)
+    and the boilerplate is flat (*take* +0.030, *steps* −0.013).
+  - **The exit criteria.** The stored vector matches the fitted one (a unit
+    test, number for number; a mismatched shape is refused), the artifact's
+    numbers reproduce, the viewer shows a number for every word of the text,
+    and the gate is green.
