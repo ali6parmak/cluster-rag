@@ -543,3 +543,33 @@ input: a new dependency + a new mechanism respectively).
 
 **Next:** Phase 5 (clustering: discovery + routing) on the same artifacts;
 the Phase 4 artifacts stay the no-clustering baseline to beat.
+
+## 2026-11-01 — the lexical floor (the track's CS-29): TF-IDF + one-vs-rest on UPR val
+
+**Run:** `upr-eval-lexical-tfidf-val` (the `evaluate` command; the sweep
+`experiments/lexical_tfidf_sweep.py`), artifact
+`results/upr-eval-lexical-tfidf-val/metrics.json`, table row in
+`docs/experiments_table_upr.md`'s `baselines` section. UPR **val** (660 texts),
+the champion's own operating point (`top_k` k=2).
+
+**What.** A new predictor kind in the registry, `lexical_tfidf`
+(`src/cluster_rag/predictors/lexical_tfidf.py`): a TF-IDF vectorizer (word 1–2
+grams, sublinear tf) fitted on the **train** split and one one-vs-rest logistic
+regression per label, scored on the evaluated split. No embedding and no model
+call — the first module under `predictors/` to import scikit-learn (not a model
+client: no download, no network, no I/O).
+
+**The numbers.** micro-F1 **0.3845** (macro 0.2772, sample 0.3676, coverage
+0.588, P@5 0.2161, R@10 0.6085, nDCG@5 0.5053, shortlist R@50 0.7205) against
+the champion's **0.5479** — **2.7× the most-frequent floor** (0.1413) and 12.6×
+the random one (0.0304). Per bucket: head 0.4695 (champion 0.6953), torso
+0.4061 (0.5121), **tail 0.0301** (0.5287; the coverage 0.111), unseen **0.0000**
+(0.0000 **by construction** — the eight held-out labels have no train example,
+so a supervised model cannot score them).
+
+**Why it is here.** It is the text-processing track's lexical methods round's
+**floor**: the measurement every later lexical change set is read against. The
+full narrative — the pre-registered falsification conditions and their verdicts,
+the per-bucket reading and the fit's own facts — is the track log's §CS-29
+(`docs/experiments_text_processing.md`) and the plan's §7.4 in
+`docs/text_processing_plan_archive.md`.

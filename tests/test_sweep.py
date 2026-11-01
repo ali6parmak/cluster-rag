@@ -238,6 +238,31 @@ def test_the_random_floor_sweep_resolves_its_grid(monkeypatch) -> None:
         assert run.config.analysis.stage3.combiner.name == "logistic"
 
 
+def test_the_lexical_floor_sweep_resolves_its_cell(monkeypatch) -> None:
+    """The CS-29 sweep: one cell, the lexical floor, the champion's operating point.
+
+    The sweep file is a real artifact, so its cell is a contract: the
+    pre-registered parameters, the ``top_k`` k=2 operating point and the val
+    split — and the sweep label that puts the row in the main UPR table's
+    ``baselines`` section.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(repo)
+    runs = sweep_commands._load_sweep_runs(repo / "experiments" / "lexical_tfidf_sweep.py")
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.label == "upr-eval-lexical-tfidf-val"
+    assert run.command == "evaluate"
+    assert run.config.table.sweep_label == "baselines"
+    assert run.config.eval is not None
+    assert run.config.eval.predictor.name == "lexical_tfidf"
+    assert run.config.eval.predictor.params["ngram_max"] == 2
+    assert run.config.eval.predictor.params["sublinear_tf"] is True
+    assert run.config.eval.decision.rule == "top_k"
+    assert run.config.eval.decision.k == 2
+    assert run.config.eval.split == "val"
+
+
 def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path) -> None:
     """A cell whose command the CLI does not implement aborts, never guesses."""
     (repo_root / "bogus_sweep.py").write_text(

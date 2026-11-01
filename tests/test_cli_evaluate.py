@@ -504,3 +504,63 @@ def test_evaluate_warns_and_ignores_label_run_for_free_predictors(
         "zero-shot label vectors" in record.message and "ignoring it" in record.message
         for record in caplog.records
     )
+
+
+# --- the lexical floor (the track's CS-29): TF-IDF + one-vs-rest ---
+
+LEXICAL_CONFIG_EXTRA = """
+eval:
+  predictor:
+    name: lexical_tfidf
+    params:
+      ngram_max: 2
+      min_df: 1
+      sublinear_tf: true
+      lowercase: true
+      stop_words: null
+      C: 1.0
+      max_iter: 1000
+      class_weight: null
+  decision:
+    rule: top_k
+    k: 2
+"""
+
+
+def test_evaluate_lexical_tfidf_end_to_end(evaluate_run) -> None:
+    """The lexical floor runs on the harness: the artifact carries the fit's facts."""
+    code, metrics, _, _ = evaluate_run(
+        run_id="upr-eval-lexical-tfidf-fix", extra=LEXICAL_CONFIG_EXTRA
+    )
+    assert code == 0
+    predictor = metrics["predictor"]
+    assert predictor["name"] == "lexical_tfidf"
+    assert predictor["params"]["ngram_max"] == 2
+    assert predictor["params"]["sublinear_tf"] is True
+    assert predictor["n_labels"] == metrics["n_labels"]
+    assert (
+        predictor["n_labels_fitted"]
+        + predictor["n_labels_without_examples"]
+        + predictor["n_labels_degenerate"]
+        == metrics["n_labels"]
+    )
+    # an embedding-free predictor: no lineage is recorded
+    assert metrics["embedding_run"] is None
+    # the unseen bucket: a label with no train example scores 0.0, so it never
+    # enters a top-2 and the bucket's coverage is 0.0 (by construction)
+    unseen = metrics["report"]["per_bucket"]["unseen"]
+    assert unseen["coverage"]["coverage"] == 0.0
+
+
+def test_evaluate_lexical_tfidf_appends_its_table_row(evaluate_run, tmp_path) -> None:
+    """The row lands in the auto table under the sweep's section."""
+    table = tmp_path / "tables.md"
+    code, metrics, _, _ = evaluate_run(
+        run_id="upr-eval-lexical-tfidf-table", extra=LEXICAL_CONFIG_EXTRA, table=table
+    )
+    assert code == 0
+    content = table.read_text("utf-8")
+    assert "## UPR — evaluate" in content
+    assert "| upr-eval-lexical-tfidf-table |" in content
+    assert "| lexical_tfidf |" in content
+    assert f"top_k k={metrics['decision']['k']}" in content

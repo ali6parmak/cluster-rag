@@ -81,6 +81,7 @@ research record and are **not** indexed here.
 | [CS-25 — a clearer screen, and the colour](#cs-25--a-clearer-screen-and-the-colour-2026-11-01) | no run (a **tool**): the viewer's headings, blocks and palette | every block names **the question it answers** (the mode letters leave the headings), the two instruments that shared one table now have their own blocks, the topic side of the feature is on the screen at all, and the screen has **colour** — with the rule that the coloured screen stripped of its codes is the plain screen, so `--no-colour` loses nothing | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-27 — the gold labels are always visible](#cs-27--the-gold-labels-are-always-visible-2026-11-01) | no run (a **tool**): the viewer's two ranking blocks and the corpus map's in-text row | a gold label below the top-5 is now listed with its **true rank** in both rankings (the text-side 17 and 27, the topic-side 11 and 27 on the seed-7 draw), and the corpus map's in-text row keeps its ramp's shade under the bold — **no number moved** | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-28 — the viewer shows every gold label](#cs-28--the-viewer-shows-every-gold-label-2026-11-01) | no run (a **tool**): the viewer's topic-side block and the corpus map's block | both blocks now answer their question for **every gold label** of the text (the focus topic first, then the others, each with its words and its value) — so the ranking's numbers come with the words that carry them: "Minority rights" 0.8750 (*minority* 0.7500, because the text says "minorities") and the corpus's own words for it (*minorities* 18 of 19, the log-odds 6.225) | the CS-19/CS-23 artifacts (read, not re-measured) |
+| [CS-29 — the lexical floor: TF-IDF + one-vs-rest](#cs-29--the-lexical-floor-tf-idf--one-vs-rest-2026-11-01) | one `upr-eval-lexical-tfidf-val` run (the **existing** `evaluate` command at the champion's own `top_k` k=2) | the bag of words reaches **micro-F1 0.3845** against the champion's 0.5479 — **neither** pre-registered falsification fires (it is 0.16 below the champion and 0.08 above the "closed" line), and the **tail collapses** (0.0301 against the champion's 0.5287) while the shortlist is on par (R@50 0.7205) and the *ordering* is not (nDCG@5 0.5053) | `results/upr-eval-lexical-tfidf-val/metrics.json` |
 
 ## Change sets
 
@@ -6133,3 +6134,160 @@ is CS-26's.
 
 
 
+## CS-29 — the lexical floor: TF-IDF + one-vs-rest (2026-11-01)
+
+**The run.** One: `upr-eval-lexical-tfidf-val`. A TF-IDF vectorizer (word 1–2
+grams, sublinear tf) fitted on the **train** split, one one-vs-rest logistic
+regression per label, scored on the **val** split at the champion's own
+operating point (`top_k` k=2). It is the **existing `evaluate` command**, the
+existing metric code and the existing decision rules — nothing about the
+measurement is new, which is the point: the lexical floor is read against the
+champion with the same instrument that measured the champion.
+
+660 val texts, 1,676 train texts, 68 label columns, **67.3 s** of CPU (61.6 s
+on the re-run; the artifact is identical apart from the wall clock). The
+artifact is `results/upr-eval-lexical-tfidf-val/metrics.json`; the row lands in
+the **main** UPR table's `baselines` section (`docs/experiments_table_upr.md`),
+because the table file is command-derived and never a heuristic: `evaluate` is
+a main-pipeline command.
+
+### The headline, and the falsification conditions read out
+
+The pooled **micro-F1 0.3845** against the champion's **0.5479** — a gap of
+**16.3 points**.
+
+The pre-registration (in the plan's §7.4, written before the first call)
+registered three conditions. Here they are, one by one:
+
+1. **The unseen bucket is 0.0000 by construction — it holds.** The eight
+   held-out labels have no train example, so no supervised model can predict
+   them; they score 0.0 and a fitted label's probability is strictly above 0,
+   so they always rank last and never enter a top-2. The measured unseen
+   micro-F1 is **0.0000** and its coverage **0.000**. This is a structural
+   fact, not a result, and the champion's unseen bucket is 0.0000 too — so the
+   two *are* comparable there. The decision-model run's 0.5697 is the one
+   number in this repo that is not comparable with them.
+2. **If the pooled micro-F1 were ≥ 0.5479 (the champion's), the champion's
+   advantage would not be real and PLAN's Phase 6/9 priorities would change —
+   it does not fire.** The number is **0.1634 below** the champion. The
+   retrieval-plus-decision pipeline's advantage survives this measurement.
+3. **If the pooled micro-F1 were ≤ 0.30, the lexical route would be closed as
+   a standalone and only the map-as-feature route (CS-32) would remain — it
+   does not fire.** The number is **0.0845 above** that line, so the lexical
+   route stays open as a standalone.
+
+The band the pre-registration expected was **0.35–0.50**, and the number sits
+inside it (0.3845). Neither falsification fired: this is a plain result, not a
+null and not a surprise.
+
+### The numbers (UPR **val**, 660 texts, `top_k` k=2)
+
+| | the lexical floor | the champion | the trivial floor (`most_frequent`, k=2) |
+|---|---|---|---|
+| **micro-F1** | **0.3845** | 0.5479 | 0.1413 |
+| macro-F1 | 0.2772 | 0.5006 | 0.0073 |
+| sample-F1 | 0.3676 | 0.5269 | 0.1327 |
+| coverage (labels suggested at least once) | 0.588 (40 of 68) | 0.868 (59 of 68) | 0.029 (2 of 68) |
+| P@5 | 0.2161 | 0.2770 | 0.0936 |
+| R@10 | 0.6085 | 0.7126 | 0.3023 |
+| nDCG@5 | 0.5053 | 0.6725 | 0.1854 |
+| shortlist R@50 | 0.7205 | 0.7423 | 0.6764 |
+
+The lexical floor is **2.7× the most-frequent baseline** (0.3845 against
+0.1413) and well above the random one (0.0304) — a bag of words plus a linear
+model is worth something on this corpus.
+
+### The per-bucket reading: the head and the torso, and nothing else
+
+| the bucket | the lexical floor's micro-F1 | the champion's | the lexical floor's coverage | the champion's |
+|---|---|---|---|---|
+| head (16 labels) | **0.4695** | 0.6953 | 1.000 | 1.000 |
+| torso (26 labels) | **0.4061** | 0.5121 | 0.846 | 1.000 |
+| tail (18 labels) | **0.0301** | 0.5287 | 0.111 | 0.944 |
+| unseen (8 labels) | **0.0000** | 0.0000 | 0.000 | 0.000 |
+
+The tail is where the lexical route **collapses**. The tail's micro-F1 is
+0.0301 against the champion's 0.5287, and its coverage is 0.111 — two of the
+eighteen tail labels are ever suggested at all. The reason is visible in the
+corpus map (CS-23): a tail label's own words are **rare words** (the label
+"Detention" ← *detention*, and a tail label has a handful of train texts), so
+a one-vs-rest logistic regression fitted on 1,676 texts has almost nothing to
+learn from — the word is there, but the label's positive class is a handful of
+examples. The head and the torso, whose words are common, are within reach.
+
+**One more reading, because the round's later change sets are read against
+this one.** The lexical floor's **shortlist R@50 is 0.7205** — within 2.2
+points of the champion's 0.7423, and above the trivial baseline's 0.6764. So
+the words alone put the gold label somewhere in the top 50 about as often as
+the whole retrieval pipeline does. What the words do **not** do is *order*
+them: the nDCG@5 is 0.5053 against the champion's 0.6725, and the P@5 is
+0.2161 against 0.2770. The lexical route is a **candidate generator on par with
+the champion and a ranker well behind it** — the same shape as the learned
+pack's finding in CS-8d (a better candidate generator, a worse classifier),
+arrived at by a completely different route.
+
+### The fit's own facts (the artifact's `predictor` block)
+
+| | |
+|---|---|
+| the TF-IDF features (the train vocabulary) | **17,217** (unigrams + bigrams) |
+| the labels fitted | **60 of 68** |
+| the labels with no train example | **8** (the held-out ones — 0.0000 by construction) |
+| the labels every train text carries (not identifiable) | **0** |
+| the train positives per label | min **1**, max **289** |
+| the convergence warnings | **0** (all 60 fits converged inside `max_iter=1000`) |
+| scikit-learn | 1.9.1 |
+
+The parameters are the pre-registered defaults and they are written into the
+frozen config, so the run never depends on a code default: `ngram_max=2`,
+`min_df=1`, `sublinear_tf=true`, `lowercase=true`, `stop_words=null`,
+`C=1.0`, `max_iter=1000`, `class_weight=null`.
+
+### Two things this change set also did, and says so plainly
+
+1. **The precedent.** `predictors/` has never imported scikit-learn — it was
+   numpy-only until now. Scikit-learn is not a model client (no model
+   download, no network, no I/O), it is a core dependency of the main pipeline,
+   and it is not on AGENTS.md's forbidden list for the pure cores, so it is
+   allowed here. It is a first, and it is recorded here. The module lives at
+   `src/cluster_rag/predictors/lexical_tfidf.py` and not under
+   `text_processors/`, because the track's pure package may import
+   scikit-learn only inside its combiners.
+2. **A table-hygiene repair, caused by this run.** The lexical row landed in
+   the main UPR table's `baselines` section, whose eight older rows (the
+   trivial baselines, written on 2026-10-20) predate the `embedding` column
+   the Phase-4 opening added: the table writer re-synced the section's
+   **header** to the current column set, which left those eight rows one cell
+   short — the leaderboard would have read "top_k k=2" as the most-frequent
+   baseline's *embedding run*. The **baselines sweep was re-run** so that
+   every row in the section is written in the current shape (the rows upsert
+   by run key, so the re-run rewrites them in place). Every number in those
+   eight rows is **identical field-for-field**; only the `date` column and the
+   wall-clock `seconds` move, as the table's own contract says ("the latest
+   run per key wins"). The two `test` rows are among them: they were
+   re-measured identically, no decision rests on them, and this round's own
+   numbers are **val only**.
+
+### The exit criteria, read out one by one
+
+1. **The run's artifact holds the number** — **holds**:
+   `results/upr-eval-lexical-tfidf-val/metrics.json` (the `report` block and
+   the `predictor` lineage block).
+2. **The table row is auto-appended** — **holds**: the row is in
+   `docs/experiments_table_upr.md`'s `baselines` section, written by the
+   command, not by hand.
+3. **The log section reads the numbers out with the falsification conditions**
+   — **holds**: the three conditions above, each with its verdict.
+4. **The gate green** — **holds**: 716 tests, ruff clean over `src`/`tests`/
+   `experiments`, the two verify tools OK and both final sweeps reproducing
+   their artifacts field for field.
+
+### What this change set does not say
+
+Nothing about the **decision model** (the 0.5697 unseen bucket is a different
+instrument and is not comparable here); nothing about `test` (the round's own
+numbers are val only); nothing about the **embedding model** (the lexical
+floor uses no embedding at all — that is what makes it a *floor*); and nothing
+about the *tuning* of the lexical model — every parameter is scikit-learn's
+default and the run is a single point, not a grid. The number is the
+reference the rest of the round is read against, not a tuned result.

@@ -3710,3 +3710,183 @@ line). The verdict and the numbers are the track log's §CS-28.*
     the fixture, including the label without a train example); and the gate is
     green (705 tests, ruff clean, the two verify tools OK, both final sweeps
     reproducing field for field).
+
+---
+
+## The lexical floor (CS-29) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-29.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-29 — the lexical floor: TF-IDF + one-vs-rest.** A new predictor kind
+  (`lexical_tfidf`): TF-IDF (word 1–2 grams, sublinear tf) over the **train**
+  split, one-vs-rest logistic regression per label, scored on the evaluated split.
+  It uses the same `Predictor` port as every other predictor, so the existing
+  `evaluate` command measures it with the existing metric code and the existing
+  decision rules.
+
+  **Why it is first.** It is the measurement that says whether the pipeline's
+  numbers are good, and every later change set is read against it. The reviewer
+  did not propose it; the sweep did.
+
+  **The cost.** Half a day. **No new dependency** — scikit-learn is already a
+  core dependency. One precedent to record: `predictors/` has never imported
+  scikit-learn (it is numpy-only today); scikit-learn is not a model client (no
+  download, no network, no I/O) and is not on AGENTS.md's forbidden list for the
+  pure cores, so this is allowed — but it is a first, and the pre-registration
+  says so.
+
+  **The run.** `upr-eval-lexical-tfidf-val`, the operating point `top_k` k=2 (the
+  champion's own). `evaluate` is a main-pipeline command, so the row lands in the
+  **main** UPR table (`docs/experiments_table_upr.md`, the `baselines` section)
+  and the narrative in the track log.
+
+  **The falsification, registered in advance.** The **unseen bucket is 0.0000 by
+  construction** — the eight held-out labels have no train examples, so a
+  supervised model cannot predict them. That is a structural fact, not a result
+  (and the champion's unseen bucket is 0.0000 too, so the two *are* comparable
+  there; the decision-model run's 0.5697 is the one that is not). If the pooled
+  micro-F1 is **≥ 0.5479** (the champion's), the champion's advantage is not real
+  and PLAN's Phase 6/9 priorities change — report it loudly. If it is **≤ 0.30**,
+  the lexical route is closed as a standalone and only the map-as-feature route
+  (CS-32) remains. The band we expect is **0.35–0.50**, and the reason is
+  external rather than hopeful: on *ECtHR* (human-rights legal text, multi-label)
+  LexGLUE's leaderboard puts `TFIDF+SVM` at **64.7 micro-F1**, and Clavié &
+  Alphonsus (2021) measure the gap between a plain linear SVM and a fine-tuned
+  legal transformer at only **15.1 %** error reduction on that task (against
+  85.1 % on general-domain text).
+
+  **The exit criteria.** The run's artifact holds the number; the table row is
+  auto-appended; the log section reads the numbers out with the falsification
+  conditions; the gate green.
+
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The predictor.** A new registry entry `lexical_tfidf`, behind the same
+    `Predictor` port as every other predictor: the `evaluate` command builds
+    it, scores the split and measures it with the **existing** metric code and
+    the **existing** decision rules. Nothing about the measurement changes.
+  - **Where the code lives.** `src/cluster_rag/predictors/lexical_tfidf.py` —
+    the adapter **and** the scikit-learn fit, because the vectorizer and the
+    logistic regression are scikit-learn's own and the track's pure package
+    may not import scikit-learn outside its combiners
+    (`TEXT_PROCESSING_PLAN.md` §2). It is the same "adapter in `predictors/`"
+    shape as CS-30's corpus-map predictor.
+  - **The fit is train-only.** The TF-IDF **vectorizer is fitted on the train
+    split** (its vocabulary and its idf), and so is every logistic regression
+    (the train texts' matrix against the train labels' indicator). The
+    evaluated split is only ever **transformed**. No val text and no val label
+    enters the fit; `test` is not touched.
+  - **The vectorizer.** Word analyzer, **1–2 grams** (`ngram_range=(1, 2)`),
+    **sublinear tf** (`1 + log(tf)`), scikit-learn's default token pattern
+    (2+ word characters) and its default **lowercasing**, **no stop-word
+    removal** (`stop_words=None` — no list is a config value here, and the idf
+    weighting already neutralises the register: "rights" is in all 60 of the
+    corpus map's tables), `min_df=1` (every word the train split has),
+    L2-normalized rows.
+  - **The classifier.** One **one-vs-rest logistic regression per label**:
+    `LogisticRegression(C=1.0, max_iter=1000, solver="lbfgs",
+    class_weight=None)` — scikit-learn's defaults, untuned. `max_iter` is
+    raised from the default 100 so the fit converges (the run records whether
+    a convergence warning was raised).
+  - **The score.** The positive-class **probability**
+    (`predict_proba()[:, 1]`) — a bounded [0, 1] scale.
+  - **The eight held-out labels.** A label with no train example cannot be
+    fitted, so it scores **0.0** for every text; and since a fitted label's
+    probability is strictly above 0, the eight always rank **last** and never
+    enter a top-2. That is what makes the unseen bucket **0.0000 by
+    construction** — comparable with the champion's own 0.0000, and with the
+    decision-model run's 0.5697 the one number that is not comparable.
+  - **The parameters** (all in `eval.predictor.params`, all recorded in the
+    run's `predictor` block): `ngram_max` (2), `min_df` (1),
+    `sublinear_tf` (true), `lowercase` (true), `stop_words` (null), `C` (1.0),
+    `max_iter` (1000), `class_weight` (null). **The run uses the defaults**;
+    the knobs exist so a later change set can vary one thing at a time
+    without editing code.
+  - **The precedent, recorded.** `predictors/` has never imported
+    scikit-learn (it was numpy-only until now). Scikit-learn is not a model
+    client — no download, no network, no I/O — and it is **not** on AGENTS.md's
+    forbidden list for the pure cores, so this is allowed; but it is a first,
+    and it is recorded here.
+  - **The run.** `upr-eval-lexical-tfidf-val`, the **val** split, the
+    operating point **`top_k` k=2** (the champion's own). `evaluate` is a
+    main-pipeline command, so the row lands in the **main** UPR table
+    (`docs/experiments_table_upr.md`, the `baselines` section) and the
+    narrative in the track log (`docs/experiments_text_processing.md`, the
+    section `## CS-29 — the lexical floor`).
+  - **The sweep.** `experiments/lexical_tfidf_sweep.py` — one cell, the sweep
+    label `baselines` (the section the block above names).
+  - **The exit criteria.** The run's artifact holds the number; the table row
+    is auto-appended; the log section reads the numbers out with the
+    falsification conditions; the gate green (ruff over `src`/`tests`/
+    `experiments`, the full pytest suite, the two verify tools, and both final
+    sweeps reproducing their artifacts field for field).
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the run is
+  `upr-eval-lexical-tfidf-val` (the artifact
+  `results/upr-eval-lexical-tfidf-val/metrics.json`), the log section is
+  `## CS-29 — the lexical floor: TF-IDF + one-vs-rest` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, 1,676 train
+  texts, 68 label columns, the champion's own `top_k` k=2 operating point; the
+  run is the **existing** `evaluate` command, so the metric code and the
+  decision rules are the ones the champion was measured with).**
+
+  - **The headline.** The pooled **micro-F1 0.3845** against the champion's
+    **0.5479** — a gap of **16.3 points**. The macro-F1 **0.2772**, the
+    sample-F1 **0.3676**, the coverage **0.588** (40 of the 68 labels are
+    suggested at least once, against the champion's 59), the P@5 **0.2161**,
+    the R@10 **0.6085**, the nDCG@5 **0.5053** and the shortlist R@50
+    **0.7205** (the champion's 0.7423).
+  - **Neither pre-registered falsification fires.** The "≥ 0.5479" condition
+    (the champion's advantage is not real) does not hold — the number is
+    0.1634 below the champion. The "≤ 0.30" condition (the lexical route is
+    closed as a standalone) does not hold either — the number is 0.0845 above
+    that line. The number sits inside the **expected band 0.35–0.50**.
+  - **The unseen bucket is 0.0000 by construction, as registered.** The eight
+    held-out labels have no train example, so they are not fittable; they
+    score 0.0 and always rank last. The measured unseen micro-F1 is
+    **0.0000** and its coverage **0.000** — comparable with the champion's
+    own 0.0000, and *not* comparable with the decision-model run's 0.5697.
+  - **The per-bucket reading: the head and the torso, and nothing else.**
+    The head **0.4695** (the champion's 0.6953, the coverage 1.000), the
+    torso **0.4061** (0.5121, the coverage 0.846), the **tail 0.0301**
+    (0.5287, the coverage **0.111** — two of the eighteen tail labels are ever
+    suggested). A tail label's own words are rare words (CS-23's corpus map),
+    so a one-vs-rest regression fitted on 1,676 texts has almost nothing to
+    learn from.
+  - **The lexical route is a candidate generator on par with the champion and
+    a ranker behind it.** The shortlist R@50 is 0.7205 against the champion's
+    0.7423 (and the trivial baseline's 0.6764), while the nDCG@5 is 0.5053
+    against 0.6725 and the P@5 0.2161 against 0.2770 — the same shape as the
+    learned pack's CS-8d finding, reached by a different route.
+  - **The fit's own facts.** **17,217** TF-IDF features (the train
+    vocabulary, unigrams + bigrams), **60 of 68** labels fitted, **8** with no
+    train example, **0** degenerate, the train positives per label min **1** /
+    max **289**, and **0** convergence warnings (all 60 fits converged inside
+    `max_iter=1000`). Scikit-learn 1.9.1.
+  - **The cost.** **67.3 s** of CPU (61.6 s on the re-run; the artifact is
+    identical apart from the wall clock). **No model calls**, no embedding
+    run, no new dependency.
+  - **The precedent, recorded.** `predictors/` imports scikit-learn for the
+    first time. It is not a model client (no download, no network, no I/O),
+    it is a core dependency, and it is not on AGENTS.md's forbidden list for
+    the pure cores — so it is allowed, but it is a first.
+  - **One thing this change set also did, and says so plainly.** The row
+    landed in the main UPR table's `baselines` section, whose eight older rows
+    predate the `embedding` column; the table writer re-synced the section's
+    **header**, which left those rows one cell short, so the **baselines
+    sweep was re-run** and every row in the section was rewritten in the
+    current shape. Every number in those eight rows is **identical
+    field-for-field**; only the `date` and the wall-clock `seconds` move.
+  - **The exit criteria.** The artifact holds the number; the table row is
+    auto-appended; the log section reads the numbers out with the
+    falsification conditions; the gate green (716 tests, ruff clean over
+    `src`/`tests`/`experiments`, the two verify tools OK, both final sweeps
+    reproducing their artifacts field for field).

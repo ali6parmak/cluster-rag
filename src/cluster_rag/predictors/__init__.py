@@ -8,6 +8,10 @@ parameter fails here — before any run starts. Embedding-dependent predictors
 further declare ``REQUIRES_EMBEDDINGS``/``REQUIRED_KINDS``
 (:func:`predictor_requirements` reads them, params included, for the evaluate
 command's artifact wiring).
+
+``lexical_tfidf`` (the track's CS-29 lexical floor) is the one member that
+imports scikit-learn: it is the round's reference measurement, a bag of words
+and a linear model behind the same port.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Any
 from cluster_rag.predictors.base import Predictor, PredictorContext
 from cluster_rag.predictors.fusion import FusionPredictor
 from cluster_rag.predictors.knn import KNNVotingPredictor
+from cluster_rag.predictors.lexical_tfidf import LexicalTfidfPredictor
 from cluster_rag.predictors.maxsim import MaxSimPredictor
 from cluster_rag.predictors.prototype import PrototypePredictor
 from cluster_rag.predictors.trivial import MostFrequentPredictor, RandomPredictor
@@ -31,6 +36,7 @@ PREDICTORS: dict[str, type] = {
     "maxsim": MaxSimPredictor,
     "fusion": FusionPredictor,
     "zeroshot": ZeroShotPredictor,
+    "lexical_tfidf": LexicalTfidfPredictor,
 }
 
 
