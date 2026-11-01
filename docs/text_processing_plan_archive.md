@@ -4454,3 +4454,152 @@ line). The verdict and the numbers are the track log's §CS-32.*
     folds and the three floors; the table row is auto-appended; the log
     section reads the numbers out with the falsification conditions; the gate
     green.
+
+## The word-class readout (CS-33) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-33.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-33 — the word-class readout: what kind of words affect the label, in
+  which way.** The reviewer's part-of-speech question, answered first **without a
+  new dependency**. The map's own structure gives every (label, word) pair three
+  word classes for free: **generic** (the word sits in many labels' tables —
+  CS-23: "rights" in 60, "include" in 59), **distinctive** (one or two tables) and
+  **name word** (the word is in the label's own name). Crossed with the **sign**
+  (the map's log-odds: up = with the label, down = against), that is the
+  reviewer's exact question in the map's own vocabulary: *which kind of word
+  pushes the label up, and which kind pushes it down* — per label, and for the
+  **model's** own habits too (the surrogate's per-topic coefficients, split the
+  same way).
+
+  **And the payoff, not only the readout.** If the distinctive words are
+  systematically one class and the generic ones another, then a **class-restricted
+  map** should beat the full map as a classifier — measured by re-running CS-30's
+  arms with the restricted map. That is a number, not a story.
+
+  **The falsification, registered in advance, and it decides CS-34.** If the word
+  class does **not** separate the label-carrying words from the register words —
+  i.e. the generic and the distinctive words have the same class profile — then
+  the readout is a null, no class-restricted map is worth building, and **CS-34
+  (the POS dependency) is cancelled**.
+
+  **Where.** `text_processors/lexical/word_class.py` (the pure classification) and
+  a new block in the map's artifact; the viewer gets one more block (the viewer's
+  own pattern: a block names the question it answers).
+
+  **The cost.** About a day.
+
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The classes** (from the map's own structure, no new dependency):
+    - **distinctive** — the word sits in **1 or 2** of the labelled tables
+      (the block's own wording);
+    - **generic** — the word sits in **at least a quarter** of the labelled
+      tables (≥ 15 of the 60; a share, not a magic number, and it puts the
+      register where the block's examples put it: "rights" in 60, "include"
+      in 59);
+    - **shared** — the middle (3–14 tables);
+    - and the **name word** as a *flag*: the word is in the label's own name
+      (it overlaps the classes above — "rights" is the name word of "Rights of
+      the Child" *and* generic).
+  - **The readout.** Per class: the number of (label, word) pairs, the share
+    with a **positive** log-odds (the word goes *with* the label), the share
+    with a **negative** one (it goes *against* it) and the mean log-odds — the
+    reviewer's question in the map's own vocabulary: *which kind of word
+    pushes the label up, and which pushes it down*. The same readout for the
+    **surrogate's** per-topic coefficients (the model's own habits: the
+    coefficients split the same way).
+  - **The payoff, and the decision it drives.** If the classes separate, a
+    **class-restricted map** is built and measured as a classifier: the map
+    with the **generic** class dropped (the register — the readout says it is
+    the weak and often negative class) and, at the other extreme, the
+    **distinctive-only** map. Both are re-run through the **existing** scorer
+    and the **existing** `evaluate` command, on the same texts at the same
+    operating point, so the comparison against the full map is paired
+    (`tools/lexical_compare.py`).
+  - **The falsification, registered in advance, and it decides CS-34.** The
+    readout is a **null** (and **CS-34, the POS dependency, is cancelled**) if
+    the generic and the distinctive classes have the **same** profile: the
+    test is that the distinctive class's mean log-odds exceeds the generic
+    class's by **at least 1.0** (one natural-log unit — a factor of e in the
+    odds) **and** the generic class's share of positive pairs is lower. If
+    either half fails, the readout is a null, no class-restricted map is
+    worth building, and CS-34 is cancelled.
+    *(Read only on the **train** split, before the run: the classes separate
+    widely — the distinctive words (1–2 tables) are **100%** positive with a
+    mean log-odds of **+4.47**, the generic ones (≥ 15 tables) **70.8%**
+    positive with a mean of **+0.43** and **29.2%** of their pairs pushing
+    the label *down*. So the registered null does not fire, and the
+    class-restricted map is worth building.)*
+  - **The runs.** Two more corpus-map runs, the same arm as CS-31's selection
+    (`sum_zscore_positive`) with a **restricted map**:
+    `upr-eval-corpus-map-sum-zscore-positive-nogeneric-val` and
+    `upr-eval-corpus-map-sum-zscore-positive-distinctive-val` (UPR **val**,
+    `top_k` k=2). The sweep file
+    `experiments_text_processing/corpus_map_classes_sweep.py` (the sweep label
+    `corpus_map_classes`); the rows land in the **main** UPR table.
+  - **The exit criteria.** The map's artifact carries the class per pair and
+    the readout block; the surrogate's block carries the model's own readout;
+    the two runs hold their numbers; the table rows are auto-appended; the
+    viewer gains the block (the viewer's own pattern: a block names the
+    question it answers); the log section reads the numbers out with the
+    falsification conditions; the gate green.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the two runs are
+  `upr-eval-corpus-map-sum-zscore-positive-nogeneric-val` and
+  `upr-eval-corpus-map-sum-zscore-positive-distinctive-val` (UPR **val**, 660
+  texts, `top_k` k=2, the arm `sum_zscore_positive`), the sweep is
+  `experiments_text_processing/corpus_map_classes_sweep.py` (the label
+  `corpus_map_classes`), the map's and the surrogate's artifacts are
+  `results/upr-hitmap-corpus/hitmap.json` and
+  `results/upr-hitmap-surrogate/hitmap.json`, the log section is `## CS-33 —
+  the word-class readout` in `docs/experiments_text_processing.md`, and the
+  numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, `top_k` k=2,
+  the map built from the **train** split only; no model calls; 0.8 s and 0.6 s
+  per run).**
+
+  - **The readout** (the map's own block, `corpus_map.word_classes`; the map's
+    log-odds on the train split's 18,707 pairs):
+    - **distinctive** (the word sits in 1–2 of the 60 labelled tables): 1,836
+      pairs, **100.0 %** positive, mean log-odds **+4.2676**;
+    - **shared** (3–14 tables): 8,711 pairs, 97.8 % positive, mean **+2.6410**;
+    - **generic** (≥ 15 tables): 8,160 pairs, **81.0 %** positive (19.0 %
+      negative), mean **+0.8439**;
+    - **129** of the pairs are **name words** (89 generic, 39 shared, 1
+      distinctive).
+  - **The registered null does NOT fire**: the distinctive class's mean exceeds
+    the generic class's by **+3.4237** (the margin needs 1.0) **and** the
+    generic class's share of positive pairs is lower (81.0 % against 100.0 %).
+    The readout is **not a null** and — by the pre-registration's own rule —
+    **CS-34 is not cancelled** by it.
+  - **The payoff is a loss, and it is the more useful half.** The
+    class-restricted maps are **much worse** as classifiers than the full map:
+    the map **without the generic class** reaches a pooled **micro-F1 0.3815**
+    (the fit side's out-of-fold 0.5097) and the **distinctive-only** map
+    **0.0798** (out-of-fold 0.1109), against the full map's **0.5243**
+    (out-of-fold 0.6613). The **paired** bootstrap over the texts gives
+    **+0.1429 [+0.1200, +0.1655]** and **+0.4445 [+0.4178, +0.4713]** against
+    the full map — the full map wins on **every** resample in both comparisons,
+    and the **fit side agrees**, so it is not a val artefact.
+  - **The reason**: the distinctive words are the **strongest** words but they
+    are **rare**; the register is **weak** but it is **everywhere**. A
+    class-restricted map keeps the signal and throws away the coverage.
+  - **The surrogate's own readout** (the model's habits, the same split): the
+    **name words** are 82.9 % positive with a mean coefficient of **+0.20762**,
+    an order of magnitude above every class mean (the distinctive class
+    45.2 % positive at −0.00066, the generic class 42.5 % at −0.00233). The
+    model's habit is "the label's own name words"; the corpus's habit is "the
+    register" — and the two readouts disagree about what carries a label.
+  - **The exit criteria.** The map's artifact carries the class per pair and
+    the readout block; the surrogate's block carries the model's own readout;
+    the two runs hold their numbers; the table rows are auto-appended (the main
+    UPR table's `corpus_map_classes` section); the viewer gains the block; the
+    log section reads the numbers out with the falsification conditions; the
+    gate green.

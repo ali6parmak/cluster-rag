@@ -839,6 +839,46 @@ def test_hitmap_upr_writes_the_corpus_map_block(
     assert "programmes" not in words
 
 
+def test_the_word_classes_are_in_the_map_and_the_surrogate_blocks(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """CS-33: the class per pair, the readout, and the surrogate's own readout."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_lexical_map: false
+    include_text_side_map: false
+    include_surrogate: true
+    include_ablation: false
+    include_corpus_map: true
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-word-classes-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-word-classes-test" / "hitmap.json").read_text("utf-8")
+    )
+    # the map's own block: the class per pair, the readout and the registered test
+    classes = payload["corpus_map"]["word_classes"]
+    assert classes["n_labelled_tables"] > 0
+    assert classes["generic_threshold"] >= 3
+    assert set(classes["readout"]) == {"distinctive", "shared", "generic"}
+    assert "holds" in classes["falsification"]
+    for row in payload["corpus_map"]["per_label"]:
+        for word in row["words"]:
+            assert word["word_class"] in {"distinctive", "shared", "generic"}
+            assert isinstance(word["is_name_word"], bool)
+    # the surrogate's own block: the model's habits, split the same way
+    surrogate = payload["ablation_map"]["arms"]["fake-paragraph-noul"]["surrogate"]
+    assert surrogate["word_classes"]["available"] is True
+    assert set(surrogate["word_classes"]["readout"]) == {"distinctive", "shared", "generic"}
+    assert surrogate["word_classes"]["n_coefficients_in_a_class"] > 0
+
+
 def test_the_corpus_map_can_be_turned_off(
     sample_jsonl, write_config, tmp_path, monkeypatch
 ) -> None:

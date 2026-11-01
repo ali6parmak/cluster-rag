@@ -517,6 +517,28 @@ def corpus_word_rows(
     return []
 
 
+def corpus_class_readout(artifact: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The corpus map's **word-class readout** (CS-33) from the artifact.
+
+    The per-class numbers: how many (label, word) pairs each class holds, the
+    share with a positive log-odds, the share with a negative one and the mean
+    log-odds. An artifact without the block (the run was made before CS-33)
+    gives an empty readout: the screen says the readout is not there.
+    """
+    block = corpus_block(artifact)
+    classes = block.get("word_classes") or {}
+    readout = classes.get("readout") or {}
+    return {str(name): dict(row) for name, row in readout.items()}
+
+
+def corpus_class_falsification(artifact: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The registered **separation test** (CS-33) from the artifact."""
+    block = corpus_block(artifact)
+    classes = block.get("word_classes") or {}
+    falsification = classes.get("falsification") or {}
+    return dict(falsification)
+
+
 def corpus_cross_check(
     context: ViewerContext,
     label: str,
@@ -1265,6 +1287,132 @@ def render(
                 line += paint("  (below the --min-df filter)", DIM, colour=colour)
             add(paint(line, DIM, colour=colour) if below else line)
         add("")
+
+        # -- the word classes (CS-33): what kind of word is this, and which way --
+        readout = corpus_class_readout(context.corpus_map)
+        add(
+            paint(
+                "WHAT KIND OF WORD IS THIS — a statistical question: which class is the "
+                "word in, and does it push the label up or down?",
+                BOLD,
+                colour=colour,
+            )
+        )
+        add(
+            paint(
+                "  the corpus map's own word classes (CS-33): a word's class is how many "
+                "of the labelled tables it sits in — distinctive (one or two), generic (a "
+                "quarter of them or more), shared (the middle)",
+                DIM,
+                colour=colour,
+            )
+        )
+        if not readout:
+            add(
+                paint(
+                    "  the readout is not shown: this run's artifact does not carry the "
+                    "word classes (the run predates CS-33)",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            add("")
+        else:
+            add(
+                paint(
+                    f"  {'class':<14}{'pairs':>8}{'positive':>10}{'negative':>10}"
+                    f"{'mean log-odds':>15}",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            for name in ("distinctive", "shared", "generic"):
+                row = readout.get(name)
+                if not row:
+                    continue
+                mean = float(row.get("mean_log_odds", 0.0))
+                code = signed_ramp(
+                    mean, max(abs(float(r.get("mean_log_odds", 0.0))) for r in readout.values())
+                )
+                add(
+                    "  "
+                    + paint(f"{name:<14}", DIM, colour=colour)
+                    + paint(f"{int(row.get('n_pairs', 0)):>8}", DIM, colour=colour)
+                    + paint(
+                        f"{float(row.get('share_positive', 0.0)) * 100:>9.1f}%", code, colour=colour
+                    )
+                    + paint(
+                        f"{float(row.get('share_negative', 0.0)) * 100:>9.1f}%", code, colour=colour
+                    )
+                    + paint(f"{mean:>+15.3f}", code, colour=colour)
+                )
+            falsification = corpus_class_falsification(context.corpus_map)
+            if falsification:
+                verdict = "the classes separate" if falsification.get("holds") else "a null"
+                add(
+                    paint(
+                        f"  the registered test: {verdict} (the distinctive class's mean is "
+                        f"{float(falsification.get('difference', 0.0)):+.3f} against the generic "
+                        f"class's, the margin is {float(falsification.get('margin', 0.0)):g})",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+
+            def _class_side(label: str, heading: str) -> None:
+                """One label's table, read by class: the text's words and their class."""
+                add(paint(heading, DIM, colour=colour))
+                rows = corpus_topic_rows(context.corpus_map, label, min_df=min_df)
+                shown = [row for row in rows if str(row.get("word")) in text_words]
+                if not shown:
+                    add(
+                        paint(
+                            "    none of this text's words is in this label's table",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                    return
+                add(
+                    paint(
+                        f"    {'word':<20}{'class':<14}{'log-odds':>11}",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                for row in shown:
+                    log_odds = float(row.get("log_odds", 0.0))
+                    code = signed_ramp(
+                        log_odds, max(abs(float(r.get("log_odds", 0.0))) for r in rows)
+                    )
+                    name = str(row.get("word_class") or "—")
+                    marker = "  ▲ name word" if row.get("is_name_word") else ""
+                    add(
+                        "    "
+                        + paint(f"{str(row.get('word')):<20}", DIM, colour=colour)
+                        + paint(
+                            f"{name:<14}", CYAN if row.get("is_name_word") else DIM, colour=colour
+                        )
+                        + paint(f"{log_odds:>+11.3f}", code, colour=colour)
+                        + paint(marker, BOLD, colour=colour)
+                    )
+
+            _class_side(focus, f'  the focus topic "{focus}": this text\'s words in its table')
+            corpus_other_gold = [label for label in gold_labels if label != focus]
+            if corpus_other_gold:
+                add(paint("  the other gold labels of this text:", DIM, colour=colour))
+                for label in corpus_other_gold:
+                    _class_side(label, f'  "{label}":')
+            add(
+                paint(
+                    "  a name word is one of the label's own name words (the flag overlaps the "
+                    "classes); the log-odds' sign says whether the word pushes the label up "
+                    "or down.",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            add("")
 
     elif context.corpus_map is None:
         add(

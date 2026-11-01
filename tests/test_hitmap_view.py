@@ -544,6 +544,48 @@ def test_the_viewer_runs_without_the_corpus_map(
     assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" not in out
 
 
+# --- the word classes (CS-33) on the screen ---
+
+
+def test_the_viewer_shows_the_word_classes(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The word-class block is on the screen: the readout and the registered test."""
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "WHAT KIND OF WORD IS THIS" in out
+    assert "distinctive" in out and "generic" in out
+    assert "the registered test" in out
+
+
+def test_the_viewers_class_rows_are_the_artifacts_own(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The class and the name-word flag on the screen are the artifact's own."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    focus, _rule = viewer_module._default_focus(context.records[0], context.labels)
+    rows = viewer_module.corpus_topic_rows(context.corpus_map, focus)
+    assert rows
+    readout = viewer_module.corpus_class_readout(context.corpus_map)
+    assert readout
+    assert set(readout) <= {"distinctive", "shared", "generic"}
+    assert "holds" in viewer_module.corpus_class_falsification(context.corpus_map)
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert str(rows[0]["word"]) in out
+    assert str(rows[0].get("word_class")) in out
+
+
 # --- the surrogate's full coefficient vector (CS-24) ---
 
 

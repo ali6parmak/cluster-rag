@@ -93,6 +93,7 @@ from cluster_rag.text_processors.decision.upr_probe import measure_upr_arm
 from cluster_rag.text_processors.decision.upr_union import z_max_union
 from cluster_rag.text_processors.features import ProfileUnits
 from cluster_rag.text_processors.features.corpus_map import (
+    CorpusMap,
     build_corpus_map,
     corpus_map_block,
 )
@@ -119,6 +120,7 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
 from cluster_rag.text_processors.lexical.corpus_map_score import (
     score_cells as map_score_cells,
 )
+from cluster_rag.text_processors.lexical.word_class import label_name_words
 from cluster_rag.text_processors.rerank.upr_rerank import (
     ORDER_TEXT_FIRST,
     candidate_ceiling,
@@ -137,6 +139,7 @@ from cluster_rag.text_processors.surrogate import (
     surrogate_predictions,
     surrogate_quality,
     topic_attribution,
+    word_class_readout,
 )
 from cluster_rag.upr_analysis import (
     UprView,
@@ -818,17 +821,20 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
     # A description of the DATA, not a measurement of the model: it needs no
     # model call, and it is built from the **train** split only (no val text
     # and no val label enters the counts; test is not touched).
+    # The **surrogate's** own word-class readout (CS-33) reads the same map, so
+    # the map is built whenever either block is wanted -- but the corpus map's
+    # own block is written only when the run asks for it.
     corpus_block: dict[str, Any] | None = None
-    if hitmap.include_corpus_map:
+    corpus_map: CorpusMap | None = None
+    if hitmap.include_corpus_map or hitmap.include_surrogate:
         train_records = setup.train_records
-        corpus_block = corpus_map_block(
-            build_corpus_map(
-                [record.text for record in train_records],
-                [record.labels for record in train_records],
-                labels,
-            ),
-            split="train",
+        corpus_map = build_corpus_map(
+            [record.text for record in train_records],
+            [record.labels for record in train_records],
+            labels,
         )
+        if hitmap.include_corpus_map:
+            corpus_block = corpus_map_block(corpus_map, split="train")
 
     # -- Version B: the ablation map (the decision model's own ablation) ----------
     units = tuple(text_units(text, unit=hitmap.unit, openers=openers) for text in texts)
@@ -980,6 +986,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
                 gold=gold,
                 hitmap=hitmap,
                 sample=sample,
+                corpus_map=corpus_map,
             )
         arms[model_config.name] = block
         rows.append(
@@ -1124,6 +1131,7 @@ def _hitmap_surrogate_block(
     gold: np.ndarray,
     hitmap: Any,
     sample: UprDecisionSample,
+    corpus_map: CorpusMap | None = None,
 ) -> dict[str, Any]:
     """The **surrogate attribution** (the map's mode C) and its validation.
 
@@ -1138,6 +1146,10 @@ def _hitmap_surrogate_block(
     counterpart's attribution follow the *shifted* topic instead?), and the
     **agreement with the causal map** (do the surrogate's top words fall inside
     the clause the ablation identified as the carrier?).
+
+    And the **word-class readout** (CS-33): the surrogate's coefficients split
+    by the corpus map's own word classes, so the model's own habits are read
+    the way the corpus's readout is read.
     """
     train_texts = [record.text for record in setup.train_records]
     fit_sample = UprDecisionSample(
@@ -1285,11 +1297,47 @@ def _hitmap_surrogate_block(
             ),
         },
         "agreement_with_the_causal_map": agreement,
+        "word_classes": _surrogate_word_class_readout(fit, vocabulary, labels, corpus_map),
         "label_blind_counterpart": {
             "quality": blind_quality,
             "per_topic": blind_attribution,
         },
     }
+
+
+def _surrogate_word_class_readout(
+    fit: Any,
+    vocabulary: Sequence[str],
+    labels: Sequence[str],
+    corpus_map: CorpusMap | None,
+) -> dict[str, Any]:
+    """The surrogate's coefficients split by the corpus map's word classes (CS-33).
+
+    The model's own habits, read the way the corpus's readout is read: the
+    per-topic coefficients against the map's own word classes (how many of the
+    labelled tables a word sits in) and the name-word flag.
+
+    Without the corpus map there is nothing to split the coefficients by, so the
+    block says so instead of guessing.
+    """
+    if corpus_map is None:
+        return {
+            "available": False,
+            "note": (
+                "the corpus map was not built in this run, so the surrogate's "
+                "coefficients cannot be split by the word classes (CS-33)"
+            ),
+        }
+    index = corpus_map.word_class_index()
+    name_words = {label: label_name_words(label) for label in labels}
+    block = word_class_readout(
+        fit.coefficients,
+        vocabulary,
+        list(labels),
+        index.classes,
+        name_words=name_words,
+    )
+    return {"available": True, **block}
 
 
 def _hitmap_upr_row(

@@ -6650,3 +6650,151 @@ obvious next question, and it is **not** measured here); nothing about
 and the folds are the plan's five); and nothing about the pack's **shortlist**
 quality, which the map's column *lowers* (R@50 0.7979 against the control's
 0.8909): a sharp per-cell score is not a good retriever.
+
+## CS-33 — the word-class readout: what kind of words affect the label, in which way (2026-11-01)
+
+**The runs.** Two kinds.
+
+- **Two artifacts, re-written once** (the map's own block, the surrogate's own
+  block): `results/upr-hitmap-corpus/hitmap.json` (the **corpus map** — now
+  carrying the **class per pair** and the **readout**) and
+  `results/upr-hitmap-surrogate/hitmap.json` (the **surrogate** — now carrying
+  **its own** readout). The `upr-hitmap-text` run was re-written with them
+  (it reads the same map). All three cost **no new model call** (the CS-9b
+  run's cache hits): 1.0 s, 5.6 s and 1.8 s.
+- **Two classifier runs**: `upr-eval-corpus-map-sum-zscore-positive-nogeneric-val`
+  and `upr-eval-corpus-map-sum-zscore-positive-distinctive-val` — the **same
+  arm** as CS-31's fit-side selection (`sum_zscore_positive`), the **same**
+  texts, the **same** operating point (`top_k` k=2), the **only** difference
+  being the **restriction** on the map's word classes. UPR **val**, 660 texts,
+  0.8 s and 0.6 s, no model call and no embedding. The rows land in the
+  **main** UPR table under `## UPR — corpus_map_classes` (`evaluate` is a
+  main-pipeline command, so the table is command-derived).
+
+**The mechanism.** The reviewer's part-of-speech question — *which kind of word
+pushes the label up, and which pushes it down* — answered **first without a new
+dependency**, from the **corpus map's own structure**: a word's class is how
+many of the **labelled** tables (the 60 that have a train example) it sits in.
+
+| the class | the rule | what it is |
+|---|---|---|
+| **distinctive** | the word sits in **1 or 2** labelled tables | the topic's own vocabulary |
+| **generic** | the word sits in **at least a quarter** of them (**≥ 15 of 60**) | the register ("rights" is in 60 tables, "include" in 59) |
+| **shared** | the middle (3–14 tables) | the words two or three labels share |
+| **name word** | a **flag**: the word is in the label's own name | it **overlaps** the classes ("rights" is the name word of "Rights of the Child" *and* generic) |
+
+The threshold is a **share**, not a magic number (a quarter of the labelled
+tables; 15 of the 60 here), and the name-word flag is a flag — the plan's own
+wording, implemented as written.
+
+### The readout (the map's own block: `corpus_map.word_classes`)
+
+| the class | the words | the (label, word) pairs | share **positive** | share **negative** | the mean log-odds |
+|---|---|---|---|---|---|
+| **distinctive** | 1,243 | 1,836 | **100.0 %** | 0.0 % | **+4.2676** |
+| shared | 1,491 | 8,711 | 97.8 % | 2.2 % | +2.6410 |
+| **generic** | 315 | 8,160 | **81.0 %** | **19.0 %** | **+0.8439** |
+
+(The map's own log-odds, on the **train** split: 18,707 pairs, 3,049 words.)
+**129** of the pairs are name words — 89 of them generic, 39 shared and 1
+distinctive.
+
+### The falsification, read out
+
+1. **The registered null does NOT fire — the classes separate widely.** The test
+   was: the distinctive class's mean log-odds exceeds the generic class's by
+   **at least 1.0** *and* the generic class's share of positive pairs is lower.
+   Both halves hold: the difference is **+3.4237** (the margin needs 1.0) and
+   the generic class's positive share is **81.0 %** against the distinctive
+   class's **100.0 %**. So the readout is **not a null**, and — by the
+   pre-registration's own rule — **CS-34 is not cancelled** by it.
+   *One honest note:* the pre-registration's own train-side read said the
+   distinctive class was **100 %** positive with a mean of **+4.47** and the
+   generic one **70.8 %** positive with a mean of **+0.43**. The module's
+   numbers are **100 % / +4.2676** and **81.0 % / +0.8439** — the same
+   conclusion, a different arithmetic (the pre-registration's read was an
+   exploratory script, not the module; the **artifact's** numbers are the
+   module's). The gap is worth naming: the *sign* of every class is the same
+   under either reading, and the decision the read drives (build the
+   class-restricted maps) is the same.
+2. **The payoff, however, is a loss — and it is the more useful half of the
+   change set.** The class-restricted maps are **much worse** as classifiers
+   than the full map:
+
+   | the map | the pooled micro-F1 | the fit side's **out-of-fold** micro-F1 | head | torso | tail | unseen | shortlist R@50 |
+   |---|---|---|---|---|---|---|---|
+   | the **full** map (CS-31's selection) | **0.5243** | **0.6613** | 0.6886 | 0.4180 | 0.5435 | 0.0000 | 0.7157 |
+   | the map **without the generic class** | 0.3815 | 0.5097 | 0.5295 | 0.2684 | 0.5049 | 0.0000 | 0.6553 |
+   | the **distinctive-only** map | 0.0798 | 0.1109 | 0.1344 | 0.0518 | 0.1910 | 0.0000 | 0.5880 |
+
+   The **paired** bootstrap over the texts (the resampling unit) puts the
+   difference against the full map at **+0.1429 [+0.1200, +0.1655]** (the
+   generic class dropped) and **+0.4445 [+0.4178, +0.4713]** (the
+   distinctive-only map) — the full map wins on **every** resample in both
+   comparisons. `tools/lexical_compare.py` rebuilds both arms from the runs'
+   own frozen configs and **checks the rebuild against the runs' artifacts**
+   before it reports anything.
+   *The fit side agrees*: the restricted maps' out-of-fold numbers (0.5097 and
+   0.1109) are below the full map's (0.6613) too — so this is not a val
+   artefact, it is what the restriction does to the map.
+3. **So the readout's promise and the payoff point in opposite directions, and
+   the reason is the point.** The distinctive words are the **strongest** words
+   (100 % positive, mean +4.27) — but they are **rare**: a text rarely contains
+   one. The register is **weak** (19 % of its pairs push the label *down*) — but
+   it is **everywhere**: the generic class's 315 words are the ones the texts
+   actually contain, and dropping them removes most of the map's *evidence*.
+   A class-restricted map keeps the signal and throws away the coverage, and a
+   classifier needs both. **The readout is a description of the corpus; the
+   payoff is a measurement of the model, and they are not the same thing.**
+   (The same shape as CS-31's: the better measure was a better model there;
+   here the better *description* is a worse *model*.)
+
+### The model's own habits: the surrogate's readout
+
+The same split, applied to the **surrogate's** per-topic coefficients (the
+model's own attribution, 68 topics × 1,203 features = **81,804** coefficients,
+every one of them classified — no word sits in no table):
+
+| the class | the coefficients | share **positive** | share **negative** | the mean coefficient |
+|---|---|---|---|---|
+| distinctive | 1,904 | **45.2 %** | 54.8 % | −0.00066 |
+| shared | 58,480 | 42.9 % | 57.1 % | −0.00346 |
+| generic | 21,420 | 42.5 % | 57.5 % | −0.00233 |
+| **the name-word flag** | 140 | **82.9 %** | 17.1 % | **+0.20762** |
+
+**This is the round's most quotable reading, and it is a different one from the
+corpus's.** The corpus's register words are *weak but everywhere*; the model's
+own attribution is **not** driven by the register at all — the distinctive
+words are only slightly more positive than the generic ones (45.2 % against
+42.5 %, and all three means are within a thousandth of zero). What the model
+*does* lean on is the **name words**: the 140 coefficients of the words that
+are in a topic's own name are **82.9 % positive** with a mean of **+0.208**,
+an order of magnitude above every class mean. So the model's habit is "the
+label's own name words, and little else", while the corpus's habit is "the
+register, and a lot of it". **The two readouts disagree about what carries a
+label** — and the class-restricted map is the map built on the *corpus's*
+reading, so it drops the register (where the evidence lives) and keeps the
+rare words (where the strength lives). That is the whole failure in one
+sentence.
+
+### The viewer
+
+The viewer gains one more block, and it names the question it answers (the
+viewer's own pattern): **"WHAT KIND OF WORD IS THIS — a statistical question:
+which class is the word in, and does it push the label up or down?"** It shows
+the readout (the three classes with their pairs, their two shares and their
+mean), the **registered test's verdict**, and then — for the focus topic and
+every other gold label of the text (CS-28's pattern) — the text's own words in
+that label's table with their **class** and their **log-odds** (the sign says
+which way the word pushes), with the name words marked. It reads the artifact's
+own numbers; nothing is recomputed for the display.
+
+### What this change set does not say
+
+Nothing about the **decision model**; nothing about `test` (the round's numbers
+are val only); nothing about the **class thresholds** (they are the plan's own
+wording: 1–2 tables, a quarter of them, the middle — no threshold was tuned,
+and the falsification was registered against exactly these); and nothing about
+the **POS line** — the readout's registered null did not fire, so **CS-34 is
+not cancelled by it**, but this change set says nothing about whether a
+*grammatical* class separates better than the corpus's own frequency class.

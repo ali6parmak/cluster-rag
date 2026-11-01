@@ -356,3 +356,10 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-corpus-map-support-count-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 1.334 |
 | upr-eval-corpus-map-sum-zscore-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.1011 | 0.0429 | 0.0982 | 0.765 | 0.0636 | 0.2393 | 0.1399 | 0.6566 | 660 | 1.294 |
 | upr-eval-corpus-map-sum-zscore-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.5243 | 0.4662 | 0.4999 | 0.853 | 0.2585 | 0.6429 | 0.6327 | 0.7157 | 660 | 1.267 |
+
+## UPR — corpus_map_classes
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-corpus-map-sum-zscore-positive-nogeneric-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.3815 | 0.3755 | 0.3605 | 0.868 | 0.1879 | 0.4872 | 0.4607 | 0.6553 | 660 | 0.793 |
+| upr-eval-corpus-map-sum-zscore-positive-distinctive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.0798 | 0.1213 | 0.0774 | 0.853 | 0.0458 | 0.1590 | 0.1072 | 0.5880 | 660 | 0.627 |

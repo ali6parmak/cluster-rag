@@ -1,10 +1,10 @@
 """Compare two lexical arms of the corpus map **paired**, on the same texts.
 
 The track's rule: *no verdict rests on two independent numbers*. The two arms
-of the corpus map (CS-30's four, CS-31's two) are scored on the **same**
-texts, with the same map and the same operating point, so the difference
-between them is paired — and the paired bootstrap over the texts (the
-resampling unit) puts an interval on it.
+of the corpus map (CS-30's four, CS-31's two, CS-33's two class-restricted
+ones) are scored on the **same** texts, with the same map and the same
+operating point, so the difference between them is paired — and the paired
+bootstrap over the texts (the resampling unit) puts an interval on it.
 
 The tool **rebuilds** both arms' score matrices from the runs' own frozen
 configs (the same pure functions the CLI uses) and **checks the rebuild against
@@ -93,7 +93,13 @@ def _arm_scores(run_id: str, results: Path) -> tuple[np.ndarray, np.ndarray, dic
         labels,
     )
     scoring = (predictor.get("params") or {}).get("scoring", "sum_logodds")
-    scores = score_cells([record.text for record in records], corpus_map, scoring=scoring)
+    restrict = (predictor.get("params") or {}).get("restrict")
+    scores = score_cells(
+        [record.text for record in records],
+        corpus_map,
+        scoring=scoring,
+        restrict=restrict,
+    )
     gold = build_label_matrix(records, labels)
     return scores, gold, artifact
 

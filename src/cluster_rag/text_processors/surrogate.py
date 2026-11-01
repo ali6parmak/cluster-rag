@@ -34,6 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.word_class import class_readout
 
 
 @dataclass(frozen=True)
@@ -346,6 +347,91 @@ def full_coefficient_vector(
             [round(float(value), decimals) for value in coefficients[index]]
             for index in range(coefficients.shape[0])
         ],
+    }
+
+
+def word_class_readout(
+    coefficients: np.ndarray,
+    vocabulary: Sequence[str],
+    topics: Sequence[str],
+    classes: Mapping[str, str],
+    *,
+    name_words: Mapping[str, frozenset[str]] | None = None,
+) -> dict[str, object]:
+    """The **word-class readout** of the surrogate's coefficients (CS-33).
+
+    The corpus map's own readout answers "which kind of word goes with the
+    label in the **corpus**"; this one answers the same question about the
+    **model**: the surrogate's per-topic coefficients, split the same way. A
+    word's class is how many of the labelled tables it sits in (the map's own
+    structure), so the two readouts are comparable.
+
+    The **name-word flag** rides along: the coefficients of the words that are
+    in a topic's own name, read on their own.
+
+    Args:
+        coefficients: The fitted per-topic coefficients, shape
+            ``(n_topics, n_features)``.
+        vocabulary: The features' names, in the coefficients' column order.
+        topics: The topics, in the coefficients' row order.
+        classes: Each word's class (the corpus map's word classes). A word that
+            sits in no table has no class and is counted apart.
+        name_words: Each topic's own name words (the name-word flag).
+
+    Returns:
+        The readout block (JSON-friendly).
+
+    Raises:
+        ValueError: If the coefficients' shape does not match the vocabulary and
+            the topics.
+    """
+    matrix = np.asarray(coefficients, dtype=np.float64)
+    if matrix.shape[0] != len(topics):
+        raise ValueError(
+            f"the coefficients have {matrix.shape[0]} topic rows and "
+            f"{len(topics)} topics were given"
+        )
+    if matrix.shape[1] != len(vocabulary):
+        raise ValueError(
+            f"the coefficients have {matrix.shape[1]} feature columns and "
+            f"{len(vocabulary)} features were given"
+        )
+    values: list[tuple[str, float]] = []
+    name_values: list[float] = []
+    unclassified = 0
+    for index, _topic in enumerate(topics):
+        own = (name_words or {}).get(_topic, frozenset())
+        for position, word in enumerate(vocabulary):
+            coefficient = float(matrix[index, position])
+            word_class = classes.get(word)
+            if word_class is None:
+                unclassified += 1
+            else:
+                values.append((word_class, coefficient))
+            if word in own:
+                name_values.append(coefficient)
+    readout = class_readout(values)
+    positive = sum(1 for value in name_values if value > 0)
+    negative = sum(1 for value in name_values if value < 0)
+    count = len(name_values)
+    return {
+        "n_topics": len(topics),
+        "n_features": len(vocabulary),
+        "n_coefficients_in_a_class": len(values),
+        "n_coefficients_without_a_class": unclassified,
+        "readout": {name: row.to_row("mean_coefficient") for name, row in readout.items()},
+        "name_word_flag": {
+            "n_pairs": count,
+            "share_positive": round(positive / count, 6) if count else 0.0,
+            "share_negative": round(negative / count, 6) if count else 0.0,
+            "mean_coefficient": round(sum(name_values) / count, 6) if count else 0.0,
+        },
+        "note": (
+            "the surrogate's per-topic coefficients split by the corpus map's own "
+            "word classes: the model's own habits, read the way the corpus's "
+            "readout is read. A word that sits in no labelled table has no class "
+            "and is counted apart."
+        ),
     }
 
 

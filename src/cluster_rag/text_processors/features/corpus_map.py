@@ -43,6 +43,16 @@ from dataclasses import dataclass
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
 from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
+from cluster_rag.text_processors.lexical.word_class import (
+    DISTINCTIVE_MAX_TABLES,
+    GENERIC_SHARE,
+    WordClassIndex,
+    build_word_class_index,
+    class_readout,
+    classify_word,
+    label_name_words,
+    separation_test,
+)
 
 # The log-odds' additive constant: the "add one half" of the conventional 2×2
 # table. It keeps a zero cell from sending the log to infinity, so a word that
@@ -72,6 +82,12 @@ class CorpusPair:
         p_value: The G² statistic's p-value.
         log_odds_conditional: The log-odds with the 0.5 added only where a
             cell is actually zero (the conditional smoothing).
+        word_class: The word's **class** (CS-33): ``distinctive`` (the word sits
+            in one or two of the labelled tables), ``shared`` (3–14) or
+            ``generic`` (at least a quarter of them). The class is a property of
+            the **word**, so every table the word sits in carries the same one.
+        is_name_word: Whether the word is one of the **label's own name words**
+            (the name-word flag; it overlaps the classes).
     """
 
     label: str
@@ -86,6 +102,8 @@ class CorpusPair:
     g2: float = 0.0
     p_value: float = 1.0
     log_odds_conditional: float = 0.0
+    word_class: str = ""
+    is_name_word: bool = False
 
     def to_row(self) -> dict[str, object]:
         """The pair as a JSON-friendly row (the artifact's own shape)."""
@@ -101,6 +119,8 @@ class CorpusPair:
             "g2": round(self.g2, 6),
             "p_value": round(self.p_value, 8),
             "log_odds_conditional": round(self.log_odds_conditional, 6),
+            "word_class": self.word_class,
+            "is_name_word": self.is_name_word,
         }
 
 
@@ -146,6 +166,17 @@ class CorpusMap:
     def labels_without_examples(self) -> tuple[str, ...]:
         """The labels the corpus has no example of (the held-out ones)."""
         return tuple(label for label in self.labels if not self.label_counts.get(label))
+
+    def word_class_index(self) -> WordClassIndex:
+        """The map's **word classes** (CS-33): each word's class and table count.
+
+        A word's class is read off the map's own structure: how many of the
+        **labelled** tables it sits in. The labels with no train example have an
+        empty table, so they never contribute.
+        """
+        table_counts = {word: len(rows) for word, rows in self.per_word.items()}
+        n_labelled = sum(1 for label in self.labels if self.label_counts.get(label))
+        return build_word_class_index(table_counts, n_labelled)
 
 
 def build_corpus_map(
@@ -195,6 +226,15 @@ def build_corpus_map(
     # The estimator's prior total (CS-31): the corpus's own (text, word)
     # incidences plus the floor's contribution. A map-level constant.
     alpha0 = prior_total(document_frequency.values())
+    # The **word classes** (CS-33): how many of the labelled tables each word
+    # sits in. The labelled tables are the labels that have a train example (the
+    # held-out labels have an empty table, so they never count).
+    n_labelled = sum(1 for label in label_space if label_counts.get(label))
+    table_counts: Counter[str] = Counter()
+    for label in label_space:
+        if not label_counts.get(label):
+            continue
+        table_counts.update(pairs[label].keys())
     per_label: dict[str, tuple[CorpusPair, ...]] = {}
     per_word: dict[str, list[CorpusPair]] = {}
     for label in label_space:
@@ -204,6 +244,7 @@ def build_corpus_map(
             per_label[label] = ()
             continue
         p_label = n_label / n_texts
+        name_words = label_name_words(label, stopwords=stopwords)
         rows: list[CorpusPair] = []
         for word, n_with in pairs[label].items():
             df = document_frequency.get(word, 0)
@@ -223,6 +264,8 @@ def build_corpus_map(
                 g2=measures.g2,
                 p_value=measures.p_value,
                 log_odds_conditional=measures.log_odds_conditional,
+                word_class=classify_word(table_counts[word], n_labelled),
+                is_name_word=word in name_words,
             )
             rows.append(pair)
         rows.sort(key=lambda row: (-row.log_odds, row.word))
@@ -380,6 +423,62 @@ def _head_value(pair: CorpusPair, measure: str) -> float:
     return -pair.p_value
 
 
+def word_class_block(corpus_map: CorpusMap) -> dict[str, object]:
+    """The **word-class readout** (CS-33): what kind of words go with the labels.
+
+    The block carries the classes' own definitions (the thresholds are a
+    **share** of the labelled tables, not a magic number), the readout per class
+    (the number of (label, word) pairs, the share with a positive log-odds, the
+    share with a negative one and the mean log-odds) and the **separation
+    test** — the change set's registered falsification, read on the map's own
+    numbers.
+
+    Args:
+        corpus_map: The corpus map.
+
+    Returns:
+        The block (JSON-friendly).
+    """
+    index = corpus_map.word_class_index()
+    readout = class_readout(
+        (pair.word_class, pair.log_odds)
+        for label in corpus_map.labels
+        for pair in corpus_map.topic_rows(label)
+    )
+    return {
+        "definitions": {
+            "distinctive": (
+                f"the word sits in at most {DISTINCTIVE_MAX_TABLES} of the labelled "
+                "tables: the topic's own vocabulary"
+            ),
+            "generic": (
+                f"the word sits in at least {GENERIC_SHARE:.0%} of the labelled "
+                f"tables (at least {index.generic_threshold} of "
+                f"{index.n_labelled_tables} here): the register"
+            ),
+            "shared": (
+                "the middle: the word sits in more tables than the distinctive "
+                "class and fewer than the generic class"
+            ),
+            "name_word": (
+                "the flag: the word is one of the label's own name words. It "
+                "OVERLAPS the classes (a name word can be distinctive or generic)"
+            ),
+            "note": (
+                "the classes come from the map's own structure (how many of the "
+                "labelled tables a word sits in), so they need no new dependency; "
+                "crossed with the sign of the log-odds they answer the question "
+                "which kind of word pushes the label up and which pushes it down"
+            ),
+        },
+        "n_labelled_tables": index.n_labelled_tables,
+        "generic_threshold": index.generic_threshold,
+        "words_by_class": index.counts_by_class(),
+        "readout": {name: row.to_row("mean_log_odds") for name, row in readout.items()},
+        "falsification": separation_test(readout, value_name="mean_log_odds"),
+    }
+
+
 def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str, object]:
     """The corpus map as the artifact's own block (JSON-friendly).
 
@@ -445,6 +544,7 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
             ),
         },
         "estimator": estimator_block(corpus_map),
+        "word_classes": word_class_block(corpus_map),
         "per_label": [
             {
                 "label": label,
@@ -463,6 +563,7 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
             {
                 "word": word,
                 "df": int(rows[0].df),
+                "word_class": rows[0].word_class,
                 "labels": [
                     {
                         "label": pair.label,

@@ -647,3 +647,38 @@ narrative — the two falsification conditions and their verdicts, the fit side'
 cross-fit and the shrinkage's signature, the conditional smoothing's sign-flip
 share — is the track log's §CS-31 (`docs/experiments_text_processing.md`) and
 the plan's §7.4 in `docs/text_processing_plan_archive.md`.
+
+## 2026-11-01 — the word classes (the track's CS-33): the class-restricted corpus maps on UPR val
+
+**Runs:** `upr-eval-corpus-map-sum-zscore-positive-{nogeneric,distinctive}-val`
+(the `evaluate` command; the sweep
+`experiments_text_processing/corpus_map_classes_sweep.py`), the artifacts
+`results/upr-eval-corpus-map-sum-zscore-positive-*-val/metrics.json`, the table
+rows in `docs/experiments_table_upr.md`'s `corpus_map_classes` section. UPR
+**val** (660 texts), `top_k` k=2, the arm `sum_zscore_positive` — the same arm,
+the same texts and the same operating point as the full map's run, so the
+comparison against it is paired.
+
+**What.** The corpus map's own **word classes** (a word's class is how many of
+the 60 labelled tables it sits in: **distinctive** 1–2, **generic** ≥ 15, the
+middle **shared**; the **name word** as a flag) crossed with the sign of the
+map's log-odds: the reviewer's part-of-speech question, answered from the
+map's own structure with no new dependency. The two runs are the **payoff**:
+the map with the generic class dropped, and the distinctive-only map.
+
+**The numbers.** The readout separates widely (the distinctive class 100 %
+positive with a mean log-odds of +4.27 against the generic class's 81 % and
++0.84), so the registered null does not fire. But the **class-restricted maps
+are much worse** as classifiers: the map without the generic class reaches a
+pooled **micro-F1 0.3815** and the distinctive-only map **0.0798**, against the
+full map's **0.5243** — a paired **+0.1429 [+0.1200, +0.1655]** and
+**+0.4445 [+0.4178, +0.4713]** in the full map's favour (the tool
+`tools/lexical_compare.py` rebuilds both arms from the runs' frozen configs and
+checks the rebuild against the artifacts first). The fit side agrees (the
+out-of-fold train micro-F1 0.5097 and 0.1109 against the full map's 0.6613),
+so it is not a val artefact: the strongest words are **rare** and the register
+is **everywhere**, and a classifier needs both. The full narrative — the
+readout, the surrogate's own readout (the model leans on the **name words**:
+82.9 % positive, a mean coefficient of +0.208) and the falsification's verdict —
+is the track log's §CS-33 (`docs/experiments_text_processing.md`) and the plan's
+§7.4 in `docs/text_processing_plan_archive.md`.

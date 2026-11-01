@@ -32,7 +32,6 @@ from cluster_rag.config import (
     ChunkerSpec,
     CombinerSpec,
     UprAnalysisConfig,
-    UprArmConfig,
     UprCorpusMapFeatureConfig,
     UprLearnedConfig,
     UprLearnedFloorsConfig,
