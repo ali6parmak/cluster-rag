@@ -85,6 +85,9 @@ research record and are **not** indexed here.
 | [CS-30 — the corpus map as a classifier](#cs-30--the-corpus-map-as-a-classifier-2026-11-01) | four `upr-eval-corpus-map-<arm>-val` runs (the map's four pre-registered scoring functions) | the train split's own word↔label weights reach **micro-F1 0.4924** — **90% of the champion** with no embedding and no model call; the map's **measure work buys +0.2226** over a plain word count (0.4924 against 0.2698), and the **cross-fit fit side was the right instrument**: the naive in-fold number would have put the count only 0.0227 behind (the out-of-fold puts it 0.2780 behind) | `results/upr-eval-corpus-map-sum-positive-val/metrics.json` |
 | [CS-31 — the corpus map's estimator, and the lexicon as an artifact](#cs-31--the-corpus-maps-estimator-and-the-lexicon-as-an-artifact-2026-11-01) | six `upr-eval-corpus-map-<arm>-val` runs (CS-30's four arms re-run + two z-scored arms) + the map's re-written artifact | the **z-scored weights move the classifier**: 0.4924 → **0.5243** (a paired **-0.0319 [-0.0526, -0.0120]**, the interval excluding zero) — the better measure is a better **model**, not only a better description; the head-word test's null does not fire (13 of the 60 heads change) but the plan's expected demotion of the single-document words does not happen (the prior shrinks the **common** words, the standard error the rare ones) | `results/upr-eval-corpus-map-sum-zscore-positive-val/metrics.json` |
 | [CS-32 — the corpus map in the learned pack](#cs-32--the-corpus-map-in-the-learned-pack-2026-11-01) | one `upr-analyze-cmap` run (the pack + the map's column, its control and the label-blind counterpart in the same run) | the map's feature is worth **+0.0684 [+0.0441, +0.0915]** of pooled micro-F1 over the same pack without it (the pack reaches **0.5502**, past the champion's 0.5479) and the **label-blind** map buys **−0.0509** — the gain is label-driven; but it is a **seen-labels** feature: it costs the unseen bucket **−0.4867** (the empty tables mark the eight held-out labels as impossible) | `results/upr-analyze-cmap/analysis.json` |
+| [CS-33 — the word-class readout](#cs-33--the-word-class-readout-what-kind-of-words-affect-the-label-in-which-way-2026-11-01) | two `upr-eval-corpus-map-sum-zscore-positive-{nogeneric,distinctive}-val` runs + the map's and the surrogate's re-written blocks | the classes separate widely (the **distinctive** words are 100 % positive at a mean of **+4.2676**, the **generic** 81 % at **+0.8439**) — the registered null does not fire — but the payoff is a **loss**: the class-restricted maps are much worse (0.3815 and 0.0798 against the full map's 0.5243), because the strongest words are **rare** and the register is **everywhere**; the model, by contrast, leans on the **name words** (82.9 % positive at **+0.208**) | `results/upr-eval-corpus-map-sum-zscore-positive-distinctive-val/metrics.json` |
+| [CS-34 — real part-of-speech tags](#cs-34--real-part-of-speech-tags-the-grammatical-axis-2026-11-01) | two `upr-eval-corpus-map-sum-zscore-positive-{noun,verb}-val` runs + the map's and the surrogate's re-written blocks | **both halves of the registered falsification fail** (the nouns do not separate from the verbs: +2.0044 against +1.9856; the noun-only map is materially worse: 0.4840 against 0.5243, a paired **+0.0403 [+0.0258, +0.0545]**) → the **grammatical axis is a null** and the `nltk` dependency is not worth keeping | `results/upr-eval-corpus-map-sum-zscore-positive-noun-val/metrics.json` |
+| [CS-35 — the label→word lexicon as a label-side channel](#cs-35--the-labelword-lexicon-as-a-label-side-channel-2026-11-02) | seven runs (`upr-labelembed-embeddinggemma-mined`, `upr-eval-fusionc-embeddinggemma-k10-c1-mined`, `upr-analyze-learned-lexicon-*`) | the mined words are the **best cell-level signal in the pack** (the AUC **0.8109**, above the whole-text cosine's 0.7818 and the description's 0.7067) and the channel buys **+0.0493 / +0.0507** of seen-bucket micro-F1 over the control — but the **pre-registered bar is not met** (the head-to-head against the name+description channel: +0.0217 [−0.0014, +0.0445] and +0.0272 [+0.0044, +0.0502], only one of three seen buckets clearing) → the lexicon **does not become a catalog channel**; the **expansion route** is a null for the eight | `results/upr-analyze-learned-lexicon-minedfeat/analysis.json` |
 
 ## Change sets
 
@@ -6924,3 +6927,190 @@ pre-registered arm — the reviewer's call); nothing about the tagger's
 **accuracy** (the tagger is nltk's, and the readout measures what the map does
 with its tags, not how good the tags are); and nothing about the other
 grammatical **languages** — the corpus is English only (PLAN §7).
+
+## CS-35 — the label→word lexicon as a label-side channel (2026-11-02)
+
+**The question.** The corpus map (CS-23/CS-31) *is* the label→word lexicon:
+18,707 (label, word) pairs over 3,049 content words, with the counts behind
+every one. This change set asks whether the lexicon can be used as a
+**label-side channel** — a label's representation built from the corpus-mined
+words instead of from its name and its description (the PIFA idea: the label's
+embedding is the TF-IDF centroid of its positive instances) — and whether the
+corpus's vocabulary can give a **lexical path to the eight labels that have no
+train example** (the label's *name* matched against the corpus, with no labels
+involved).
+
+**The runs.** Seven, all on UPR **val** (660 texts, 1,312 gold cells, `top_k`
+k=2), in the sweep `experiments_text_processing/upr_learned_lexicon_sweep.py`
+(the section `## UPR — upr_learned_lexicon` in the track's table).
+
+| run | what |
+|---|---|
+| `upr-labelembed-embeddinggemma-mined` | the label artifact: the 68 label texts, each the label's corpus-mined words |
+| `upr-eval-fusionc-embeddinggemma-k10-c1-mined` | the guard's reference for the mined label side (the champion with the mined label vectors) |
+| `upr-analyze-learned-lexicon-control` | the **control**: the champion's label side, the plain pack |
+| `upr-analyze-learned-lexicon-desc` | the name+description channel's **query** half (the description label side) |
+| `upr-analyze-learned-lexicon-catfeat` | the name+description channel's **feature** half (the catalog-gated groups) |
+| `upr-analyze-learned-lexicon-mined` | the mined-words channel's **query** half (the mined label side) |
+| `upr-analyze-learned-lexicon-minedfeat` | the mined-words channel's **feature** half (the `label_mined` column) |
+
+**The reproducibility check passes.** The three re-runs of CS-11's arms
+reproduce CS-11's artifacts **field for field** — the whole `analysis.json`,
+bar the `run_id` and the wall-clock fields. The mined arms' guards hold: each
+run's whole-text reference arm reproduces its own `evaluate` run.
+
+### The lexicon (the artifact's own block: `learned.label_lexicon.lexicon`)
+
+The lexicon is built **at the edge** from the **train** split's corpus map (no
+val text, no val label, no test text). A label's words are the **top 10** by
+the **PIFA weight** — `tf(L,w) × idf(w)`, the TF-IDF centroid's coordinate for
+the word. Two routes:
+
+| the route | the labels | what the words are |
+|---|---|---|
+| **mined** | 60 | the label's own top-10 centroid coordinates |
+| **expanded** | 7 | the label's **name** matched against the corpus's vocabulary |
+| **fallback** | 1 (`Other`) | the label's **name** (its only word is a stopword) |
+
+The mined words read exactly as the label's topic: *Access to justice* → `justice
+access fair trial victims ensure system perpetrators right barriers`; *Corruption*
+→ `corruption combat combating transparency institutions governance government
+fighting good rule`.
+
+**The expansion route's reach, and its looseness.** Seven of the eight held-out
+labels get an expansion: *Asylum-seekers - refugees* → `refuse seeking seek`;
+*ESC rights - general* → `general rights`; *Freedom of association and peaceful
+assembly* → `peaceful association assembly freedom`; *Freedom of religion and
+belief* → `beliefs relinquishing religious freedom`; *Gender-based violence* →
+`based gender violence`; *General* → `general`; *Special procedures* →
+`procedures special`. The corpus never says `asylum`, `refugees`, `religion` or
+`esc` — the route's reach is exactly what the corpus says. But the registered
+rule (a shared prefix of **four** characters) is looser than a stemmer:
+`refuse` and `seeking` are not inflections of *refugees* and *seekers*, and
+`relinquishing` is not an inflection of *religion*. The pre-registration's
+illustrative list under-counted these matches (its rule was right, its
+illustration was not); the rule is what was implemented and what is measured.
+
+### The numbers (UPR **val**, the pack `embedding + lexical + chunk_profile`, the gradient-boosted combiner)
+
+| arm | micro-F1 | macro-F1 | nDCG@5 | shortlist R@50 | head | torso | tail | unseen |
+|---|---|---|---|---|---|---|---|---|
+| the **control** (the champion's label side) | 0.4818 | 0.4652 | 0.6137 | 0.8909 | 0.5505 | 0.4122 | 0.4531 | 0.4469 |
+| the name+description channel's **query** | 0.5084 | 0.4872 | 0.6557 | 0.8864 | 0.5949 | 0.4101 | 0.5121 | 0.4690 |
+| the name+description channel's **features** | 0.5076 | 0.5077 | 0.6643 | 0.8955 | 0.5492 | 0.4559 | 0.5047 | 0.4824 |
+| the mined-words channel's **query** | **0.5152** | 0.5174 | 0.6605 | 0.8838 | 0.6165 | 0.4444 | 0.5031 | 0.3902 |
+| the mined-words channel's **features** | **0.5243** | 0.5265 | **0.6742** | 0.8909 | 0.6234 | 0.4522 | 0.4815 | 0.4591 |
+
+**Against the control** (the paired bootstrap over the texts; 2,000 resamples,
+seed 42; the "seen" view is the head, the torso and the tail pooled — the
+labels a train-derived channel exists for):
+
+| arm | the pooled Δ | the **seen** Δ | the **unseen** Δ |
+|---|---|---|---|
+| the mined-words **query** | +0.0334 [+0.0145, +0.0531] | +0.0493 [+0.0284, +0.0710] | **−0.0567 [−0.1011, −0.0109]** |
+| the mined-words **features** | +0.0426 [+0.0248, +0.0602] | +0.0507 [+0.0312, +0.0708] | +0.0122 [−0.0268, +0.0530] |
+
+**The head-to-head** (the difference of the differences: the mined arm minus
+the name+description arm, the same texts, the same fit side, the same
+operating point):
+
+| the scope | the **query** half (mined − desc) | the **feature** half (minedfeat − catfeat) |
+|---|---|---|
+| the **seen** view | +0.0217 [−0.0014, +0.0445] | **+0.0272 [+0.0044, +0.0502]** |
+| head | +0.0216 [−0.0088, +0.0512] | **+0.0742 [+0.0427, +0.1052]** |
+| torso | **+0.0344 [+0.0037, +0.0669]** | −0.0037 [−0.0374, +0.0316] |
+| tail | −0.0090 [−0.0796, +0.0605] | −0.0232 [−0.0880, +0.0467] |
+| unseen | −0.0788 [−0.1330, −0.0232] | −0.0234 [−0.0632, +0.0192] |
+
+### The falsification, read out — **the bar is not met, so the channel does not become a catalog channel**
+
+The registered rule: the channel **wins** if the paired difference is positive
+with an interval that **excludes zero** on the seen-bucket view **and** on at
+least **two of the three** seen buckets.
+
+1. The **query half does not win.** The seen view's interval **includes zero**
+   (+0.0217 [−0.0014, +0.0445]); only the torso clears the bar on its own.
+2. The **feature half does not win either.** Its seen view **does** clear the
+   bar (+0.0272 [+0.0044, +0.0502]) and the head does (+0.0742 [+0.0427,
+   +0.1052]), but the torso (−0.0037) and the tail (−0.0232) do not — one bucket
+   of three, where the rule needs two.
+
+**Neither half wins, so the channel loses the pre-registered comparison.** By the
+plan's own rule the lexicon's value stays confined to the readout (CS-31) and
+the classifier (CS-30), and the mined words **should not become a catalog
+channel**. That is the verdict — a null on the registered bar, reported as a
+null.
+
+**The expansion route's own bar fails too.** It had to raise the unseen
+bucket's micro-F1 against the control with an interval that excludes zero:
+the query half gives **−0.0567 [−0.1011, −0.0109]** (the interval excludes zero
+and the sign is *negative*) and the feature half **+0.0122 [−0.0268, +0.0530]**
+(the interval includes zero). **The route is a null for the eight**, and the
+reading is plain: for the label *side* the expansion is **worse than the name**
+it replaced (`refuse`, `seeking`, `relinquishing` are not the label's words), and
+as a per-cell coverage feature it is too weak to move a bucket whose labels
+never enter the global top-2.
+
+### Why the channel does not win — the reading the numbers give
+
+The mined words are the **best cell-level signal in the whole pack**. The
+feature diagnostics (the artifact's own block) rank the columns by their AUC
+over the val grid's 44,880 cells:
+
+| the column | the AUC | on the fit side |
+|---|---|---|
+| the **mined words' coverage** (the new column) | **0.8109** | 0.8657 |
+| the whole-text cosine | 0.7818 | 0.8195 |
+| the label **name**'s coverage | 0.7566 | — |
+| the **description**'s coverage (CS-11's channel) | 0.7067 | 0.7647 |
+| the parent one-hots (CS-11's other channel) | 0.4705–0.5433 | — |
+
+So the lexicon's words say more about a cell than the description does, and
+more than the embedding's own cosine. **The pack cannot spend that signal**:
+the gains over the control (+0.0493 and +0.0507 on the seen view) are in the same
+league as the catalog's channels' gains, but the head-to-head does not separate
+them, and the gains sit in the **head** while the torso and the tail are flat or
+slightly negative. The pack already carries the label's name overlap and the
+cosines, and the mined words are largely **redundant** with them.
+
+### The guard, and what it cost
+
+The pack is fitted on train and the mined words come from train, so the fit
+side's label side is **cross-fit**: five folds over the train records (336 /
+335 / 335 / 335 / 335 texts), each fold's cells extracted with the label side
+built from the **other** folds' records — so the words (and the label vectors
+they build) never come from the cells they score. The artifact records the
+folds and the seed. The three runs whose label side is **not** train-derived
+(the control, the description query, the catalog-gated groups) are not
+cross-fitted, which is why they reproduce CS-11's artifacts exactly.
+
+**What the guard cost is not measured**: the uncross-fitted variant of the two
+mined arms was not a pre-registered arm. The numbers above are the honest
+(cross-fitted) ones.
+
+### What this change set does not say
+
+- Nothing about `test` — the round's numbers are val only.
+- Nothing about the **K** (the number of mined words per label): K = 10 was
+  fixed in advance and its sensitivity is unmeasured.
+- Nothing about a **stricter** expansion rule (the exact match alone, or a
+  real stemmer): the registered four-character prefix is what was measured, and
+  its looseness is visible in the words it produced.
+- Nothing about the **uncross-fitted** arms (the guard's cost), as above.
+- Nothing about the **catalog's** own content: the committed catalog stays
+  frozen (its sha256 does not move) and carries no mined words — they are
+  corpus-derived, and the fit side's cross-fit needs a *fold's* words, which a
+  frozen file cannot provide. The catalog's schema now accepts an optional
+  `mined_words` field, so a frozen lexicon can be dropped in later without
+  touching the pack.
+
+### The reviewer's open items
+
+- **`nltk`** (CS-34's verdict: the dependency "is not worth keeping") — it is
+  still in the core dependencies.
+- The **closed-class map** (CS-34's per-tag reading: the closed-class words are
+  the weak ones) — not a pre-registered arm.
+- **The mined-words channel**: the bar is not met, so it does not ship as a
+  catalog channel; the numbers above (a better cell-level signal than the
+  description's, the same pack-level gain, no head-to-head separation) are the
+  reviewer's to read.

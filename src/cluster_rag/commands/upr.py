@@ -13,8 +13,8 @@ import json
 import logging
 import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,7 @@ from cluster_rag.commands._common import (
     _check_reference_arm,
     _fmt,
     _require_run_id,
+    _train_corpus_map,
     _upr_label_catalog,
     _warn_upr_prefix,
     _write_resolved_config,
@@ -122,6 +123,11 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
 )
 from cluster_rag.text_processors.lexical.corpus_map_score import (
     score_cells as map_score_cells,
+)
+from cluster_rag.text_processors.lexical.label_lexicon import (
+    LabelLexicon,
+    build_label_lexicon,
+    label_lexicon_block,
 )
 from cluster_rag.text_processors.lexical.pos_class import (
     POS_CLASSES,
@@ -2801,9 +2807,122 @@ def _upr_refit_weights(
     return {"name": f"{name}_refit", "block": block, "report": report}
 
 
+def _label_template(setup: EvalSetup) -> str | None:
+    """The label artifact's own template (``None`` when it has none).
+
+    The template is the label side's own recipe (the artifact that produced
+    the vectors records it), so the fit side's cross-fitted label side is
+    rendered exactly like the artifact's.
+    """
+    if setup.label_artifact is None:
+        return None
+    label_texts = setup.label_artifact.meta.get("label_texts") or {}
+    template = label_texts.get("template")
+    return str(template) if template else None
+
+
+def _label_variant(setup: EvalSetup) -> str:
+    """The label artifact's own variant (``name`` when it records none)."""
+    if setup.label_artifact is None:
+        return "name"
+    label_texts = setup.label_artifact.meta.get("label_texts") or {}
+    return str(label_texts.get("variant") or "name")
+
+
+def _render_label_text(template: str | None, words: str) -> str:
+    """Render a label's text through the artifact's template (or bare)."""
+    if template:
+        return template.replace("{label}", words)
+    return words
+
+
+def _upr_cross_fit_cubes(
+    setup: EvalSetup,
+    *,
+    folds: int,
+    seed: int,
+    label_sides: Callable[[Sequence[int]], list[UprLabel]],
+    extractor_factory: Callable[[list[UprLabel]], UprFeatureExtractor],
+    random_extractor_factory: Callable[[list[UprLabel]], UprFeatureExtractor] | None = None,
+    control_extractor_factory: Callable[[list[UprLabel]], UprFeatureExtractor] | None = None,
+    decision_train: np.ndarray | None = None,
+    rerank_train: np.ndarray | None = None,
+    corpus_map_train: np.ndarray | None = None,
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """The fit side's cubes, extracted **fold by fold** with per-fold label sides.
+
+    The pack is fitted on train and the mined words come from train, so an
+    in-fold label side is optimistically biased exactly where the combiner
+    learns its weight (CS-32's rule, applied to the label side). Each fold's
+    cells are therefore extracted with the label side built from the **other**
+    folds' records — the same fold assignment as the corpus map's own
+    cross-fit (the same seed, the same permutation).
+
+    Args:
+        setup: The run's setup (the train records and the label space).
+        folds: How many folds to split the train records into.
+        seed: The fold split's seed (deterministic).
+        label_sides: The fold's label sides, given the indices the fold
+            **keeps** (the other folds' records).
+        extractor_factory: Builds the pack for a fold's label sides.
+        random_extractor_factory: The same, for the random-vector floor.
+        control_extractor_factory: The same, for the corpus map's control.
+        decision_train: The decision probability matrix (the fit side's cells).
+        rerank_train: The reranker's score matrix (the fit side's cells).
+        corpus_map_train: The corpus map's score matrix (the fit side's cells).
+
+    Returns:
+        ``(cubes, meta)`` — the precomputed fit-side cubes (the keys
+        ``train`` / ``random`` / ``control``; a key is absent when its factory
+        is ``None``) and the cross-fit's provenance.
+
+    Raises:
+        ValueError: If the folds are fewer than two.
+    """
+    if folds < 2:
+        raise ValueError(f"a cross-fit needs at least 2 folds, got {folds}")
+    train_texts = [record.text for record in setup.train_records]
+    n_texts = len(train_texts)
+    order = np.random.default_rng(seed).permutation(n_texts)
+    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
+    cubes: dict[str, np.ndarray] = {}
+    fold_sizes: list[int] = []
+    for chunk in chunks:
+        held = set(chunk.tolist())
+        keep = [index for index in range(n_texts) if index not in held]
+        sides = label_sides(keep)
+        rows = [train_texts[index] for index in chunk]
+        for name, factory, matrices in (
+            ("train", extractor_factory, (decision_train, rerank_train, corpus_map_train)),
+            ("random", random_extractor_factory, (decision_train, rerank_train, corpus_map_train)),
+            ("control", control_extractor_factory, (decision_train, rerank_train, None)),
+        ):
+            if factory is None:
+                continue
+            sliced = [None if matrix is None else matrix[chunk] for matrix in matrices]
+            cube = factory(sides).extract(rows, *sliced)
+            if name not in cubes:
+                cubes[name] = np.zeros((n_texts, cube.shape[1], cube.shape[2]), dtype=cube.dtype)
+            cubes[name][chunk] = cube
+        fold_sizes.append(int(chunk.size))
+    meta = {
+        "folds": int(folds),
+        "seed": int(seed),
+        "fold_sizes": fold_sizes,
+        "note": (
+            "the fit side's label side is cross-fit: each fold's cells are "
+            "extracted with the label side built from the OTHER folds' records, "
+            "so the corpus-mined words (and the label vectors they build) never "
+            "come from the cells they score"
+        ),
+    }
+    return cubes, meta
+
+
 def _upr_label_sides(
     setup: EvalSetup,
     catalog: Mapping[str, LabelEntry],
+    lexicon: LabelLexicon | None = None,
 ) -> list[UprLabel]:
     """The label space as the pack's label sides.
 
@@ -2811,7 +2930,8 @@ def _upr_label_sides(
     features compare the text with it) and the text that is **embedded** for
     it (the zero-shot label vector's own text: the bare name or the config
     template). The catalog's description and parent are attached when the
-    catalog has them.
+    catalog has them, and the **corpus-mined words** (the track's CS-35) when
+    the run built a lexicon.
     """
     embedded_texts = _upr_label_texts(setup)
     sides: list[UprLabel] = []
@@ -2823,9 +2943,96 @@ def _upr_label_sides(
                 text=text,
                 description=entry.description if entry else None,
                 parent=entry.parent if entry else None,
+                mined_words=lexicon.label_words(label) if lexicon is not None else (),
             )
         )
     return sides
+
+
+def _upr_label_lexicon(
+    setup: EvalSetup,
+    learned: Any,
+) -> tuple[LabelLexicon, dict[str, Any]]:
+    """The **label lexicon** (the track's CS-35): the corpus-mined words.
+
+    The lexicon is the **train** split's corpus map read as a label-side
+    representation: per label, the words that characterise it (the mined
+    route) or, for a label with no train example, the words its **name**
+    matches in the corpus (the expansion route, with no labels involved).
+
+    The **guard**: when the run's label artifact is itself the mined-words
+    one, the lexicon built here must be the artifact's own — otherwise the
+    fit side's cross-fit would be folding a different representation than the
+    evaluated split is scored with. A mismatch fails loudly.
+
+    Args:
+        setup: The run's setup (the train records and the label space).
+        learned: The learned arm's config (the lexicon's knobs).
+
+    Returns:
+        ``(lexicon, block)`` — the lexicon and its JSON-friendly block.
+
+    Raises:
+        ValueError: If the run's own lexicon disagrees with the label
+            artifact's.
+    """
+    lexicon_config = learned.label_lexicon
+    corpus_map = _train_corpus_map(setup.train_records, setup.labels)
+    lexicon = build_label_lexicon(
+        corpus_map,
+        top_k=lexicon_config.top_k,
+        expansion_min_prefix=lexicon_config.expansion_min_prefix,
+    )
+    block = label_lexicon_block(lexicon)
+    block["provenance"] = {
+        "split": "train",
+        "n_train_texts": corpus_map.n_texts,
+        "map": {
+            "n_texts": corpus_map.n_texts,
+            "n_words": corpus_map.n_words,
+            "n_pairs": corpus_map.n_pairs,
+            "labels_with_examples": sum(
+                1 for label in corpus_map.labels if corpus_map.label_counts.get(label)
+            ),
+        },
+    }
+    artifact_words = _artifact_mined_words(setup)
+    if artifact_words is not None:
+        mine = {label: list(lexicon.label_words(label)) for label in setup.labels}
+        if artifact_words != mine:
+            differing = [
+                label
+                for label in setup.labels
+                if artifact_words.get(label, []) != mine.get(label, [])
+            ]
+            raise ValueError(
+                "the run's own label lexicon disagrees with the label artifact's "
+                f"(the mined words of {len(differing)} label(s) differ, e.g. "
+                f"{differing[:3]}): the labelembed run and this run must use the "
+                "same top_k and expansion_min_prefix"
+            )
+    return lexicon, block
+
+
+def _artifact_mined_words(setup: EvalSetup) -> dict[str, list[str]] | None:
+    """The label artifact's own mined words (``None`` when it has none).
+
+    The artifact records the lexicon it was built from (the track's CS-35), so
+    the run can check its own lexicon against it.
+    """
+    if setup.label_artifact is None:
+        return None
+    label_texts = setup.label_artifact.meta.get("label_texts") or {}
+    if label_texts.get("variant") != "mined_words":
+        return None
+    block = label_texts.get("lexicon") or {}
+    rows = block.get("per_label") or []
+    if not rows:
+        return None
+    return {
+        str(row.get("label")): [str(word.get("word")) for word in row.get("words") or []]
+        for row in rows
+    }
 
 
 def _upr_bucket_masks(view: UprView) -> dict[str, np.ndarray]:
@@ -2877,7 +3084,14 @@ def _upr_learned_arms(
     embedder = _check_embedder_matches_artifact(config, setup)
     spec = build_preprocess_spec(config.preprocess)
     catalog = _upr_label_catalog(config)
-    labels = _upr_label_sides(setup, catalog)
+    # The label lexicon (the track's CS-35): the corpus-mined words, built at
+    # the edge from the train split. Off by default, so every earlier run's
+    # artifact keeps its exact content.
+    lexicon = None
+    lexicon_block: dict[str, Any] = {}
+    if learned.label_lexicon.enabled:
+        lexicon, lexicon_block = _upr_label_lexicon(setup, learned)
+    labels = _upr_label_sides(setup, catalog, lexicon=lexicon)
 
     chunker, chunk_embedder = _upr_chunker(config, embedder, learned.chunker, spec.version)
     text_embedder = _cached_embedder(embedder, config, spec.version)
@@ -2900,25 +3114,44 @@ def _upr_learned_arms(
         ngram_embedder = _cached_embedder(
             embedder, config, ngram_chunker.cache_version(spec.version)
         )
-    extractor = UprFeatureExtractor(
-        UprFeatureEmbedders(
-            text=text_embedder,
-            chunks=chunk_embedder,
-            labels=label_embedder,
-            text_sentences=sentence_embedder,
-            text_ngrams=ngram_embedder,
-        ),
-        labels=labels,
-        text_chunker=chunker,
-        top_k=learned.top_k,
+    real_embedders = UprFeatureEmbedders(
+        text=text_embedder,
+        chunks=chunk_embedder,
+        labels=label_embedder,
+        text_sentences=sentence_embedder,
+        text_ngrams=ngram_embedder,
+    )
+
+    def _pack(
+        sides: Sequence[UprLabel],
+        *,
+        groups: Sequence[str],
+        embedders: UprFeatureEmbedders,
+        corpus_map_available: bool,
+    ) -> UprFeatureExtractor:
+        """The pack for one label side (the fold-by-fold cross-fit's factory)."""
+        return UprFeatureExtractor(
+            embedders,
+            labels=sides,
+            text_chunker=chunker,
+            top_k=learned.top_k,
+            groups=groups,
+            catalog_available=bool(catalog),
+            corpus_map_available=corpus_map_available,
+            lexicon_available=lexicon is not None,
+            profile_units=profile_units,
+            profile_top_k=learned.profile_top_k,
+        )
+
+    extractor = _pack(
+        labels,
         groups=learned.groups,
-        catalog_available=bool(catalog),
+        embedders=real_embedders,
         corpus_map_available=learned.corpus_map_feature.enabled,
-        profile_units=profile_units,
-        profile_top_k=learned.profile_top_k,
     )
     # The random-vector floor: the pack's embedding sides are seeded random
     # unit vectors of the model's dimension (never written to the cache).
+    random_embedders = None
     random_extractor = None
     if learned.floors.random_vectors:
         dimension = int(embedder.info.dimension or 0)
@@ -2928,22 +3161,18 @@ def _upr_learned_arms(
                 "section's backend does not report one"
             )
         random_embedder = RandomEmbedder(dimension=dimension, seed=learned.floors.random_seed)
-        random_extractor = UprFeatureExtractor(
-            UprFeatureEmbedders(
-                text=random_embedder,
-                chunks=random_embedder,
-                labels=random_embedder,
-                text_sentences=random_embedder,
-                text_ngrams=random_embedder,
-            ),
-            labels=labels,
-            text_chunker=chunker,
-            top_k=learned.top_k,
+        random_embedders = UprFeatureEmbedders(
+            text=random_embedder,
+            chunks=random_embedder,
+            labels=random_embedder,
+            text_sentences=random_embedder,
+            text_ngrams=random_embedder,
+        )
+        random_extractor = _pack(
+            labels,
             groups=learned.groups,
-            catalog_available=bool(catalog),
+            embedders=random_embedders,
             corpus_map_available=learned.corpus_map_feature.enabled,
-            profile_units=profile_units,
-            profile_top_k=learned.profile_top_k,
         )
 
     train_texts = [record.text for record in setup.train_records]
@@ -2967,22 +3196,76 @@ def _upr_learned_arms(
         corpus_map_train_blind = corpus_map_block_data["train_blind"]
         corpus_map_eval_blind = corpus_map_block_data["eval_blind"]
         control_groups = tuple(group for group in learned.groups if group != "corpus_map")
-        control_extractor = UprFeatureExtractor(
-            UprFeatureEmbedders(
-                text=text_embedder,
-                chunks=chunk_embedder,
-                labels=label_embedder,
-                text_sentences=sentence_embedder,
-                text_ngrams=ngram_embedder,
-            ),
-            labels=labels,
-            text_chunker=chunker,
-            top_k=learned.top_k,
+        control_extractor = _pack(
+            labels,
             groups=control_groups,
-            catalog_available=bool(catalog),
+            embedders=real_embedders,
             corpus_map_available=False,
-            profile_units=profile_units,
-            profile_top_k=learned.profile_top_k,
+        )
+    # The fit side's **cross-fit** (the track's CS-35): the pack is fitted on
+    # train and the mined words come from train, so the fit side's label side
+    # is extracted fold by fold, each fold with the label side built from the
+    # other folds' records.
+    fit_cubes: dict[str, np.ndarray] = {}
+    cross_fit_meta: dict[str, Any] = {}
+    if lexicon is not None:
+        template = _label_template(setup)
+        mined_variant = _label_variant(setup) == "mined_words"
+
+        def _fold_label_sides(keep: Sequence[int]) -> list[UprLabel]:
+            """The fold's label sides: the lexicon built from the other folds."""
+            fold_map = _train_corpus_map(
+                [setup.train_records[index] for index in keep],
+                setup.labels,
+            )
+            fold_lexicon = build_label_lexicon(
+                fold_map,
+                top_k=learned.label_lexicon.top_k,
+                expansion_min_prefix=learned.label_lexicon.expansion_min_prefix,
+            )
+            sides: list[UprLabel] = []
+            for base in labels:
+                words = fold_lexicon.label_words(base.name)
+                text = base.text
+                if mined_variant:
+                    text = _render_label_text(template, fold_lexicon.label_text(base.name))
+                sides.append(replace(base, text=text, mined_words=words))
+            return sides
+
+        fit_cubes, cross_fit_meta = _upr_cross_fit_cubes(
+            setup,
+            folds=learned.label_lexicon.folds,
+            seed=seed,
+            label_sides=_fold_label_sides,
+            extractor_factory=lambda sides: _pack(
+                sides,
+                groups=learned.groups,
+                embedders=real_embedders,
+                corpus_map_available=learned.corpus_map_feature.enabled,
+            ),
+            random_extractor_factory=(
+                None
+                if random_embedders is None
+                else lambda sides: _pack(
+                    sides,
+                    groups=learned.groups,
+                    embedders=random_embedders,
+                    corpus_map_available=learned.corpus_map_feature.enabled,
+                )
+            ),
+            control_extractor_factory=(
+                None
+                if control_extractor is None
+                else lambda sides: _pack(
+                    sides,
+                    groups=control_groups,
+                    embedders=real_embedders,
+                    corpus_map_available=False,
+                )
+            ),
+            decision_train=decision_train,
+            rerank_train=rerank_train,
+            corpus_map_train=corpus_map_train,
         )
     result = score_upr_learned_arms(
         train_texts=train_texts,
@@ -3011,6 +3294,9 @@ def _upr_learned_arms(
         corpus_map_train_blind=corpus_map_train_blind,
         corpus_map_eval_blind=corpus_map_eval_blind,
         control_extractor=control_extractor,
+        train_features=fit_cubes.get("train"),
+        control_train_features=fit_cubes.get("control"),
+        random_train_features=fit_cubes.get("random"),
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
     arms: dict[str, dict[str, Any]] = {}
@@ -3049,6 +3335,27 @@ def _upr_learned_arms(
             "here."
         ),
     }
+    if lexicon is not None:
+        # The label lexicon (the track's CS-35): the corpus-mined words, the
+        # routes they came from and the cross-fit that guards the fit side.
+        meta["label_lexicon"] = {
+            "enabled": True,
+            "top_k": learned.label_lexicon.top_k,
+            "expansion_min_prefix": learned.label_lexicon.expansion_min_prefix,
+            "seed": seed,
+            "cross_fit": cross_fit_meta,
+            "label_side": {
+                "variant": _label_variant(setup),
+                "template": _label_template(setup),
+                "note": (
+                    "the label side's text comes from the label artifact (the "
+                    "rendered texts it records); the fit side's label side is "
+                    "cross-fitted, so each fold's cells are scored with the "
+                    "label side built from the other folds' records"
+                ),
+            },
+            "lexicon": lexicon_block,
+        }
     if corpus_map_block_data:
         # The corpus map's comparison (the track's CS-32): the real arm minus
         # the control (the same pack without the group) and minus the

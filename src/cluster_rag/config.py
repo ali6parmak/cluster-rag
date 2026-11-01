@@ -14,6 +14,7 @@ working directory. Run the CLI from the repository root, as in AGENTS.md.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -124,7 +125,13 @@ class LabelTextsConfig(BaseModel):
     - ``variant: description`` — the label's **catalog description** (the
       text-processing track's CS-11 catalog, ``paths.label_catalog``), either
       bare or through the same template. The label without a catalog entry
-      falls back to its name, and the artifact records the count.
+      falls back to its name, and the artifact records the count;
+    - ``variant: mined_words`` — the label's **corpus-mined words** (the
+      text-processing track's CS-35: the label-side representation built from
+      the train split's corpus map, the PIFA idea), either bare or through the
+      same template. The words come from the **train** split, so the variant
+      needs the split's fixed ids; the command builds the map and the lexicon
+      and renders every label's text.
 
     The ``description`` variant needs the catalog file to exist; without it the
     command fails loudly rather than embedding a half-empty catalog.
@@ -132,8 +139,12 @@ class LabelTextsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    variant: Literal["name", "template", "description"] = "name"
+    variant: Literal["name", "template", "description", "mined_words"] = "name"
     template: str | None = None
+    # The mined-words variant's own knobs (CS-35): how many mined words a
+    # label keeps, and the expansion route's minimum shared prefix.
+    top_k: int = Field(default=10, ge=1)
+    expansion_min_prefix: int = Field(default=4, ge=1)
 
     @model_validator(mode="after")
     def _template_matches_variant(self) -> LabelTextsConfig:
@@ -150,19 +161,27 @@ class LabelTextsConfig(BaseModel):
             raise ValueError("label_texts template must contain the {label} placeholder")
         return self
 
-    def render_text(self, label: str, description: str | None = None) -> str:
+    def render_text(
+        self,
+        label: str,
+        description: str | None = None,
+        mined_words: Sequence[str] | None = None,
+    ) -> str:
         """The embeddable text for one label (deterministic, config-driven).
 
         Args:
             label: The label's name.
             description: The label's catalog description (the
                 ``description`` variant only).
+            mined_words: The label's **mined words** (the ``mined_words``
+                variant only — the corpus-mined representation of CS-35).
 
         Returns:
             The text to embed.
 
         Raises:
-            ValueError: If the variant needs a description and none is given.
+            ValueError: If the variant needs a description or mined words and
+                none is given.
         """
         if self.variant == "name":
             return label
@@ -175,6 +194,16 @@ class LabelTextsConfig(BaseModel):
             if self.template:
                 return self.template.replace("{label}", description)
             return description
+        if self.variant == "mined_words":
+            if not mined_words:
+                raise ValueError(
+                    f"the label_texts variant 'mined_words' needs the mined words "
+                    f"for the label {label!r}: the lexicon has none (or was not built)"
+                )
+            words = " ".join(mined_words)
+            if self.template:
+                return self.template.replace("{label}", words)
+            return words
         assert self.template is not None  # guaranteed by the validator
         return self.template.replace("{label}", label)
 
@@ -1874,6 +1903,44 @@ class UprCorpusMapFeatureConfig(BaseModel):
     label_blind: bool = True
 
 
+class UprLabelLexiconConfig(BaseModel):
+    """The **label lexicon** as the pack's channel (the track's CS-35).
+
+    The corpus map (CS-23) *is* the label→word lexicon; this config turns it
+    into a **label-side representation**: per label, the words that characterise
+    it (the PIFA idea — the label's TF-IDF centroid over its positive
+    instances), and for the labels with no train example the **expansion**
+    route (the label's name matched against the corpus, with no labels
+    involved).
+
+    The pack does **not** build the lexicon: it is built at the edge (from the
+    train split) and the words ride on the label side, exactly like the
+    description and the parent.
+
+    **The guard.** The pack is fitted on train and the mined words come from
+    train, so on the fit side the channel would be optimistically biased
+    exactly where the combiner learns its weight. The fit side is therefore
+    **cross-fit**: each fold's cells are scored with the label side built from
+    the **other** folds (CS-32's rule, applied to the label side).
+
+    Attributes:
+        enabled: Whether the run computes the mined-words channel at all. The
+            default is ``False``, so the earlier runs' artifacts keep their
+            exact content.
+        top_k: How many mined words a label keeps (CS-35's K).
+        expansion_min_prefix: The expansion route's minimum shared prefix (in
+            characters).
+        folds: The cross-fit's number of folds (at least 2).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    top_k: int = Field(default=10, ge=1)
+    expansion_min_prefix: int = Field(default=4, ge=1)
+    folds: int = Field(default=5, ge=2)
+
+
 class UprBackoffConfig(BaseModel):
     """The **sibling-max backoff** on the UPR pack (the track's CS-11).
 
@@ -1947,6 +2014,8 @@ class UprLearnedConfig(BaseModel):
             (CS-13); off by default.
         corpus_map_feature: The **corpus map**'s per-cell score as a pack
             feature (CS-32); off by default.
+        label_lexicon: The **label lexicon** (the corpus-mined words) as the
+            pack's label-side channel (CS-35); off by default.
         seed: The seed of the floors' permutations and of the random-vector
             draw. ``None`` uses the run's seed.
     """
@@ -1969,6 +2038,7 @@ class UprLearnedConfig(BaseModel):
     decision_feature: UprDecisionFeatureConfig = Field(default_factory=UprDecisionFeatureConfig)
     rerank_feature: UprRerankFeatureConfig = Field(default_factory=UprRerankFeatureConfig)
     corpus_map_feature: UprCorpusMapFeatureConfig = Field(default_factory=UprCorpusMapFeatureConfig)
+    label_lexicon: UprLabelLexiconConfig = Field(default_factory=UprLabelLexiconConfig)
     seed: int | None = None
 
     @field_validator("groups")

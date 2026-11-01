@@ -370,3 +370,10 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-eval-corpus-map-sum-zscore-positive-noun-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4840 | 0.4224 | 0.4608 | 0.838 | 0.2324 | 0.5764 | 0.5761 | 0.6857 | 660 | 1.81 |
 | upr-eval-corpus-map-sum-zscore-positive-verb-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.1261 | 0.1197 | 0.1184 | 0.750 | 0.0664 | 0.2048 | 0.1620 | 0.6110 | 660 | 0.973 |
+
+## UPR — upr_learned_lexicon
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-labelembed-embeddinggemma-mined | 2026-11-02 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.182 | 68 | 0 |
+| upr-eval-fusionc-embeddinggemma-k10-c1-mined | 2026-11-02 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4961 | 0.5262 | 0.868 | 0.2770 | 0.7085 | 0.6737 | 0.7375 | 660 | 0.139 |

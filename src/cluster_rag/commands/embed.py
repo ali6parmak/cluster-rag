@@ -19,6 +19,8 @@ import numpy as np
 from cluster_rag.commands._common import (
     _append_command_rows,
     _require_run_id,
+    _train_corpus_map,
+    _train_records,
     _upr_label_catalog,
     _warn_upr_prefix,
     _write_resolved_config,
@@ -30,6 +32,11 @@ from cluster_rag.embed import KINDS, build_embedder
 from cluster_rag.embed.cache import CachedEmbedder
 from cluster_rag.experiment_table import EMBED_COLUMNS, EMBED_KEY_COLUMNS
 from cluster_rag.preprocess import build_preprocess_spec
+from cluster_rag.text_processors.lexical.label_lexicon import (
+    LabelLexicon,
+    build_label_lexicon,
+    label_lexicon_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +181,49 @@ def _cmd_embed(config: AppConfig, kinds: Sequence[str]) -> int:
     return 0
 
 
+def _label_lexicon_from_train(
+    config: AppConfig,
+    labels: Sequence[str],
+) -> tuple[LabelLexicon, dict[str, Any]]:
+    """The **label lexicon** from the train split (the track's CS-35).
+
+    The lexicon is the corpus map's label-side representation: per label, the
+    words that characterise it (the mined route) or, for a label with no train
+    example, the words its **name** matches in the corpus (the expansion
+    route). The map is built from the **train** split only.
+
+    Args:
+        config: The resolved app config (the split's ids, the knobs).
+        labels: The label space (every label of the dataset).
+
+    Returns:
+        ``(lexicon, block)`` — the lexicon and its JSON-friendly block (the
+        artifact's own shape, with the provenance).
+    """
+    records, source_sha = _train_records(config)
+    corpus_map = _train_corpus_map(records, labels)
+    lexicon = build_label_lexicon(
+        corpus_map,
+        top_k=config.label_texts.top_k if config.label_texts else 10,
+        expansion_min_prefix=(config.label_texts.expansion_min_prefix if config.label_texts else 4),
+    )
+    block = label_lexicon_block(lexicon)
+    block["provenance"] = {
+        "split": "train",
+        "source_sha256": source_sha,
+        "n_train_texts": len(records),
+        "map": {
+            "n_texts": corpus_map.n_texts,
+            "n_words": corpus_map.n_words,
+            "n_pairs": corpus_map.n_pairs,
+            "labels_with_examples": sum(
+                1 for label in corpus_map.labels if corpus_map.label_counts.get(label)
+            ),
+        },
+    }
+    return lexicon, block
+
+
 def _cmd_labelembed(config: AppConfig) -> int:
     """Run labelembed: embed one text per dataset label (zero-shot artifact, Phase 4).
 
@@ -185,6 +235,12 @@ def _cmd_labelembed(config: AppConfig) -> int:
     ``results/<run_id>/label_embeddings.npz`` (``labels`` + ``vectors_label``,
     row order = sorted label order) plus ``meta.json`` with the full lineage;
     consumed through ``eval.label_embedding_run_id``.
+
+    The ``mined_words`` variant (the track's CS-35) is the one that needs the
+    **train split**: the label's text is its corpus-mined words (the label-side
+    representation built from the train split's corpus map), so the command
+    builds the map and the lexicon itself and records the lexicon's block in
+    the artifact.
     """
     started = time.perf_counter()
     run_id = _require_run_id(config)
@@ -206,6 +262,11 @@ def _cmd_labelembed(config: AppConfig) -> int:
     if not labels:
         raise ValueError("the dataset has no labels; nothing to embed")
     catalog = _upr_label_catalog(config) if config.label_texts.variant == "description" else {}
+    lexicon_block: dict[str, Any] | None = None
+    if config.label_texts.variant == "mined_words":
+        lexicon, lexicon_block = _label_lexicon_from_train(config, labels)
+    else:
+        lexicon = None
     texts: list[str] = []
     n_fallback = 0
     for label in labels:
@@ -214,7 +275,12 @@ def _cmd_labelembed(config: AppConfig) -> int:
         if config.label_texts.variant == "description" and not description:
             description = label
             n_fallback += 1
-        texts.append(config.label_texts.render_text(label, description))
+        words = list(lexicon.label_words(label)) if lexicon is not None else None
+        if words is not None and not words:
+            # the fallback route: the label has no mined words and no matched
+            # word, so its text is its NAME (the plan's own rule).
+            words = [label]
+        texts.append(config.label_texts.render_text(label, description, words))
 
     spec = build_preprocess_spec(config.preprocess)
     processed = spec.apply(texts)
@@ -276,6 +342,15 @@ def _cmd_labelembed(config: AppConfig) -> int:
                 else None
             ),
             "n_fallback_to_name": n_fallback,
+            "top_k": (
+                config.label_texts.top_k if config.label_texts.variant == "mined_words" else None
+            ),
+            "expansion_min_prefix": (
+                config.label_texts.expansion_min_prefix
+                if config.label_texts.variant == "mined_words"
+                else None
+            ),
+            "lexicon": lexicon_block,
         },
         "source_sha256": file_sha256(config.paths.data_raw),
         "n_malformed_lines": report.n_invalid,

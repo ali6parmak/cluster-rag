@@ -11,6 +11,16 @@ with one object per label::
 
     {"name": "Detention", "description": "arrest and detention", "parent": "Liberties"}
 
+A fourth field is **optional** and belongs to the text-processing track's CS-35
+(the label→word lexicon as a label-side channel)::
+
+    {"name": "Detention", "mined_words": ["detention", "custody", "arrest"]}
+
+The committed catalog carries none of them: the mined words are **corpus-derived**
+(the train split's own corpus map), and the fit side's cross-fit needs a *fold's*
+words, which a frozen file cannot provide — so the words are built at the edge and
+ride on the label side. The field is the schema's home for a frozen lexicon.
+
 The file is the edge (it is read from disk), the data it carries is passed to
 the track's pure pack as plain values. A run **without** a catalog is a
 perfectly valid run: the pack's two catalog-gated feature groups are then
@@ -43,11 +53,18 @@ class LabelEntry:
             when the entry carries none).
         parent: The label's parent category (its **type** in the taxonomy;
             ``None`` when the entry carries none).
+        mined_words: The label's **corpus-mined words** (the text-processing
+            track's CS-35: the label-side representation built from the train
+            split's corpus map). Empty when the entry carries none — the
+            committed catalog carries none, because the mined words are
+            **corpus-derived** and the fit side's cross-fit needs a fold's
+            words, which a frozen file cannot provide.
     """
 
     name: str
     description: str | None = None
     parent: str | None = None
+    mined_words: tuple[str, ...] = ()
 
 
 def load_label_catalog(path: Path) -> dict[str, LabelEntry]:
@@ -85,10 +102,20 @@ def load_label_catalog(path: Path) -> dict[str, LabelEntry]:
             raise ValueError(f"the label catalog repeats the label {name!r} (line {number})")
         description = payload.get("description")
         parent = payload.get("parent")
+        mined_words = payload.get("mined_words")
+        if mined_words is not None and (
+            not isinstance(mined_words, list)
+            or not all(isinstance(word, str) and word.strip() for word in mined_words)
+        ):
+            raise ValueError(
+                f"the label catalog's line {number} carries a 'mined_words' that is "
+                "not a list of non-empty strings"
+            )
         entries[name] = LabelEntry(
             name=name,
             description=description if isinstance(description, str) and description else None,
             parent=parent if isinstance(parent, str) and parent else None,
+            mined_words=tuple(str(word).strip() for word in (mined_words or [])),
         )
     return entries
 

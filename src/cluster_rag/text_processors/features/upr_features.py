@@ -93,6 +93,7 @@ UPR_FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "decision": ("dec_",),
     "rerank": ("rerank_",),
     "corpus_map": ("cmap_",),
+    "label_mined": ("labelmined_",),
 }
 
 # The group names, in the canonical order.
@@ -105,6 +106,12 @@ CATALOG_GROUPS: tuple[str, ...] = ("label_part", "label_type")
 # built at the edge from the train split and its per-cell score is passed in,
 # so the group can only be selected when the map is available.
 CORPUS_MAP_GROUPS: tuple[str, ...] = ("corpus_map",)
+
+# The groups that need the **label lexicon** (the track's CS-35): the
+# corpus-mined words, built at the edge from the train split, ride on the
+# label side — so the group can only be selected when the lexicon is
+# available.
+LEXICON_GROUPS: tuple[str, ...] = ("label_mined",)
 
 # The **default** selection: the two catalog-free groups. The CS-8d run uses
 # exactly these (the repo has no label catalog), and the artifact records the
@@ -119,6 +126,11 @@ DEFAULT_UPR_TOP_K = 3
 # and the label-type one-hots.
 DESCRIPTION_FEATURE_PREFIX = "labelpart_description_coverage"
 LABEL_TYPE_FEATURE_PREFIX = "labeltype_"
+
+# The **mined-words** group's column (the track's CS-35): the soft coverage of
+# the label's corpus-mined words by the text — the same statistic as the
+# description's coverage, over the mined words instead of the description.
+MINED_FEATURE_PREFIX = "labelmined_coverage"
 
 # The **decision** group's column (the track's CS-13): the decision model's
 # probability for the (text, label) cell. The pack does not compute it -- the
@@ -187,12 +199,16 @@ class UprLabel:
             when there is no catalog.
         parent: The label's parent category (its **type** in the taxonomy);
             ``None`` when there is no catalog.
+        mined_words: The label's **corpus-mined words** (the track's CS-35:
+            the label-side representation built from the train split's corpus
+            map, the PIFA idea). Empty when the run has no lexicon.
     """
 
     name: str
     text: str = ""
     description: str | None = None
     parent: str | None = None
+    mined_words: tuple[str, ...] = ()
 
     @property
     def embedded_text(self) -> str:
@@ -246,6 +262,7 @@ class _LabelFacts:
     name_gram_norm: float
     name_token_ngrams: list[frozenset[str]]
     description_token_ngrams: list[frozenset[str]]
+    mined_token_ngrams: list[frozenset[str]]
 
 
 class UprFeatureExtractor:
@@ -272,13 +289,17 @@ class UprFeatureExtractor:
             groups. The selected features keep the pack's canonical order.
         catalog_available: Whether a label catalog was available. The
             catalog-gated groups can only be selected when it is.
+        lexicon_available: Whether the **label lexicon** (the track's CS-35:
+            the corpus-mined words) was available. The lexicon-gated group can
+            only be selected when it is.
         stopwords: The stopwords of the lexical coverage.
 
     Raises:
         ValueError: If the label space is empty, if a group name is unknown,
             if the selection is empty or repeats a group, if a catalog-gated
-            group is selected without a catalog, if ``top_k`` is not positive
-            or if it would duplicate the top-2 mean column.
+            group is selected without a catalog, if a lexicon-gated group is
+            selected without a lexicon, if ``top_k`` is not positive or if it
+            would duplicate the top-2 mean column.
     """
 
     def __init__(
@@ -291,6 +312,7 @@ class UprFeatureExtractor:
         groups: Sequence[str] | None = None,
         catalog_available: bool = False,
         corpus_map_available: bool = False,
+        lexicon_available: bool = False,
         profile_units: ProfileUnits | None = None,
         profile_top_k: int = 3,
         stopwords: frozenset[str] = DEFAULT_STOPWORDS,
@@ -310,6 +332,7 @@ class UprFeatureExtractor:
         self.stopwords = frozenset(stopwords)
         self.catalog_available = bool(catalog_available)
         self.corpus_map_available = bool(corpus_map_available)
+        self.lexicon_available = bool(lexicon_available)
         self.profile_units = profile_units
         self.profile_top_k = profile_top_k
         self.groups = self._checked_groups(groups)
@@ -318,6 +341,13 @@ class UprFeatureExtractor:
             raise ValueError(
                 f"the feature group(s) {gated} need a label catalog (a name / "
                 "description / parent per label, paths.label_catalog): the repo "
+                "has none, so the pack runs without them"
+            )
+        lexicon_gated = [group for group in LEXICON_GROUPS if group in self.groups]
+        if lexicon_gated and not self.lexicon_available:
+            raise ValueError(
+                f"the feature group(s) {lexicon_gated} need the label lexicon (the "
+                "corpus-mined words of the train split, built at the edge): the run "
                 "has none, so the pack runs without them"
             )
         if "chunk_profile" in self.groups and profile_units is None:
@@ -380,6 +410,8 @@ class UprFeatureExtractor:
             names.append(DESCRIPTION_FEATURE_PREFIX)
         if "label_type" in self.groups:
             names.extend(f"{LABEL_TYPE_FEATURE_PREFIX}{parent}" for parent in self._parent_names())
+        if "label_mined" in self.groups:
+            names.append(MINED_FEATURE_PREFIX)
         if "decision" in self.groups:
             names.append(DECISION_FEATURE_NAME)
         if "rerank" in self.groups:
@@ -442,7 +474,7 @@ class UprFeatureExtractor:
     def describe(self) -> dict[str, Any]:
         """A JSON-friendly description of the pack (recorded in the artifact)."""
         gated = [group for group in CATALOG_GROUPS if group not in self.groups]
-        return {
+        described = {
             "name": "upr",
             "n_features": len(self.feature_names),
             "feature_names": list(self.feature_names),
@@ -464,6 +496,21 @@ class UprFeatureExtractor:
                     "pack runs without them and the gap is stated here: the "
                     "label's description and its parent category are not part "
                     "of this arm's features."
+                ),
+            },
+            "label_lexicon": {
+                "available": self.lexicon_available,
+                "gated_groups": list(LEXICON_GROUPS),
+                "groups_not_selected": [
+                    group for group in LEXICON_GROUPS if group not in self.groups
+                ],
+                "n_labels_with_words": sum(1 for label in self.labels if label.mined_words),
+                "note": (
+                    "the label lexicon (the track's CS-35): the label's corpus-"
+                    "mined words, built at the edge from the train split's "
+                    "corpus map. The group's column is the mined words' soft "
+                    "coverage by the text — the same statistic as the "
+                    "description's coverage, over the mined words."
                 ),
             },
             "embedding_sides": {
@@ -511,6 +558,12 @@ class UprFeatureExtractor:
                 "vector's own text)."
             ),
         }
+        if not self.lexicon_available:
+            # the lexicon's block appears only when the run has a lexicon, so
+            # every earlier run's artifact keeps its exact content (the
+            # track's "off by default" rule)
+            described.pop("label_lexicon")
+        return described
 
     # -- the text side -----------------------------------------------------------------
 
@@ -545,6 +598,7 @@ class UprFeatureExtractor:
                 _token_ngrams(token) for token in content_tokens(label.name, self.stopwords)
             ],
             description_token_ngrams=[_token_ngrams(token) for token in description_tokens],
+            mined_token_ngrams=[_token_ngrams(word) for word in label.mined_words],
         )
 
     # -- the extraction ----------------------------------------------------------------
@@ -707,6 +761,11 @@ class UprFeatureExtractor:
             if "label_type" in self.groups
             else {}
         )
+        mined_index = (
+            self._canonical_names.index(MINED_FEATURE_PREFIX)
+            if "label_mined" in self.groups
+            else None
+        )
         # The chunk profile's units (the sentences and the word pieces) on the
         # text side; the label side is one unit (the label's own vector).
         profile = self._profile_sides(items, label_vectors, text_vectors.shape[1])
@@ -742,21 +801,26 @@ class UprFeatureExtractor:
                     values[column, description_index] = soft_coverage(
                         label_facts_row.description_token_ngrams, facts.ngrams
                     )
-            # 5. the label's type (the catalog-gated group)
+                # 5. the label's corpus-mined words' coverage (the CS-35 group)
+                if mined_index is not None and label_facts_row.mined_token_ngrams:
+                    values[column, mined_index] = soft_coverage(
+                        label_facts_row.mined_token_ngrams, facts.ngrams
+                    )
+            # 6. the label's type (the catalog-gated group)
             if type_index:
                 for column, label in enumerate(self.labels):
                     if label.parent is not None and label.parent in type_index:
                         values[column, type_index[label.parent]] = 1.0
-            # 6. the chunk profile (the CS-8e group)
+            # 7. the chunk profile (the CS-8e group)
             if profile is not None:
                 self._profile_values(values, profile, position)
-            # 7. the decision model's probability (the CS-13 group)
+            # 8. the decision model's probability (the CS-13 group)
             if decision_index is not None:
                 values[:, decision_index] = probabilities[position]
-            # 8. the reranker's score (the CS-16 group)
+            # 9. the reranker's score (the CS-16 group)
             if rerank_index is not None:
                 values[:, rerank_index] = rerank_values[position]
-            # 9. the corpus map's per-cell score (the CS-32 group)
+            # 10. the corpus map's per-cell score (the CS-32 group)
             if map_index is not None:
                 values[:, map_index] = map_values[position]
         return matrix

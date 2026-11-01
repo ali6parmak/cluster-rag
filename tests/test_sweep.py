@@ -704,7 +704,12 @@ def test_label_embed_cell_field() -> None:
         label_texts=LabelTextsConfig(variant="template", template="About {label}."),
     )
     assert cell.command == "labelembed"
-    assert cell.overrides["label_texts"] == {"variant": "template", "template": "About {label}."}
+    overrides = cell.overrides["label_texts"]
+    assert overrides["variant"] == "template"
+    assert overrides["template"] == "About {label}."
+    # the mined-words variant's own knobs ride along (the track's CS-35)
+    assert overrides["top_k"] == 10
+    assert overrides["expansion_min_prefix"] == 4
     with pytest.raises(ValueError, match="Extra inputs"):
         LabelEmbedCell(
             label="upr-labelembed-x",

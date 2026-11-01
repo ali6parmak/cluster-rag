@@ -35,6 +35,16 @@ from cluster_rag.eval.multilabel import paired_counts_bootstrap, paired_values_b
 
 DEFAULT_RESULTS = Path("results")
 
+# The **seen-bucket view** (the track's CS-35): the head, the torso and the
+# tail pooled — the labels a label-side channel that is built from the train
+# examples exists for. The buckets partition the label space, so the union is
+# exact: the per-text (tp, fp, fn) counts of the three seen buckets add up.
+# The per-text nDCG values do **not** add up (an nDCG over the masked view is
+# not additive), so the union's nDCG is not computable from the artifacts — the
+# per-bucket nDCG is reported instead.
+SEEN_BUCKETS: tuple[str, ...] = ("head", "torso", "tail")
+SEEN_VIEW = "seen"
+
 
 def load_artifact(results: Path, run_id: str) -> dict[str, Any]:
     """One run's artifact (``analysis.json`` or ``decisions.json``).
@@ -62,10 +72,20 @@ def arm_block(artifact: dict[str, Any], arm: str) -> dict[str, Any]:
 
 
 def _counts(block: dict[str, Any], bucket: str | None) -> np.ndarray:
-    """The per-text counts of an arm (overall or of one label bucket)."""
+    """The per-text counts of an arm (overall, one label bucket, or the seen view)."""
     per_text = block.get("per_text")
     if not per_text:
         raise KeyError("the arm has no per_text block (the run predates it)")
+    if bucket == SEEN_VIEW:
+        # the union of the seen buckets' counts (the buckets partition the label
+        # space, so the sum is the seen labels' own counts)
+        total: np.ndarray | None = None
+        for name in SEEN_BUCKETS:
+            rows = _counts(block, name)
+            total = rows if total is None else total + rows
+        if total is None:
+            raise KeyError("the arm carries none of the seen buckets")
+        return total
     if bucket is None:
         rows = per_text["f1_counts"]
     else:
@@ -106,11 +126,11 @@ def compare(
 
     Returns:
         The block: the micro-F1 and the nDCG comparisons, pooled and per
-        bucket.
+        bucket. The ``seen`` scope (the head, the torso and the tail pooled)
+        carries the micro-F1 only — the per-text nDCG values are not additive,
+        so the union's nDCG is not computable from the artifacts.
     """
     result: dict[str, Any] = {"pooled": {}, "per_bucket": {}}
-    scopes: list[tuple[str, str | None]] = [("overall", None)]
-    scopes.extend((bucket, bucket) for bucket in buckets)
     for bucket in buckets:
         f1 = paired_counts_bootstrap(
             _counts(left_block, bucket),
@@ -118,6 +138,9 @@ def compare(
             resamples=resamples,
             seed=seed,
         )
+        if bucket == SEEN_VIEW:
+            result["per_bucket"][bucket] = {"micro_f1": f1, "ndcg": None}
+            continue
         ndcg = paired_values_bootstrap(
             _values(left_block, bucket),
             _values(right_block, bucket),
@@ -148,7 +171,15 @@ def main() -> int:
     parser.add_argument("right_run_id")
     parser.add_argument("--left-arm", default="learned_histgb")
     parser.add_argument("--right-arm", default="learned_histgb")
-    parser.add_argument("--buckets", nargs="*", default=["head", "torso", "tail", "unseen"])
+    parser.add_argument(
+        "--buckets",
+        nargs="*",
+        default=["seen", "head", "torso", "tail", "unseen"],
+        help=(
+            "the label buckets to compare; 'seen' is the head, the torso and the "
+            "tail pooled (the track's CS-35 seen-bucket view)"
+        ),
+    )
     parser.add_argument("--resamples", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS)
@@ -180,6 +211,11 @@ def main() -> int:
         (bucket, outcome["per_bucket"][bucket]) for bucket in outcome["per_bucket"]
     ]:
         for metric, block in payload.items():
+            if block is None:
+                # the seen view's nDCG: not computable from the artifacts (the
+                # per-text nDCG values are not additive across the buckets)
+                print(f"{scope:10s} {metric:10s} {'n/a':>9s}")
+                continue
             print(
                 f"{scope:10s} {metric:10s} {block['left']:9.4f} {block['right']:9.4f} "
                 f"{block['delta']:+9.4f} {block['ci_low']:+9.4f} {block['ci_high']:+9.4f}"

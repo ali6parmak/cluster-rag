@@ -171,6 +171,30 @@ def _control_role_labels(labels: np.ndarray, rng: np.random.Generator) -> np.nda
     return permuted
 
 
+def _check_fit_cube(
+    cube: np.ndarray,
+    extractor: UprFeatureExtractor,
+    n_texts: int,
+    name: str,
+) -> None:
+    """Check a **precomputed** fit-side cube against its extractor.
+
+    The cube is the caller's (the CS-35 cross-fit's fold-by-fold extraction),
+    so the only thing this can check is that it has the shape the combiner
+    expects: one row per fit-side text, one column per label and one column
+    per selected feature.
+
+    Raises:
+        ValueError: If the cube's shape does not match.
+    """
+    expected = (n_texts, extractor.n_labels, len(extractor.feature_names))
+    if tuple(cube.shape) != expected:
+        raise ValueError(
+            f"the precomputed fit side {name!r} has shape {tuple(cube.shape)}, "
+            f"expected {expected}: it must carry the extractor's own columns"
+        )
+
+
 def score_upr_learned_arms(
     *,
     train_texts: Sequence[str],
@@ -199,6 +223,9 @@ def score_upr_learned_arms(
     corpus_map_train_blind: np.ndarray | None = None,
     corpus_map_eval_blind: np.ndarray | None = None,
     control_extractor: UprFeatureExtractor | None = None,
+    train_features: np.ndarray | None = None,
+    control_train_features: np.ndarray | None = None,
+    random_train_features: np.ndarray | None = None,
 ) -> UprLearningResult:
     """Fit the learned arm on train and score it (and its floors) on val.
 
@@ -249,12 +276,28 @@ def score_upr_learned_arms(
         control_extractor: The **control**'s extractor (the same pack without
             the ``corpus_map`` group). Fitted and scored in the same run, so
             the difference against the real arm is paired by construction.
+        train_features: The fit side's feature cube, **precomputed**. The
+            track's CS-35 cross-fits the fit side's *label side* (the corpus-
+            mined words come from train, so an in-fold label side would be
+            optimistically biased exactly where the combiner learns its
+            weight), and a cross-fitted cube cannot be extracted by one
+            extractor — each fold's cells need that fold's label side. The
+            caller extracts the cube fold by fold and passes it here. ``None``
+            (the default) extracts it from ``extractor``, exactly as before.
+        control_train_features: The **control**'s precomputed fit side (the
+            same shape as ``train_features``).
+        random_train_features: The **random floor**'s precomputed fit side.
 
     Returns:
         The :class:`UprLearningResult` (the arms' score matrices and the
         artifact's ``learned`` block).
     """
-    train_features = extractor.extract(train_texts, decision_train, rerank_train, corpus_map_train)
+    if train_features is None:
+        train_features = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train
+        )
+    else:
+        _check_fit_cube(train_features, extractor, len(train_texts), "train_features")
     eval_features = extractor.extract(eval_texts, decision_eval, rerank_eval, corpus_map_eval)
     train_rows, train_labels = _fit_rows(train_features, train_gold)
     eval_rows = eval_features.reshape(-1, eval_features.shape[-1])
@@ -273,7 +316,18 @@ def score_upr_learned_arms(
     # The control is the same pack without the map's group, fitted and scored
     # here, so the difference against the real arm is paired by construction.
     if control_extractor is not None:
-        control_train = control_extractor.extract(train_texts, decision_train, rerank_train, None)
+        if control_train_features is None:
+            control_train = control_extractor.extract(
+                train_texts, decision_train, rerank_train, None
+            )
+        else:
+            _check_fit_cube(
+                control_train_features,
+                control_extractor,
+                len(train_texts),
+                "control_train_features",
+            )
+            control_train = control_train_features
         control_eval = control_extractor.extract(eval_texts, decision_eval, rerank_eval, None)
         control_rows, control_labels = _fit_rows(control_train, train_gold)
         control_combiner = combiner_factory().fit(control_rows, control_labels, weights)
@@ -368,9 +422,15 @@ def score_upr_learned_arms(
 
     # -- the random-vector floor --
     if random_extractor is not None:
-        random_train = random_extractor.extract(
-            train_texts, decision_train, rerank_train, corpus_map_train
-        )
+        if random_train_features is None:
+            random_train = random_extractor.extract(
+                train_texts, decision_train, rerank_train, corpus_map_train
+            )
+        else:
+            _check_fit_cube(
+                random_train_features, random_extractor, len(train_texts), "random_train_features"
+            )
+            random_train = random_train_features
         random_eval = random_extractor.extract(
             eval_texts, decision_eval, rerank_eval, corpus_map_eval
         )

@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from cluster_rag.config import AppConfig
+from cluster_rag.data import Record, load_jsonl, load_split_ids, select_records_by_ids
+from cluster_rag.dataset_stats import file_sha256
 from cluster_rag.embed.cache import CachedEmbedder
 from cluster_rag.experiment_table import (
     append_table_rows,
@@ -26,6 +28,7 @@ from cluster_rag.experiment_table import (
     table_target,
 )
 from cluster_rag.label_catalog import LabelEntry, load_label_catalog
+from cluster_rag.text_processors.features.corpus_map import CorpusMap, build_corpus_map
 
 logger = logging.getLogger(__name__)
 
@@ -211,3 +214,65 @@ def _upr_label_catalog(config: AppConfig) -> dict[str, LabelEntry]:
     catalog = load_label_catalog(path)
     logger.info("the label catalog %s carries %d entries", path, len(catalog))
     return catalog
+
+
+def _train_records(config: AppConfig) -> tuple[list[Record], str]:
+    """The **train** split's records, from the fixed id list.
+
+    The corpus map (CS-23) and the label lexicon (CS-35) are built from the
+    train split only, so this is the corpus every train-derived artifact is
+    built on. The id list is checked against the dataset's sha256 — the same
+    consistency check the ``evaluate`` command makes — so a stale id list
+    fails loudly instead of silently shifting the corpus.
+
+    Args:
+        config: The resolved app config.
+
+    Returns:
+        ``(records, source_sha256)`` — the train records in the id list's own
+        order, and the dataset's sha256.
+
+    Raises:
+        ValueError: If the fixed split and the dataset disagree.
+    """
+    report = load_jsonl(config.paths.data_raw)
+    source_sha = file_sha256(config.paths.data_raw)
+    ids, provenance = load_split_ids(config.paths.data_splits, "train")
+    recorded = provenance.get("source_sha256")
+    if recorded and recorded != source_sha:
+        raise ValueError(
+            "train_ids.json was built from a different data source (sha256 mismatch): "
+            "the fixed splits and the dataset disagree; do not re-split silently."
+        )
+    return select_records_by_ids(report.records, ids), source_sha
+
+
+def _train_corpus_map(
+    records: Sequence[Record],
+    labels: Sequence[str],
+    *,
+    word_pos: Mapping[str, str] | None = None,
+) -> CorpusMap:
+    """The **corpus map** of the train split (the map's own builder).
+
+    The map is the train split's own word↔label association (CS-23), so no val
+    text, no val label and no test text enters it. It is the corpus every
+    train-derived artifact of the track is built on: the map's own feature
+    (CS-32), the word classes (CS-33) and the label lexicon (CS-35).
+
+    Args:
+        records: The train split's records.
+        labels: The label space (every label, even the ones the train split
+            never carries — they get an empty table).
+        word_pos: The words' grammatical classes (CS-34), when the corpus was
+            tagged.
+
+    Returns:
+        The corpus map.
+    """
+    return build_corpus_map(
+        [record.text for record in records],
+        [record.labels for record in records],
+        labels,
+        word_pos=word_pos,
+    )
