@@ -33,6 +33,7 @@ from typing import Any
 import numpy as np
 import yaml
 
+from cluster_rag.config import load_config
 from cluster_rag.data import build_label_matrix, load_jsonl, load_split_ids, select_records_by_ids
 from cluster_rag.eval.multilabel import (
     apply_decision_rule,
@@ -87,18 +88,31 @@ def _arm_scores(run_id: str, results: Path) -> tuple[np.ndarray, np.ndarray, dic
     records = select_records_by_ids(report.records, ids_by_split[split])
     train_records = select_records_by_ids(report.records, ids_by_split["train"])
     labels = sorted({label for record in report.records for label in record.labels})
+    scoring = (predictor.get("params") or {}).get("scoring", "sum_logodds")
+    restrict = (predictor.get("params") or {}).get("restrict")
+    restrict_pos = (predictor.get("params") or {}).get("restrict_pos")
+    word_pos: dict[str, str] = {}
+    if restrict_pos is not None:
+        # the grammatical classes (CS-34): the train corpus is tagged with the
+        # same edge client the run used, so the rebuild reads the same map.
+        from cluster_rag.commands.upr import pos_word_classes
+
+        word_pos, _distribution, _provenance = pos_word_classes(
+            load_config(run_dir / "config.yaml"),
+            [record.text for record in train_records],
+        )
     corpus_map = build_corpus_map(
         [record.text for record in train_records],
         [record.labels for record in train_records],
         labels,
+        word_pos=word_pos or None,
     )
-    scoring = (predictor.get("params") or {}).get("scoring", "sum_logodds")
-    restrict = (predictor.get("params") or {}).get("restrict")
     scores = score_cells(
         [record.text for record in records],
         corpus_map,
         scoring=scoring,
         restrict=restrict,
+        restrict_pos=restrict_pos,
     )
     gold = build_label_matrix(records, labels)
     return scores, gold, artifact

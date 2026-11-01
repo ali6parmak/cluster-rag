@@ -35,6 +35,7 @@ from embedder_pool import MODELS  # noqa: F401  (the shared model pool stays imp
 
 from cluster_rag.config import (
     DecisionModelConfig,
+    PosConfig,
     UprAnalysisConfig,
     UprDecisionConfig,
     UprHitMapConfig,
@@ -82,6 +83,9 @@ cells = [
         split="val",
         embedding_run=CHAMPION_EMBEDDING_RUN,
         label_embedding_run=CHAMPION_LABEL_EMBEDDING_RUN,
+        # the part-of-speech tagger (the track's CS-34): the map's own block
+        # carries the grammatical readout beside the frequency one.
+        pos=PosConfig(enabled=True),
         analysis=UprAnalysisConfig(
             arms=(),
             length_buckets=LENGTH_BUCKETS,

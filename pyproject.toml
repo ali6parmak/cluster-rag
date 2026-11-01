@@ -19,6 +19,9 @@ dependencies = [
     "sentence-transformers>=3.0",
     # Multi-label iterative stratification for the Phase 1 splits.
     "iterative-stratification>=0.0.7",
+    # The part-of-speech tagger at the edge (the track's CS-34): the model
+    # itself is downloaded on demand into the run's cache root.
+    "nltk>=3.8",
     "peft>=0.21.2",
     "einops>=0.8",
 ]

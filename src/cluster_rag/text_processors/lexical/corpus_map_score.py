@@ -58,12 +58,13 @@ Pure core: numpy + the standard library only.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 
 from cluster_rag.text_processors.features.corpus_map import CorpusMap, build_corpus_map
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.pos_class import POS_CLASSES
 from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES
 
 # The four scoring functions of CS-30, plus the two **z-scored** arms of
@@ -101,6 +102,7 @@ def _word_index(
     corpus_map: CorpusMap,
     *,
     restrict: Sequence[str] | None = None,
+    restrict_pos: Sequence[str] | None = None,
 ) -> dict[str, tuple[tuple[int, float, float], ...]]:
     """The map's reverse tables as ``word -> ((column, log_odds, z_score), ...)``.
 
@@ -109,6 +111,8 @@ def _word_index(
         restrict: The word classes to **keep** (CS-33): the words of the other
             classes contribute nothing, which is the same as dropping them from
             the tables. ``None`` keeps every class (the full map).
+        restrict_pos: The grammatical classes to **keep** (CS-34): the same
+            rule on the POS axis. ``None`` keeps every class.
 
     Returns:
         The word index: every word the corpus holds, with the label columns it
@@ -120,10 +124,13 @@ def _word_index(
     """
     columns = {label: index for index, label in enumerate(corpus_map.labels)}
     allowed = _allowed_classes(restrict)
+    allowed_pos = _allowed_pos_classes(restrict_pos)
     index: dict[str, tuple[tuple[int, float, float], ...]] = {}
     classes = corpus_map.word_class_index() if allowed is not None else None
     for word, rows in corpus_map.per_word.items():
         if classes is not None and classes.class_of(word) not in allowed:
+            continue
+        if allowed_pos is not None and corpus_map.pos_classes.get(word, "") not in allowed_pos:
             continue
         index[word] = tuple((columns[pair.label], pair.log_odds, pair.z_score) for pair in rows)
     return index
@@ -146,12 +153,32 @@ def _allowed_classes(restrict: Sequence[str] | None) -> frozenset[str] | None:
     return frozenset(names)
 
 
+def _allowed_pos_classes(restrict: Sequence[str] | None) -> frozenset[str] | None:
+    """The grammatical classes a restriction keeps (``None`` = every class).
+
+    Raises:
+        ValueError: On an unknown class or an empty restriction.
+    """
+    if restrict is None:
+        return None
+    names = tuple(restrict)
+    unknown = [name for name in names if name not in POS_CLASSES]
+    if unknown:
+        raise ValueError(
+            f"Unknown grammatical class(es) {unknown}; expected some of {list(POS_CLASSES)}"
+        )
+    if not names:
+        raise ValueError("a restriction must keep at least one grammatical class")
+    return frozenset(names)
+
+
 def score_cells(
     texts: Sequence[str],
     corpus_map: CorpusMap,
     *,
     scoring: str = "sum_logodds",
     restrict: Sequence[str] | None = None,
+    restrict_pos: Sequence[str] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> np.ndarray:
     """Score every text against every label from the map's own weights.
@@ -164,6 +191,8 @@ def score_cells(
         restrict: The word classes to **keep** (CS-33): the map with the other
             classes dropped — the "generic class dropped" and the
             "distinctive-only" maps. ``None`` is the full map.
+        restrict_pos: The grammatical classes to **keep** (CS-34): the same
+            rule on the POS axis (the "nouns only" and the "verbs only" maps).
         stopwords: The tokenizer's stopwords — the map's own, so the words
             match the tables.
 
@@ -182,7 +211,7 @@ def score_cells(
         )
     aggregation, measure, positive_only = _ARMS[scoring]
     labels = list(corpus_map.labels)
-    index = _word_index(corpus_map, restrict=restrict)
+    index = _word_index(corpus_map, restrict=restrict, restrict_pos=restrict_pos)
     scores = np.zeros((len(texts), len(labels)), dtype=np.float64)
     empty_columns = [
         column for column, label in enumerate(labels) if not corpus_map.label_counts.get(label)
@@ -223,6 +252,8 @@ def cross_fit_scores(
     folds: int = 5,
     seed: int = 42,
     restrict: Sequence[str] | None = None,
+    restrict_pos: Sequence[str] | None = None,
+    word_pos: Mapping[str, str] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> dict[str, np.ndarray]:
     """The **out-of-fold** score matrices: each fold's texts scored by the other folds.
@@ -242,6 +273,9 @@ def cross_fit_scores(
         restrict: The word classes to **keep** (CS-33): the restriction rides
             into every fold's map, so the fit side reads the same map the
             evaluated split is scored with.
+        restrict_pos: The grammatical classes to **keep** (CS-34).
+        word_pos: The words' grammatical classes (CS-34) — a property of the
+            word, not of a label, so every fold's map carries them.
         stopwords: The tokenizer's stopwords.
 
     Returns:
@@ -250,7 +284,7 @@ def cross_fit_scores(
 
     Raises:
         ValueError: On fewer than two folds, on an unknown scoring function,
-            on an unknown word class, or when the texts and the label sets have
+            on an unknown class, or when the texts and the label sets have
             different lengths.
     """
     if len(texts) != len(label_sets):
@@ -261,6 +295,7 @@ def cross_fit_scores(
     if unknown:
         raise ValueError(f"Unknown scoring function(s) {unknown}; expected {SCORING_FUNCTIONS}")
     _allowed_classes(restrict)
+    _allowed_pos_classes(restrict_pos)
     n_texts = len(texts)
     order = np.random.default_rng(seed).permutation(n_texts)
     chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
@@ -273,10 +308,16 @@ def cross_fit_scores(
             [label_sets[index] for index in keep],
             labels,
             stopwords=stopwords,
+            word_pos=word_pos,
         )
         fold_texts = [texts[index] for index in chunk]
         for name in scorings:
             out[name][chunk] = score_cells(
-                fold_texts, corpus_map, scoring=name, restrict=restrict, stopwords=stopwords
+                fold_texts,
+                corpus_map,
+                scoring=name,
+                restrict=restrict,
+                restrict_pos=restrict_pos,
+                stopwords=stopwords,
             )
     return out

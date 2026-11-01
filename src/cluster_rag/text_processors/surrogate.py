@@ -34,7 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
-from cluster_rag.text_processors.lexical.word_class import class_readout
+from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES, class_readout
 
 
 @dataclass(frozen=True)
@@ -357,6 +357,7 @@ def word_class_readout(
     classes: Mapping[str, str],
     *,
     name_words: Mapping[str, frozenset[str]] | None = None,
+    class_names: Sequence[str] = WORD_CLASSES,
 ) -> dict[str, object]:
     """The **word-class readout** of the surrogate's coefficients (CS-33).
 
@@ -377,6 +378,8 @@ def word_class_readout(
         classes: Each word's class (the corpus map's word classes). A word that
             sits in no table has no class and is counted apart.
         name_words: Each topic's own name words (the name-word flag).
+        class_names: The class names to report (the map's own frequency classes
+            by default; CS-34's grammatical classes pass their own names).
 
     Returns:
         The readout block (JSON-friendly).
@@ -410,7 +413,7 @@ def word_class_readout(
                 values.append((word_class, coefficient))
             if word in own:
                 name_values.append(coefficient)
-    readout = class_readout(values)
+    readout = class_readout(values, classes=class_names)
     positive = sum(1 for value in name_values if value > 0)
     negative = sum(1 for value in name_values if value < 0)
     count = len(name_values)

@@ -682,3 +682,52 @@ readout, the surrogate's own readout (the model leans on the **name words**:
 82.9 % positive, a mean coefficient of +0.208) and the falsification's verdict —
 is the track log's §CS-33 (`docs/experiments_text_processing.md`) and the plan's
 §7.4 in `docs/text_processing_plan_archive.md`.
+
+## 2026-11-01 — the word classes and the grammatical axis (the track's CS-33/CS-34): the class-restricted corpus maps on UPR val
+
+**Runs:** `upr-eval-corpus-map-sum-zscore-positive-{nogeneric,distinctive}-val`
+(CS-33) and `upr-eval-corpus-map-sum-zscore-positive-{noun,verb}-val` (CS-34) —
+the `evaluate` command, the sweeps
+`experiments_text_processing/corpus_map_classes_sweep.py` and
+`experiments_text_processing/corpus_map_pos_sweep.py`, the artifacts
+`results/upr-eval-corpus-map-sum-zscore-positive-*-val/metrics.json`, the table
+rows in `docs/experiments_table_upr.md`'s `corpus_map_classes` and
+`corpus_map_pos` sections. UPR **val** (660 texts), `top_k` k=2, the arm
+`sum_zscore_positive` — the same arm, the same texts and the same operating
+point in every run, so the comparison against the full map is paired.
+
+**What.** The corpus map's own **word classes** (CS-33: a word's class is how
+many of the 60 labelled tables it sits in) and its **grammatical classes**
+(CS-34: the same, with `nltk`'s real POS tags) crossed with the sign of the
+map's log-odds — the reviewer's part-of-speech question, answered from the
+map's own structure and then from a real tagger. The runs are the **payoff**:
+the class-restricted maps as classifiers.
+
+**The numbers.** The full map reaches a pooled **micro-F1 0.5243**.
+
+- **CS-33 (the frequency classes):** the readout separates widely — the
+  distinctive class is 100 % positive with a mean log-odds of **+4.27**
+  against the generic class's 81 % and **+0.84** — so the registered null does
+  not fire; but the **payoff is a loss**: the map without the generic class
+  reaches **0.3815** and the distinctive-only map **0.0798** (a paired
+  **+0.1429 [+0.1200, +0.1655]** and **+0.4445 [+0.4178, +0.4713]** in the
+  full map's favour). The strongest words are **rare** and the register is
+  **everywhere**.
+- **CS-34 (the grammatical classes): a null.** The nouns and the verbs are
+  nearly identical to the map (**+2.0044** against **+1.9856**; the margin
+  needed 1.0) and the noun class's share of positive pairs (90.1 %) is
+  *lower* than the verb class's (91.4 %) — so the registered test fails; and
+  the payoff fails too: the **noun-only** map reaches **0.4840** (a paired
+  **+0.0403 [+0.0258, +0.0545]** against the full map — the interval excludes
+  zero) and the **verb-only** map **0.1261**. The fit side agrees (the
+  out-of-fold train micro-F1 0.6175 and 0.1550 against the full map's
+  0.6613). **Both halves of the pre-registered falsification fail, so the POS
+  line is a null and the `nltk` dependency is not worth keeping**; the one
+  thing it bought is the per-tag readout, where the closed-class words (the
+  register in the grammatical sense) are the weakest.
+
+The full narrative — the readouts, the surrogate's own readout (the model
+leans on the label's **name words**: 82.9 % positive at a mean coefficient of
++0.208) and both falsifications' verdicts — is the track log's §CS-33 and §CS-34
+(`docs/experiments_text_processing.md`) and the plan's §7.4 in
+`docs/text_processing_plan_archive.md`.

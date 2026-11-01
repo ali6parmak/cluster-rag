@@ -75,12 +75,17 @@ class PredictorContext:
             information, so they are train-legal even for held-out labels
             (AGENTS.md leakage discipline). ``None`` unless the predictor
             needs them (``zeroshot``; ``fusion`` with ``c > 0``).
+        word_pos: The train corpus's **grammatical classes** (CS-34): each
+            word's class (the class of its modal tag). A property of the word,
+            not of a label, so it carries no label information and stays
+            train-legal. Empty unless the tagger is enabled.
     """
 
     labels: tuple[str, ...]
     train_records: tuple[Record, ...] = field(default=())
     train_document_vectors: np.ndarray | None = None
     label_vectors: np.ndarray | None = None
+    word_pos: Mapping[str, str] = field(default_factory=dict)
 
     def require_train_vectors(self) -> np.ndarray:
         """Return the validated train document vectors (embedding predictors).

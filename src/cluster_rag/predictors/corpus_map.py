@@ -42,6 +42,7 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
     cross_fit_scores,
     score_cells,
 )
+from cluster_rag.text_processors.lexical.pos_class import POS_CLASSES
 from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES
 
 
@@ -74,6 +75,8 @@ class CorpusMapPredictor:
         folds: the cross-fit's number of folds (default 5).
         restrict: the word classes to **keep** (CS-33; default every class) —
             the map with the generic class dropped, or the distinctive-only map.
+        restrict_pos: the grammatical classes to **keep** (CS-34; default every
+            class) — the map with the nouns only, or the verbs only.
 
     Deterministic: the map, the fold split and the scoring are all
     deterministic given the train split and the seed.
@@ -81,7 +84,9 @@ class CorpusMapPredictor:
 
     REQUIRES_EMBEDDINGS: bool = False
     REQUIRED_KINDS: tuple[str, ...] = ()
-    ALLOWED_PARAMS: frozenset[str] = frozenset({"scoring", "fit_side_k", "folds", "restrict"})
+    ALLOWED_PARAMS: frozenset[str] = frozenset(
+        {"scoring", "fit_side_k", "folds", "restrict", "restrict_pos"}
+    )
     NAME: str = "corpus_map"
 
     def __init__(
@@ -125,16 +130,47 @@ class CorpusMapPredictor:
                 raise ValueError(
                     f"predictor {self.NAME!r} params['restrict'] must keep at least one word class"
                 )
+        restrict_pos = params.get("restrict_pos")
+        if restrict_pos is not None:
+            if isinstance(restrict_pos, str) or not isinstance(restrict_pos, (list, tuple)):
+                raise ValueError(
+                    f"predictor {self.NAME!r} params['restrict_pos'] must be a list of "
+                    f"grammatical classes, got {restrict_pos!r}"
+                )
+            unknown = [name for name in restrict_pos if name not in POS_CLASSES]
+            if unknown:
+                raise ValueError(
+                    f"predictor {self.NAME!r} params['restrict_pos'] has unknown grammatical "
+                    f"class(es) {unknown}; expected some of {list(POS_CLASSES)}"
+                )
+            if not restrict_pos:
+                raise ValueError(
+                    f"predictor {self.NAME!r} params['restrict_pos'] must keep at least one "
+                    "grammatical class"
+                )
+        if restrict_pos is not None and not context.word_pos:
+            raise ValueError(
+                f"predictor {self.NAME!r} params['restrict_pos'] needs the corpus's "
+                "grammatical classes, but the context carries none: enable the "
+                "part-of-speech tagger (the pos: config section) so the train "
+                "corpus is tagged"
+            )
         self._scoring = scoring
         self._fit_side_k = fit_side_k
         self._folds = folds
         self._restrict = tuple(restrict) if restrict is not None else None
+        self._restrict_pos = tuple(restrict_pos) if restrict_pos is not None else None
         self._labels = context.labels
         self._seed = seed
 
         train_texts = [record.text for record in context.train_records]
         train_label_sets = [record.labels for record in context.train_records]
-        self._map = build_corpus_map(train_texts, train_label_sets, context.labels)
+        self._map = build_corpus_map(
+            train_texts,
+            train_label_sets,
+            context.labels,
+            word_pos=context.word_pos or None,
+        )
         self._fit_side = self._fit_side_block(context, train_texts, train_label_sets)
 
     def _fit_side_block(
@@ -152,7 +188,13 @@ class CorpusMapPredictor:
         gold = build_label_matrix(context.train_records, context.labels)
         in_fold: dict[str, float] = {}
         for arm in SCORING_FUNCTIONS:
-            scores = score_cells(train_texts, self._map, scoring=arm, restrict=self._restrict)
+            scores = score_cells(
+                train_texts,
+                self._map,
+                scoring=arm,
+                restrict=self._restrict,
+                restrict_pos=self._restrict_pos,
+            )
             in_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
         out_of_fold: dict[str, float] = {}
         crossed = cross_fit_scores(
@@ -162,6 +204,8 @@ class CorpusMapPredictor:
             folds=self._folds,
             seed=self._seed,
             restrict=self._restrict,
+            restrict_pos=self._restrict_pos,
+            word_pos=context.word_pos or None,
         )
         for arm, scores in crossed.items():
             out_of_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
@@ -171,6 +215,7 @@ class CorpusMapPredictor:
             "metric": f"micro-F1 at top_k k={self._fit_side_k}",
             "cross_fit_folds": self._folds,
             "restrict": list(self._restrict) if self._restrict is not None else None,
+            "restrict_pos": list(self._restrict_pos) if self._restrict_pos is not None else None,
             "in_fold_micro_f1": {arm: round(value, 6) for arm, value in in_fold.items()},
             "out_of_fold_micro_f1": {arm: round(value, 6) for arm, value in out_of_fold.items()},
             "selected": selected,
@@ -180,8 +225,8 @@ class CorpusMapPredictor:
                 "optimistically biased (most of all for the arms that use the "
                 "log-odds the map itself computed); the selection is made on the "
                 "out-of-fold number, the fit side's honest reading. A restricted "
-                "run (CS-33) reads the same restricted map on the fit side, so the "
-                "numbers here belong to the map the val split is scored with."
+                "run (CS-33, CS-34) reads the same restricted map on the fit side, "
+                "so the numbers here belong to the map the val split is scored with."
             ),
         }
 
@@ -190,7 +235,13 @@ class CorpusMapPredictor:
 
         ``query_vectors`` is ignored: this predictor is embedding-free.
         """
-        return score_cells(texts, self._map, scoring=self._scoring, restrict=self._restrict)
+        return score_cells(
+            texts,
+            self._map,
+            scoring=self._scoring,
+            restrict=self._restrict,
+            restrict_pos=self._restrict_pos,
+        )
 
     def describe(self) -> dict[str, Any]:
         """Name, the parameters, the map's shape and the fit side's numbers."""
@@ -200,6 +251,7 @@ class CorpusMapPredictor:
             "scoring": self._scoring,
             "fit_side_k": self._fit_side_k,
             "restrict": list(self._restrict) if self._restrict is not None else None,
+            "restrict_pos": list(self._restrict_pos) if self._restrict_pos is not None else None,
             "map": {
                 "split": "train",
                 "n_texts": self._map.n_texts,

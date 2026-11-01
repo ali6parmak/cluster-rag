@@ -37,7 +37,7 @@ Pure core: the standard library only (no numpy, no model client, no I/O).
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
@@ -249,23 +249,28 @@ class ClassReadout:
         }
 
 
-def class_readout(values: Iterable[tuple[str, float]]) -> dict[str, ClassReadout]:
+def class_readout(
+    values: Iterable[tuple[str, float]],
+    classes: Sequence[str] = WORD_CLASSES,
+) -> dict[str, ClassReadout]:
     """The readout of every class, over ``(class, value)`` pairs.
 
     Args:
         values: The pairs: the class and the value (the log-odds for the
             corpus map, the coefficient for the surrogate).
+        classes: The class names to report (the map's own frequency classes by
+            default; CS-34's grammatical classes pass their own names).
 
     Returns:
         One readout per class (every class is present, empty ones included).
 
     Raises:
-        ValueError: On a class name the module does not know.
+        ValueError: On a class name the readout does not know.
     """
-    buckets: dict[str, list[float]] = {name: [] for name in WORD_CLASSES}
+    buckets: dict[str, list[float]] = {name: [] for name in classes}
     for name, value in values:
         if name not in buckets:
-            raise ValueError(f"Unknown word class {name!r}; expected one of {list(WORD_CLASSES)}")
+            raise ValueError(f"Unknown word class {name!r}; expected one of {list(buckets)}")
         buckets[name].append(float(value))
     return {name: _readout(bucket) for name, bucket in buckets.items()}
 
@@ -298,6 +303,10 @@ def separation_test(
     of *e* in the odds) **and** the generic class's share of positive pairs
     must be lower. If either half fails, the readout is a **null**: the word
     class does not separate the label-carrying words from the register words.
+
+    (CS-34's grammatical test is its own function,
+    :func:`cluster_rag.text_processors.lexical.pos_class.pos_separation_test`:
+    this block's shape is CS-33's, published, and is never reshaped.)
 
     Args:
         readout: The readout (from :func:`class_readout`).

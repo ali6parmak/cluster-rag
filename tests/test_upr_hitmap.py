@@ -879,6 +879,35 @@ def test_the_word_classes_are_in_the_map_and_the_surrogate_blocks(
     assert surrogate["word_classes"]["n_coefficients_in_a_class"] > 0
 
 
+def test_the_grammatical_block_is_absent_without_the_tagger(
+    sample_jsonl, write_config, tmp_path, monkeypatch
+) -> None:
+    """CS-34: with the tagger off, the map carries no grammatical readout."""
+    decider = FakeDecider()
+    monkeypatch.setattr(upr_commands, "build_upr_decider", lambda model_config, config: decider)
+    extra = (
+        HITMAP_EXTRA.format(digest="f" * 64, unit="clause")
+        + """
+    include_lexical_map: false
+    include_text_side_map: false
+    include_surrogate: false
+    include_ablation: false
+    include_corpus_map: true
+"""
+    )
+    config_file = write_config(sample_jsonl, run_id="upr-hitmap-no-pos-test", extra=extra)
+    if not (tmp_path / "splits" / "train_ids.json").is_file():
+        assert main(["split", "--config", str(config_file)]) == 0
+    assert main(["hitmap-upr", "--config", str(config_file)]) == 0
+    payload = json.loads(
+        (tmp_path / "results" / "upr-hitmap-no-pos-test" / "hitmap.json").read_text("utf-8")
+    )
+    assert payload["corpus_map"]["pos_classes"]["available"] is False
+    for row in payload["corpus_map"]["per_label"]:
+        for word in row["words"]:
+            assert word["pos_class"] == ""
+
+
 def test_the_corpus_map_can_be_turned_off(
     sample_jsonl, write_config, tmp_path, monkeypatch
 ) -> None:

@@ -62,6 +62,12 @@ splits:
 #   preprocess: {variant: raw, strip_openers: [...]}  # variants: raw | lowercase |
 #                                            # strip_leading_formulaic; openers below
 #   cache:     {enabled: true}               # disk cache at paths.cache
+#   pos:       {enabled: false, backend: nltk, model_id: averaged_perceptron_tagger_eng,
+#               language: eng}  # the part-of-speech tagger at the edge (the track's
+#               # CS-34): a model client, OFF by default. When it is on, the TRAIN
+#               # corpus is tagged (the model's files land under paths.cache/pos/,
+#               # its digest is recorded in the artifact) and the words'
+#               # grammatical classes ride into the corpus map.
 #   probe:     {question_transforms: [strip_block],     # default; add "keep" for an
 #               question_block_markers: ["Answer choices:", "Notes:"],
 #               recall_ks: [1, 10]}          # explicit comparison; used by `probe-omct`

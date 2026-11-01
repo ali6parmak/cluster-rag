@@ -544,7 +544,7 @@ def test_the_viewer_runs_without_the_corpus_map(
     assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" not in out
 
 
-# --- the word classes (CS-33) on the screen ---
+# --- the word classes (CS-33) and the grammatical axis (CS-34) on the screen ---
 
 
 def test_the_viewer_shows_the_word_classes(
@@ -557,6 +557,29 @@ def test_the_viewer_shows_the_word_classes(
     assert "WHAT KIND OF WORD IS THIS" in out
     assert "distinctive" in out and "generic" in out
     assert "the registered test" in out
+
+
+def test_the_viewer_shows_the_grammatical_axis(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The grammatical readout is on the screen (CS-34), when the run carries it."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    pos = viewer_module.corpus_pos_block(context.corpus_map)
+    # the fixture's corpus run has no tagger (the pos: section is off there),
+    # so the block says so and the screen does not invent a readout
+    assert pos == {} or pos.get("available") is False
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "WHAT KIND OF WORD IS THIS" in out
 
 
 def test_the_viewers_class_rows_are_the_artifacts_own(

@@ -539,6 +539,19 @@ def corpus_class_falsification(artifact: Mapping[str, Any] | None) -> dict[str, 
     return dict(falsification)
 
 
+def corpus_pos_block(artifact: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The corpus map's **grammatical** block (CS-34) from the artifact.
+
+    The block carries the tagger's provenance, the corpus's tag distribution and
+    the readout per grammatical class. An artifact without the block (the run
+    was made before CS-34, or with the tagger off) gives an empty block: the
+    screen says the readout is not there.
+    """
+    block = corpus_block(artifact)
+    pos = block.get("pos_classes") or {}
+    return dict(pos) if isinstance(pos, Mapping) else {}
+
+
 def corpus_cross_check(
     context: ViewerContext,
     label: str,
@@ -1358,6 +1371,70 @@ def render(
                         colour=colour,
                     )
                 )
+            # the grammatical axis (CS-34): the same readout, split by the
+            # tagger's class.
+            pos = corpus_pos_block(context.corpus_map)
+            pos_readout = dict(pos.get("readout_by_class") or {})
+            if pos_readout:
+                add(
+                    paint(
+                        "  the same question on the grammatical axis (CS-34): the tagger's "
+                        "class of the word",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                for name in ("noun", "verb", "adjective", "adverb", "other"):
+                    row = pos_readout.get(name)
+                    if not row:
+                        continue
+                    mean = float(row.get("mean_log_odds", 0.0))
+                    code = signed_ramp(
+                        mean,
+                        max(abs(float(r.get("mean_log_odds", 0.0))) for r in pos_readout.values()),
+                    )
+                    add(
+                        "  "
+                        + paint(f"{name:<14}", DIM, colour=colour)
+                        + paint(f"{int(row.get('n_pairs', 0)):>8}", DIM, colour=colour)
+                        + paint(
+                            f"{float(row.get('share_positive', 0.0)) * 100:>9.1f}%",
+                            code,
+                            colour=colour,
+                        )
+                        + paint(
+                            f"{float(row.get('share_negative', 0.0)) * 100:>9.1f}%",
+                            code,
+                            colour=colour,
+                        )
+                        + paint(f"{mean:>+15.3f}", code, colour=colour)
+                    )
+                ambiguity = dict(pos.get("ambiguity") or {})
+                pos_falsification = dict(pos.get("falsification") or {})
+                if ambiguity:
+                    add(
+                        paint(
+                            f"  the tagger's ambiguity: "
+                            f"{int(ambiguity.get('n_words_with_several_tags', 0))} of "
+                            f"{int(ambiguity.get('n_words', 0))} words take more than one tag "
+                            f"({float(ambiguity.get('share_with_several_tags', 0.0)) * 100:.1f} %)",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                if pos_falsification:
+                    verdict = "the classes separate" if pos_falsification.get("holds") else "a null"
+                    add(
+                        paint(
+                            f"  the registered test (the nouns against the verbs): {verdict} "
+                            f"(the noun class's mean is "
+                            f"{float(pos_falsification.get('difference', 0.0)):+.3f} against the "
+                            f"verb class's, the margin is "
+                            f"{float(pos_falsification.get('margin', 0.0)):g})",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
 
             def _class_side(label: str, heading: str) -> None:
                 """One label's table, read by class: the text's words and their class."""
@@ -1375,7 +1452,7 @@ def render(
                     return
                 add(
                     paint(
-                        f"    {'word':<20}{'class':<14}{'log-odds':>11}",
+                        f"    {'word':<20}{'class':<14}{'pos':<12}{'log-odds':>11}",
                         DIM,
                         colour=colour,
                     )
@@ -1386,6 +1463,7 @@ def render(
                         log_odds, max(abs(float(r.get("log_odds", 0.0))) for r in rows)
                     )
                     name = str(row.get("word_class") or "—")
+                    pos_name = str(row.get("pos_class") or "—")
                     marker = "  ▲ name word" if row.get("is_name_word") else ""
                     add(
                         "    "
@@ -1393,6 +1471,7 @@ def render(
                         + paint(
                             f"{name:<14}", CYAN if row.get("is_name_word") else DIM, colour=colour
                         )
+                        + paint(f"{pos_name:<12}", DIM, colour=colour)
                         + paint(f"{log_odds:>+11.3f}", code, colour=colour)
                         + paint(marker, BOLD, colour=colour)
                     )

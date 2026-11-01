@@ -286,6 +286,29 @@ class CacheConfig(BaseModel):
     enabled: bool = True
 
 
+class PosConfig(BaseModel):
+    """The **part-of-speech tagger** (the text-processing track's CS-34).
+
+    A **model client**: the tagger downloads its model (``nltk``'s
+    ``averaged_perceptron_tagger_eng``), so it lives at the edge
+    (``src/cluster_rag/pos/``) and the track's pure package imports the port
+    only. The model's files live under the run's own cache root
+    (``cache/pos/nltk_data/``) and the model's **digest** is recorded in the
+    run's artifact.
+
+    **Off by default**: every earlier run's artifact keeps its exact content,
+    and a run that does not need the grammatical classes never pays for the
+    download.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    backend: Literal["nltk"] = "nltk"
+    model_id: str = "averaged_perceptron_tagger_eng"
+    language: str = "eng"
+
+
 class PreprocessConfig(BaseModel):
     """Preprocessing applied to texts before embedding (Phase 2).
 
@@ -2106,6 +2129,10 @@ class AppConfig(BaseModel):
     embed_kinds: tuple[str, ...] = ("document",)
     preprocess: PreprocessConfig = Field(default_factory=PreprocessConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
+    # The part-of-speech tagger (the track's CS-34): a model client, off by
+    # default. When it is on, the train corpus is tagged and the words'
+    # grammatical classes ride into the corpus map and the pack.
+    pos: PosConfig = Field(default_factory=PosConfig)
     probe: ProbeConfig = Field(default_factory=ProbeConfig)
     eval: EvalConfig | None = None  # Phase 3: the `evaluate` command requires it
     # The text-processing track's Stage-0 analysis (the `analyze-omct`

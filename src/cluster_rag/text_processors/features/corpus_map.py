@@ -39,10 +39,16 @@ from __future__ import annotations
 import math
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
 from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
+from cluster_rag.text_processors.lexical.pos_class import (
+    POS_CLASSES,
+    ambiguity_summary,
+    modal_classes,
+    pos_separation_test,
+)
 from cluster_rag.text_processors.lexical.word_class import (
     DISTINCTIVE_MAX_TABLES,
     GENERIC_SHARE,
@@ -88,6 +94,10 @@ class CorpusPair:
             the **word**, so every table the word sits in carries the same one.
         is_name_word: Whether the word is one of the **label's own name words**
             (the name-word flag; it overlaps the classes).
+        pos_class: The word's **grammatical class** (CS-34): ``noun``,
+            ``verb``, ``adjective``, ``adverb`` or ``other`` — the class of the
+            word's modal tag in the train corpus. Empty when the corpus was
+            not tagged.
     """
 
     label: str
@@ -104,6 +114,7 @@ class CorpusPair:
     log_odds_conditional: float = 0.0
     word_class: str = ""
     is_name_word: bool = False
+    pos_class: str = ""
 
     def to_row(self) -> dict[str, object]:
         """The pair as a JSON-friendly row (the artifact's own shape)."""
@@ -121,6 +132,7 @@ class CorpusPair:
             "log_odds_conditional": round(self.log_odds_conditional, 6),
             "word_class": self.word_class,
             "is_name_word": self.is_name_word,
+            "pos_class": self.pos_class,
         }
 
 
@@ -144,6 +156,9 @@ class CorpusMap:
     label_counts: Mapping[str, int]
     per_label: Mapping[str, tuple[CorpusPair, ...]]
     per_word: Mapping[str, tuple[CorpusPair, ...]]
+    # The words' **grammatical classes** (CS-34): the class of each word's modal
+    # tag in the corpus. Empty when the corpus was not tagged.
+    pos_classes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def n_words(self) -> int:
@@ -185,6 +200,7 @@ def build_corpus_map(
     labels: Sequence[str],
     *,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
+    word_pos: Mapping[str, str] | None = None,
 ) -> CorpusMap:
     """Build the corpus map from a corpus's texts and their labels.
 
@@ -198,6 +214,9 @@ def build_corpus_map(
         labels: The label space (every label, even the ones the corpus never
             carries — they are reported as empty).
         stopwords: The stopwords of the tokenizer.
+        word_pos: The words' **grammatical classes** (CS-34), when the corpus
+            was tagged. The class is a property of the word, so it rides on
+            every table the word sits in.
 
     Returns:
         The corpus map.
@@ -237,6 +256,7 @@ def build_corpus_map(
         table_counts.update(pairs[label].keys())
     per_label: dict[str, tuple[CorpusPair, ...]] = {}
     per_word: dict[str, list[CorpusPair]] = {}
+    pos_classes = dict(word_pos or {})
     for label in label_space:
         n_label = label_counts.get(label, 0)
         if not n_label or not n_texts:
@@ -266,6 +286,7 @@ def build_corpus_map(
                 log_odds_conditional=measures.log_odds_conditional,
                 word_class=classify_word(table_counts[word], n_labelled),
                 is_name_word=word in name_words,
+                pos_class=pos_classes.get(word, ""),
             )
             rows.append(pair)
         rows.sort(key=lambda row: (-row.log_odds, row.word))
@@ -282,6 +303,7 @@ def build_corpus_map(
         label_counts=dict(label_counts),
         per_label=per_label,
         per_word=frozen_per_word,
+        pos_classes=pos_classes,
     )
 
 
@@ -479,7 +501,94 @@ def word_class_block(corpus_map: CorpusMap) -> dict[str, object]:
     }
 
 
-def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str, object]:
+def pos_class_block(
+    corpus_map: CorpusMap,
+    *,
+    tagger: Mapping[str, object] | None = None,
+    distribution: Mapping[str, Counter[str]] | None = None,
+) -> dict[str, object]:
+    """The **grammatical readout** (CS-34): the map's words on the POS axis.
+
+    The block carries the tagger's provenance, the corpus's **tag
+    distribution** (how many words take more than one tag — the ambiguity the
+    plan's warning is about), the readout **per class** (by the modal tag: the
+    partition) and **per tag** (every tag a word takes: the non-partition), and
+    the **separation test** — the nouns against the verbs.
+
+    Args:
+        corpus_map: The corpus map.
+        tagger: The tagger's provenance (the model id, the digest, the backend
+            and the cache's counters).
+        distribution: The corpus's per-word tag counts.
+
+    Returns:
+        The block (JSON-friendly).
+    """
+    if not distribution:
+        return {
+            "available": False,
+            "note": (
+                "the corpus was not tagged: no grammatical class is available for "
+                "this map (the tagger is off, or the corpus carries no tags)"
+            ),
+        }
+    classes = modal_classes(distribution)
+    readout = class_readout(
+        (
+            (classes.get(pair.word, "other"), pair.log_odds)
+            for label in corpus_map.labels
+            for pair in corpus_map.topic_rows(label)
+        ),
+        classes=POS_CLASSES,
+    )
+    # the per-tag readout: a pair is counted under every tag its word takes, so
+    # the ambiguous words are visible in both readouts.
+    per_tag: dict[str, list[float]] = {}
+    for label in corpus_map.labels:
+        for pair in corpus_map.topic_rows(label):
+            for tag in distribution.get(pair.word, {}):
+                per_tag.setdefault(tag, []).append(pair.log_odds)
+    tag_readout = class_readout(
+        ((tag, value) for tag, values in per_tag.items() for value in values),
+        classes=sorted(per_tag),
+    )
+    return {
+        "available": True,
+        "tagger": dict(tagger or {}),
+        "classes": {
+            "noun": "NN, NNS, NNP, NNPS: the topic words",
+            "verb": "VB, VBD, VBG, VBN, VBP, VBZ: the predicate words (this genre's register)",
+            "adjective": "JJ, JJR, JJS",
+            "adverb": "RB, RBR, RBS, WRB",
+            "other": "every other tag (the numbers, the symbols, the foreign words)",
+            "note": (
+                "a word's class is the class of its MODAL tag (the tag it takes "
+                "most often across the corpus); the per-tag readout counts a word "
+                "under every tag it takes, so an ambiguous word is visible in both"
+            ),
+        },
+        "ambiguity": ambiguity_summary(distribution),
+        "words_by_class": {
+            name: sum(1 for value in classes.values() if value == name) for name in POS_CLASSES
+        },
+        "readout_by_class": {name: row.to_row("mean_log_odds") for name, row in readout.items()},
+        "readout_by_tag": {name: row.to_row("mean_log_odds") for name, row in tag_readout.items()},
+        "falsification": pos_separation_test(readout),
+        "note": (
+            "the readout on the grammatical axis: the map's own log-odds, split by "
+            "the tagger's class. The registered test is CS-33's, on the "
+            "grammatical pair: the nouns against the verbs."
+        ),
+    }
+
+
+def corpus_map_block(
+    corpus_map: CorpusMap,
+    *,
+    split: str = "train",
+    tagger: Mapping[str, object] | None = None,
+    distribution: Mapping[str, Counter[str]] | None = None,
+) -> dict[str, object]:
     """The corpus map as the artifact's own block (JSON-friendly).
 
     The block carries the corpus's shape, the four measures' own definitions
@@ -490,6 +599,8 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
     Args:
         corpus_map: The map (from :func:`build_corpus_map`).
         split: The split the corpus is (the artifact records it).
+        tagger: The tagger's provenance (CS-34), when the corpus was tagged.
+        distribution: The corpus's per-word tag counts (CS-34).
 
     Returns:
         The block (JSON-friendly).
@@ -545,6 +656,7 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
         },
         "estimator": estimator_block(corpus_map),
         "word_classes": word_class_block(corpus_map),
+        "pos_classes": pos_class_block(corpus_map, tagger=tagger, distribution=distribution),
         "per_label": [
             {
                 "label": label,

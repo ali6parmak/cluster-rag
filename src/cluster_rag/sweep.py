@@ -49,6 +49,7 @@ from cluster_rag.config import (
     EvalDecisionConfig,
     EvalMetricsConfig,
     LabelTextsConfig,
+    PosConfig,
     PreprocessConfig,
     ProbeConfig,
     UprAnalysisConfig,
@@ -175,6 +176,10 @@ class EvalCell(_LabelledCell):
     # Zero-shot label vectors (Phase 4): a prior `upr-labelembed-*` run; needed
     # by predictor `zeroshot` and by `fusion` with c > 0 only.
     label_embedding_run: str | None = None
+    # The part-of-speech tagger (the track's CS-34): the section that switches
+    # the tagger on for this cell (the train corpus is tagged and the words'
+    # grammatical classes ride into the corpus map).
+    pos: PosConfig | None = None
 
     @field_validator("embedding_run")
     @classmethod
@@ -226,6 +231,8 @@ class EvalCell(_LabelledCell):
         }
         if self.metrics is not None:
             payload["eval"]["metrics"] = self.metrics.model_dump(mode="python")
+        if self.pos is not None:
+            payload["pos"] = self.pos.model_dump(mode="python")
         return payload
 
 
@@ -568,6 +575,10 @@ class HitMapUprCell(_LabelledCell):
     embedding_run: str
     label_embedding_run: str | None = None
     analysis: UprAnalysisConfig
+    # The part-of-speech tagger (the track's CS-34): the section that switches
+    # the tagger on for this cell (the map's own block then carries the
+    # grammatical readout).
+    pos: PosConfig | None = None
 
     @field_validator("embedding_run")
     @classmethod
@@ -614,6 +625,8 @@ class HitMapUprCell(_LabelledCell):
             },
             "upr_analysis": self.analysis.model_dump(mode="python"),
         }
+        if self.pos is not None:
+            payload["pos"] = self.pos.model_dump(mode="python")
         return payload
 
 

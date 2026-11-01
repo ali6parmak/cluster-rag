@@ -6798,3 +6798,129 @@ and the falsification was registered against exactly these); and nothing about
 the **POS line** — the readout's registered null did not fire, so **CS-34 is
 not cancelled by it**, but this change set says nothing about whether a
 *grammatical* class separates better than the corpus's own frequency class.
+
+## CS-34 — real part-of-speech tags: the grammatical axis (2026-11-01)
+
+**The runs.** Two classifier runs and two artifacts, re-written once.
+
+- `upr-eval-corpus-map-sum-zscore-positive-noun-val` and
+  `upr-eval-corpus-map-sum-zscore-positive-verb-val` — the **same** arm as
+  CS-31's fit-side selection (`sum_zscore_positive`), the **same** texts and
+  the **same** operating point (`top_k` k=2); the **only** difference is the
+  map's **grammatical restriction**. UPR **val**, 660 texts, 1.8 s and 1.0 s,
+  no model call and no embedding (the tagger is a local model, cached). The
+  rows land in the **main** UPR table under `## UPR — corpus_map_pos`.
+- The two artifacts re-written once: `results/upr-hitmap-corpus/hitmap.json`
+  (the **map's own block** now carries the grammatical readout) and
+  `results/upr-hitmap-surrogate/hitmap.json` (the **surrogate's** block now
+  carries **its own** grammatical readout). The train corpus (1,676 texts) is
+  tagged with **1,676 cache hits and 0 misses** — no new model call, no new
+  download after the first one.
+
+**The mechanism.** The reviewer's part-of-speech question, answered on the
+**grammatical** axis this time. The tagger is at the **edge**
+(`src/cluster_rag/pos/`: the port, the `nltk` backend and its own disk cache),
+the new dependency is `nltk` (MIT) with the `averaged_perceptron_tagger_eng`
+model, and the model's **digest** (`46538d9046892dfe…`) is recorded in the
+artifact. The tagger is handed the **track's own tokenization**, so its tokens
+and the map's words are the same units and the tags line up **by position** —
+no second tokenizer, no `punkt` download, and no join to be guessed.
+
+**The classes.** The Penn tagset grouped into five: **noun** (NN, NNS, NNP,
+NNPS), **verb** (VB, VBD, VBG, VBN, VBP, VBZ), **adjective** (JJ, JJR, JJS),
+**adverb** (RB, RBR, RBS, WRB) and **other**. A word's class is the class of
+its **modal tag**, and the **per-word tag distribution** is stored: **412 of
+the map's 3,049 words (13.5 %)** take more than one tag (the plan's own check
+said 16.3 % over the 3,000-text corpus; the train split's own number is the
+one the artifact carries). The words by class: **1,555 nouns, 660 verbs, 600
+adjectives, 108 adverbs, 126 other**.
+
+### The readout (the map's own block: `corpus_map.pos_classes`)
+
+| the class | the (label, word) pairs | share **positive** | share **negative** | the mean log-odds |
+|---|---|---|---|---|
+| **noun** | 9,752 | 90.1 % | 9.9 % | **+2.0044** |
+| **verb** | 4,057 | 91.4 % | 8.6 % | **+1.9856** |
+| adjective | 3,605 | 90.3 % | 9.7 % | +2.0403 |
+| adverb | 554 | 94.6 % | 5.4 % | +2.2221 |
+| other | 739 | 93.0 % | 7.0 % | +2.0820 |
+
+### The falsification, read out — **BOTH halves fail, so the POS line is a null**
+
+1. **The readout's separation fails.** The registered test was CS-33's, on the
+   grammatical pair: the **noun** class's mean log-odds must exceed the
+   **verb** class's by at least **1.0** and the noun class's share of positive
+   pairs must be higher. Neither holds: the difference is **+0.0188** (the
+   margin needs 1.0) and the verb class's positive share (**91.4 %**) is
+   actually **higher** than the noun class's (**90.1 %**). **The grammatical
+   axis does not separate the topic words from the predicate words** — the map
+   treats them almost identically.
+2. **The payoff fails too.** The **noun-only** map reaches a pooled **micro-F1
+   0.4840** against the full map's **0.5243**; the **paired** bootstrap over
+   the texts puts the difference at **+0.0403 [+0.0258, +0.0545]** — the
+   interval **excludes zero**, so the noun-only map is **materially worse**
+   (the registered condition wanted an interval that *includes* zero). The
+   **verb-only** map reaches **0.1261** (**+0.3982 [+0.3735, +0.4244]** against
+   the full map). The **fit side agrees** (the out-of-fold train micro-F1
+   **0.6175** and **0.1550** against the full map's **0.6613**), so this is
+   not a val artefact.
+
+| the map | the pooled micro-F1 | the fit side's **out-of-fold** | head | torso | tail | unseen | shortlist R@50 |
+|---|---|---|---|---|---|---|---|
+| the **full** map | **0.5243** | **0.6613** | 0.6886 | 0.4180 | 0.5435 | 0.0000 | 0.7157 |
+| the **nouns only** | 0.4840 | 0.6175 | **0.6937** | 0.3309 | 0.4833 | 0.0000 | 0.6857 |
+| the **verbs only** | 0.1261 | 0.1550 | 0.2768 | 0.0625 | 0.0978 | 0.0000 | 0.6110 |
+
+3. **So the verdict is the pre-registered one: the POS line is a null, and the
+   dependency is not worth keeping.** The `nltk` dependency bought a readout
+   that does not separate and a classifier that is materially worse. What it
+   did buy is **the one place the grammatical axis shows any structure at
+   all** — the **per-tag** readout, where the **closed-class** words (this
+   genre's register, in the grammatical sense) are the weakest and the content
+   words the strongest:
+
+   | the tag | the pairs | share positive | the mean log-odds |
+   |---|---|---|---|
+   | RBR (comparative adverbs) | 57 | 73.7 % | **+0.4851** |
+   | FW (foreign words) | 42 | 66.7 % | **+0.6737** |
+   | MD (predicative modifiers) | 19 | 89.5 % | +0.8283 |
+   | IN (prepositions) | 411 | 86.9 % | +1.3016 |
+   | DT (determiners) | 31 | 93.5 % | +1.6005 |
+   | VB (base verbs) | 3,592 | 87.0 % | +1.4428 |
+   | NN (nouns) | 8,803 | 89.8 % | +1.8583 |
+   | VBN (past participles) | 868 | 97.0 % | +2.3371 |
+   | CD (numbers) | 366 | 99.2 % | +2.7337 |
+
+   That is a **reading**, not a measurement: the closed-class words are the
+   weak ones, so the "register" CS-33 found is partly the *function words* —
+   but the pre-registered test was about the nouns against the verbs, and a
+   **closed-class-dropped** map was **not** a pre-registered arm, so it is not
+   measured here. It is the obvious next question, and it is the reviewer's.
+
+### The model's own habits, on the grammatical axis
+
+The same split, applied to the **surrogate's** 81,804 per-topic coefficients:
+
+| the class | the coefficients | share **positive** | the mean coefficient |
+|---|---|---|---|
+| noun | 44,064 | 42.1 % | −0.003509 |
+| verb | 16,456 | 44.4 % | −0.002093 |
+| adjective | 15,640 | 43.3 % | −0.002488 |
+| adverb | 2,244 | 41.9 % | −0.004332 |
+| other | 3,400 | 43.0 % | −0.004616 |
+| **the name-word flag** | 140 | **82.9 %** | **+0.207622** |
+
+The model's attribution does not separate on the grammatical axis either (the
+noun and the verb classes are within 0.2 points of each other, and every class
+mean is within a thousandth of zero) — and **CS-33's finding stands**: what
+the model leans on is the **label's own name words**, an order of magnitude
+above every class mean.
+
+### What this change set does not say
+
+Nothing about the **decision model**; nothing about `test` (the round's
+numbers are val only); nothing about a **closed-class** map (not a
+pre-registered arm — the reviewer's call); nothing about the tagger's
+**accuracy** (the tagger is nltk's, and the readout measures what the map does
+with its tags, not how good the tags are); and nothing about the other
+grammatical **languages** — the corpus is English only (PLAN §7).

@@ -4603,3 +4603,175 @@ line). The verdict and the numbers are the track log's §CS-33.*
     UPR table's `corpus_map_classes` section); the viewer gains the block; the
     log section reads the numbers out with the falsification conditions; the
     gate green.
+
+## The real POS tags (CS-34) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-34.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-34 — real part-of-speech tags.** *Gated on the reviewer's OK: a new
+  dependency and a model download (AGENTS.md §3).* Tag the corpus with a real POS
+  tagger and redo CS-33's readout with the grammatical class, plus the
+  class-restricted map's number.
+
+  **The dependency, stated plainly.** `nltk` (MIT) plus its
+  `averaged_perceptron_tagger_eng` model; the install and the tagger's run over
+  our 3,000-text corpus (0.64 s) were checked, and 4,089 distinct words come back
+  of which **16.3 %** take more than one tag across the corpus — so the readout
+  must report the per-word tag *distribution*, not a single tag, or it will lie.
+  The tagger is a **model client** (it downloads a model), so it lives at the
+  edge: `src/cluster_rag/pos/` with a `base.py` port and an `nltk_tagger.py`
+  backend; the track's package imports the port only. The model download needs a
+  cache and a recorded digest, like the embedder's and the decision model's. One
+  line in AGENTS.md's pure-core rule (the `cluster_rag.pos.base` port).
+
+  **The falsification.** The same as CS-33's, now with the grammatical class: if
+  the class does not separate the label-carrying words from the register words,
+  the whole POS line is a null and the dependency is not worth keeping.
+
+  **The cost.** About a day, plus the dependency.
+
+  **The pre-registration (2026-11-01, written before the first call — the
+  reviewer's OK on the dependency and the download was given on 2026-11-01;
+  this fixes the *shape* of the number).** The block above fixes the
+  mechanism; this fixes the number.
+
+  - **The tagger, at the edge.** A new package `src/cluster_rag/pos/`:
+    `base.py` — the **port** (a `Tagger` protocol: the token stream in, the
+    `(token, tag)` pairs out, plus the provenance) — and `nltk_tagger.py` — the
+    **backend** (`nltk`'s `averaged_perceptron_tagger_eng`), with its own disk
+    cache (`cache.py`, the decision cache's shape). The track's package
+    imports the **port** only: one line in AGENTS.md's pure-core rule (the
+    `cluster_rag.pos.base` port). The dependency is **`nltk`** (MIT), added to
+    `pyproject.toml`; a new `pos:` config section (the model id and the
+    backend, **off by default** so every earlier run's artifact keeps its exact
+    content).
+  - **The cache and the digest.** The tagger is a model client, so its answers
+    are cached on disk like the embedder's and the decision model's: the key
+    is `(model id, digest, the text's sha1)`, the cache lives under the run's
+    own cache root (`cache/pos/`), and the **model's digest** (the sha256 of
+    the tagger's own model files) is recorded in the artifact's provenance — so
+    a re-run knows which build of the tagger it read.
+  - **The corpus that is tagged, and the tokens that are tagged.** The **train**
+    split (the map's corpus): no val text and no test text enters the tag
+    distribution. The tagger's input is the **track's own tokenization**
+    (`[a-z0-9]+` on the lower-cased text, the map's unit) — so the tagger's
+    tokens and the map's words line up **by position**, exactly: no second
+    tokenizer, no `punkt` download, and no join to be guessed. The token
+    stream keeps the stopwords and the one-character tokens (the tagger needs
+    the sentence's shape); the **map's words** are the content tokens of that
+    same stream, so every map word gets its tags from the positions where it
+    occurs.
+  - **The classes.** The **Penn tagset** grouped into five coarse classes:
+    **noun** (NN, NNS, NNP, NNPS), **verb** (VB, VBD, VBG, VBN, VBP, VBZ),
+    **adjective** (JJ, JJR, JJS), **adverb** (RB, RBR, RBS, WRB) and **other**
+    (the rest). A **word's** class is the class of its **modal tag** — the tag
+    it takes most often across the train corpus — and the words that take
+    **several** tags are reported as such: the per-word tag *distribution* is
+    stored and the **share of the map's words with more than one tag** is
+    reported (the plan's own check says 16.3 % over the 3,000-text corpus;
+    this is the train split's own number, and it is the one the artifact
+    carries). A word with no tag at all is counted apart, never dropped
+    silently.
+  - **The readout.** Per class: the number of (label, word) pairs, the share
+    with a **positive** log-odds, the share with a **negative** one and the
+    mean log-odds — CS-33's readout, crossed with the grammatical class.
+    Reported **twice**: by the **modal tag** (the partition — every pair
+    counted once) and by **every tag the word takes** (the non-partition, so a
+    word that is a noun here and a verb there is visible in both). And the
+    same readout for the **surrogate's** per-topic coefficients (the model's
+    own habits).
+  - **The payoff.** The **POS-restricted map** as a classifier: the map with
+    the **nouns only** (the topic words) and, at the other extreme, the map
+    with the **verbs only** (the predicate words) — the two ends of the
+    grammatical axis, fixed in advance. Both through the **existing** scorer
+    and the **existing** `evaluate` command, on the same texts at the same
+    operating point (`top_k` k=2), so the comparison against the full map is
+    paired (`tools/lexical_compare.py`).
+  - **The runs.** Two classifier runs:
+    `upr-eval-corpus-map-sum-zscore-positive-noun-val` and
+    `upr-eval-corpus-map-sum-zscore-positive-verb-val` (UPR **val**, `top_k`
+    k=2, the arm CS-31's fit side selected), the sweep
+    `experiments_text_processing/corpus_map_pos_sweep.py` (the sweep label
+    `corpus_map_pos`); the rows land in the **main** UPR table. Plus the two
+    artifacts re-written once: the map's own block (the POS readout) and the
+    surrogate's own block (the model's POS readout).
+  - **The falsification, registered in advance.** The POS line is a **null**
+    (and the dependency is not worth keeping) if **both** of these fail:
+    1. **the readout's separation** (the plan's "the same as CS-33's, now with
+       the grammatical class"): the **noun** class's mean log-odds must exceed
+       the **verb** class's by **at least 1.0** (the same natural-log unit) and
+       the noun class's share of positive pairs must be higher. (The nouns are
+       the label-carrying words; the verbs are this genre's register.)
+    2. **the payoff**: the **noun-only** map must not be materially worse than
+       the full map — the paired Δ's interval must **include zero** (the
+       track's own reading of "materially smaller", as in CS-32).
+    If the separation holds and the payoff does not, the line is a good
+    **description** and a bad **model** (CS-33's shape) — reported as such,
+    not as a null.
+  - **The exit criteria.** The map's artifact carries the POS block (the
+    tagger's provenance, the tag distribution, the readout per class and per
+    tag, the separation test); the surrogate's block carries the model's POS
+    readout; the two runs hold their numbers; the table rows are auto-appended;
+    the viewer gains the POS lines; the log section reads the numbers out with
+    the falsification conditions; the gate green (ruff over `src`/`tests`/
+    `experiments`, the full pytest suite, the two verify tools, and both final
+    sweeps reproducing their artifacts field for field).
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the reviewer's OK on
+  the dependency and the model download was given on 2026-11-01; the two runs
+  are `upr-eval-corpus-map-sum-zscore-positive-{noun,verb}-val` (UPR **val**,
+  660 texts, `top_k` k=2, the arm `sum_zscore_positive`), the sweep is
+  `experiments_text_processing/corpus_map_pos_sweep.py` (the label
+  `corpus_map_pos`), the map's and the surrogate's artifacts are
+  `results/upr-hitmap-corpus/hitmap.json` and
+  `results/upr-hitmap-surrogate/hitmap.json`, the log section is `## CS-34 —
+  real part-of-speech tags` in `docs/experiments_text_processing.md`, and the
+  numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, `top_k` k=2;
+  the map built from the **train** split only and tagged with `nltk`'s
+  `averaged_perceptron_tagger_eng` (the digest recorded in the artifact, the
+  train corpus tagged with 1,676 cache hits and 0 misses; no model calls).**
+
+  - **The readout** (the map's own block, `corpus_map.pos_classes`; the map's
+    log-odds over the 18,707 pairs): **noun** 9,752 pairs, 90.1 % positive, a
+    mean log-odds of **+2.0044**; **verb** 4,057, 91.4 %, **+1.9856**;
+    adjective 3,605, 90.3 %, +2.0403; adverb 554, 94.6 %, +2.2221; other 739,
+    93.0 %, +2.0820. The map's 3,049 words by class: 1,555 nouns, 660 verbs,
+    600 adjectives, 108 adverbs, 126 other; **412 of the 3,049 (13.5 %)** take
+    more than one tag (the per-word distribution is stored).
+  - **The readout's separation FAILS**: the noun class's mean exceeds the verb
+    class's by **+0.0188** (the margin needs 1.0) and the verb class's share of
+    positive pairs (**91.4 %**) is *higher* than the noun class's (**90.1 %**).
+    The grammatical axis does not separate the topic words from the predicate
+    words.
+  - **The payoff FAILS too**: the **noun-only** map reaches a pooled **micro-F1
+    0.4840** (the fit side's out-of-fold 0.6175) against the full map's
+    **0.5243** (0.6613) — a paired **+0.0403 [+0.0258, +0.0545]**, the interval
+    **excluding zero**, so the restriction costs something measurable; the
+    **verb-only** map reaches **0.1261** (**+0.3982 [+0.3735, +0.4244]**,
+    out-of-fold 0.1550).
+  - **So the POS line is a NULL** (both halves of the registered falsification
+    fail) and **the dependency is not worth keeping**. The one thing it bought
+    is the **per-tag** readout, where the closed-class words (the register in
+    the grammatical sense: FW +0.67, RBR +0.49, MD +0.83, IN +1.30) are the
+    weakest and the content words the strongest (NNP +3.65, JJS +3.29, CD
+    +2.73). That is a **reading**, not a measurement — a closed-class map was
+    not a pre-registered arm, so it is the reviewer's next question.
+  - **The surrogate's own readout** agrees: the noun and the verb classes are
+    within 0.2 points of each other (42.1 % against 44.4 % positive) and every
+    class mean is within a thousandth of zero, while the **name words** are
+    82.9 % positive at a mean coefficient of **+0.20762** — CS-33's finding
+    stands.
+  - **The exit criteria.** The map's artifact carries the POS block (the
+    tagger's provenance, the tag distribution, the readout per class and per
+    tag, the separation test); the surrogate's block carries the model's POS
+    readout; the two runs hold their numbers; the table rows are auto-appended
+    (the main UPR table's `corpus_map_pos` section); the viewer gains the POS
+    lines; the log section reads the numbers out with the falsification
+    conditions; the gate green.

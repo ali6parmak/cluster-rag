@@ -16,6 +16,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -73,6 +74,8 @@ from cluster_rag.experiment_table import (
 from cluster_rag.label_catalog import LabelEntry
 from cluster_rag.omct_analysis import BASELINE_ARM
 from cluster_rag.omct_decision import DecisionArm, score_cells
+from cluster_rag.pos.cache import CachedTagger
+from cluster_rag.pos.nltk_tagger import NltkTagger
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
@@ -119,6 +122,12 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
 )
 from cluster_rag.text_processors.lexical.corpus_map_score import (
     score_cells as map_score_cells,
+)
+from cluster_rag.text_processors.lexical.pos_class import (
+    POS_CLASSES,
+    merge_distributions,
+    modal_classes,
+    word_tag_counts,
 )
 from cluster_rag.text_processors.lexical.word_class import label_name_words
 from cluster_rag.text_processors.rerank.upr_rerank import (
@@ -200,6 +209,76 @@ def build_upr_decider(model_config: Any, config: AppConfig) -> Any:
     )
     prompt_version = decision.prompt_version if decision else "v1"
     return CachedDecider(client, config.paths.cache, prompt_version=prompt_version)
+
+
+def build_pos_tagger(config: AppConfig) -> Any:
+    """Build the part-of-speech tagger (the CLI's wiring seam, the track's CS-34).
+
+    The tagger is a **model client**: it downloads its model into the run's own
+    cache root and its answers are cached on disk (its own root under
+    ``cache/``, never the embedding cache), so a re-run never re-tags a text.
+    The track's pure package never imports the client — only the port.
+
+    Returns:
+        The cached tagger, or ``None`` when the tagger is off (the default).
+
+    Raises:
+        RuntimeError: If the model cannot be found or downloaded.
+    """
+    pos = config.pos
+    if not pos.enabled:
+        return None
+    if pos.backend != "nltk":
+        raise ValueError(f"Unknown part-of-speech backend {pos.backend!r}; expected 'nltk'")
+    client = NltkTagger(
+        pos.model_id,
+        data_root=Path(config.paths.cache) / "pos" / "nltk_data",
+        language=pos.language,
+    )
+    return CachedTagger(client, config.paths.cache)
+
+
+def pos_word_classes(
+    config: AppConfig,
+    texts: Sequence[str],
+) -> tuple[dict[str, str], dict[str, Counter[str]], dict[str, Any]]:
+    """The train corpus's **grammatical classes** (the track's CS-34).
+
+    The corpus is tagged with the track's own tokenization, so the tagger's
+    tokens and the map's words line up by position; the per-word tag counts
+    are merged over the corpus and each word's class is the class of its
+    **modal** tag.
+
+    Args:
+        config: The resolved app config (the ``pos:`` section decides).
+        texts: The corpus's texts (the train split).
+
+    Returns:
+        The per-word class, the per-word tag counts and the tagger's
+        provenance (with the cache's counters). All three are empty when the
+        tagger is off.
+    """
+    tagger = build_pos_tagger(config)
+    if tagger is None:
+        return {}, {}, {}
+    distributions = []
+    for text in texts:
+        tagged = tagger.tag(text)
+        distributions.append(word_tag_counts(text, tagged))
+    merged = merge_distributions(distributions)
+    classes = modal_classes(merged)
+    info = tagger.info
+    provenance = {
+        "model_id": info.model_id,
+        "digest": info.digest,
+        "backend": info.backend,
+        "cache_hits": getattr(tagger, "cache_hits", 0),
+        "cache_misses": getattr(tagger, "cache_misses", 0),
+        "n_stored": getattr(tagger, "n_stored", 0),
+        "n_texts_tagged": len(texts),
+        **info.extra,
+    }
+    return classes, merged, provenance
 
 
 def _cmd_decide_upr(config: AppConfig) -> int:
@@ -826,15 +905,27 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
     # own block is written only when the run asks for it.
     corpus_block: dict[str, Any] | None = None
     corpus_map: CorpusMap | None = None
+    pos_classes: dict[str, str] = {}
+    pos_distribution: dict[str, Counter[str]] = {}
+    pos_provenance: dict[str, Any] = {}
     if hitmap.include_corpus_map or hitmap.include_surrogate:
         train_records = setup.train_records
+        pos_classes, pos_distribution, pos_provenance = pos_word_classes(
+            config, [record.text for record in train_records]
+        )
         corpus_map = build_corpus_map(
             [record.text for record in train_records],
             [record.labels for record in train_records],
             labels,
+            word_pos=pos_classes or None,
         )
         if hitmap.include_corpus_map:
-            corpus_block = corpus_map_block(corpus_map, split="train")
+            corpus_block = corpus_map_block(
+                corpus_map,
+                split="train",
+                tagger=pos_provenance,
+                distribution=pos_distribution or None,
+            )
 
     # -- Version B: the ablation map (the decision model's own ablation) ----------
     units = tuple(text_units(text, unit=hitmap.unit, openers=openers) for text in texts)
@@ -1337,7 +1428,26 @@ def _surrogate_word_class_readout(
         index.classes,
         name_words=name_words,
     )
-    return {"available": True, **block}
+    pos_block = word_class_readout(
+        fit.coefficients,
+        vocabulary,
+        list(labels),
+        corpus_map.pos_classes,
+        name_words=name_words,
+        class_names=POS_CLASSES,
+    )
+    return {
+        "available": True,
+        **block,
+        "pos_classes": {
+            "available": bool(corpus_map.pos_classes),
+            **pos_block,
+            "note": (
+                "the same coefficients split by the grammatical classes (CS-34): "
+                "the model's own habits on the POS axis"
+            ),
+        },
+    }
 
 
 def _hitmap_upr_row(
@@ -2000,11 +2110,18 @@ def _prepare_evaluation(config: AppConfig, split: str) -> EvalSetup:
         if artifact is not None and "document" in required_kinds
         else None  # zero-shot predictors use query vectors only
     )
+    # The part-of-speech tagger (the track's CS-34): when it is on, the train
+    # corpus is tagged and the words' grammatical classes ride into the
+    # predictor's context (a property of the word, never of a label).
+    word_pos, _distribution, _provenance = pos_word_classes(
+        config, [record.text for record in train_records]
+    )
     context = PredictorContext(
         labels=tuple(labels),
         train_records=tuple(train_records),
         train_document_vectors=train_vectors,
         label_vectors=label_artifact.vectors if label_artifact is not None else None,
+        word_pos=word_pos,
     )
     predictor = build_predictor(
         eval_config.predictor.name,
