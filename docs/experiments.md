@@ -610,3 +610,40 @@ falsification conditions and their verdicts, the fit side's cross-fit and the
 bias it removes — is the track log's §CS-30
 (`docs/experiments_text_processing.md`) and the plan's §7.4 in
 `docs/text_processing_plan_archive.md`.
+
+## 2026-11-01 — the corpus map's estimator (the track's CS-31): the z-scored weights on UPR val
+
+**Runs:** `upr-eval-corpus-map-{sum-logodds,sum-positive,max-logodds,support-count,sum-zscore,sum-zscore-positive}-val`
+(the `evaluate` command; the sweep `experiments/corpus_map_sweep.py`), the
+artifacts `results/upr-eval-corpus-map-*-val/metrics.json`, the table rows in
+`docs/experiments_table_upr.md`'s `corpus_map` section; the **lexicon
+artifact** is the map's own block, re-written once
+(`results/upr-hitmap-corpus/hitmap.json`, now carrying the new measures beside
+CS-23's unchanged ones). UPR **val** (660 texts), `top_k` k=2.
+
+**What.** Five new measures on the map's **same 2×2 table**, in the form of the
+reference implementation the track's plan names (`logodds` on PyPI, MIT, no
+dependencies — Monroe, Colaresi & Quinn 2008's Dirichlet prior), adapted to the
+**document level**: the informative-prior log-odds (the word's global document
+frequency as the pseudo-count), its standard error, the **z-score** (δ over the
+standard error), the **G²** significance with its p-value (the standard
+library's `erfc`, no scipy), and the **conditional smoothing** (the 0.5 only
+where a cell is actually zero). No package was installed; the formulas are
+pinned by hand-computed unit tests.
+
+**The numbers.** The z-scored arm reaches a pooled **micro-F1 0.5243** (macro
+0.4662, coverage 0.853, P@5 0.2585, R@10 0.6429, nDCG@5 0.6327, shortlist
+R@50 0.7157) against the champion's **0.5479** and the log-odds arm's 0.4924 —
+a **paired** **+0.0319 [-0.0526, -0.0120]** in the z-scored arm's favour (the
+interval excludes zero; the tool `tools/lexical_compare.py` rebuilds both arms
+from the runs' frozen configs and checks the rebuild against the artifacts
+first). Per bucket: head 0.6886 (champion 0.6953), torso 0.4180 (0.5121),
+**tail 0.5435** (0.5287 — above the champion's), unseen 0.0000 by construction.
+
+**Why it is here.** It is the text-processing track's lexical methods round's
+third instrument, after CS-29's TF-IDF floor and CS-30's log-odds map, and the
+first one where the **measure** (not the features) is the lever. The full
+narrative — the two falsification conditions and their verdicts, the fit side's
+cross-fit and the shrinkage's signature, the conditional smoothing's sign-flip
+share — is the track log's §CS-31 (`docs/experiments_text_processing.md`) and
+the plan's §7.4 in `docs/text_processing_plan_archive.md`.

@@ -594,13 +594,16 @@ def test_evaluate_corpus_map_end_to_end(evaluate_run) -> None:
     assert predictor["map"]["split"] == "train"
     assert predictor["map"]["n_labels"] == metrics["n_labels"]
     fit_side = predictor["fit_side"]
-    # the fit side's numbers: all four arms, in-fold and out-of-fold, and the
-    # selection made on the out-of-fold one
+    # the fit side's numbers: every arm (CS-30's four and CS-31's two
+    # z-scored ones), in-fold and out-of-fold, and the selection made on the
+    # out-of-fold one
     assert set(fit_side["in_fold_micro_f1"]) == {
         "sum_logodds",
         "sum_positive",
         "max_logodds",
         "support_count",
+        "sum_zscore",
+        "sum_zscore_positive",
     }
     assert set(fit_side["out_of_fold_micro_f1"]) == set(fit_side["in_fold_micro_f1"])
     assert fit_side["selected_by"] == "out_of_fold_micro_f1"

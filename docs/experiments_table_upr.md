@@ -350,7 +350,9 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-eval-corpus-map-sum-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4901 | 0.4573 | 0.4685 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 | 660 | 0.788 |
-| upr-eval-corpus-map-sum-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4924 | 0.4582 | 0.4712 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 | 660 | 0.81 |
-| upr-eval-corpus-map-max-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4848 | 0.4439 | 0.4625 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 | 660 | 0.797 |
-| upr-eval-corpus-map-support-count-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 0.796 |
+| upr-eval-corpus-map-sum-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4901 | 0.4573 | 0.4685 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 | 660 | 1.277 |
+| upr-eval-corpus-map-sum-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4924 | 0.4582 | 0.4712 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 | 660 | 1.275 |
+| upr-eval-corpus-map-max-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4848 | 0.4439 | 0.4625 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 | 660 | 1.288 |
+| upr-eval-corpus-map-support-count-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 1.334 |
+| upr-eval-corpus-map-sum-zscore-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.1011 | 0.0429 | 0.0982 | 0.765 | 0.0636 | 0.2393 | 0.1399 | 0.6566 | 660 | 1.294 |
+| upr-eval-corpus-map-sum-zscore-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.5243 | 0.4662 | 0.4999 | 0.853 | 0.2585 | 0.6429 | 0.6327 | 0.7157 | 660 | 1.267 |

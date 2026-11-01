@@ -4090,3 +4090,214 @@ line). The verdict and the numbers are the track log's §CS-30.*
     gate green (ruff over `src`/`tests`/`experiments`, the full pytest suite,
     the two verify tools, both final sweeps reproducing their artifacts field
     for field).
+
+---
+
+## The corpus map's estimator (CS-31) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-31.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-31 — the corpus map's estimator, and the lexicon as a first-class
+  artifact.** Two parts, one change set, because the second is measured with the
+  first.
+
+  1. **The estimator.** Beside the current log-odds, the map gains the
+     **informative-prior log-odds** (Monroe, Colaresi & Quinn 2008: the word's
+     global frequency as the pseudo-count) and its **z-score** (δ over the
+     standard error); a **significance** per pair, so "this word goes with this
+     label" can be stated with a p-value instead of only a size (Fisher's exact
+     or the G² statistic on the same 2×2 table — the same table, so nearly
+     free); and the **conditional smoothing** variant (0.5 only where a cell is
+     actually zero), with the share of pairs whose *sign* flips under it reported.
+     The reason to change it: our fixed 0.5 on all four cells is the variant the
+     statistics literature criticises (Jackson et al., *JRSS-M* 2021: adding 0.5
+     to *every* cell of *every* table performs **worse** than adding it only to
+     the tables that actually have a zero cell; Agresti recommends a much smaller
+     constant for sparse data).
+  2. **The lexicon artifact.** The map's words, per label, with the new measures
+     and the counts — reusable by CS-32, CS-33, CS-35 and the viewer, so it is
+     written once. It goes into `text_processors/lexical/lexicon.py` (the
+     estimator, pure) and `text_processors/features/corpus_map.py` (the artifact
+     block, so the existing CS-23 shape is preserved and the viewer keeps
+     reading one block).
+
+  **The reference implementations** are used as *test oracles*, not as runtime
+  dependencies (the track's package stays numpy-only): `logodds` on PyPI (MIT, no
+  dependencies, and it takes the informative prior directly), `tidylo::bind_log_odds()`
+  in R (the same method with an empirical-Bayes prior) and
+  `quanteda.textstats::textstat_keyness()` (the chi² / Fisher / G² / PMI family,
+  with p-values).
+
+  **The falsification, registered in advance.** The head word changes for a
+  measurable number of labels: CS-23 measured the **lift**'s head as a hapax for
+  **55 of the 60** labelled tables and the log-odds's head as a hapax for only
+  **4**, so the z-score's head should be a hapax for **few** labels — the prior
+  is supposed to demote the single-document words. **If the z-scored head word is
+  unchanged for ≥ 55 of the 60 labels, the prior does nothing here and the metric
+  upgrade is a null**; report it as a null. And CS-30's classifier is re-measured
+  with the z-scored weights: if the pooled micro-F1 does not move, the better
+  measure is a better *description*, not a better *model*.
+
+  **The cost.** About a day. **No new dependency.**
+
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **Where the code lives.** The **estimator** is pure and lives in
+    `text_processors/lexical/lexicon.py` (the standard library only — no
+    numpy needed, no model client); the **artifact block** stays in
+    `text_processors/features/corpus_map.py`, so the CS-23 shape is preserved
+    and the viewer keeps reading one block. The **scorer** (CS-30's) gains the
+    z-scored arms.
+  - **The estimator's five new measures**, all from the **same 2×2 table**
+    (`a` word+label, `b` word+no label, `c` no word+label, `d` neither), the
+    label's count `n_label`, the corpus's count `N` and the word's **document
+    frequency** `df`:
+    1. **`log_odds_informative`** — the **informative-prior log-odds** in the
+       form of the reference implementation the block above names
+       (`logodds` on PyPI, MIT, no dependencies — Monroe, Colaresi & Quinn
+       2008's Dirichlet prior), **adapted to the document level**: the word's
+       global document frequency is the pseudo-count, `α_w = df + alpha`
+       (`alpha` = 0.01, the reference's floor), and `α₀ = Σ_w α_w` over the
+       map's vocabulary (the corpus's own (text, word) incidences). Then
+       `δ_label = log((a+α_w)/(n_label+α₀-a-α_w))`,
+       `δ_other = log((b+α_w)/(n_other+α₀-b-α_w))` and the score is
+       `δ_label − δ_other`.
+    2. **`standard_error`** — `σ = sqrt(1/(a+α_w) + 1/(b+α_w))`, the
+       reference's own variance of the difference.
+    3. **`z_score`** — the plan's **δ over the standard error**: the
+       informative log-odds divided by its σ (the reference's z-score).
+    4. **`g2` and `p_value`** — the **significance** on the same table: the
+       likelihood-ratio **G²** statistic (1 degree of freedom) and its
+       p-value, `p = erfc(sqrt(G²/2))` — the chi-square 1-df survival
+       function, which the standard library computes exactly (the track's
+       package may not import scipy, so the p-value is computed here rather
+       than taken from a library).
+    5. **`log_odds_conditional`** — the **conditional smoothing**: the 0.5
+       added **only to the cells that are actually zero**, the variant the
+       statistics literature criticises our fixed 0.5 for (Jackson et al.,
+       *JRSS-M* 2021; Agresti). The **share of pairs whose sign flips**
+       under it is reported.
+  - **The current log-odds is NOT touched.** CS-23's numbers stay exactly as
+    they are; the new measures are added **beside** them (the reviewer's
+    decision of 2026-11-01), so every number CS-23 reported stays reproducible
+    from its artifact.
+  - **The reference implementations are oracles, not dependencies.** The
+    formulas follow the published method (the `logodds` package's own
+    "Method" section, Monroe et al. 2008; `tidylo::bind_log_odds()`; the
+    `quanteda.textstats::textstat_keyness()` family for the significance);
+    **no package is installed** (this change set's cost line says *no new
+    dependency*), so the implementation is pinned by **hand-computed unit
+    tests** instead.
+  - **The lexicon artifact.** The map's words, per label, with the new
+    measures and the counts behind them — **written once**, in the map's own
+    block, so CS-32, CS-33, CS-35 and the viewer all read the same numbers.
+    The block gains the new measures per pair and a **summary**: the head
+    word per label under each measure (with its counts), the head-word
+    agreement between the measures, and the conditional smoothing's sign-flip
+    share.
+  - **The classifier re-measurement.** The map's weights are re-measured with
+    the **z-score** instead of the log-odds, through two new arms of the same
+    scorer: `sum_zscore` (the sum of the z-scores over the text's words) and
+    `sum_zscore_positive` (the same sum over the words whose z-score is
+    positive — the analogue of the **selected** arm, `sum_positive`). Two
+    more runs, `upr-eval-corpus-map-sum-zscore-val` and
+    `upr-eval-corpus-map-sum-zscore-positive-val`, on UPR **val** at the same
+    `top_k` k=2.
+  - **The comparison is paired.** The two arms are scored on the **same
+    texts** with the same map and the same operating point, so the
+    difference is paired (the track's rule: no verdict rests on two
+    independent numbers). A small tool (`tools/lexical_compare.py`) rebuilds
+    both arms' score matrices from the runs' frozen configs, **checks them
+    against the runs' own artifacts** (the recomputed micro-F1 must equal the
+    artifact's), and reports the paired bootstrap CI of the difference
+    (`eval/multilabel.py: paired_metric_bootstrap`, the resampling unit the
+    text).
+  - **The falsification, registered in advance.**
+    1. **The head-word test.** The z-scored head word must be **different**
+       from the log-odds's head word for **at least 5 of the 60** labelled
+       tables: **if it is unchanged for ≥ 55 of the 60, the prior does nothing
+       here and the metric upgrade is a null** — reported as a null. (Read
+       only on the **train** split, before the run: with the formulas above
+       the head changes for **13 of the 60**, so the registered null does not
+       fire — but the plan's *expectation* that the z-score demotes the
+       single-document words is **not** met: the z-scored head is a hapax for
+       the **same 4** labels as the log-odds's head. The reason is the
+       formulas' own: the informative prior shrinks the **common** words (the
+       register — "rights" is in all 60 tables), while the **standard error**
+       is what shrinks the rare ones. Both readings are reported.)
+    2. **The model test.** The z-scored weights must **move** the classifier:
+       if the pooled micro-F1 does not move, the better measure is a better
+       **description**, not a better **model** — a null, reported as a null.
+       The reading is on the **val** re-measurement (the two new runs) and on
+       the **fit side** (the out-of-fold numbers, which the selection sees).
+  - **The exit criteria.** The map's artifact carries the lexicon; the six
+    map runs (the four CS-30 arms and the two z-scored ones) hold their
+    numbers; the table rows are auto-appended; the log section reads the
+    numbers out with the falsification conditions; the paired comparison's
+    tool checks its own rebuild against the artifacts; the gate green (ruff
+    over `src`/`tests`/`experiments`, the full pytest suite, the two verify
+    tools, and both final sweeps reproducing their artifacts field for field).
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the six runs are
+  `upr-eval-corpus-map-{sum-logodds,sum-positive,max-logodds,support-count,sum-zscore,sum-zscore-positive}-val`
+  (the artifacts `results/upr-eval-corpus-map-*-val/metrics.json`), the lexicon
+  artifact is `results/upr-hitmap-corpus/hitmap.json` (re-written with the new
+  measures), the paired comparison is `tools/lexical_compare.py`, the log
+  section is `## CS-31 — the corpus map's estimator, and the lexicon as an
+  artifact` in `docs/experiments_text_processing.md`, and the numbers are
+  below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, the champion's
+  own `top_k` k=2; the map is built from the **train** split only; no model
+  calls, no embedding, 1.3 s per run).**
+
+  - **The falsification, read out.** (i) The **head-word test: the registered
+    null does NOT fire** — the z-scored head word differs from the log-odds's
+    for **13 of the 60** labelled tables (the null needed ≥ 55 unchanged) —
+    **but the plan's expectation does NOT hold either**: the z-scored head is a
+    hapax for the **same 4 labels** as the log-odds's head. The reason is the
+    formulas' own: the **informative prior shrinks the COMMON words** (the
+    register) and **the standard error is what shrinks the rare ones**. (ii)
+    The **model test: the better measure is a better MODEL, not only a better
+    description** — the pooled micro-F1 **moves** from the log-odds arm's
+    **0.4924** to the z-scored arm's **0.5243** (**+0.0319**), and the
+    **paired** bootstrap over the texts gives **-0.0319 [-0.0526, -0.0120]**
+    (the log-odds arm minus the z-scored arm) — the interval **excludes zero**
+    and the z-scored arm wins on every resample.
+  - **The selection moved.** With the z-scored arms in the pool, the fit side's
+    out-of-fold maximum is `sum_zscore_positive` (**0.6613** against the
+    log-odds arms' 0.6026–0.6141), so **CS-30's headline (0.4924) is
+    superseded**: the corpus map as a classifier is now **0.5243**, and its gap
+    to the champion's 0.5479 is **0.0236**.
+  - **The shrinkage shows itself where it should.** The z-scored arm's
+    **in-fold** number (0.7399) is *below* the log-odds arms' (0.7656–0.7731)
+    and its **out-of-fold** number (0.6613) is *above* them — the textbook
+    signature of a prior that shrinks the noisy weights. (The opposite of
+    CS-30's `support_count` case, where the in-fold number was the
+    optimistic one.)
+  - **The plain `sum_zscore` arm collapses to 0.1011**, and that is a reading
+    rather than a defect: the z-score is signed, so the words that go
+    *against* a label drag the sum down; the "evidence for" restriction is what
+    makes the z-scored weights usable.
+  - **The tail.** The z-scored arm's tail is **0.5435** — above the
+    champion's **0.5287** and well above the log-odds arm's 0.4386 and
+    CS-29's lexical floor's 0.0301.
+  - **The conditional smoothing** flips the sign of **798 of the 18,707 pairs
+    (4.27%)** — the share the plan asked for.
+  - **The lexicon artifact** is the map's own block, written once
+    (`results/upr-hitmap-corpus/hitmap.json`, 10.7 MB): every pair's new
+    measures beside CS-23's (whose numbers are **unchanged**) plus a summary
+    block (the head word per label under each measure, the head-word
+    agreement, the sign-flip share) — so CS-32, CS-33, CS-35 and the viewer
+    all read the same numbers.
+  - **The exit criteria.** The map's artifact carries the lexicon; the six
+    runs hold their numbers; the table rows are auto-appended; the log section
+    reads the numbers out with the falsification conditions; the paired
+    comparison's tool **checks its own rebuild against the runs' artifacts**
+    before it reports anything; the gate green.

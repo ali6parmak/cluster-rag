@@ -20,6 +20,11 @@ cheap, and the choice between them made on the fit side):
 - ``support_count`` — how many of the label's table words the text contains,
   unweighted (the **measure-free control**: the same words, no measure).
 
+**CS-31 adds two z-scored arms**: ``sum_zscore`` and ``sum_zscore_positive``
+— the same two sums, over the map's **z-score** (the informative log-odds over
+its standard error) instead of the log-odds. They are the re-measurement of
+the classifier with the estimator's better measure as the weight.
+
 **The unit is the map's own**: a **distinct** content word, tokenized exactly
 as the map was built (``content_tokens`` — the lower-cased alphanumeric tokens
 without the stopwords). A word repeated in the text counts once, because the
@@ -54,14 +59,30 @@ import numpy as np
 from cluster_rag.text_processors.features.corpus_map import CorpusMap, build_corpus_map
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
 
-# The four scoring functions, in the plan's order. The order is also the
-# tie-break order of the fit-side selection (the first maximal wins).
+# The four scoring functions of CS-30, plus the two **z-scored** arms of
+# CS-31 (the map's weights read as the z-score instead of the log-odds). The
+# order is also the tie-break order of the fit-side selection (the first
+# maximal wins).
 SCORING_FUNCTIONS: tuple[str, ...] = (
     "sum_logodds",
     "sum_positive",
     "max_logodds",
     "support_count",
+    "sum_zscore",
+    "sum_zscore_positive",
 )
+
+# What each arm does with the map's weights: the aggregation ("sum", "max" or
+# "count"), which measure it reads ("log_odds" or "z_score") and whether it
+# keeps only the words whose value is **positive** (the "evidence for" score).
+_ARMS: dict[str, tuple[str, str, bool]] = {
+    "sum_logodds": ("sum", "log_odds", False),
+    "sum_positive": ("sum", "log_odds", True),
+    "max_logodds": ("max", "log_odds", False),
+    "support_count": ("count", "", False),
+    "sum_zscore": ("sum", "z_score", False),
+    "sum_zscore_positive": ("sum", "z_score", True),
+}
 
 # The gap between the empty tables' floor and the row's smallest seen score.
 # Any strictly positive gap works; one unit is enough, because the floor only
@@ -69,20 +90,21 @@ SCORING_FUNCTIONS: tuple[str, ...] = (
 FLOOR_GAP = 1.0
 
 
-def _word_index(corpus_map: CorpusMap) -> dict[str, tuple[tuple[int, float], ...]]:
-    """The map's reverse tables as ``word -> ((label column, log_odds), ...)``.
+def _word_index(corpus_map: CorpusMap) -> dict[str, tuple[tuple[int, float, float], ...]]:
+    """The map's reverse tables as ``word -> ((column, log_odds, z_score), ...)``.
 
     Args:
         corpus_map: The corpus map (the train split's word↔label association).
 
     Returns:
         The word index: every word the corpus holds, with the label columns it
-        belongs to and the log-odds of each (label, word) pair.
+        belongs to, the log-odds of each (label, word) pair and the z-score
+        (CS-31's measure).
     """
     columns = {label: index for index, label in enumerate(corpus_map.labels)}
-    index: dict[str, tuple[tuple[int, float], ...]] = {}
+    index: dict[str, tuple[tuple[int, float, float], ...]] = {}
     for word, rows in corpus_map.per_word.items():
-        index[word] = tuple((columns[pair.label], pair.log_odds) for pair in rows)
+        index[word] = tuple((columns[pair.label], pair.log_odds, pair.z_score) for pair in rows)
     return index
 
 
@@ -115,31 +137,30 @@ def score_cells(
         raise ValueError(
             f"Unknown scoring function {scoring!r}; expected one of {SCORING_FUNCTIONS}"
         )
+    aggregation, measure, positive_only = _ARMS[scoring]
     labels = list(corpus_map.labels)
     index = _word_index(corpus_map)
     scores = np.zeros((len(texts), len(labels)), dtype=np.float64)
     empty_columns = [
         column for column, label in enumerate(labels) if not corpus_map.label_counts.get(label)
     ]
-    take_max = scoring == "max_logodds"
+    take_max = aggregation == "max"
     for row, text in enumerate(texts):
         matched = np.zeros(len(labels), dtype=bool) if take_max else None
         for token in set(content_tokens(text, stopwords)):
             entries = index.get(token)
             if not entries:
                 continue
-            for column, log_odds in entries:
-                if scoring == "sum_logodds":
-                    scores[row, column] += log_odds
-                elif scoring == "sum_positive":
-                    if log_odds > 0:
-                        scores[row, column] += log_odds
-                elif take_max:
-                    if not matched[column] or log_odds > scores[row, column]:
-                        scores[row, column] = log_odds
-                        matched[column] = True
-                else:  # support_count: the measure-free control
+            for column, log_odds, z_score in entries:
+                value = log_odds if measure == "log_odds" else z_score
+                if aggregation == "count":
                     scores[row, column] += 1.0
+                elif take_max:
+                    if not matched[column] or value > scores[row, column]:
+                        scores[row, column] = value
+                        matched[column] = True
+                elif not positive_only or value > 0:
+                    scores[row, column] += value
     if empty_columns:
         # the empty tables: no evidence at all, so they are ranked last in
         # their row (the harness's scores must be finite, so the floor is the

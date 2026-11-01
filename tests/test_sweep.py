@@ -263,20 +263,28 @@ def test_the_lexical_floor_sweep_resolves_its_cell(monkeypatch) -> None:
     assert run.config.eval.split == "val"
 
 
-def test_the_corpus_map_sweep_resolves_its_four_arms(monkeypatch) -> None:
-    """The CS-30 sweep: four arms, one cell each, the champion's operating point.
+def test_the_corpus_map_sweep_resolves_its_arms(monkeypatch) -> None:
+    """The CS-30/CS-31 sweep: one cell per arm, the champion's operating point.
 
     The sweep file is a real artifact, so its grid is a contract: the four
-    pre-registered scoring functions, each measured at ``top_k`` k=2 on the val
-    split, and the sweep label that puts the rows in their own table section.
+    pre-registered scoring functions plus CS-31's two z-scored arms, each
+    measured at ``top_k`` k=2 on the val split, and the sweep label that puts
+    the rows in their own table section.
     """
     repo = Path(__file__).resolve().parents[1]
     monkeypatch.chdir(repo)
     runs = sweep_commands._load_sweep_runs(repo / "experiments" / "corpus_map_sweep.py")
-    assert len(runs) == 4
+    assert len(runs) == 6
     assert sorted(run.label for run in runs) == sorted(
         f"upr-eval-corpus-map-{short}-val"
-        for short in ("sum-logodds", "sum-positive", "max-logodds", "support-count")
+        for short in (
+            "sum-logodds",
+            "sum-positive",
+            "max-logodds",
+            "support-count",
+            "sum-zscore",
+            "sum-zscore-positive",
+        )
     )
     for run in runs:
         assert run.command == "evaluate"
@@ -289,7 +297,14 @@ def test_the_corpus_map_sweep_resolves_its_four_arms(monkeypatch) -> None:
         assert run.config.eval.decision.k == 2
         assert run.config.eval.split == "val"
     arms = {run.config.eval.predictor.params["scoring"] for run in runs}
-    assert arms == {"sum_logodds", "sum_positive", "max_logodds", "support_count"}
+    assert arms == {
+        "sum_logodds",
+        "sum_positive",
+        "max_logodds",
+        "support_count",
+        "sum_zscore",
+        "sum_zscore_positive",
+    }
 
 
 def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path) -> None:

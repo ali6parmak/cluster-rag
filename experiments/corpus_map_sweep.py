@@ -1,15 +1,16 @@
-"""The corpus map as a classifier on UPR (the track's CS-30): four arms.
+"""The corpus map as a classifier on UPR (the track's CS-30, extended by CS-31):
+the arms.
 
-One cell per pre-registered scoring function, all on the **val** split at the
-champion's own operating point (``top_k`` k=2), all measured by the **existing**
-``evaluate`` command — the same instrument that measured CS-29's lexical floor
-and the champion.
+One cell per scoring function, all on the **val** split at the champion's own
+operating point (``top_k`` k=2), all measured by the **existing** ``evaluate``
+command — the same instrument that measured CS-29's lexical floor and the
+champion.
 
-The **choice** between the four arms is not made here: it is made on the fit
-side (the out-of-fold train micro-F1, which every artifact carries), so
-nothing in this sweep picks a winner on val. The four val rows are the map's
-own **measure ablation**: does the log-odds weighting beat a plain count of
-the label's table words?
+The **choice** between the arms is not made here: it is made on the fit side
+(the out-of-fold train micro-F1, which every artifact carries), so nothing in
+this sweep picks a winner on val. The val rows are the map's own **measure
+ablation**: does the log-odds weighting beat a plain count of the label's table
+words? — and (CS-31) does the z-scored weight move the classifier?
 
 The rows land in the **main** UPR table (``docs/experiments_table_upr.md``) in
 the ``corpus_map`` section — ``evaluate`` is a main-pipeline command, so the
@@ -24,13 +25,16 @@ from __future__ import annotations
 from cluster_rag.sweep import EvalCell, define_sweep
 
 # The four pre-registered scoring functions (TEXT_PROCESSING_PLAN.md section
-# 7.4). The run id names the arm, so the table's four rows are readable
-# without the artifact.
+# 7.4) plus CS-31's two z-scored arms (the map's weights read as the z-score
+# instead of the log-odds). The run id names the arm, so the table's rows are
+# readable without the artifact.
 ARMS: tuple[tuple[str, str], ...] = (
     ("sum_logodds", "sum-logodds"),
     ("sum_positive", "sum-positive"),
     ("max_logodds", "max-logodds"),
     ("support_count", "support-count"),
+    ("sum_zscore", "sum-zscore"),
+    ("sum_zscore_positive", "sum-zscore-positive"),
 )
 
 # The fit side's selection metric is measured at the same operating point.

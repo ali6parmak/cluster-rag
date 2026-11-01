@@ -808,10 +808,29 @@ def test_hitmap_upr_writes_the_corpus_map_block(
     # every pair is stored, with the counts behind it
     per_label = corpus["per_label"]
     assert len(per_label) == payload["text_set"]["n_labels"]
+    # the CS-23 keys are untouched; CS-31's measures are added BESIDE them
+    cs23_keys = {"word", "n_with", "df", "lift", "log_odds"}
+    cs31_keys = {
+        "log_odds_informative",
+        "standard_error",
+        "z_score",
+        "g2",
+        "p_value",
+        "log_odds_conditional",
+    }
     for row in per_label:
         for word in row["words"]:
-            assert set(word) == {"word", "n_with", "df", "lift", "log_odds"}
+            assert cs23_keys <= set(word)
+            assert cs31_keys <= set(word)
             assert word["n_with"] <= word["df"]
+            assert 0.0 <= word["p_value"] <= 1.0
+    # the estimator's summary: the head word per measure and the readings the
+    # change set's falsification is stated against
+    estimator = corpus["estimator"]
+    assert estimator["head_agreement"]["n_labels_with_a_table"] > 0
+    assert "z_score_head_differs_from_log_odds" in estimator["head_agreement"]
+    assert estimator["conditional_smoothing"]["n_pairs"] == corpus["corpus"]["n_pairs"]
+    assert 0.0 <= estimator["conditional_smoothing"]["sign_flip_share"] <= 1.0
     # the reverse table holds the same pairs
     assert sum(len(row["labels"]) for row in corpus["per_word"]) == corpus["corpus"]["n_pairs"]
     # the corpus is the train split: a word that only a val text has is absent

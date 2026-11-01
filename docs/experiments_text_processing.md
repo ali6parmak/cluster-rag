@@ -83,6 +83,7 @@ research record and are **not** indexed here.
 | [CS-28 — the viewer shows every gold label](#cs-28--the-viewer-shows-every-gold-label-2026-11-01) | no run (a **tool**): the viewer's topic-side block and the corpus map's block | both blocks now answer their question for **every gold label** of the text (the focus topic first, then the others, each with its words and its value) — so the ranking's numbers come with the words that carry them: "Minority rights" 0.8750 (*minority* 0.7500, because the text says "minorities") and the corpus's own words for it (*minorities* 18 of 19, the log-odds 6.225) | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-29 — the lexical floor: TF-IDF + one-vs-rest](#cs-29--the-lexical-floor-tf-idf--one-vs-rest-2026-11-01) | one `upr-eval-lexical-tfidf-val` run (the **existing** `evaluate` command at the champion's own `top_k` k=2) | the bag of words reaches **micro-F1 0.3845** against the champion's 0.5479 — **neither** pre-registered falsification fires (it is 0.16 below the champion and 0.08 above the "closed" line), and the **tail collapses** (0.0301 against the champion's 0.5287) while the shortlist is on par (R@50 0.7205) and the *ordering* is not (nDCG@5 0.5053) | `results/upr-eval-lexical-tfidf-val/metrics.json` |
 | [CS-30 — the corpus map as a classifier](#cs-30--the-corpus-map-as-a-classifier-2026-11-01) | four `upr-eval-corpus-map-<arm>-val` runs (the map's four pre-registered scoring functions) | the train split's own word↔label weights reach **micro-F1 0.4924** — **90% of the champion** with no embedding and no model call; the map's **measure work buys +0.2226** over a plain word count (0.4924 against 0.2698), and the **cross-fit fit side was the right instrument**: the naive in-fold number would have put the count only 0.0227 behind (the out-of-fold puts it 0.2780 behind) | `results/upr-eval-corpus-map-sum-positive-val/metrics.json` |
+| [CS-31 — the corpus map's estimator, and the lexicon as an artifact](#cs-31--the-corpus-maps-estimator-and-the-lexicon-as-an-artifact-2026-11-01) | six `upr-eval-corpus-map-<arm>-val` runs (CS-30's four arms re-run + two z-scored arms) + the map's re-written artifact | the **z-scored weights move the classifier**: 0.4924 → **0.5243** (a paired **-0.0319 [-0.0526, -0.0120]**, the interval excluding zero) — the better measure is a better **model**, not only a better description; the head-word test's null does not fire (13 of the 60 heads change) but the plan's expected demotion of the single-document words does not happen (the prior shrinks the **common** words, the standard error the rare ones) | `results/upr-eval-corpus-map-sum-zscore-positive-val/metrics.json` |
 
 ## Change sets
 
@@ -6412,3 +6413,137 @@ the champion's 0.7423, but that is a property the map and the champion share,
 not something this change set produced. The map's own **ranking** is the new
 thing here: the nDCG@5 0.6176 against CS-29's 0.5053, with the same kind of
 input (words) and no model at all.
+## CS-31 — the corpus map's estimator, and the lexicon as an artifact (2026-11-01)
+
+**The run.** Six: the four CS-30 arms (re-run, so their artifacts carry the
+new measures) plus **two z-scored arms** — `sum_zscore` and
+`sum_zscore_positive`, the map's weights read as the **z-score** instead of the
+log-odds. All on UPR **val** at the champion's own `top_k` k=2, all measured by
+the **existing `evaluate` command**; the artifacts are
+`results/upr-eval-corpus-map-*-val/metrics.json` and the rows land in the
+**main** UPR table's `corpus_map` section. The **lexicon artifact** is the map's
+own block, re-written once: `results/upr-hitmap-corpus/hitmap.json` (10.7 MB)
+now carries every pair's new measures beside CS-23's, plus a summary block.
+
+**The estimator.** Five new measures, all from the **same 2×2 table**, the
+label's count, the corpus's count and the word's document frequency, in the
+form of the reference implementation the plan names (`logodds` on PyPI, MIT, no
+dependencies — Monroe, Colaresi & Quinn 2008's Dirichlet prior), **adapted to
+the document level** (this map's unit is the document that contains the word):
+
+| the measure | what it is |
+|---|---|
+| `log_odds_informative` | the log-odds with the word's **global document frequency** as the pseudo-count (`α_w = df + 0.01`, `α₀` = the corpus's own (text, word) incidences) |
+| `standard_error` | `σ = sqrt(1/(a+α_w) + 1/(b+α_w))` |
+| `z_score` | **δ over the standard error** — the plan's z-score |
+| `g2`, `p_value` | the likelihood-ratio **G²** on the same table (1 df) and its p-value (`erfc(sqrt(G²/2))` — the chi-square 1-df survival, computed with the standard library because the track's package may not import scipy) |
+| `log_odds_conditional` | the log-odds with the 0.5 added **only where a cell is actually zero** (the conditional smoothing) |
+
+**CS-23's log-odds is untouched**: the same numbers, in the same rows, beside
+the new ones. No package was installed (the change set's cost line says *no
+new dependency*), so the formulas are pinned by **hand-computed unit tests**.
+
+### The falsification conditions, read out
+
+1. **The head-word test — the registered null does NOT fire, but the plan's
+   expectation does NOT hold either.** The z-scored head word **differs** from
+   the log-odds's for **13 of the 60** labelled tables (the registered null
+   needed ≥ 55 unchanged, so the metric upgrade is not a null). But the
+   z-scored head is a hapax for the **same 4 labels** as the log-odds's head —
+   the demotion of the single-document words that the plan expected **did not
+   happen**. The reason is the formulas' own, and it is worth stating
+   plainly: **the informative prior shrinks the COMMON words** (the register —
+   "rights" is in all 60 tables) and **the standard error is what shrinks the
+   rare ones**. The two ends of the map are attacked by two different
+   measures, and the z-score's head is the *informative* one, where the
+   common words have been shrunk to nothing and the rare ones still carry
+   their little evidence. (The p-value's head — the most *significant* word —
+   is the third reading: "Detention" ← *detention* (df 35), "Discrimination" ←
+   *discrimination* (df 139), "Access to justice" ← *justice* (df 66).)
+2. **The model test — the better measure is a better MODEL, not only a better
+   description.** The pooled micro-F1 **moves**: the log-odds arm's **0.4924**
+   becomes the z-scored arm's **0.5243** (**+0.0319**), and the **paired**
+   bootstrap over the texts (the resampling unit) puts the difference at
+   **-0.0319 [-0.0526, -0.0120]** (the log-odds arm minus the z-scored arm) —
+   the interval **excludes zero**, and the z-scored arm is the better of the
+   two on **every** resample. The comparison is paired by construction (the
+   same texts, the same map, the same operating point), and
+   `tools/lexical_compare.py` rebuilds both arms from the runs' own frozen
+   configs and **checks the rebuild against the runs' artifacts** before it
+   reports anything.
+
+### The six arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | the fit side's **out-of-fold** micro-F1 (the selection) | the fit side's in-fold micro-F1 | the pooled val micro-F1 | the seen buckets pooled | the tail | macro-F1 | coverage | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| **`sum_zscore_positive`** (the selected arm) | **0.6613** | 0.7399 | **0.5243** | **0.5915** | **0.5435** | 0.4662 | 0.853 | 0.6327 | 0.7157 |
+| `sum_positive` (CS-30's selected arm) | 0.6141 | 0.7731 | 0.4924 | 0.5555 | 0.4386 | 0.4582 | 0.882 | 0.6176 | 0.7307 |
+| `max_logodds` | 0.6100 | 0.7020 | 0.4848 | 0.5469 | 0.4417 | 0.4439 | 0.882 | 0.5990 | 0.7294 |
+| `sum_logodds` | 0.6026 | 0.7656 | 0.4901 | 0.5529 | 0.4229 | 0.4573 | 0.882 | 0.6086 | 0.7289 |
+| `support_count` (the measure-free control) | 0.3361 | 0.7504 | 0.2698 | 0.3043 | 0.1509 | 0.2050 | 0.750 | 0.3716 | 0.7229 |
+| `sum_zscore` | 0.1103 | 0.1224 | 0.1011 | 0.1140 | 0.0204 | 0.0429 | 0.765 | 0.1399 | 0.6566 |
+
+**The selection moved**: with the z-scored arms in the pool, the fit side's
+out-of-fold maximum is now `sum_zscore_positive` (0.6613 against the log-odds
+arms' 0.6026–0.6141). **CS-30's headline is therefore superseded**: the corpus
+map as a classifier is now the z-scored arm's **0.5243**, not the log-odds
+arm's 0.4924.
+
+**And the shrinkage shows itself exactly where a shrinkage estimator should
+show it.** The z-scored arm's **in-fold** number (0.7399) is *below* the
+log-odds arms' (0.7656–0.7731) — the prior costs a little when the model is
+scored on the corpus it was built from — while its **out-of-fold** number
+(0.6613) is *above* them (0.6026–0.6141). That is the textbook signature of a
+prior that shrinks the noisy weights: it pays on the training side and wins on
+the unseen side. (It is also the opposite of CS-30's `support_count` case,
+where the in-fold number was the *optimistic* one.)
+
+**The plain `sum_zscore` arm collapses to 0.1011** — and that is not a
+defect but a reading: the z-score is signed, so the words that go *against* a
+label drag the sum down, and the "evidence **for**" restriction
+(`sum_zscore_positive`) is what makes the z-scored weights usable at all. The
+same words, the same map, the same operating point — only the restriction
+differs.
+
+### Where the map now stands against the pipeline
+
+| | the pooled micro-F1 | the seen buckets | the tail |
+|---|---|---|---|
+| the champion (the whole retrieval + decision pipeline) | **0.5479** | 0.6181 | 0.5287 |
+| **the corpus map, z-scored (no embedding, no model call)** | **0.5243** | 0.5915 | **0.5435** |
+| the corpus map, log-odds (CS-30) | 0.4924 | 0.5555 | 0.4386 |
+| the lexical floor, TF-IDF (CS-29) | 0.3845 | 0.4338 | 0.0301 |
+| the trivial floor (`most_frequent`) | 0.1413 | 0.1595 | — |
+
+The gap to the champion is now **0.0236** (the CS-30 condition "within 0.02 of
+the champion's 0.5479" still does not fire, but it is close), and the map's
+**tail** is now **above** the champion's (0.5435 against 0.5287). A corpus
+statistic — no embedding, no model call, no retrieval — is within 2.4 points of
+the whole pipeline's micro-F1 on this corpus.
+
+### The conditional smoothing, and the rest of the artifact
+
+The conditional smoothing (the 0.5 only where a cell is actually zero) flips
+the **sign** of **798 of the 18,707 pairs (4.27%)** — a small share, and the
+share the plan asked for. The lexicon's summary block carries the head word
+per label under each measure (with its counts), the head-word agreement, and
+that share, so CS-32, CS-33, CS-35 and the viewer all read the same numbers.
+
+### What this change set does not say
+
+Nothing about the **decision model**; nothing about `test` (the round's numbers
+are val only); nothing about a **tuned** estimator (the prior's strength is the
+reference's default floor and the arms are untuned — the round's next change
+set, CS-32, asks a different question); and nothing about the **z-score's
+head word**: the head-word test says the prior does something (13 of 60 heads
+change) and that it does **not** do what the plan expected at the head level
+(the same 4 hapax heads) — the head word is a *description* of the map, and
+the model test says the measure is worth more than the description.
+
+**A correction to CS-30's log section, appended here (the log is
+append-only):** CS-30 reported the corpus map as a classifier with the pooled
+micro-F1 **0.4924**, the arm its fit side selected then (`sum_positive`). With
+CS-31's two z-scored arms in the pool, the fit side's selection moves to
+`sum_zscore_positive` and the corpus map's number is **0.5243**. CS-30's
+numbers stand as they were measured; this is the same method with a better
+measure in it.

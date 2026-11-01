@@ -1148,6 +1148,15 @@ port only.
     over `src`/`tests`/`experiments`, the full pytest suite, the two verify
     tools, and both final sweeps reproducing their artifacts field for field).
 
+- **CS-31** (the corpus map's estimator, and the lexicon as an artifact) →
+  executed 2026-11-01 → the archive's §7.4 (the corpus map's estimator) and
+  the track log's §CS-31. The **z-scored weights move the classifier**:
+  0.4924 → **0.5243** (a paired **-0.0319 [-0.0526, -0.0120]**, the interval
+  excluding zero) — the better measure is a better **model**, not only a better
+  description; the head-word test's null does not fire (13 of the 60 heads
+  change) but the plan's expected demotion of the single-document words does
+  not happen (the prior shrinks the **common** words, the standard error the
+  rare ones).
 - [ ] **CS-32 — the corpus map in the learned pack.** The map's per-cell score
   becomes a feature of the UPR pack, so the learned combiner can use it beside the
   embedding and lexical features: a new group in `UPR_FEATURE_GROUP_PREFIXES`

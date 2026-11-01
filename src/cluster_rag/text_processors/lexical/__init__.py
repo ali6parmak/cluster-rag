@@ -9,20 +9,31 @@ no model client, no I/O, no scikit-learn (the track's one documented
 scikit-learn exception is its ``combining/`` package, §2). The model clients
 and the harness wiring live outside: the adapter in
 ``src/cluster_rag/predictors/`` and the CLI in ``src/cluster_rag/commands/``.
+
+Note the import order: this package's ``__init__`` re-exports the
+**estimator** only. The scorer (:mod:`corpus_map_score`) reads the map, and
+the map reads the estimator — so re-exporting the scorer here would make the
+package's import cycle.
 """
 
 from __future__ import annotations
 
-from cluster_rag.text_processors.lexical.corpus_map_score import (
-    FLOOR_GAP,
-    SCORING_FUNCTIONS,
-    cross_fit_scores,
-    score_cells,
+from cluster_rag.text_processors.lexical.lexicon import (
+    ALPHA,
+    PairMeasures,
+    conditional_log_odds,
+    g2_p_value,
+    g2_statistic,
+    pair_measures,
+    prior_total,
 )
 
 __all__ = [
-    "FLOOR_GAP",
-    "SCORING_FUNCTIONS",
-    "cross_fit_scores",
-    "score_cells",
+    "ALPHA",
+    "PairMeasures",
+    "conditional_log_odds",
+    "g2_p_value",
+    "g2_statistic",
+    "pair_measures",
+    "prior_total",
 ]

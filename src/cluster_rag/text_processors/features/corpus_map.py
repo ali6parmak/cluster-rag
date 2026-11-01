@@ -42,6 +42,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
 
 # The log-odds' additive constant: the "add one half" of the conventional 2×2
 # table. It keeps a zero cell from sending the log to infinity, so a word that
@@ -61,6 +62,16 @@ class CorpusPair:
         df: The corpus texts that have the word at all.
         lift: ``P(label | word present) / P(label)``.
         log_odds: The 0.5-smoothed signed log-odds over the 2×2 table.
+        log_odds_informative: The **informative-prior** log-odds (CS-31): the
+            same table with the word's global document frequency as the
+            pseudo-count (Monroe et al. 2008's Dirichlet prior, adapted to the
+            document level).
+        standard_error: The standard error of that log-odds.
+        z_score: δ over the standard error — the plan's z-score.
+        g2: The likelihood-ratio G² statistic on the same 2×2 table (1 df).
+        p_value: The G² statistic's p-value.
+        log_odds_conditional: The log-odds with the 0.5 added only where a
+            cell is actually zero (the conditional smoothing).
     """
 
     label: str
@@ -69,6 +80,12 @@ class CorpusPair:
     df: int
     lift: float
     log_odds: float
+    log_odds_informative: float = 0.0
+    standard_error: float = 0.0
+    z_score: float = 0.0
+    g2: float = 0.0
+    p_value: float = 1.0
+    log_odds_conditional: float = 0.0
 
     def to_row(self) -> dict[str, object]:
         """The pair as a JSON-friendly row (the artifact's own shape)."""
@@ -78,6 +95,12 @@ class CorpusPair:
             "df": self.df,
             "lift": round(self.lift, 6),
             "log_odds": round(self.log_odds, 6),
+            "log_odds_informative": round(self.log_odds_informative, 6),
+            "standard_error": round(self.standard_error, 6),
+            "z_score": round(self.z_score, 6),
+            "g2": round(self.g2, 6),
+            "p_value": round(self.p_value, 8),
+            "log_odds_conditional": round(self.log_odds_conditional, 6),
         }
 
 
@@ -169,6 +192,9 @@ def build_corpus_map(
             pairs[label].update(words)
 
     n_texts = len(texts)
+    # The estimator's prior total (CS-31): the corpus's own (text, word)
+    # incidences plus the floor's contribution. A map-level constant.
+    alpha0 = prior_total(document_frequency.values())
     per_label: dict[str, tuple[CorpusPair, ...]] = {}
     per_word: dict[str, list[CorpusPair]] = {}
     for label in label_space:
@@ -183,6 +209,7 @@ def build_corpus_map(
             df = document_frequency.get(word, 0)
             if not df:
                 continue
+            measures = pair_measures(n_with, df, n_label, n_texts, alpha0=alpha0)
             pair = CorpusPair(
                 label=label,
                 word=word,
@@ -190,6 +217,12 @@ def build_corpus_map(
                 df=df,
                 lift=(n_with / df) / p_label,
                 log_odds=log_odds(n_with=n_with, df=df, n_label=n_label, n_texts=n_texts),
+                log_odds_informative=measures.log_odds_informative,
+                standard_error=measures.standard_error,
+                z_score=measures.z_score,
+                g2=measures.g2,
+                p_value=measures.p_value,
+                log_odds_conditional=measures.log_odds_conditional,
             )
             rows.append(pair)
         rows.sort(key=lambda row: (-row.log_odds, row.word))
@@ -242,6 +275,111 @@ def log_odds(*, n_with: int, df: int, n_label: int, n_texts: int) -> float:
     return math.log((a + SMOOTHING) / (b + SMOOTHING)) + math.log((d + SMOOTHING) / (c + SMOOTHING))
 
 
+def estimator_block(corpus_map: CorpusMap) -> dict[str, object]:
+    """The estimator's summary block (CS-31): what the new measures say.
+
+    The block carries the measures' own definitions, the **head word** of every
+    labelled table under each of them (with its counts), how far the measures
+    agree on the head word, and the conditional smoothing's sign-flip share —
+    the four readings the change set's falsification is stated against.
+
+    Args:
+        corpus_map: The corpus map.
+
+    Returns:
+        The block (JSON-friendly).
+    """
+    heads: dict[str, dict[str, dict[str, object]]] = {
+        name: {} for name in ("log_odds", "log_odds_informative", "z_score", "p_value")
+    }
+    for label in corpus_map.labels:
+        rows = corpus_map.topic_rows(label)
+        if not rows:
+            continue
+        for name in heads:
+            best = max(rows, key=lambda row: (_head_value(row, name), row.word))
+            heads[name][label] = {
+                "word": best.word,
+                "n_with": best.n_with,
+                "df": best.df,
+                "log_odds": round(best.log_odds, 6),
+                "log_odds_informative": round(best.log_odds_informative, 6),
+                "z_score": round(best.z_score, 6),
+                "p_value": round(best.p_value, 8),
+            }
+    labelled = [label for label in corpus_map.labels if corpus_map.topic_rows(label)]
+    n_labelled = len(labelled)
+    changed = sum(
+        1
+        for label in labelled
+        if heads["z_score"][label]["word"] != heads["log_odds"][label]["word"]
+    )
+    n_pairs = corpus_map.n_pairs
+    sign_flips = sum(
+        1
+        for label in corpus_map.labels
+        for pair in corpus_map.topic_rows(label)
+        if (pair.log_odds > 0) != (pair.log_odds_conditional > 0)
+    )
+    return {
+        "measures": {
+            "log_odds": ("the 0.5-smoothed signed log-odds over the 2x2 table (CS-23, unchanged)"),
+            "log_odds_informative": (
+                "the informative-prior log-odds: the same table with the word's "
+                "global document frequency as the pseudo-count (alpha_w = df + "
+                "0.01; alpha_0 = the corpus's own (text, word) incidences), in the "
+                "form of Monroe et al. 2008's Dirichlet prior adapted to the "
+                "document level"
+            ),
+            "standard_error": "sqrt(1/(a+alpha_w) + 1/(b+alpha_w))",
+            "z_score": "the informative log-odds over its standard error",
+            "g2": "the likelihood-ratio G^2 statistic on the same 2x2 table (1 df)",
+            "p_value": "the G^2 statistic's p-value (the chi-square 1-df survival)",
+            "log_odds_conditional": (
+                "the log-odds with the 0.5 added only where a cell is actually zero "
+                "(the conditional smoothing)"
+            ),
+        },
+        "heads": heads,
+        "head_agreement": {
+            "n_labels_with_a_table": n_labelled,
+            "z_score_head_differs_from_log_odds": changed,
+            "z_score_head_is_a_hapax": sum(
+                1 for label in labelled if heads["z_score"][label]["df"] == 1
+            ),
+            "log_odds_head_is_a_hapax": sum(
+                1 for label in labelled if heads["log_odds"][label]["df"] == 1
+            ),
+            "note": (
+                "the z-score's head is the label's most significant word under the "
+                "informative prior and the standard error; the informative prior "
+                "shrinks the COMMON words (the register) and the standard error is "
+                "what shrinks the rare ones"
+            ),
+        },
+        "conditional_smoothing": {
+            "n_pairs": n_pairs,
+            "n_sign_flips": sign_flips,
+            "sign_flip_share": round(sign_flips / n_pairs, 6) if n_pairs else 0.0,
+        },
+    }
+
+
+def _head_value(pair: CorpusPair, measure: str) -> float:
+    """The value a measure is read by when it picks a table's head word.
+
+    The p-value is read the other way round: the head is the **smallest**
+    p-value (the most significant word), so the key is negated.
+    """
+    if measure == "log_odds":
+        return pair.log_odds
+    if measure == "log_odds_informative":
+        return pair.log_odds_informative
+    if measure == "z_score":
+        return pair.z_score
+    return -pair.p_value
+
+
 def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str, object]:
     """The corpus map as the artifact's own block (JSON-friendly).
 
@@ -288,6 +426,17 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
                 "(a word+label, b word+no label, c no word+label, d neither): "
                 "above 0 with the label, below 0 against it, 0 nothing"
             ),
+            "log_odds_informative": (
+                "the informative-prior log-odds (CS-31): the same table with the "
+                "word's global document frequency as the pseudo-count"
+            ),
+            "standard_error": "the standard error of the informative log-odds",
+            "z_score": "the informative log-odds over its standard error",
+            "g2": "the likelihood-ratio G^2 statistic on the same 2x2 table (1 df)",
+            "p_value": "the G^2 statistic's p-value",
+            "log_odds_conditional": (
+                "the log-odds with the 0.5 added only where a cell is actually zero"
+            ),
             "note": (
                 "no thresholds: every pair that occurs is stored, with the counts "
                 "behind it, so any number can be recomputed and audited. The "
@@ -295,6 +444,7 @@ def corpus_map_block(corpus_map: CorpusMap, *, split: str = "train") -> dict[str
                 "number), never by dropping data."
             ),
         },
+        "estimator": estimator_block(corpus_map),
         "per_label": [
             {
                 "label": label,
