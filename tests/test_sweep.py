@@ -263,6 +263,35 @@ def test_the_lexical_floor_sweep_resolves_its_cell(monkeypatch) -> None:
     assert run.config.eval.split == "val"
 
 
+def test_the_corpus_map_sweep_resolves_its_four_arms(monkeypatch) -> None:
+    """The CS-30 sweep: four arms, one cell each, the champion's operating point.
+
+    The sweep file is a real artifact, so its grid is a contract: the four
+    pre-registered scoring functions, each measured at ``top_k`` k=2 on the val
+    split, and the sweep label that puts the rows in their own table section.
+    """
+    repo = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(repo)
+    runs = sweep_commands._load_sweep_runs(repo / "experiments" / "corpus_map_sweep.py")
+    assert len(runs) == 4
+    assert sorted(run.label for run in runs) == sorted(
+        f"upr-eval-corpus-map-{short}-val"
+        for short in ("sum-logodds", "sum-positive", "max-logodds", "support-count")
+    )
+    for run in runs:
+        assert run.command == "evaluate"
+        assert run.config.table.sweep_label == "corpus_map"
+        assert run.config.eval is not None
+        assert run.config.eval.predictor.name == "corpus_map"
+        assert run.config.eval.predictor.params["fit_side_k"] == 2
+        assert run.config.eval.predictor.params["folds"] == 5
+        assert run.config.eval.decision.rule == "top_k"
+        assert run.config.eval.decision.k == 2
+        assert run.config.eval.split == "val"
+    arms = {run.config.eval.predictor.params["scoring"] for run in runs}
+    assert arms == {"sum_logodds", "sum_positive", "max_logodds", "support_count"}
+
+
 def test_sweep_command_fails_loudly_on_an_unimplemented_command(repo_root: Path) -> None:
     """A cell whose command the CLI does not implement aborts, never guesses."""
     (repo_root / "bogus_sweep.py").write_text(

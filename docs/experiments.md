@@ -573,3 +573,40 @@ full narrative — the pre-registered falsification conditions and their verdict
 the per-bucket reading and the fit's own facts — is the track log's §CS-29
 (`docs/experiments_text_processing.md`) and the plan's §7.4 in
 `docs/text_processing_plan_archive.md`.
+
+## 2026-11-01 — the corpus map as a classifier (the track's CS-30): the train split's own word↔label weights on UPR val
+
+**Runs:** `upr-eval-corpus-map-{sum-logodds,sum-positive,max-logodds,support-count}-val`
+(the `evaluate` command; the sweep `experiments/corpus_map_sweep.py`), the
+artifacts `results/upr-eval-corpus-map-*-val/metrics.json`, the table rows in
+`docs/experiments_table_upr.md`'s `corpus_map` section. UPR **val** (660
+texts), the champion's own operating point (`top_k` k=2). The map is built
+from the **train** split only (1,676 texts, 3,049 words, 18,707 (label, word)
+pairs); **no model calls, no embedding, 0.8 s per run**.
+
+**What.** A new predictor kind, `corpus_map`: every (text, label) cell scored
+from the corpus map's own log-odds, with four pre-registered scoring
+functions. The arm the **fit side** selects (the out-of-fold train micro-F1 —
+never val) is `sum_positive`.
+
+**The numbers.** micro-F1 **0.4924** (macro 0.4582, coverage 0.882, P@5
+0.2630, R@10 0.6869, nDCG@5 0.6176, shortlist R@50 0.7307) against the
+champion's **0.5479** — a **pure corpus statistic reaches 90% of the
+champion's micro-F1**, with no embedding and no model call. Per bucket: head
+0.6611 (champion 0.6953), torso 0.4745 (0.5121), **tail 0.4386** (0.5287; the
+coverage 1.000 against the champion's 0.944), unseen **0.0000** by
+construction (the empty tables are ranked last in every row).
+
+**The measure ablation.** The measure-free control (`support_count`: how many
+of the label's table words the text contains, unweighted) reaches **0.2698**
+against the log-odds arms' **0.4848–0.4924** — the map's log-odds weighting
+buys **+0.2226 micro-F1**, so CS-23's measure work is not decoration.
+
+**Why it is here.** It is the text-processing track's lexical methods round's
+second instrument, after CS-29's TF-IDF floor, and the two are read against
+each other (the map reaches the **tail** where the learned floor collapses:
+0.4386 against 0.0301). The full narrative — the four pre-registered
+falsification conditions and their verdicts, the fit side's cross-fit and the
+bias it removes — is the track log's §CS-30
+(`docs/experiments_text_processing.md`) and the plan's §7.4 in
+`docs/text_processing_plan_archive.md`.

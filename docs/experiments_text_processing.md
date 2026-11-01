@@ -82,6 +82,7 @@ research record and are **not** indexed here.
 | [CS-27 — the gold labels are always visible](#cs-27--the-gold-labels-are-always-visible-2026-11-01) | no run (a **tool**): the viewer's two ranking blocks and the corpus map's in-text row | a gold label below the top-5 is now listed with its **true rank** in both rankings (the text-side 17 and 27, the topic-side 11 and 27 on the seed-7 draw), and the corpus map's in-text row keeps its ramp's shade under the bold — **no number moved** | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-28 — the viewer shows every gold label](#cs-28--the-viewer-shows-every-gold-label-2026-11-01) | no run (a **tool**): the viewer's topic-side block and the corpus map's block | both blocks now answer their question for **every gold label** of the text (the focus topic first, then the others, each with its words and its value) — so the ranking's numbers come with the words that carry them: "Minority rights" 0.8750 (*minority* 0.7500, because the text says "minorities") and the corpus's own words for it (*minorities* 18 of 19, the log-odds 6.225) | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-29 — the lexical floor: TF-IDF + one-vs-rest](#cs-29--the-lexical-floor-tf-idf--one-vs-rest-2026-11-01) | one `upr-eval-lexical-tfidf-val` run (the **existing** `evaluate` command at the champion's own `top_k` k=2) | the bag of words reaches **micro-F1 0.3845** against the champion's 0.5479 — **neither** pre-registered falsification fires (it is 0.16 below the champion and 0.08 above the "closed" line), and the **tail collapses** (0.0301 against the champion's 0.5287) while the shortlist is on par (R@50 0.7205) and the *ordering* is not (nDCG@5 0.5053) | `results/upr-eval-lexical-tfidf-val/metrics.json` |
+| [CS-30 — the corpus map as a classifier](#cs-30--the-corpus-map-as-a-classifier-2026-11-01) | four `upr-eval-corpus-map-<arm>-val` runs (the map's four pre-registered scoring functions) | the train split's own word↔label weights reach **micro-F1 0.4924** — **90% of the champion** with no embedding and no model call; the map's **measure work buys +0.2226** over a plain word count (0.4924 against 0.2698), and the **cross-fit fit side was the right instrument**: the naive in-fold number would have put the count only 0.0227 behind (the out-of-fold puts it 0.2780 behind) | `results/upr-eval-corpus-map-sum-positive-val/metrics.json` |
 
 ## Change sets
 
@@ -6291,3 +6292,123 @@ floor uses no embedding at all — that is what makes it a *floor*); and nothing
 about the *tuning* of the lexical model — every parameter is scikit-learn's
 default and the run is a single point, not a grid. The number is the
 reference the rest of the round is read against, not a tuned result.
+## CS-30 — the corpus map as a classifier (2026-11-01)
+
+**The run.** Four: one per pre-registered scoring function, all on UPR **val**
+at the champion's own operating point (`top_k` k=2), all measured by the
+**existing `evaluate` command** — the same instrument that measured CS-29's
+lexical floor and the champion. The map is CS-23's **existing** function
+(`build_corpus_map`) over the **train** split: 1,676 texts, 3,049 words,
+18,707 (label, word) pairs, 60 of the 68 labels with a table. **No model calls,
+no embedding, 0.8 s per run**; the artifacts are
+`results/upr-eval-corpus-map-<arm>-val/metrics.json` and the rows land in the
+**main** UPR table's new `corpus_map` section (`evaluate` is a main-pipeline
+command, so the table file is command-derived, never a heuristic).
+
+### The headline, and the falsification conditions read out
+
+The **corpus map as a classifier** is the arm the **fit side** selects:
+**`sum_positive`** (the "evidence **for**" score — the sum of the map's
+log-odds over the text's words whose log-odds is positive). Its pooled
+**micro-F1 is 0.4924** against the champion's **0.5479** — a gap of **5.6
+points**.
+
+The pre-registration registered four conditions. Here they are, one by one:
+
+1. **The unseen bucket is 0.0000 by construction — it holds.** The eight
+   held-out labels have an **empty** table, so there is no evidence at all
+   about them; they are ranked last in every row and never enter a top-2. The
+   measured unseen micro-F1 is **0.0000** and its coverage **0.000**. (The
+   bucket's *ranking* metrics inside the restricted view are an artefact of
+   the tie — the harness ranks equal scores by the column order — and are not
+   read as evidence; the same artefact is in CS-29's run.)
+2. **The measure ablation: does the log-odds weighting beat `support_count`?
+   — it does, and by a lot.** The measure-free control (how many of the
+   label's table words the text contains, unweighted) reaches **0.2698**; the
+   three log-odds arms reach **0.4848–0.4924**. The map's careful measure
+   work buys **+0.2226 micro-F1** — the opposite of the pre-registered null.
+   CS-23's measure work is *not* decoration.
+3. **If the pooled micro-F1 came within 0.02 of the champion's 0.5479 (that
+   is, at or above 0.5279), the pipeline would be buying little over a corpus
+   statistic — it does not fire, but it nearly does.** The selected arm is
+   **0.0555** below the champion (0.4924 against 0.5479), and the seen-bucket
+   reading is **0.0626** below it (0.5555 against 0.6181). A **pure corpus
+   statistic** — no embedding, no model call, no retrieval — reaches **90% of
+   the champion's micro-F1**. That is the finding this change set produces,
+   and it is a finding about *the pipeline's priorities*, not about the map.
+4. **The seen-bucket read** (the pooled number mixes the eight labels the map
+   cannot see into its denominator, so the three seen buckets are pooled **by
+   their own counts** and read beside it): the map's selected arm **0.5555**
+   against the champion's **0.6181**, CS-29's lexical floor's **0.4338** and
+   the trivial floor's **0.1595**. The order is the same in both readings.
+
+### The four arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | the fit side's **out-of-fold** micro-F1 (the selection) | the fit side's in-fold micro-F1 | the pooled val micro-F1 | macro-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| **`sum_positive`** (the selected arm) | **0.6141** | 0.7731 | **0.4924** | 0.4582 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 |
+| `sum_logodds` | 0.6026 | 0.7656 | 0.4901 | 0.4573 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 |
+| `max_logodds` | 0.6100 | 0.7020 | 0.4848 | 0.4439 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 |
+| `support_count` (the measure-free control) | 0.3361 | 0.7504 | 0.2698 | 0.2050 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 |
+
+The best arm **on val** is also the arm the fit side selects
+(`sum_positive`), so the discipline cost nothing here — but it is the fit
+side's number that made the choice, and the table's best-val row is reported
+only as an observation.
+
+### The cross-fit was the right instrument, and now that is a measurement
+
+The pre-registration made the fit side's number the **out-of-fold** one (5
+folds over the train split; each fold's texts scored by a map built from the
+other folds) instead of the in-fold one, because the map is built from the
+train split it scores. **That decision is now measured, not asserted:**
+
+- the **in-fold** number puts the measure-free control **0.0227 behind** the
+  best arm (0.7504 against 0.7731) — it would have said the map's measure
+  work buys almost nothing;
+- the **out-of-fold** number puts it **0.2780 behind** (0.3361 against
+  0.6141) — the measure work buys a lot;
+- and the **val** ablation lands between them: **0.2226** (0.2698 against
+  0.4924).
+
+So the naive fit side would have mis-read the map's own measure work by an
+order of magnitude, in the direction that flatters the control. The
+mechanism is visible in CS-23's numbers: **2,540 of the map's 18,707 pairs
+(13.6%) rest on a word that occurs in exactly one train text**, and such a
+word's log-odds is huge — so in-fold the *sum* collects a big inflated
+contribution from a text's own hapax word, a contribution the *count* (which
+sees the same word as 1) does not. The cross-fit is the track's own guard
+(CS-9b's fit-side threshold, CS-32's cross-fit), applied one change set
+earlier than CS-32.
+
+### The per-bucket reading: the map reaches the tail, the TF-IDF floor does not
+
+| the bucket | the map's selected arm | `sum_logodds` | `max_logodds` | `support_count` | the champion | CS-29's lexical floor |
+|---|---|---|---|---|---|---|
+| head (16 labels) | **0.6611** | 0.6635 | 0.6826 | 0.3484 | 0.6953 | 0.4695 |
+| torso (26 labels) | **0.4745** | 0.4782 | 0.4336 | 0.2296 | 0.5121 | 0.4061 |
+| tail (18 labels) | **0.4386** | 0.4229 | 0.4417 | 0.1509 | 0.5287 | 0.0301 |
+| unseen (8 labels) | **0.0000** | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| the tail's **coverage** | **1.000** | 1.000 | 1.000 | 0.667 | 0.944 | 0.111 |
+
+The tail is where the two lexical instruments separate most sharply: the
+corpus map reaches **0.4386** on the tail with a **coverage of 1.000** (every
+one of the eighteen tail labels is suggested at least once), while CS-29's
+TF-IDF floor reaches **0.0301** with a coverage of **0.111** (two of the
+eighteen). The reason is the map's own construction: a tail label's words are
+rare, and a *learned* model with a handful of positive examples cannot find
+them (CS-29), while the map's log-odds *is* that rarity made explicit — the
+word's own weight, read off the corpus, does not need a positive class to
+learn from.
+
+### What this change set does not say
+
+Nothing about the **decision model** (its 0.5697 unseen bucket is a different
+instrument); nothing about `test` (the round's numbers are val only); nothing
+about a **tuned** map (the log-odds and the counts are the map's own, CS-23's
+measure, unchanged — CS-31's estimator is the next change set); and nothing
+about the map's **candidate** quality: the shortlist R@50 (0.7307) is close to
+the champion's 0.7423, but that is a property the map and the champion share,
+not something this change set produced. The map's own **ranking** is the new
+thing here: the nDCG@5 0.6176 against CS-29's 0.5053, with the same kind of
+input (words) and no model at all.

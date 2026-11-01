@@ -11,7 +11,9 @@ command's artifact wiring).
 
 ``lexical_tfidf`` (the track's CS-29 lexical floor) is the one member that
 imports scikit-learn: it is the round's reference measurement, a bag of words
-and a linear model behind the same port.
+and a linear model behind the same port. ``corpus_map`` (CS-30) is the round's
+second lexical instrument: the train split's own word↔label association turned
+into a scorer, with no embedding and no model call in the loop.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from cluster_rag.predictors.base import Predictor, PredictorContext
+from cluster_rag.predictors.corpus_map import CorpusMapPredictor
 from cluster_rag.predictors.fusion import FusionPredictor
 from cluster_rag.predictors.knn import KNNVotingPredictor
 from cluster_rag.predictors.lexical_tfidf import LexicalTfidfPredictor
@@ -37,6 +40,7 @@ PREDICTORS: dict[str, type] = {
     "fusion": FusionPredictor,
     "zeroshot": ZeroShotPredictor,
     "lexical_tfidf": LexicalTfidfPredictor,
+    "corpus_map": CorpusMapPredictor,
 }
 
 

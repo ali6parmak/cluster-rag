@@ -23,6 +23,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | U7 | **Chunking the long texts** (the 300+ character bucket): Δ micro-F1 — the chunkers that do not split UPR's texts give exactly 0 in every bucket | UPR **val** | **+0.109 … +0.127** | `results/upr-analyze-ladder/analysis.json` | §CS-8b |
 | U8 | The **pure zero-shot geometry** as a *candidate generator*: shortlist R@50 (the champion's 0.7423) | UPR **val** | **0.8691** | `results/upr-analyze-final-ladder/analysis.json` | §CS-8b |
 | U9 | The **lexical floor** — TF-IDF (word 1–2 grams) + one-vs-rest logistic regression, no embedding at all: micro-F1 / the tail bucket / shortlist R@50 | UPR **val** | **0.3845** / 0.0301 / 0.7205 | `results/upr-eval-lexical-tfidf-val/metrics.json` | §CS-29 |
+| U10 | The **corpus map as a classifier** — the train split's own word↔label weights, no embedding and no model call: micro-F1 / the seen buckets / the tail bucket | UPR **val** | **0.4924** / 0.5555 / 0.4386 | `results/upr-eval-corpus-map-sum-positive-val/metrics.json` | §CS-30 |
 | M1 | The **decision model** on the same-document grid: **within-document** AUC (the pooled AUC 0.7688 goes beside it, never alone) | OMCT | **0.7701** | `results/omct-analyze-final-*/analysis.json` | §Stage 3.5.2 |
 | M2 | The plain full-text cosine, for comparison | OMCT | 0.5020–0.5632 | same | §Stage 3.5.2 |
 | M3 | The **learned feature pack**: within-document AUC | OMCT | 0.6472–0.6723 | same | §Stage 3.1 |
@@ -54,6 +55,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | What is the safe-negative rule — the track's deliverable? | §Stage 3.5.2 · §CS-9b · §CS-14 · `TEXT_PROCESSING_PLAN.md` §8 |
 | What is the label catalog? | §CS-11 · `catalogs/upr_labels.jsonl` (+ `catalogs/upr_labels.meta.json`) |
 | What does a **plain lexical model** reach on this corpus (the round's floor)? | the track log's §CS-29 (TF-IDF + one-vs-rest, micro-F1 0.3845 — the tail collapses, the shortlist is on par with the champion's) |
+| What does a **pure corpus statistic** reach (no embedding, no model call)? | the track log's §CS-30 (the corpus map as a classifier: micro-F1 0.4924 against the champion's 0.5479; the map's log-odds weighting buys +0.2226 over a plain word count) |
 | What did the zero-shot rerankers do? | §CS-15 (as scorers) · §CS-16 (as a pack feature) |
 | What did the hit map show (which words carry the signal)? | the track log's §CS-18 (the topic-side map + the causal ablation) · §CS-19 (the text-side map + the surrogate attribution) · the archive's §7.1.4 / §7.1.5 |
 | What does the corpus itself associate with each label (the plain statistics)? | the track log's §CS-23 (the corpus map: every word for every label of the **train** split, with the counts, the lift and the log-odds) · the archive's §7.1 (the corpus map) · `results/upr-hitmap-corpus/hitmap.json` |

@@ -3890,3 +3890,203 @@ line). The verdict and the numbers are the track log's §CS-29.*
     falsification conditions; the gate green (716 tests, ruff clean over
     `src`/`tests`/`experiments`, the two verify tools OK, both final sweeps
     reproducing their artifacts field for field).
+
+---
+
+## The corpus map as a classifier (CS-30) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-30.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-30 — the corpus map as a classifier.** A new predictor kind
+  (`corpus_map`): every (text, label) cell is scored from the corpus map's own
+  weights, and is measured by the same harness as CS-29. The scorer lives in
+  `text_processors/lexical/corpus_map_score.py`; the adapter in
+  `src/cluster_rag/predictors/corpus_map.py`.
+
+  **The scoring function**, with its alternatives pre-registered (all four are
+  cheap, so all four are measured, and the choice is made on the **fit side**,
+  never on val): `sum_logodds` (the sum of the map's log-odds over the text's
+  words, a word missing from the label's table contributing 0), `sum_positive`
+  (the same over the words whose log-odds is positive — the "evidence **for**"
+  score), `max_logodds` (the single best word — the "is the label's own word
+  here" score) and `support_count` (how many of the label's table words the text
+  contains, unweighted — the measure-free control).
+
+  **The discipline.** The map is built from the **train** split only; the
+  evaluated split is scored with it, so no val text and no val label enters the
+  map. The operating point is `top_k` k=2, so nothing is fitted on the evaluated
+  split at all.
+
+  **The falsification, registered in advance.** The **unseen bucket is 0.0000 by
+  construction** — the map's table for the eight held-out labels is empty (CS-23
+  measures this), so the map cannot see a label it has no examples of. The
+  interesting read is the **seen-bucket** number and the map's **own measure
+  ablation**: does the log-odds weighting beat `support_count`? If a *count* of
+  the label's table words is as good as the log-odds weighting, then the map's
+  careful measure work (CS-23) buys nothing predictive. And if the pooled
+  micro-F1 comes **within 0.02 of the champion's 0.5479**, the
+  retrieval-plus-decision pipeline is buying little over a corpus statistic — a
+  finding to report, not to bury.
+
+  **The cost.** Half a day to a day. **No new dependency.**
+
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The predictor.** A new registry entry `corpus_map`, behind the same
+    `Predictor` port as every other predictor: the `evaluate` command builds
+    it, scores the split and measures it with the **existing** metric code and
+    the **existing** decision rules — the same instrument that measured CS-29
+    and the champion.
+  - **Where the code lives.** The **scorer** is pure and lives in the track's
+    package, `src/cluster_rag/text_processors/lexical/corpus_map_score.py`
+    (numpy + the standard library only); the **adapter** lives in
+    `src/cluster_rag/predictors/corpus_map.py`, next to CS-29's
+    (`predictors/` is where a predictor goes; the plan's §2 keeps scikit-learn
+    out of the track's package, and this scorer needs none).
+  - **The map.** Built by the **existing** CS-23 function
+    (`text_processors/features/corpus_map.py: build_corpus_map`) from the
+    **train** split only, with the track's own tokenizer
+    (`content_tokens` — the same unit the map's tables are keyed by). No val
+    text, no val label and no test text enters the map.
+  - **The four scoring functions** (the plan's names, the literal definitions):
+    - `sum_logodds` — the sum of the map's log-odds over the text's **distinct**
+      content words; a word missing from the label's table contributes 0;
+    - `sum_positive` — the same sum, over the words whose log-odds is
+      **positive** (the "evidence **for**" score);
+    - `max_logodds` — the **single best** word: the maximum log-odds over the
+      text's words that are in the label's table, and **0.0** when the text has
+      no word in the table ("no evidence");
+    - `support_count` — how many of the label's table words the text contains,
+      unweighted (the **measure-free control**).
+    The text's words are **distinct**: the map's unit is the word's presence,
+    and `support_count`'s own wording ("how many of the label's table words the
+    text contains") says so.
+  - **The empty tables.** A label with **no train example** has an empty table
+    (CS-23 measures it: 8 of the 68 labels), so there is no evidence at all
+    about it: those labels are ranked **last in every row** and can never
+    enter a top-k. That is what makes the unseen bucket **0.0000 by
+    construction**. *Amended before the first call (2026-11-01):* the floor
+    was first written as `-inf`, but the harness **rejects non-finite
+    scores** (`eval/multilabel.py`: "scores must be finite (NaN/inf would
+    corrupt every ranking"), so the floor is **finite and per row**: the
+    smallest score among the labels that *do* have a table, minus one. The
+    floor touches the empty tables alone — the seen labels' scores and their
+    order are untouched — and it is strictly below every seen label's score
+    whatever the arm's scale, which the two signed arms need (they are
+    unbounded below). *One reading note, registered with it:* the unseen
+    bucket's **decision** view (the F1 and the coverage) and the **global**
+    shortlist are the honest numbers (0.0000); the bucket's **ranking**
+    metrics *inside* the restricted view are an artefact of the tie (the
+    harness ranks equal scores by the column order, so the eight tied columns
+    are ordered alphabetically) and are not read as evidence. The same
+    artefact is in CS-29's run.
+  - **The choice is made on the fit side, and the fit side is cross-fit.** The
+    plan says the choice between the four arms is made on the fit side, never
+    on val. The **fit-side number is the out-of-fold train micro-F1 at the same
+    operating point** (`top_k` k=2), with **5 folds** over the train split
+    (seeded, deterministic): each fold's texts are scored by a map built from
+    the **other** folds. The reason is the map's own construction: the map is
+    built from the train split, so scoring the train split with it is
+    optimistically biased — and most of all for the arms that use the log-odds
+    the map itself computed (a hapax word's log-odds is huge, and it
+    contributes its full size to a sum and only 1 to a count). A selection made
+    on that number would prejudge the very ablation this change set exists to
+    run ("does the log-odds weighting beat `support_count`?"). This is the
+    track's **own** guard, registered in CS-32 ("the fit side's map must be
+    cross-fit") and in CS-9b (the fit side's threshold), applied one change set
+    earlier. The **in-fold** number (the train split scored by the full map) is
+    reported **beside** the out-of-fold one, so the bias is a measurement and
+    not an assertion.
+  - **The four runs.** One per arm, all on UPR **val** at `top_k` k=2:
+    `upr-eval-corpus-map-sum-logodds-val`,
+    `upr-eval-corpus-map-sum-positive-val`,
+    `upr-eval-corpus-map-max-logodds-val` and
+    `upr-eval-corpus-map-support-count-val`. The sweep file is
+    `experiments/corpus_map_sweep.py` (the sweep label `corpus_map`, so the
+    table's section is `## UPR — corpus_map`); `evaluate` is a main-pipeline
+    command, so the rows land in the **main** UPR table
+    (`docs/experiments_table_upr.md`) and the narrative in the track log
+    (`docs/experiments_text_processing.md`, the section
+    `## CS-30 — the corpus map as a classifier`).
+  - **What is reported.** All four arms' val numbers (the **measure ablation**)
+    and all four fit-side numbers (the **selection**); the headline — "the
+    corpus map as a classifier" — is the arm the fit side selects, and the
+    falsification is read on it. The arm with the best *val* number is reported
+    too, clearly marked as **not** the selection (choosing it would be choosing
+    on val).
+  - **The falsification, registered in advance.** (i) The **unseen bucket is
+    0.0000 by construction** — the empty tables score the floor. (ii) The
+    **measure ablation**: if a plain **count** of the label's table words
+    (`support_count`) is as good as the log-odds weighting, then the map's
+    careful measure work (CS-23) buys nothing predictive — a null, reported as
+    a null. (iii) If the pooled micro-F1 comes **within 0.02 of the champion's
+    0.5479** (that is, at or above **0.5279**), the retrieval-plus-decision
+    pipeline is buying little over a corpus statistic — a finding to report,
+    not to bury. (iv) The **seen-bucket** read: the pooled number mixes the
+    eight labels the map cannot see into its denominator, so the three seen
+    buckets (head, torso, tail) are pooled **by their own counts** and read
+    beside it.
+  - **The exit criteria.** The four artifacts hold the numbers; the four table
+    rows are auto-appended; the log section reads the numbers out with the
+    falsification conditions; the gate green (ruff over `src`/`tests`/
+    `experiments`, the full pytest suite, the two verify tools, and both final
+    sweeps reproducing their artifacts field for field).
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the four runs are
+  `upr-eval-corpus-map-{sum-logodds,sum-positive,max-logodds,support-count}-val`
+  (the artifacts `results/upr-eval-corpus-map-*-val/metrics.json`), the log
+  section is `## CS-30 — the corpus map as a classifier` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, the champion's
+  own `top_k` k=2 operating point, the map built from the **train** split only
+  — 1,676 texts, 3,049 words, 18,707 (label, word) pairs; **no model calls, no
+  embedding, 0.8 s per run**).**
+
+  - **The headline.** The **corpus map as a classifier** is the arm the fit
+    side selects, **`sum_positive`** (the "evidence for" score); its pooled
+    **micro-F1 is 0.4924** against the champion's **0.5479** — a gap of **5.6
+    points**. The best arm *on val* is the same arm, so the discipline cost
+    nothing here.
+  - **The four conditions.** (i) The **unseen bucket is 0.0000 by
+    construction** — it holds (the empty tables are ranked last in every row);
+    the bucket's *ranking* metrics inside the restricted view are a tie
+    artefact and are not read. (ii) The **measure ablation does not fire**:
+    the log-odds arms reach **0.4848–0.4924** against the measure-free
+    control's **0.2698**, so the map's careful measure work buys **+0.2226
+    micro-F1** — the opposite of the registered null. (iii) The "within 0.02
+    of the champion" condition **does not fire, but it nearly does**: the
+    selected arm is **0.0555** below the champion, and the seen-bucket reading
+    **0.0626** below it (0.5555 against 0.6181) — a **pure corpus statistic
+    reaches 90% of the champion's micro-F1**. (iv) The seen-bucket read: the
+    map 0.5555, the champion 0.6181, CS-29's lexical floor 0.4338, the trivial
+    floor 0.1595 — the same order as the pooled reading.
+  - **The cross-fit was the right instrument, and that is now a measurement.**
+    The **in-fold** fit side puts the measure-free control only **0.0227**
+    behind the best arm (0.7504 against 0.7731) — it would have said the
+    measure work buys almost nothing; the **out-of-fold** fit side puts it
+    **0.2780 behind** (0.3361 against 0.6141), and the **val** ablation lands
+    between them (**0.2226**). The mechanism is CS-23's own: a word that
+    occurs in exactly one train text has a huge log-odds (2,540 of the map's
+    18,707 pairs rest on such a hapax), so in-fold the *sum* collects a big
+    inflated contribution from a text's own hapax word that the *count* (which
+    sees the same word as 1) does not.
+  - **The per-bucket reading.** head **0.6611**, torso **0.4745**, **tail
+    0.4386** (the coverage **1.000** — every tail label is suggested at least
+    once), unseen 0.0000. The tail is where the two lexical instruments
+    separate most sharply: the map reaches 0.4386 there where CS-29's TF-IDF
+    floor reaches **0.0301** (the coverage 0.111 against the map's 1.000).
+  - **The cost.** **No model calls, no embedding, no new dependency**; 0.8 s
+    per run (the map build plus the 5-fold cross-fit).
+  - **The exit criteria.** The four artifacts hold the numbers; the four table
+    rows are auto-appended (the main UPR table's new `corpus_map` section); the
+    log section reads the numbers out with the falsification conditions; the
+    gate green (ruff over `src`/`tests`/`experiments`, the full pytest suite,
+    the two verify tools, both final sweeps reproducing their artifacts field
+    for field).

@@ -345,3 +345,12 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-labelembed-embeddinggemma-desc | 2026-10-27 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.079 | 68 | 0 |
 | upr-eval-fusionc-embeddinggemma-k10-c1-desc | 2026-10-27 | val | fusion | embeddinggemma | top_k k=2 | 0.5456 | 0.4959 | 0.5248 | 0.868 | 0.2755 | 0.7093 | 0.6702 | 0.7352 | 660 | 0.182 |
+
+## UPR — corpus_map
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-corpus-map-sum-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4901 | 0.4573 | 0.4685 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 | 660 | 0.788 |
+| upr-eval-corpus-map-sum-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4924 | 0.4582 | 0.4712 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 | 660 | 0.81 |
+| upr-eval-corpus-map-max-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4848 | 0.4439 | 0.4625 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 | 660 | 0.797 |
+| upr-eval-corpus-map-support-count-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 0.796 |

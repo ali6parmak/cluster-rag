@@ -998,6 +998,14 @@ port only.
     `experiments`, the full pytest suite, the two verify tools, and both final
     sweeps reproducing their artifacts field for field).
 
+- **CS-30** (the corpus map as a classifier) → executed 2026-11-01 → the
+  archive's §7.4 (the corpus map as a classifier) and the track log's §CS-30.
+  The corpus statistic reaches **micro-F1 0.4924** against the champion's
+  0.5479 (90% of it, with no embedding and no model call); the map's
+  **log-odds weighting buys +0.2226** over a plain word count (0.4924 against
+  0.2698), and the **cross-fit fit side was the right instrument** — the
+  naive in-fold number would have put the count only 0.0227 behind (the
+  out-of-fold puts it 0.2780 behind).
 - [ ] **CS-31 — the corpus map's estimator, and the lexicon as a first-class
   artifact.** Two parts, one change set, because the second is measured with the
   first.

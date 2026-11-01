@@ -564,3 +564,66 @@ def test_evaluate_lexical_tfidf_appends_its_table_row(evaluate_run, tmp_path) ->
     assert "| upr-eval-lexical-tfidf-table |" in content
     assert "| lexical_tfidf |" in content
     assert f"top_k k={metrics['decision']['k']}" in content
+
+
+# --- the corpus map as a classifier (the track's CS-30) ---
+
+CORPUS_MAP_CONFIG_EXTRA = """
+eval:
+  predictor:
+    name: corpus_map
+    params:
+      scoring: sum_logodds
+      fit_side_k: 2
+      folds: 5
+  decision:
+    rule: top_k
+    k: 2
+"""
+
+
+def test_evaluate_corpus_map_end_to_end(evaluate_run) -> None:
+    """The map as a classifier: the artifact carries the map's shape and the fit side."""
+    code, metrics, _, _ = evaluate_run(
+        run_id="upr-eval-corpus-map-fix", extra=CORPUS_MAP_CONFIG_EXTRA
+    )
+    assert code == 0
+    predictor = metrics["predictor"]
+    assert predictor["name"] == "corpus_map"
+    assert predictor["scoring"] == "sum_logodds"
+    assert predictor["map"]["split"] == "train"
+    assert predictor["map"]["n_labels"] == metrics["n_labels"]
+    fit_side = predictor["fit_side"]
+    # the fit side's numbers: all four arms, in-fold and out-of-fold, and the
+    # selection made on the out-of-fold one
+    assert set(fit_side["in_fold_micro_f1"]) == {
+        "sum_logodds",
+        "sum_positive",
+        "max_logodds",
+        "support_count",
+    }
+    assert set(fit_side["out_of_fold_micro_f1"]) == set(fit_side["in_fold_micro_f1"])
+    assert fit_side["selected_by"] == "out_of_fold_micro_f1"
+    assert fit_side["selected"] == max(
+        fit_side["out_of_fold_micro_f1"], key=lambda arm: fit_side["out_of_fold_micro_f1"][arm]
+    )
+    # an embedding-free predictor: no lineage is recorded
+    assert metrics["embedding_run"] is None
+    # the unseen bucket: a label with no train example has an empty table, so it
+    # is ranked last and never enters a top-2
+    unseen = metrics["report"]["per_bucket"]["unseen"]
+    assert unseen["coverage"]["coverage"] == 0.0
+    assert unseen["f1"]["micro_f1"] == 0.0
+
+
+def test_evaluate_corpus_map_appends_its_table_row(evaluate_run, tmp_path) -> None:
+    """The row lands in the auto table under the sweep's section."""
+    table = tmp_path / "tables.md"
+    code, metrics, _, _ = evaluate_run(
+        run_id="upr-eval-corpus-map-table", extra=CORPUS_MAP_CONFIG_EXTRA, table=table
+    )
+    assert code == 0
+    content = table.read_text("utf-8")
+    assert "| upr-eval-corpus-map-table |" in content
+    assert "| corpus_map |" in content
+    assert f"top_k k={metrics['decision']['k']}" in content
