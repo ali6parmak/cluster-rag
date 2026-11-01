@@ -78,6 +78,7 @@ research record and are **not** indexed here.
 | [CS-20 — the hit map's terminal viewer](#cs-20--the-hit-maps-terminal-viewer-2026-10-29) | no run (a **tool**): the offline mode reads the CS-19 artifacts, the live mode the model's cached grid, the what-if mode a re-asked grid | one text on screen: the words and what each contributes, who the words say it is, what the model says, what is true — and, behind a flag, what happens if a word is removed; the **attribution/causation** distinction is in the output itself | the CS-19 artifacts (read, not re-measured) |
 | [CS-23 — the corpus map](#cs-23--the-corpus-map-2026-11-01) | one `upr-hitmap-corpus` run (the train split's own word↔label association; **0 new model calls**, 1.3 s) | the plain statistics of the corpus, at last: **18,707** (label, word) pairs over 1,676 train texts; the plan's pre-read expectation is reproduced **digit for digit** ("Detention" ← detention 16.90, "Migrants" ← migrant 27.86); the log-odds and the lift pick a **different head word for 55 of the 60 labels** (the lift's head is a hapax); the label's own name word heads **33** of the tables; the register ("rights") is in **all 60** | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-24 — the surrogate's full vector](#cs-24--the-surrogates-full-vector-2026-11-01) | the CS-19 sweep re-run (`upr-hitmap-surrogate` + `upr-hitmap-text`; **0 new model calls**, 16.6 s) | the surrogate's **whole** fitted vector (68 topics × 1,203 features = **81,804** numbers, 1.37 MB) now sits beside the top-15 lists; every number CS-19 reported is **reproduced unchanged**, and the viewer's surrogate column is complete (a word outside the model's vocabulary reads "not in the model's vocabulary", never zero) | `results/upr-hitmap-surrogate/hitmap.json` |
+| [CS-25 — a clearer screen, and the colour](#cs-25--a-clearer-screen-and-the-colour-2026-11-01) | no run (a **tool**): the viewer's headings, blocks and palette | every block names **the question it answers** (the mode letters leave the headings), the two instruments that shared one table now have their own blocks, the topic side of the feature is on the screen at all, and the screen has **colour** — with the rule that the coloured screen stripped of its codes is the plain screen, so `--no-colour` loses nothing | the CS-19/CS-23 artifacts (read, not re-measured) |
 
 ## Change sets
 
@@ -5848,5 +5849,98 @@ surrogate's, not the model's); nothing about `test`; nothing about the
 correlation, the R², the topic-faithfulness and the carrier agreement are
 CS-19's numbers, reproduced, not new evidence. The vector is a **reading**
 convenience: the fit is the same fit.
+
+## CS-25 — a clearer screen, and the colour (2026-11-01)
+
+**The run: none.** This is a **tool** change, like CS-20: the viewer gets new
+headings and colour, it writes no artifact and appends no table row, and it
+costs **0 model calls** (the numbers on the screen are the CS-19/CS-23
+artifacts' and the tool's own readings, exactly as before).
+
+### What the review asked for, and what landed
+
+The reviewer's complaint (the plan's §7.2): *"two instruments shared one table
+with one footnote, the mode letters (A/B/C/D/E) and the feature jargon made the
+blocks unreadable, and there was not enough colour to see the structure."*
+
+**Every block now names the question it answers**, in plain words, and the mode
+letters have left the headings (they stay in the plan and the log, where the
+history lives):
+
+| the block | the heading |
+|---|---|
+| the feature's own split (the text side) | "THE FEATURE'S OWN SPLIT — a spelling question: how much of each word is in the topic's name?" |
+| the feature's own split (the topic side) | "THE TOPIC'S OWN WORDS — a spelling question: how much of the topic's name is in the text?" |
+| the corpus map (CS-23) | "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question: which words go with this label in the training corpus?" |
+| the surrogate (CS-24) | "THE MODEL'S WORD HABITS — a learned question: does the model react to this word for this topic?" |
+| the what-if | "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" |
+| the clauses | "THE CLAUSES OF THIS TEXT — the causal one, at clause level" (CS-26) |
+
+The two instruments that shared one table now have **their own blocks**: the
+feature's own exact decomposition is one table, the surrogate's fitted
+coefficients are another. And the **topic side** of the feature — the topic's
+own name words and how much of each the text has — is now on the screen at all
+(the viewer already computed that decomposition; it simply did not show it).
+
+**The attribution/causation distinction is still visible** — it moved from the
+mode letters into the block's own line: the feature's split says "an
+attribution: the feature's own arithmetic …, never the model's reading", the
+surrogate says "an attribution of the model's own probability …, never a causal
+claim", the corpus map says "a description of the data …, never the model's
+reading", and the what-if says "the causal one, at word level".
+
+### The palette (raw ANSI, the 256-colour ramps for the shades, no dependency)
+
+**bold** = the header or the row that matters (a top-1, a gold label);
+**cyan** = structure (the dataset and split in the header, the label names, the
+topic's own name words); a **green ramp** (five shades) = pushes the score up
+or is true; a **red ramp** (five shades) = pushes the score down; **yellow** =
+caution (the model's noise, the not-deterministic note); **dim** = nothing here
+(zeros, "—", the notes). The brightness is the size: the ramp's darkest shade
+is the smallest value, its brightest the largest.
+
+Where it lands: the gold labels in bold green (in every ranking they appear
+in); the contribution bars on the green ramp; the topic's own name words in
+cyan; the surrogate's and the corpus map's numbers on the green/red ramps; the
+corpus words that are **in this text** in bold with their counts in dim; the
+what-if's deltas on a ramp, with **anything inside the model's noise band
+(±0.003) in dim and marked "noise"** — the rule that separates "the model used
+this word" from "the model twitched".
+
+### The rule, enforced by a test
+
+**Colour never carries information the text does not also carry.** The
+coloured screen, with its escape codes stripped, is **byte-identical** to the
+plain screen — and that is a test, not a promise: the viewer is run twice (with
+and without the colours) and the two outputs are compared after the strip. So
+`--no-colour` loses nothing.
+
+A `--colour` flag forces the colours on when the output is piped (into
+`less -R`); the default is "on when stdout is a terminal".
+
+### The exit criteria, read out one by one
+
+1. **The plain output still carries every number and every marker** — **holds**:
+   the coloured screen stripped of its codes is the plain screen, character for
+   character (the test above), and every marker the colours carry has a text
+   twin: "★" for a gold label, "▲" for a word of the topic's own name, "noise"
+   for a delta inside the model's noise band, the bar's length for the
+   contribution's size.
+2. **The coloured output is checked by a test (the right codes on the right
+   cells)** — **holds**: the header's "UPR val" is cyan, a gold label is bold
+   green, the topic's own name words are cyan, the positive and the negative
+   numbers are on the two ramps, and the notes are dim.
+3. **The gate green** — 700 tests, ruff clean, the two verify tools OK and both
+   final sweeps reproducing field for field.
+
+### What this change set does not say
+
+Nothing new was measured: every number on the screen is the artifacts' (the
+offline blocks) or the tool's own reading of the model (the live and the what-if
+blocks); nothing about `test`; nothing about the corpus-level word ablation
+(CS-22); nothing about the OMCT map (CS-21); and nothing about the clause
+ablation in the viewer — its heading is fixed here, but the block itself is
+CS-26's.
+
 
 

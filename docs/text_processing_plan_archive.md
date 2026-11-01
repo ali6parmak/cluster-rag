@@ -3462,3 +3462,104 @@ line). The verdict and the numbers are the track log's §CS-24.*
     test, number for number; a mismatched shape is refused), the artifact's
     numbers reproduce, the viewer shows a number for every word of the text,
     and the gate is green.
+
+---
+
+## A clearer screen, and the colour (CS-25) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.2
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-25.*
+
+### 7.1 A clearer screen, and the colour (CS-25)
+
+- [x] **CS-25 — a clearer screen, and the colour.** Every block says **which
+  question it answers**, in plain words; the mode letters leave the viewer's
+  headings (they stay in the plan and the log, where the history lives); and
+  the screen gets **colour**.
+
+  **The headings** (the names replace the letters):
+
+  | the block | the heading | the question it answers |
+  |---|---|---|
+  | the feature's own split (text side) | "THE FEATURE'S OWN SPLIT — a spelling question: how much of each word is in the topic's name?" | the feature's arithmetic |
+  | the feature's own split (topic side) | "THE TOPIC'S OWN WORDS — a spelling question: how much of the topic's name is in the text?" | the feature's arithmetic |
+  | the corpus map (CS-23) | "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question: which words go with this label in the training corpus?" | the data's statistics |
+  | the surrogate (CS-24) | "THE MODEL'S WORD HABITS — a learned question: does the model react to this word for this topic?" | the model, indirectly |
+  | the clauses (CS-26) | "THE CLAUSES OF THIS TEXT — the causal one, at clause level" | the model, directly |
+  | the what-if | "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" | the model, directly |
+
+  **The palette** (raw ANSI, the 256-colour ramps for the shades, still **no
+  dependency**): **bold** = the header or the row that matters (a top-1, the
+  label-linked clause); **cyan** = structure (label names, the topic's own name
+  words); a **green ramp** = pushes the score up / is true (the brightness is
+  the size); a **red ramp** = pushes the score down; **yellow** = caution (the
+  model's noise, "not ablatable", the not-deterministic note); **dim** = nothing
+  here (zeros, "—", the notes).
+
+  **Where it lands.** The gold labels in bold green (and in every ranking they
+  appear in); the contribution bars on a green ramp; the words that **are** the
+  topic's name in cyan; the surrogate and corpus columns on a green/red ramp;
+  the corpus words that are **in this text** in bold with the counts in dim;
+  each clause's drop on a red ramp with the label-linked clause in bold; the
+  what-if deltas on a ramp, with **anything inside the model's noise band
+  (±0.003) in dim and marked "noise"** — the rule that separates "the model
+  used this word" from "the model twitched"; the header's dataset/split in
+  cyan.
+
+  **The rule.** Colour never carries information the text does not also carry,
+  so `--no-colour` loses nothing. A `--colour` flag forces it on when piping
+  (e.g. into `less -R`); the default is "on when stdout is a terminal".
+
+  **The cost.** Presentation only; 0 calls.
+
+  **The exit criteria.** The plain output still carries every number and every
+  marker; the coloured output is checked by a test (the right codes on the
+  right cells); the gate green.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the change set is a
+  **tool** change: the viewer gets new headings, blocks and colour, it writes no
+  artifact and appends no table row, and it costs **0 model calls**. The log
+  section is `## CS-25 — a clearer screen, and the colour` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (the tool's own output on the UPR **val**
+  split; every number on it is the CS-19/CS-23 artifacts' or the tool's own
+  reading of the model).**
+
+  - **The headings.** Every block names **the question it answers** and the
+    mode letters have left the headings (they stay in the plan and the log):
+    "THE FEATURE'S OWN SPLIT — a spelling question: …", "THE TOPIC'S OWN WORDS
+    — a spelling question: …", "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a
+    statistical question: …", "THE MODEL'S WORD HABITS — a learned question:
+    …", "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" (and
+    "THE CLAUSES OF THIS TEXT — the causal one, at clause level", which is
+    CS-26's block).
+  - **The two instruments that shared one table** now have their own blocks
+    (the feature's own decomposition; the surrogate's fitted coefficients), and
+    the **topic side** of the feature — the topic's own name words and how much
+    of each the text has — is on the screen at all.
+  - **The attribution/causation distinction** moved from the mode letters into
+    each block's own line ("an attribution: the feature's own arithmetic …,
+    never the model's reading"; "an attribution of the model's own
+    probability …, never a causal claim"; "a description of the data …, never
+    the model's reading"; "the causal one, at word level").
+  - **The palette.** Bold, cyan, a five-shade green ramp, a five-shade red
+    ramp, yellow and dim — raw ANSI, the 256-colour ramps for the shades, no
+    dependency. The brightness is the size. The gold labels are bold green, the
+    contribution bars and the positive numbers are on the green ramp, the
+    negative ones on the red ramp, the topic's own name words and the header's
+    dataset and split are cyan, the corpus words that are **in this text** are
+    bold with their counts in dim, and a what-if delta inside the model's noise
+    band (**±0.003**) is dim and marked **"noise"**.
+  - **The rule, enforced by a test.** The coloured screen, with its escape
+    codes stripped, is **byte-identical** to the plain screen — so
+    `--no-colour` loses nothing. A `--colour` flag forces the colours on when
+    the output is piped; the default is "on when stdout is a terminal".
+  - **The exit criteria.** The plain output carries every number and every
+    marker (the strip-and-compare test), the coloured output is checked cell by
+    cell (the header's split in cyan, a gold label in bold green, the topic's
+    name words in cyan, the two ramps on the positive and the negative numbers,
+    the notes dim), and the gate is green (700 tests, ruff clean, the two
+    verify tools OK, both final sweeps reproducing field for field).

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -212,6 +213,13 @@ def _view_args(artifacts: dict[str, Any], *extra: str) -> list[str]:
     ]
 
 
+def _coloured_args(artifacts: dict[str, Any], *extra: str) -> list[str]:
+    """The same arguments with the colours forced on (the pipe case)."""
+    args = _view_args(artifacts, *extra)
+    args.remove("--no-colour")
+    return [*args[: args.index("--text")], "--colour", *args[args.index("--text") :]]
+
+
 # --- the pure half ---
 
 
@@ -279,8 +287,9 @@ def test_the_viewer_runs_offline_on_the_fixture(
     assert "HIT MAP VIEWER" in out
     assert "UPR val" in out
     assert "WHAT IS TRUE" in out
-    assert "ATTRIBUTION" in out
-    assert "THE WORDS AND WHAT EACH CONTRIBUTES" in out
+    assert "THE FEATURE'S OWN SPLIT" in out
+    assert "THE MODEL'S WORD HABITS" in out
+    assert "THE TOPIC'S OWN WORDS" in out
 
 
 def test_the_viewers_numbers_are_the_artifacts_own(
@@ -372,7 +381,7 @@ def test_the_what_if_mode_removes_the_word_and_re_asks(
     args = _view_args(fixture_artifacts, "--text", record_id, "--what-if", word)
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
-    assert "CAUSAL" in out
+    assert "the causal one" in out
     assert "NOT deterministic" in out
     # the model saw the intact text and the text without the word
     assert any(word.lower() in call for call in decider.calls)
@@ -402,9 +411,12 @@ def test_the_output_separates_the_attributions_from_the_causal_column(
     args = _view_args(fixture_artifacts, "--text", record_id, "--live", "--what-if", word)
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
-    assert "ATTRIBUTION (mode B" in out
-    assert "ATTRIBUTION (the lexical map's own ranking)" in out
-    assert "CAUSAL (the model is asked again)" in out
+    # the attributions say what they are ...
+    assert "an attribution: the feature's own arithmetic" in out
+    assert "an attribution of the model's own probability" in out
+    assert "a description of the data" in out
+    # ... and the causal one says so
+    assert "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" in out
 
 
 # --- the corpus map (CS-23) on the screen ---
@@ -608,3 +620,115 @@ def test_a_word_outside_the_vocabulary_says_so(
     out = capsys.readouterr().out
     assert "not in the model's vocabulary" in out
     assert "never zero" in out
+
+
+# --- the clearer screen and the colour (CS-25) ---
+
+
+def test_the_colour_carries_nothing_the_text_does_not(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The rule: the coloured screen, stripped of its codes, is the plain screen.
+
+    Every colour is a reading of a number that is on the screen anyway, so
+    ``--no-colour`` loses no information.
+    """
+    record_id = str(fixture_artifacts["val_ids"][0])
+    assert viewer_module.main(_view_args(fixture_artifacts, "--text", record_id)) == 0
+    plain = capsys.readouterr().out
+    assert viewer_module.main(_coloured_args(fixture_artifacts, "--text", record_id)) == 0
+    coloured = capsys.readouterr().out
+    assert "\033[" in coloured, "the coloured screen carries no escape codes"
+    stripped = re.sub(r"\033\[[0-9;]*m", "", coloured)
+    assert stripped == plain
+
+
+def test_the_colour_flag_forces_the_colour_when_piping(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--colour`` turns the colours on even when the output is piped."""
+    record_id = str(fixture_artifacts["val_ids"][0])
+    assert viewer_module.main(_coloured_args(fixture_artifacts, "--text", record_id)) == 0
+    assert "\033[" in capsys.readouterr().out
+
+
+def test_the_palette_lands_on_the_right_cells(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The coloured output is checked: the codes are on the cells they belong to."""
+    record_id = str(fixture_artifacts["val_ids"][0])
+    assert viewer_module.main(_coloured_args(fixture_artifacts, "--text", record_id)) == 0
+    out = capsys.readouterr().out
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    focus, _rule = viewer_module._default_focus(context.records[0], context.labels)
+    own_words = viewer_module.topic_words(context.records[0].text, focus)
+    cyan = "\033[38;5;51m"
+    # the header's dataset and split are in cyan
+    assert f"{cyan}UPR val" in out
+    # a gold label is in bold green
+    assert viewer_module.GOLD in out
+    # the topic's own name words are in cyan
+    assert own_words
+    assert f"{cyan}{own_words[0]}" in out
+    # the surrogate's positive and negative coefficients are on the two ramps
+    assert any(code in out for code in viewer_module.GREEN_RAMP)
+    assert any(code in out for code in viewer_module.RED_RAMP)
+    # the notes are dim
+    assert viewer_module.DIM in out
+
+
+def test_the_mode_letters_leave_the_headings(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The headings name the question; the mode letters stay in the plan and the log."""
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    for letter in ("mode A", "mode B", "mode C", "mode D", "mode E"):
+        assert letter not in out
+    # the blocks name the question they answer
+    assert "THE FEATURE'S OWN SPLIT — a spelling question:" in out
+    assert "THE TOPIC'S OWN WORDS — a spelling question:" in out
+    assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question:" in out
+    assert "THE MODEL'S WORD HABITS — a learned question:" in out
+
+
+def test_the_noise_band_marks_the_deltas(
+    viewer_module: Any,
+    fixture_artifacts: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A delta inside the model's noise band is dim and marked "noise"."""
+    decider = FakeDecider()
+    monkeypatch.setattr(viewer_module, "build_upr_decider", lambda model_config, config: decider)
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    word = context.records[0].text.split()[0]
+    args = _coloured_args(
+        fixture_artifacts,
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+        "--live",
+        "--what-if",
+        word,
+    )
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "noise" in out
+    assert f"±{viewer_module.NOISE_BAND:g}" in out

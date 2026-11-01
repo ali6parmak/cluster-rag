@@ -631,6 +631,8 @@ per change set, so a reader can always tell *moved* from *lost*:
   §CS-23.
 - **CS-24** (the surrogate's full coefficient vector) → executed 2026-11-01 → the
   archive's §7.1 (the surrogate's full vector) and the track log's §CS-24.
+- **CS-25** (a clearer screen, and the colour) → executed 2026-11-01 → the
+  archive's §7.1 (the clearer screen) and the track log's §CS-25.
 
 The change sets still open:
 
@@ -743,50 +745,8 @@ word). CS-21 and CS-22 stay untouched and unscheduled.
   §CS-23.
 - **CS-24** (the surrogate's full coefficient vector) → executed 2026-11-01 → the
   archive's §7.1 (the surrogate's full vector) and the track log's §CS-24.
-- [ ] **CS-25 — a clearer screen, and the colour.** Every block says **which
-  question it answers**, in plain words; the mode letters leave the viewer's
-  headings (they stay in the plan and the log, where the history lives); and
-  the screen gets **colour**.
-
-  **The headings** (the names replace the letters):
-
-  | the block | the heading | the question it answers |
-  |---|---|---|
-  | the feature's own split (text side) | "THE FEATURE'S OWN SPLIT — a spelling question: how much of each word is in the topic's name?" | the feature's arithmetic |
-  | the feature's own split (topic side) | "THE TOPIC'S OWN WORDS — a spelling question: how much of the topic's name is in the text?" | the feature's arithmetic |
-  | the corpus map (CS-23) | "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question: which words go with this label in the training corpus?" | the data's statistics |
-  | the surrogate (CS-24) | "THE MODEL'S WORD HABITS — a learned question: does the model react to this word for this topic?" | the model, indirectly |
-  | the clauses (CS-26) | "THE CLAUSES OF THIS TEXT — the causal one, at clause level" | the model, directly |
-  | the what-if | "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" | the model, directly |
-
-  **The palette** (raw ANSI, the 256-colour ramps for the shades, still **no
-  dependency**): **bold** = the header or the row that matters (a top-1, the
-  label-linked clause); **cyan** = structure (label names, the topic's own name
-  words); a **green ramp** = pushes the score up / is true (the brightness is
-  the size); a **red ramp** = pushes the score down; **yellow** = caution (the
-  model's noise, "not ablatable", the not-deterministic note); **dim** = nothing
-  here (zeros, "—", the notes).
-
-  **Where it lands.** The gold labels in bold green (and in every ranking they
-  appear in); the contribution bars on a green ramp; the words that **are** the
-  topic's name in cyan; the surrogate and corpus columns on a green/red ramp;
-  the corpus words that are **in this text** in bold with the counts in dim;
-  each clause's drop on a red ramp with the label-linked clause in bold; the
-  what-if deltas on a ramp, with **anything inside the model's noise band
-  (±0.003) in dim and marked "noise"** — the rule that separates "the model
-  used this word" from "the model twitched"; the header's dataset/split in
-  cyan.
-
-  **The rule.** Colour never carries information the text does not also carry,
-  so `--no-colour` loses nothing. A `--colour` flag forces it on when piping
-  (e.g. into `less -R`); the default is "on when stdout is a terminal".
-
-  **The cost.** Presentation only; 0 calls.
-
-  **The exit criteria.** The plain output still carries every number and every
-  marker; the coloured output is checked by a test (the right codes on the
-  right cells); the gate green.
-
+- **CS-25** (a clearer screen, and the colour) → executed 2026-11-01 → the
+  archive's §7.1 (the clearer screen) and the track log's §CS-25.
 - [ ] **CS-26 — the clause ablation in the viewer (mode D).** The clause-level
   ablation (CS-18) is implemented and measured but invisible: the viewer shows
   the interactive word-level version instead.

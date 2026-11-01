@@ -108,18 +108,58 @@ CORPUS_WORD_LABELS = 3
 # tolerance is the rounding (plus a hair).
 VALUE_TOLERANCE = 1e-6
 
-# The ANSI palette (raw escape codes: no dependency).
+# The model's own noise band (the CS-7a precedent: the same call re-run moves
+# the probability by ~0.001-0.003). A what-if delta inside the band is the
+# model twitching, not the model using the word.
+NOISE_BAND = 0.003
+
+# The ANSI palette (raw escape codes: no dependency). The 256-colour ramps
+# carry the shades: **the brightness is the size** of the value.
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
-GREEN = "\033[32m"
 RED = "\033[31m"
 YELLOW = "\033[33m"
+CYAN = "\033[38;5;51m"
+GREEN_RAMP: tuple[str, ...] = tuple(f"\033[38;5;{code}m" for code in (22, 28, 34, 40, 46))
+RED_RAMP: tuple[str, ...] = tuple(f"\033[38;5;{code}m" for code in (52, 88, 124, 160, 196))
+# The gold labels: bold and bright green (the truth, in every ranking).
+GOLD = BOLD + GREEN_RAMP[-1]
 
 
 def paint(text: str, code: str, *, colour: bool) -> str:
     """Wrap a text in an ANSI code (or leave it alone in the plain fallback)."""
     return f"{code}{text}{RESET}" if colour else text
+
+
+def ramp_code(value: float, maximum: float, ramp: Sequence[str]) -> str:
+    """The shade for a value: the brightness is the size (nothing here is dim).
+
+    Args:
+        value: The value to shade.
+        maximum: The scale's maximum (the brightest shade).
+        ramp: The ramp's codes, the darkest first.
+
+    Returns:
+        The ANSI code for the value's shade.
+    """
+    if maximum <= 0.0 or value <= 0.0:
+        return DIM
+    index = min(len(ramp) - 1, int(round((len(ramp) - 1) * value / maximum)))
+    return ramp[index]
+
+
+def signed_ramp(value: float, maximum: float) -> str:
+    """The ramp for a signed value: the green ramp up, the red ramp down.
+
+    A value of zero is **dim** — nothing here — and the brightness follows the
+    value's size on its own side of the scale.
+    """
+    if maximum <= 0.0 or value == 0.0:
+        return DIM
+    if value > 0.0:
+        return ramp_code(value, maximum, GREEN_RAMP)
+    return ramp_code(-value, maximum, RED_RAMP)
 
 
 def _bar(value: float, maximum: float, width: int = 24) -> str:
@@ -733,9 +773,9 @@ def render(
 ) -> str:
     """The whole screen, as text (the tool's own output).
 
-    The columns say which of the two they are: the lexical and the surrogate
-    numbers are **attributions**, the what-if block is the **causal** one, and
-    the corpus map's block is a description of the **data** (neither).
+    Every block names **the question it answers** (CS-25), and every colour
+    carries nothing the plain text does not: a colour is a reading of a number
+    that is on the screen anyway, so ``--no-colour`` loses no information.
     """
     record = context.records[row]
     text = record.text
@@ -748,19 +788,39 @@ def render(
     vector = surrogate_full_vector(surrogate)
     rows = word_rows(text, focus)
     maximum = max((float(entry["contribution"]) for entry in rows), default=0.0)
+    # the topic's own name words (the topic side of the feature) — the words the
+    # screen marks in cyan
+    topic_name_words = topic_words(text, focus)
     # the text's own content words, in the text's order (the corpus map's unit)
     text_words: list[str] = []
     for word in content_tokens(text, DEFAULT_STOPWORDS):
         if word not in text_words:
             text_words.append(word)
+    surrogate_max = max((abs(value) for value in coefficients.values()), default=0.0)
+    corpus = corpus_block(context.corpus_map)
     lines: list[str] = []
     add = lines.append
+
+    def label_cell(label: str, width: int = 0) -> str:
+        """A label's name: a **gold** label in bold green, the rest plain.
+
+        The padding is applied **before** the colour, so the columns line up in
+        the coloured output as well (and the plain and the coloured screens
+        carry the same text).
+        """
+        cell = f"{label:<{width}}" if width else label
+        return paint(cell, GOLD, colour=colour) if label in gold_labels else cell
 
     add(paint("=" * 96, BOLD, colour=colour))
     add(
         paint(
-            f"HIT MAP VIEWER — UPR {context.split} "
-            f"({len(context.records)} texts, {len(labels)} labels, "
+            "HIT MAP VIEWER — ",
+            BOLD,
+            colour=colour,
+        )
+        + paint(f"UPR {context.split}", BOLD + CYAN, colour=colour)
+        + paint(
+            f" ({len(context.records)} texts, {len(labels)} labels, "
             f"{int(context.gold.sum())} gold cells)",
             BOLD,
             colour=colour,
@@ -793,55 +853,108 @@ def render(
     add(f'  "{text}"')
     add("")
     add(paint("WHAT IS TRUE — the gold labels of this text (UPR val)", BOLD, colour=colour))
-    add("  " + " · ".join(gold_labels))
+    add("  " + " · ".join(label_cell(label) for label in gold_labels))
     add("")
     add(paint(f'THE FOCUS TOPIC: "{focus}"', BOLD, colour=colour))
     if focus_rule:
         add(paint(f"  (chosen: {focus_rule})", DIM, colour=colour))
-    own_words = topic_words(text, focus)
-    add(f"  the topic's own name words (mode A, attribution): {', '.join(own_words) or '—'}")
+    add(
+        "  the topic's own name words: "
+        + (paint(", ".join(topic_name_words), CYAN, colour=colour) if topic_name_words else "—")
+    )
     add("")
 
+    # -- the feature's own split: the text side ---------------------------------
     add(
         paint(
-            "THE WORDS AND WHAT EACH CONTRIBUTES — ATTRIBUTION "
-            "(mode B: lex_text_coverage, the feature's own exact decomposition)",
+            "THE FEATURE'S OWN SPLIT — a spelling question: how much of each word is in "
+            "the topic's name?",
             BOLD,
             colour=colour,
         )
     )
     add(
         paint(
-            f"  {'word':<20}{'n':>2}   {'contribution':>11}   {'bar':<28}{'surrogate (mode C)'}",
+            "  an attribution: the feature's own arithmetic (lex_text_coverage), never the "
+            "model's reading",
+            DIM,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            f"  {'word':<20}{'n':>2}   {'contribution':>11}   {'bar':<28}",
             DIM,
             colour=colour,
         )
     )
     for entry in rows:
         contribution = float(entry["contribution"])
-        colour_code = GREEN if contribution > 0.0 else DIM
+        word = str(entry["word"])
+        code = ramp_code(contribution, maximum, GREEN_RAMP)
+        is_topic_word = word in topic_name_words
+        add(
+            "  "
+            + paint(f"{word:<20}", CYAN if is_topic_word else code, colour=colour)
+            + f"{int(entry['n_occurrences']):>2}   {contribution:>11.4f}   "
+            + paint(f"{_bar(contribution, maximum):<28}", code, colour=colour)
+            + paint("  ▲" if is_topic_word else "  ", DIM, colour=colour)
+        )
+    add(
+        paint(
+            "  ▲ = the word is one of the topic's own name words; the bar's shade is the "
+            "contribution's size (the number says it too).",
+            DIM,
+            colour=colour,
+        )
+    )
+    add("")
+
+    # -- the model's word habits: the surrogate ---------------------------------
+    add(
+        paint(
+            "THE MODEL'S WORD HABITS — a learned question: does the model react to this "
+            "word for this topic?",
+            BOLD,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            "  an attribution of the model's own probability (a ridge surrogate), never a "
+            "causal claim",
+            DIM,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            f"  {'word':<20}{'the surrogate says':>22}",
+            DIM,
+            colour=colour,
+        )
+    )
+    for entry in rows:
         word = str(entry["word"])
         surrogate = coefficients.get(word)
         if surrogate is not None:
             # the rounding is at the display's precision, and a value that
-            # rounds to zero never shows a sign ("-0.000" would be a artefact)
+            # rounds to zero never shows a sign ("-0.000" would be an artefact)
             shown = round(float(surrogate), 3) + 0.0
-            surrogate_cell = f"{shown:+.3f}"
-            surrogate_colour = RED if shown < 0.0 else GREEN
+            cell = f"{shown:+.3f}"
+            code = signed_ramp(shown, surrogate_max)
         elif vector is not None:
             # the word is outside the model's vocabulary (CS-24): a different
             # and more useful statement than "not stored"
-            surrogate_cell = "not in the model's vocabulary"
-            surrogate_colour = DIM
+            cell = "not in the model's vocabulary"
+            code = DIM
         else:
-            surrogate_cell = "—"
-            surrogate_colour = DIM
+            cell = "—"
+            code = DIM
         add(
             "  "
-            + paint(f"{word:<20}", colour_code, colour=colour)
-            + f"{int(entry['n_occurrences']):>2}   {contribution:>11.4f}   "
-            + paint(f"{_bar(contribution, maximum):<28}", colour_code, colour=colour)
-            + paint(f"{surrogate_cell:>10}", surrogate_colour, colour=colour)
+            + paint(f"{word:<20}", DIM, colour=colour)
+            + paint(f"{cell:>22}", code, colour=colour)
         )
     if vector is not None:
         add(
@@ -863,43 +976,95 @@ def render(
             )
         )
     add("")
+
+    # -- the feature's own split: the topic side -------------------------------
     add(
         paint(
-            "WHO THE WORDS SAY IT IS — ATTRIBUTION (the lexical map's own ranking)",
+            "THE TOPIC'S OWN WORDS — a spelling question: how much of the topic's name is "
+            "in the text?",
             BOLD,
             colour=colour,
         )
     )
     add(
         paint(
-            "  the text's words against the topic's name (mode B, lex_text_coverage)",
+            "  the same feature's other side (lex_label_coverage): the topic's name words "
+            "and how much of each the text has",
+            DIM,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            f"  {'word':<20}{'coverage':>11}   {'bar':<28}",
+            DIM,
+            colour=colour,
+        )
+    )
+    topic_rows = list(label_word_contributions(text, focus))
+    topic_maximum = max((item.coverage for item in topic_rows), default=0.0)
+    for item in topic_rows:
+        code = ramp_code(item.coverage, topic_maximum, GREEN_RAMP)
+        add(
+            "  "
+            + paint(f"{item.word:<20}", CYAN, colour=colour)
+            + f"{item.coverage:>11.4f}   "
+            + paint(f"{_bar(item.coverage, topic_maximum):<28}", code, colour=colour)
+        )
+    add(
+        paint(
+            "  the topic's name words are in cyan; the bar's shade is the coverage's size "
+            "(the number says it too).",
+            DIM,
+            colour=colour,
+        )
+    )
+    add("")
+
+    add(
+        paint(
+            "WHO THE WORDS SAY IT IS — a spelling question: which labels do the words point at?",
+            BOLD,
+            colour=colour,
+        )
+    )
+    add(
+        paint(
+            "  the text's words against the topic's name (lex_text_coverage)",
             DIM,
             colour=colour,
         )
     )
     for rank, label, value in _ranking_rows(text_ranking, top_k):
         mark = " ★" if label in gold_labels else "  "
-        add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+        add(f"   {rank:>2}  {label_cell(label, 38)}{value:>9.4f}{mark}")
     add(
         paint(
-            "  the topic's words against the text (mode A, lex_label_coverage)",
+            "  the topic's words against the text (lex_label_coverage)",
             DIM,
             colour=colour,
         )
     )
     for rank, label, value in _ranking_rows(topic_ranking_rows, top_k):
         mark = " ★" if label in gold_labels else "  "
-        add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+        add(f"   {rank:>2}  {label_cell(label, 38)}{value:>9.4f}{mark}")
     add(paint("   (★ = a gold label of this text)", DIM, colour=colour))
     add("")
 
-    corpus = corpus_block(context.corpus_map)
     if corpus:
         add(
             paint(
-                "THE CORPUS'S OWN WORDS FOR THIS TOPIC — the train corpus's own "
-                "word<->label association (CS-23; the data's statistics, not the model's)",
+                "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question: which "
+                "words go with this label in the training corpus?",
                 BOLD,
+                colour=colour,
+            )
+        )
+        add(
+            paint(
+                "  a description of the data (the train split's own counts), never the "
+                "model's reading",
+                DIM,
                 colour=colour,
             )
         )
@@ -943,13 +1108,26 @@ def render(
                     colour=colour,
                 )
             )
+            log_odds_max = max((abs(float(row["log_odds"])) for row in topic_rows), default=0.0)
             for row in topic_rows[:top_k]:
-                in_text = str(row["word"]) in text_words
-                mark = "  ★ in this text" if in_text else ""
+                word = str(row["word"])
+                in_text = word in text_words
+                log_odds = float(row["log_odds"])
+                code = signed_ramp(log_odds, log_odds_max)
                 add(
-                    f"  {str(row['word']):<20}{int(row['n_with']):>8}{int(row['df']):>6}"
-                    f"{float(row['lift']):>9.2f}{float(row['log_odds']):>11.3f}"
-                    + paint(f"{mark}", BOLD if in_text else DIM, colour=colour)
+                    "  "
+                    + paint(
+                        f"{word:<20}",
+                        BOLD if in_text else code,
+                        colour=colour,
+                    )
+                    + paint(
+                        f"{int(row['n_with']):>8}{int(row['df']):>6}"
+                        f"{float(row['lift']):>9.2f}{log_odds:>11.3f}",
+                        DIM if in_text else code,
+                        colour=colour,
+                    )
+                    + paint("  ★ in this text" if in_text else "", BOLD, colour=colour)
                 )
             add(
                 paint(
@@ -972,7 +1150,7 @@ def render(
         add(
             paint(
                 "THIS TEXT'S WORDS AND THE LABELS THEY LEAN TO — the same association, "
-                "read the other way (CS-23)",
+                "read the other way",
                 BOLD,
                 colour=colour,
             )
@@ -985,7 +1163,7 @@ def render(
             )
         )
         for word in text_words:
-            rows = corpus_word_rows(context.corpus_map, word, limit=CORPUS_WORD_LABELS)
+            rows_for_word = corpus_word_rows(context.corpus_map, word, limit=CORPUS_WORD_LABELS)
             df = next(
                 (
                     int(row.get("df", 0))
@@ -994,14 +1172,15 @@ def render(
                 ),
                 0,
             )
-            if not rows:
+            if not rows_for_word:
                 add(
                     f"  {word:<20}{'—':>6}   "
                     + paint("not in the training corpus", DIM, colour=colour)
                 )
                 continue
             leans = " · ".join(
-                f"{str(entry['label'])} {float(entry['log_odds']):+.3f}" for entry in rows
+                f"{label_cell(str(entry['label']))} {float(entry['log_odds']):+.3f}"
+                for entry in rows_for_word
             )
             below = min_df > 0 and df < min_df
             line = f"  {word:<20}{df:>6}   {leans}"
@@ -1009,6 +1188,7 @@ def render(
                 line += paint("  (below the --min-df filter)", DIM, colour=colour)
             add(paint(line, DIM, colour=colour) if below else line)
         add("")
+
     elif context.corpus_map is None:
         add(
             paint(
@@ -1023,7 +1203,8 @@ def render(
     if live is not None:
         add(
             paint(
-                "WHAT THE MODEL SAYS — the decision model's own ranking (live)",
+                "WHAT THE MODEL SAYS — the model's own reading: what does the model say "
+                "this text is about?",
                 BOLD,
                 colour=colour,
             )
@@ -1038,15 +1219,24 @@ def render(
             )
         )
         order = np.argsort(-np.asarray(live, dtype=np.float64))
+        live_max = max((float(live[int(column)]) for column in order[:top_k]), default=0.0)
         for rank, column in enumerate(order[:top_k], start=1):
             label = labels[int(column)]
             value = float(live[int(column)])
             mark = " ★" if label in gold_labels else "  "
-            add(f"   {rank:>2}  {label:<38}{value:>9.4f}{mark}")
+            code = ramp_code(value, live_max, GREEN_RAMP)
+            add(f"   {rank:>2}  {label_cell(label, 38)}{value:>9.4f}{mark}")
         add(paint(f"  the calls: {live_calls} {_cache_line(cache)}", DIM, colour=colour))
         add("")
 
-    add(paint("THE THREE SIDE BY SIDE", BOLD, colour=colour))
+    add(
+        paint(
+            "THE THREE SIDE BY SIDE — the comparison: what the words say, what the model "
+            "says, what is true",
+            BOLD,
+            colour=colour,
+        )
+    )
     add(
         paint(
             f"  {'topic':<38}{'the words say':>15}{'the model says':>16}{'the truth':>10}",
@@ -1078,14 +1268,22 @@ def render(
             else "—",
             "gold" if label in gold_labels else "",
         ]
-        add(f"  {label:<38}{cells[0]:>15}{cells[1]:>16}{cells[2]:>10}")
+        add(f"  {label_cell(label, 38)}{cells[0]:>15}{cells[1]:>16}{cells[2]:>10}")
     add("")
 
     if what_if:
         add(
             paint(
-                "WHAT IF THIS WORD IS REMOVED — CAUSAL (the model is asked again)",
+                "WHAT IF THIS WORD IS REMOVED — the causal one, at word level",
                 BOLD,
+                colour=colour,
+            )
+        )
+        add(
+            paint(
+                "  the model is asked again about the text without the word: this is the "
+                "causal read (the blocks above are not)",
+                DIM,
                 colour=colour,
             )
         )
@@ -1107,16 +1305,30 @@ def render(
                     colour=colour,
                 )
             )
-            for label in tracked:
+            deltas = [
+                float(scores[labels.index(label)]) - float(what_if_baseline[labels.index(label)])
+                for label in tracked
+            ]
+            delta_max = max((abs(delta) for delta in deltas), default=0.0)
+            for label, delta in zip(tracked, deltas, strict=True):
                 column = labels.index(label)
                 intact = float(what_if_baseline[column])
                 without = float(scores[column])
-                delta = without - intact
-                code = RED if delta < -0.01 else (GREEN if delta > 0.01 else DIM)
+                noise = abs(delta) <= NOISE_BAND
+                code = DIM if noise else signed_ramp(delta, delta_max)
                 add(
-                    f"  {label:<38}{intact:>9.4f}{without:>10.4f}"
+                    f"  {label_cell(label, 38)}{intact:>9.4f}{without:>10.4f}"
                     + paint(f"{delta:>10.4f}", code, colour=colour)
+                    + paint("  noise" if noise else "", DIM, colour=colour)
                 )
+            add(
+                paint(
+                    f"  a delta inside the model's noise band (±{NOISE_BAND:g}) is marked "
+                    '"noise": the model twitched, it did not use the word.',
+                    DIM,
+                    colour=colour,
+                )
+            )
             intact_order = int(np.argmax(what_if_baseline))
             without_order = int(np.argmax(scores))
             intact_top = labels[intact_order]
@@ -1208,9 +1420,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the display-time filter: only the words with at least this df (0 = off)",
     )
     parser.add_argument("--no-colour", action="store_true", help="plain text (no ANSI colours)")
+    parser.add_argument(
+        "--colour",
+        action="store_true",
+        help="force the colours on (the default is 'on when stdout is a terminal')",
+    )
     args = parser.parse_args(argv)
 
-    colour = not args.no_colour and sys.stdout.isatty()
+    colour = args.colour or (not args.no_colour and sys.stdout.isatty())
     try:
         config = load_config(args.config)
         results = args.results if args.results is not None else Path(config.paths.results)
