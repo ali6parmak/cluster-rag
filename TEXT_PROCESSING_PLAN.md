@@ -1257,6 +1257,14 @@ port only.
     two verify tools, and both final sweeps reproducing their artifacts field
     for field).
 
+- **CS-32** (the corpus map in the learned pack) → executed 2026-11-01 → the
+  archive's §7.4 (the corpus map in the learned pack) and the track log's
+  §CS-32. The map's feature is worth **+0.0684 [+0.0441, +0.0915]** of
+  pooled micro-F1 over the same pack without it (the pack reaches **0.5502**,
+  past the champion's 0.5479) and the **label-blind** map buys **−0.0509** —
+  the gain is label-driven; but it is a **seen-labels** feature: it costs the
+  unseen bucket **−0.4867** (the empty tables mark the eight held-out labels
+  as impossible).
 - [ ] **CS-33 — the word-class readout: what kind of words affect the label, in
   which way.** The reviewer's part-of-speech question, answered first **without a
   new dependency**. The map's own structure gives every (label, word) pair three

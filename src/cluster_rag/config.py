@@ -1810,6 +1810,47 @@ class UprDecisionFeatureConfig(BaseModel):
         return self
 
 
+class UprCorpusMapFeatureConfig(BaseModel):
+    """The **corpus map**'s per-cell score as a **pack feature** (the track's CS-32).
+
+    The corpus map (CS-23) is the train split's own word↔label association.
+    Its per-cell score becomes one more column of the pack's
+    ``(n_texts, n_labels, n_features)`` cube, so the learned combiner can use
+    the corpus's word statistics beside the embedding and lexical features.
+
+    The pack does **not** build the map: the map is built at the edge (from the
+    train split) and its score matrix is passed in, exactly like the decision
+    probability (CS-13) and the reranker's score (CS-16), so the column is
+    cell-local by construction.
+
+    **The guard.** The pack is fitted on train and the map is built from
+    train, so the fit side's map must be **cross-fit** (each fold's cells
+    scored against a map built from the other folds) — otherwise the feature
+    is optimistically biased exactly where the combiner learns its weight.
+
+    Attributes:
+        enabled: Whether the run computes the feature at all. The default is
+            ``False``, so the earlier runs' artifacts keep their exact
+            content.
+        scoring: Which scoring function of the map's scorer weights the cells
+            (the z-scored "evidence for" sum by default — the arm CS-31's fit
+            side selected).
+        folds: The cross-fit's number of folds (at least 2).
+        label_blind: Whether the run also computes the **label-blind
+            counterpart** (the map built with the labels permuted among the
+            train records) — the yardstick that says how much of the feature's
+            contribution is the map's construction rather than the corpus's
+            word↔label association.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    scoring: str = "sum_zscore_positive"
+    folds: int = Field(default=5, ge=2)
+    label_blind: bool = True
+
+
 class UprBackoffConfig(BaseModel):
     """The **sibling-max backoff** on the UPR pack (the track's CS-11).
 
@@ -1881,6 +1922,8 @@ class UprLearnedConfig(BaseModel):
             track's CS-16; the CS-13 precedent's shape). Off by default.
         decision_feature: The **decision probability** as a pack feature
             (CS-13); off by default.
+        corpus_map_feature: The **corpus map**'s per-cell score as a pack
+            feature (CS-32); off by default.
         seed: The seed of the floors' permutations and of the random-vector
             draw. ``None`` uses the run's seed.
     """
@@ -1902,6 +1945,7 @@ class UprLearnedConfig(BaseModel):
     backoff: UprBackoffConfig = Field(default_factory=UprBackoffConfig)
     decision_feature: UprDecisionFeatureConfig = Field(default_factory=UprDecisionFeatureConfig)
     rerank_feature: UprRerankFeatureConfig = Field(default_factory=UprRerankFeatureConfig)
+    corpus_map_feature: UprCorpusMapFeatureConfig = Field(default_factory=UprCorpusMapFeatureConfig)
     seed: int | None = None
 
     @field_validator("groups")

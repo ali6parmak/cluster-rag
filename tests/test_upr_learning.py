@@ -59,6 +59,7 @@ def _extractor(
     groups: tuple[str, ...] | None = None,
     labels: tuple[UprLabel, ...] = LABELS,
     catalog_available: bool = False,
+    corpus_map_available: bool = False,
     embedder: object | None = None,
 ) -> UprFeatureExtractor:
     """A pack over the fake embedder (no network, no model download)."""
@@ -70,6 +71,7 @@ def _extractor(
         top_k=top_k,
         groups=groups,
         catalog_available=catalog_available,
+        corpus_map_available=corpus_map_available,
     )
 
 
@@ -106,6 +108,35 @@ def test_the_catalog_gated_groups_need_a_catalog() -> None:
         _extractor(groups=("embedding", "label_part"))
     with pytest.raises(ValueError, match="label catalog"):
         _extractor(groups=("label_type",))
+
+
+def test_the_corpus_map_group_needs_the_map() -> None:
+    """The CS-32 group is gated like the catalog ones: no map, no group."""
+    with pytest.raises(ValueError, match="corpus map"):
+        _extractor(groups=("embedding", "corpus_map"))
+    with pytest.raises(ValueError, match="corpus map"):
+        _extractor(groups=("corpus_map",))
+
+
+def test_the_corpus_map_column_carries_the_passed_scores() -> None:
+    """The map's per-cell score becomes the group's own column."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    assert "cmap_score" in extractor.feature_names
+    n_labels = len(LABELS)
+    scores = np.arange(2 * n_labels, dtype=np.float64).reshape(2, n_labels)
+    cube = extractor.extract(["alpha beta", "gamma delta"], None, None, scores)
+    assert cube.shape == (2, n_labels, len(extractor.feature_names))
+    column = extractor.feature_names.index("cmap_score")
+    assert np.allclose(cube[:, :, column], scores.astype(np.float32))
+
+
+def test_the_corpus_map_group_refuses_a_missing_matrix() -> None:
+    """The group needs its matrix: the pack does not build the map."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    with pytest.raises(ValueError, match="corpus map"):
+        extractor.extract(["alpha beta"])
+    with pytest.raises(ValueError, match="corpus map matrix"):
+        extractor.extract(["alpha beta"], None, None, np.zeros((2, 5)))
 
 
 def test_the_catalog_gated_groups_work_with_a_catalog() -> None:

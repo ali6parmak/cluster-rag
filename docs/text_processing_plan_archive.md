@@ -4301,3 +4301,156 @@ line). The verdict and the numbers are the track log's §CS-31.*
     reads the numbers out with the falsification conditions; the paired
     comparison's tool **checks its own rebuild against the runs' artifacts**
     before it reports anything; the gate green.
+
+---
+
+## The corpus map in the learned pack (CS-32) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.4
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-32.*
+
+### 7.4 The lexical methods round (CS-29 … CS-35)
+
+- [x] **CS-32 — the corpus map in the learned pack.** The map's per-cell score
+  becomes a feature of the UPR pack, so the learned combiner can use it beside the
+  embedding and lexical features: a new group in `UPR_FEATURE_GROUP_PREFIXES`
+  (e.g. `cmap_`), gated like the catalog groups (the group is only selectable when
+  the map is available, and a run without it records the gap in its artifact).
+
+  **The guard, and it is not optional.** The pack is fitted on **train**; the map
+  is built from **train**. On the fit side the map has already seen the cells it
+  scores, so the feature is optimistically biased exactly where the combiner
+  learns its weight. The fit side's map must be **cross-fit** — K folds over
+  train, each fold's cells scored against a map built from the other folds — the
+  same shape as the fit-side threshold's cross-fit (CS-9b). The artifact records
+  the folds.
+
+  **The control, which is the point of the change set.** Three floors, as the
+  track already does: the **control** (the same pack with the group removed); the
+  **random-vector floor** (unchanged); and the **label-blind control** (the same
+  pack, but the map is built with the labels **permuted**). If the label-blind
+  map buys the same Δ as the real one, the "gain" is the map's construction, not
+  the corpus's word↔label association — the exact failure mode the track's own
+  control-role floor was built to catch.
+
+  **The measurement and its falsification.** The paired Δ micro-F1 against the
+  control, with its CI, over the texts (the resampling unit), plus the per-bucket
+  breakdown. The unseen bucket is expected flat: the map is empty for the eight
+  held-out labels, so this feature cannot help there. The Δ's CI must exclude
+  zero **and** the label-blind control's Δ must be materially smaller. If the Δ is
+  inside the noise, the corpus's word statistics add nothing that the
+  label-name overlap features (`lex_label_coverage`, `lex_text_coverage`) do not
+  already carry.
+
+  **The cost.** About a day and a half (the pack's group machinery, the
+  cross-fit, the controls, the report block).
+
+  **The pre-registration (2026-11-01, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The feature.** A new **feature group** `corpus_map` in the UPR pack's
+    `UPR_FEATURE_GROUP_PREFIXES` (the prefix `cmap_`), with **one** column:
+    the map's **per-cell score** under the z-scored arm
+    (`sum_zscore_positive` — the arm CS-31's fit side selected). The pack
+    does **not** compute it: the map is built at the edge (from the train
+    split) and its score matrix is passed in, exactly like the decision
+    probability (CS-13) and the reranker's score (CS-16) — so the column is
+    **cell-local** by construction (no document identity, no length).
+  - **The gating.** The group is **gated like the catalog groups**: it can
+    only be selected when the map is available, and a run without it records
+    the gap in its artifact. The map's availability is the config's
+    `upr_analysis.learned.corpus_map_feature.enabled` (off by default, so
+    every earlier run's artifact keeps its exact content) — and the group's
+    selection is refused without it, the same contract the catalog groups
+    have.
+  - **The guard (not optional).** The pack is fitted on **train** and the map
+    is built from **train**, so on the fit side the map has already seen the
+    cells it scores — the feature would be optimistically biased exactly
+    where the combiner learns its weight. The **fit side's map is
+    cross-fit**: **5 folds** over the train split, each fold's cells scored
+    against a map built from the **other** folds (CS-31's
+    `cross_fit_scores`, the same shape as the fit-side threshold's cross-fit
+    in CS-9b). The **evaluated** split is scored with the **full** train map.
+    The artifact records the folds and the cross-fit's seed.
+  - **The three floors, and the control is the point.**
+    1. the **control**: the same pack with the group **removed** — fitted and
+       scored **in the same run**, so the Δ is paired by construction;
+    2. the **random-vector floor**: unchanged (the pack's own);
+    3. the **label-blind control**: the same pack, but the map is built with
+       the **labels permuted** among the train records (the per-label counts
+       are preserved, only the assignment changes — the track's own
+       permutation discipline). If the label-blind map buys the same Δ as the
+       real one, the "gain" is the map's *construction*, not the corpus's
+       word↔label association — the failure mode the track's control-role
+       floor was built to catch.
+  - **The run.** One: `upr-analyze-cmap`, the `analyze-upr` command with the
+    learned arm's groups `embedding + lexical + chunk_profile + corpus_map`
+    (the CS-13 pack's groups plus the new one), the combiner the CS-13 pack's
+    (the gradient-boosted one), `top_k` k=2 on the **val** split. The sweep
+    file `experiments_text_processing/upr_learned_cmap_sweep.py` (the sweep
+    label `upr_learned_cmap`, so the table's section is
+    `## UPR — upr_learned_cmap`); the artifact
+    `results/upr-analyze-cmap/analysis.json`. The label-blind counterpart
+    rides in the **same run** (the CS-13 precedent).
+  - **The measurement and its falsification.** The **paired** Δ micro-F1
+    (the real arm minus the control) with its CI over the texts (the
+    resampling unit), plus the per-bucket breakdown, plus the label-blind
+    arm's Δ beside it. The **unseen bucket is expected flat**: the map's
+    table for the eight held-out labels is empty, so the feature cannot help
+    there. The falsification: the Δ's CI must **exclude zero** *and* the
+    label-blind control's Δ must be **materially smaller**. If the Δ is
+    inside the noise, the corpus's word statistics add **nothing** that the
+    label-name overlap features (`lex_label_coverage`, `lex_text_coverage`)
+    do not already carry — a null, reported as a null. "Materially smaller"
+    is read as: the label-blind Δ's interval includes zero (the blind map
+    buys nothing measurable) while the real Δ's excludes it.
+  - **The exit criteria.** The artifact holds the Δs with their intervals, the
+    folds and the three floors; the table row is auto-appended; the log
+    section reads the numbers out with the falsification conditions; the gate
+    green (ruff over `src`/`tests`/`experiments`, the full pytest suite, the
+    two verify tools, and both final sweeps reproducing their artifacts field
+    for field).
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the run is
+  `upr-analyze-cmap` (the artifact `results/upr-analyze-cmap/analysis.json`),
+  the sweep is `experiments_text_processing/upr_learned_cmap_sweep.py` (the
+  label `upr_learned_cmap`), the log section is `## CS-32 — the corpus map in
+  the learned pack` in `docs/experiments_text_processing.md`, and the numbers
+  are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, `top_k` k=2,
+  the gradient-boosted combiner; the map is built from the **train** split only
+  and the fit side's map is **cross-fit** over 5 folds; no model calls; 93 s).**
+
+  - **The headline.** The pack with the map's feature reaches a pooled
+    **micro-F1 0.5502** — past the **champion's 0.5479** — against the same
+    pack **without** the group (the control) at **0.4818**. The paired
+    difference (the resampling unit the text) is **+0.0684 [+0.0441, +0.0915]**,
+    and the real arm wins on **every** resample.
+  - **The label-blind counterpart.** The blind map's own gain over the same
+    control is **−0.0509 [−0.0678, −0.0340]**: the blind map buys nothing,
+    it costs five points — so the gain is **label-driven**, not the map's
+    construction. (The registered gloss "the blind Δ's interval includes zero"
+    is **not** met — the interval is significantly **negative**; the
+    condition's substance holds and its literal wording is recorded as not
+    met in the log.)
+  - **The unseen bucket is NOT flat.** The map's empty tables give the eight
+    held-out labels the floor, so the column says "impossible" for them and
+    the control's unseen **0.4867** collapses to **0.0000** (the paired
+    difference **−0.4867 [−0.5446, −0.4256]**). The seen buckets give back
+    more: head **+0.1675 [+0.1343, +0.2045]**, torso **+0.0901 [+0.0397,
+    +0.1408]**, tail **+0.0876 [+0.0146, +0.1638]**.
+  - **The falsification does not fire**: the corpus's word statistics add
+    something the label-name overlap features do not already carry — but what
+    they add is a **seen-labels** feature.
+  - **The round's most useful number is in the random-vector floor**: the
+    floor (the embedding sides replaced by noise) reaches **0.5357**, only
+    **0.0145** below the real arm, so on this pack the **embedding geometry
+    contributes 0.0145** and the **map's feature 0.0684** — a corpus statistic
+    worth roughly five times the embedding side.
+  - **The exit criteria.** The artifact holds the Δs with their intervals, the
+    folds and the three floors; the table row is auto-appended; the log
+    section reads the numbers out with the falsification conditions; the gate
+    green.

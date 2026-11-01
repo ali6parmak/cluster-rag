@@ -84,6 +84,7 @@ research record and are **not** indexed here.
 | [CS-29 — the lexical floor: TF-IDF + one-vs-rest](#cs-29--the-lexical-floor-tf-idf--one-vs-rest-2026-11-01) | one `upr-eval-lexical-tfidf-val` run (the **existing** `evaluate` command at the champion's own `top_k` k=2) | the bag of words reaches **micro-F1 0.3845** against the champion's 0.5479 — **neither** pre-registered falsification fires (it is 0.16 below the champion and 0.08 above the "closed" line), and the **tail collapses** (0.0301 against the champion's 0.5287) while the shortlist is on par (R@50 0.7205) and the *ordering* is not (nDCG@5 0.5053) | `results/upr-eval-lexical-tfidf-val/metrics.json` |
 | [CS-30 — the corpus map as a classifier](#cs-30--the-corpus-map-as-a-classifier-2026-11-01) | four `upr-eval-corpus-map-<arm>-val` runs (the map's four pre-registered scoring functions) | the train split's own word↔label weights reach **micro-F1 0.4924** — **90% of the champion** with no embedding and no model call; the map's **measure work buys +0.2226** over a plain word count (0.4924 against 0.2698), and the **cross-fit fit side was the right instrument**: the naive in-fold number would have put the count only 0.0227 behind (the out-of-fold puts it 0.2780 behind) | `results/upr-eval-corpus-map-sum-positive-val/metrics.json` |
 | [CS-31 — the corpus map's estimator, and the lexicon as an artifact](#cs-31--the-corpus-maps-estimator-and-the-lexicon-as-an-artifact-2026-11-01) | six `upr-eval-corpus-map-<arm>-val` runs (CS-30's four arms re-run + two z-scored arms) + the map's re-written artifact | the **z-scored weights move the classifier**: 0.4924 → **0.5243** (a paired **-0.0319 [-0.0526, -0.0120]**, the interval excluding zero) — the better measure is a better **model**, not only a better description; the head-word test's null does not fire (13 of the 60 heads change) but the plan's expected demotion of the single-document words does not happen (the prior shrinks the **common** words, the standard error the rare ones) | `results/upr-eval-corpus-map-sum-zscore-positive-val/metrics.json` |
+| [CS-32 — the corpus map in the learned pack](#cs-32--the-corpus-map-in-the-learned-pack-2026-11-01) | one `upr-analyze-cmap` run (the pack + the map's column, its control and the label-blind counterpart in the same run) | the map's feature is worth **+0.0684 [+0.0441, +0.0915]** of pooled micro-F1 over the same pack without it (the pack reaches **0.5502**, past the champion's 0.5479) and the **label-blind** map buys **−0.0509** — the gain is label-driven; but it is a **seen-labels** feature: it costs the unseen bucket **−0.4867** (the empty tables mark the eight held-out labels as impossible) | `results/upr-analyze-cmap/analysis.json` |
 
 ## Change sets
 
@@ -6547,3 +6548,105 @@ CS-31's two z-scored arms in the pool, the fit side's selection moves to
 `sum_zscore_positive` and the corpus map's number is **0.5243**. CS-30's
 numbers stand as they were measured; this is the same method with a better
 measure in it.
+## CS-32 — the corpus map in the learned pack (2026-11-01)
+
+**The run.** One: `upr-analyze-cmap` — the UPR learned pack (the CS-8d pack's
+groups plus the new `corpus_map` one), the gradient-boosted combiner, `top_k`
+k=2 on the **val** split. The map's per-cell score is a **pack feature** now:
+the group `corpus_map`, one column (`cmap_score`), the z-scored "evidence for"
+score (CS-31's fit-side selection). The artifact is
+`results/upr-analyze-cmap/analysis.json`; the row lands in the **track's** UPR
+table under `## UPR — upr_learned_cmap`. **93 s**, no model calls (the
+embeddings are cache hits).
+
+**The guard, and it was needed.** The pack is fitted on **train** and the map
+is built from **train**, so the fit side's map is **cross-fit**: 5 folds over
+the train split, each fold's cells scored against a map built from the other
+folds (the artifact records the folds, the seed and the scoring function). The
+evaluated split is scored with the full train map. The label-blind counterpart
+rides in the same run: the same pack, but the map is built with the **labels
+permuted** among the train records (the per-label counts preserved, only the
+assignment changed).
+
+### The arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.868 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+| **the pack + the map's feature** | **0.5502** | 0.5081 | 0.897 | 0.6931 | 0.5088 | **0.5566** | 0.0000 | 0.6694 | 0.7979 |
+| the pack **without** the group (the control) | 0.4818 | 0.4652 | 1.000 | 0.5505 | 0.4122 | 0.4531 | **0.4867** | 0.6137 | 0.8909 |
+| the pack with the **label-blind** map | 0.4309 | 0.4277 | 0.926 | 0.5395 | 0.4099 | 0.4665 | 0.0066 | 0.5493 | 0.7741 |
+| the pack's **random-vector floor** | 0.5357 | 0.4787 | 0.882 | 0.6758 | 0.4885 | 0.5223 | 0.0000 | 0.6506 | 0.7729 |
+| the pack's chance floor (the label permutation) | 0.0544 | — | — | — | — | — | — | — | — |
+| the pack's control-role floor | 0.0208 | — | — | — | — | — | — | — | — |
+
+### The falsification, read out
+
+1. **The Δ's CI must exclude zero — it does.** The **paired** difference (the
+   real arm minus the control, the resampling unit the text) is
+   **+0.0684 [+0.0441, +0.0915]**, and the real arm is the better of the two
+   on **every** resample (the share of positive differences: 1.000). The map's
+   feature is worth something the pack did not have.
+2. **The label-blind control's Δ must be materially smaller — it is, by a
+   wide margin.** The blind map's own gain over the same control is
+   **−0.0509 [−0.0678, −0.0340]**: the label-blind map buys **nothing**; it
+   *costs* 5 points. So the gain is **label-driven**, not the map's
+   construction — the exact failure mode the track's control-role floor was
+   built to catch, caught here by the map's own counterpart.
+   *One honest note on the registered wording:* the pre-registration glossed
+   the second condition as "the label-blind Δ's interval includes zero". The
+   interval does **not** include zero — it is significantly **negative**. That
+   is a stronger statement in the direction the condition cares about (the
+   blind map certainly does not reproduce the gain; it destroys it), and the
+   reason is visible in the arms: the gradient-boosted combiner *fits* the
+   noise feature (a spurious split on a feature that carries no label
+   information), where a linear model would have given it a weight of about
+   zero. The condition's **substance** holds; its **literal gloss** does not,
+   and it is recorded here rather than smoothed over.
+3. **The unseen bucket was expected flat — it is not.** The pre-registration
+   said the map's table for the eight held-out labels is empty, "so this
+   feature cannot help there". It cannot help there, and it **hurts**:
+   the paired per-bucket difference on the unseen view is **−0.4867
+   [−0.5446, −0.4256]** — the control's unseen micro-F1 **0.4867** (the pack's
+   own features can suggest the held-out labels) collapses to **0.0000** with
+   the map's column in the pack. The mechanism is exact: the map's empty
+   tables give the eight labels the **floor**, so the column says "impossible"
+   for them and the combiner never suggests them again. The pooled **+0.0684**
+   is *after* that loss: the seen buckets give back more (head **+0.1675
+   [+0.1343, +0.2045]**, torso **+0.0901 [+0.0397, +0.1408]**, tail **+0.0876
+   [+0.0146, +0.1638]** — all three intervals exclude zero).
+4. **So the falsification does not fire**: the corpus's word statistics add
+   something the label-name overlap features do **not** already carry. But the
+   honest reading of *what* they add is narrow: they are a **seen-labels**
+   feature. They buy the seen buckets +0.07…+0.17 and they cost the unseen
+   bucket 0.49 — and the two facts are the same fact seen from two sides.
+
+### The feature's own diagnostics, and the round's most useful number
+
+The map's column is the **ninth** of the pack's twenty features by AUC (0.7275)
+but it has by far the **largest separation** (7.535; the next feature's is
+1.589): the gold cells' mean score is **2.978** against the background's
+**−0.083**. Its length correlation is 0.038 — it is not a length proxy ✓
+(the pack's chunk-profile columns run up to 0.605).
+
+**And the round's most useful number is in the random-vector floor.** The
+floor (the pack's embedding sides replaced by seeded random vectors, the
+lexical, chunk-profile and map features real) reaches **0.5357** — only
+**0.0145** below the real arm (0.5502). So on this pack the **embedding
+geometry contributes 0.0145** and the **map's feature contributes 0.0684**:
+a corpus statistic is worth roughly **five times** the embedding side. That
+is a fact about *this* pack (a lexical corpus, a short recommendation per
+text), not a general claim — but it is the kind of fact PLAN's Phase 6 and
+Phase 9 priorities should be read against.
+
+### What this change set does not say
+
+Nothing about the **decision model** (CS-13's pack + the decision probability
+is still the track's best UPR number at 0.5965, and the two features work on
+**opposite buckets**: the decision feature *finds* the unseen labels (0.5697)
+and the map's feature *hides* them (0.0000) — putting both in one pack is the
+obvious next question, and it is **not** measured here); nothing about
+`test`; nothing about a **tuned** map (the arm is CS-31's fit-side selection
+and the folds are the plan's five); and nothing about the pack's **shortlist**
+quality, which the map's column *lowers* (R@50 0.7979 against the control's
+0.8909): a sharp per-cell score is not a good retriever.

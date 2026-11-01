@@ -194,6 +194,11 @@ def score_upr_learned_arms(
     decision_eval: np.ndarray | None = None,
     rerank_train: np.ndarray | None = None,
     rerank_eval: np.ndarray | None = None,
+    corpus_map_train: np.ndarray | None = None,
+    corpus_map_eval: np.ndarray | None = None,
+    corpus_map_train_blind: np.ndarray | None = None,
+    corpus_map_eval_blind: np.ndarray | None = None,
+    control_extractor: UprFeatureExtractor | None = None,
 ) -> UprLearningResult:
     """Fit the learned arm on train and score it (and its floors) on val.
 
@@ -229,13 +234,28 @@ def score_upr_learned_arms(
             cells (the ``rerank`` group's column; the CS-16 feature).
         rerank_eval: The reranker's score matrix for the evaluated split's
             cells.
+        corpus_map_train: The corpus map's per-cell score matrix for the
+            **fit side**'s cells (the ``corpus_map`` group's column; the
+            CS-32 feature). The fit side's map is **cross-fit**, so the
+            column is not optimistically biased where the combiner learns
+            its weight.
+        corpus_map_eval: The corpus map's per-cell score matrix for the
+            evaluated split's cells (the full train map).
+        corpus_map_train_blind: The **label-blind counterpart**'s fit-side
+            score matrix (the map built with the labels permuted among the
+            train records).
+        corpus_map_eval_blind: The label-blind counterpart's evaluated-split
+            score matrix.
+        control_extractor: The **control**'s extractor (the same pack without
+            the ``corpus_map`` group). Fitted and scored in the same run, so
+            the difference against the real arm is paired by construction.
 
     Returns:
         The :class:`UprLearningResult` (the arms' score matrices and the
         artifact's ``learned`` block).
     """
-    train_features = extractor.extract(train_texts, decision_train, rerank_train)
-    eval_features = extractor.extract(eval_texts, decision_eval, rerank_eval)
+    train_features = extractor.extract(train_texts, decision_train, rerank_train, corpus_map_train)
+    eval_features = extractor.extract(eval_texts, decision_eval, rerank_eval, corpus_map_eval)
     train_rows, train_labels = _fit_rows(train_features, train_gold)
     eval_rows = eval_features.reshape(-1, eval_features.shape[-1])
     weights = _weights(train_labels, control_weight)
@@ -247,6 +267,53 @@ def score_upr_learned_arms(
     scores: dict[str, np.ndarray] = {arm_name: arm_scores}
     rng = np.random.default_rng(seed)
     floors: dict[str, Any] = {}
+    corpus_map_meta: dict[str, Any] = {}
+
+    # -- the corpus map's control and label-blind counterpart (the track's CS-32) --
+    # The control is the same pack without the map's group, fitted and scored
+    # here, so the difference against the real arm is paired by construction.
+    if control_extractor is not None:
+        control_train = control_extractor.extract(train_texts, decision_train, rerank_train, None)
+        control_eval = control_extractor.extract(eval_texts, decision_eval, rerank_eval, None)
+        control_rows, control_labels = _fit_rows(control_train, train_gold)
+        control_combiner = combiner_factory().fit(control_rows, control_labels, weights)
+        control_scores = np.asarray(
+            control_combiner.score(control_eval.reshape(-1, control_eval.shape[-1])),
+            dtype=np.float64,
+        ).reshape(control_eval.shape[0], control_eval.shape[1])
+        scores[f"{arm_name}_control"] = control_scores
+        corpus_map_meta["control"] = {
+            "arm": f"{arm_name}_control",
+            "note": (
+                "the same pack without the corpus_map group, fitted and scored in "
+                "the same run: the difference against the real arm is paired by "
+                "construction"
+            ),
+        }
+    if corpus_map_train_blind is not None and corpus_map_eval_blind is not None:
+        blind_train = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train_blind
+        )
+        blind_eval = extractor.extract(
+            eval_texts, decision_eval, rerank_eval, corpus_map_eval_blind
+        )
+        blind_rows, blind_labels = _fit_rows(blind_train, train_gold)
+        blind_combiner = combiner_factory().fit(blind_rows, blind_labels, weights)
+        blind_scores = np.asarray(
+            blind_combiner.score(blind_eval.reshape(-1, blind_eval.shape[-1])),
+            dtype=np.float64,
+        ).reshape(blind_eval.shape[0], blind_eval.shape[1])
+        scores[f"{arm_name}_label_blind"] = blind_scores
+        corpus_map_meta["label_blind"] = {
+            "arm": f"{arm_name}_label_blind",
+            "note": (
+                "the same pack, but the corpus map is built with the labels "
+                "permuted among the train records (the per-label counts are "
+                "preserved, only the assignment changes): it says how much of the "
+                "feature's contribution is the map's construction and not the "
+                "corpus's word<->label association"
+            ),
+        }
 
     # -- the chance floor (the label-permutation floor) --
     chance_draws: list[dict[str, Any]] = []
@@ -301,8 +368,12 @@ def score_upr_learned_arms(
 
     # -- the random-vector floor --
     if random_extractor is not None:
-        random_train = random_extractor.extract(train_texts, decision_train, rerank_train)
-        random_eval = random_extractor.extract(eval_texts, decision_eval, rerank_eval)
+        random_train = random_extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train
+        )
+        random_eval = random_extractor.extract(
+            eval_texts, decision_eval, rerank_eval, corpus_map_eval
+        )
         random_rows, random_labels = _fit_rows(random_train, train_gold)
         random_eval_rows = random_eval.reshape(-1, random_eval.shape[-1])
         random_combiner = combiner_factory().fit(random_rows, random_labels, weights)
@@ -378,6 +449,11 @@ def score_upr_learned_arms(
         "permutation_resamples": int(permutation_resamples),
         "seed": int(seed),
     }
+    if corpus_map_meta:
+        # The corpus map's block (the track's CS-32) — only when the run
+        # computed the feature, so every earlier run's artifact keeps its
+        # exact content.
+        meta["corpus_map"] = corpus_map_meta
     # The reporting blocks (CS-8f): the calibration and the decision-rule
     # comparison of the arm. The threshold is chosen on the fit side, so the
     # fit side's scores are needed here.

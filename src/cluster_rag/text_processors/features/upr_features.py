@@ -92,6 +92,7 @@ UPR_FEATURE_GROUP_PREFIXES: dict[str, tuple[str, ...]] = {
     "chunk_profile": ("cprof_",),
     "decision": ("dec_",),
     "rerank": ("rerank_",),
+    "corpus_map": ("cmap_",),
 }
 
 # The group names, in the canonical order.
@@ -99,6 +100,11 @@ UPR_FEATURE_GROUPS: tuple[str, ...] = tuple(UPR_FEATURE_GROUP_PREFIXES)
 
 # The groups that need a label catalog.
 CATALOG_GROUPS: tuple[str, ...] = ("label_part", "label_type")
+
+# The groups that need the **corpus map** (the track's CS-32): the map is
+# built at the edge from the train split and its per-cell score is passed in,
+# so the group can only be selected when the map is available.
+CORPUS_MAP_GROUPS: tuple[str, ...] = ("corpus_map",)
 
 # The **default** selection: the two catalog-free groups. The CS-8d run uses
 # exactly these (the repo has no label catalog), and the artifact records the
@@ -125,6 +131,14 @@ DECISION_FEATURE_NAME = "dec_probability"
 # it -- the reranker is a client and the cells are scored at the edge -- so the
 # column is **cell-local** by construction.
 RERANK_FEATURE_NAME = "rerank_score"
+
+# The **corpus map** group's column (the track's CS-32): the corpus map's
+# per-cell score for the (text, label) cell. The pack does not compute it
+# either -- the map is built at the edge from the train split (and the fit
+# side's map is **cross-fit**, so the column is not optimistically biased
+# where the combiner learns its weight) -- so the column is cell-local by
+# construction.
+CORPUS_MAP_FEATURE_NAME = "cmap_score"
 
 # The chunk profile's feature names (the CS-8e group): the ranked cross-unit
 # match profile at the two granularities and the alignment kinds.
@@ -276,6 +290,7 @@ class UprFeatureExtractor:
         top_k: int = DEFAULT_UPR_TOP_K,
         groups: Sequence[str] | None = None,
         catalog_available: bool = False,
+        corpus_map_available: bool = False,
         profile_units: ProfileUnits | None = None,
         profile_top_k: int = 3,
         stopwords: frozenset[str] = DEFAULT_STOPWORDS,
@@ -294,6 +309,7 @@ class UprFeatureExtractor:
         self.top_k = top_k
         self.stopwords = frozenset(stopwords)
         self.catalog_available = bool(catalog_available)
+        self.corpus_map_available = bool(corpus_map_available)
         self.profile_units = profile_units
         self.profile_top_k = profile_top_k
         self.groups = self._checked_groups(groups)
@@ -307,6 +323,13 @@ class UprFeatureExtractor:
         if "chunk_profile" in self.groups and profile_units is None:
             raise ValueError(
                 "the chunk_profile group needs the profile's unit splitters (profile_units=...)"
+            )
+        map_gated = [group for group in CORPUS_MAP_GROUPS if group in self.groups]
+        if map_gated and not self.corpus_map_available:
+            raise ValueError(
+                f"the feature group(s) {map_gated} need the corpus map (the train "
+                "split's own word<->label association, built at the edge): the run "
+                "has none, so the pack runs without them"
             )
         self._canonical_names = self._canonical_feature_names()
         self._selected = tuple(
@@ -361,6 +384,8 @@ class UprFeatureExtractor:
             names.append(DECISION_FEATURE_NAME)
         if "rerank" in self.groups:
             names.append(RERANK_FEATURE_NAME)
+        if "corpus_map" in self.groups:
+            names.append(CORPUS_MAP_FEATURE_NAME)
         if "chunk_profile" in self.groups:
             names.extend(self._profile_feature_names())
         return tuple(names)
@@ -533,6 +558,7 @@ class UprFeatureExtractor:
         texts: Sequence[str],
         decision_scores: np.ndarray | None = None,
         rerank_scores: np.ndarray | None = None,
+        corpus_map_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         """The feature cube of the texts, shape ``(n_texts, n_labels, n_features)``.
 
@@ -546,15 +572,20 @@ class UprFeatureExtractor:
                 cells (the ``decision`` group's column; the CS-13 feature).
             rerank_scores: The reranker's score matrix for the cells (the
                 ``rerank`` group's column; the CS-16 feature).
+            corpus_map_scores: The corpus map's per-cell score matrix (the
+                ``corpus_map`` group's column; the CS-32 feature).
         """
         selected = np.asarray(self._selected, dtype=np.int64)
-        return self.extract_all(texts, decision_scores, rerank_scores)[:, :, selected]
+        return self.extract_all(texts, decision_scores, rerank_scores, corpus_map_scores)[
+            :, :, selected
+        ]
 
     def extract_all(
         self,
         texts: Sequence[str],
         decision_scores: np.ndarray | None = None,
         rerank_scores: np.ndarray | None = None,
+        corpus_map_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         """The full feature cube (every canonical column).
 
@@ -572,13 +603,17 @@ class UprFeatureExtractor:
             rerank_scores: The reranker's score matrix for the cells (the
                 ``rerank`` group's column; the CS-16 feature). Required when
                 the group is selected.
+            corpus_map_scores: The corpus map's per-cell score matrix (the
+                ``corpus_map`` group's column; the CS-32 feature). Required
+                when the group is selected.
 
         Returns:
             The float32 feature cube, one row per (text, label) cell.
 
         Raises:
-            ValueError: If the ``decision`` or the ``rerank`` group is
-                selected and its matrix is missing or has the wrong shape.
+            ValueError: If the ``decision``, the ``rerank`` or the
+                ``corpus_map`` group is selected and its matrix is missing or
+                has the wrong shape.
         """
         items = list(texts)
         n_texts = len(items)
@@ -619,6 +654,25 @@ class UprFeatureExtractor:
                 raise ValueError(
                     f"the rerank matrix must have shape {(n_texts, n_labels)}, "
                     f"got {rerank_values.shape}"
+                )
+
+        map_index = (
+            self._canonical_names.index(CORPUS_MAP_FEATURE_NAME)
+            if "corpus_map" in self.groups
+            else None
+        )
+        if map_index is not None:
+            if corpus_map_scores is None:
+                raise ValueError(
+                    "the 'corpus_map' feature group needs the corpus map's "
+                    "per-cell score matrix (the caller builds the map at the "
+                    "edge and scores the cells)"
+                )
+            map_values = np.asarray(corpus_map_scores, dtype=np.float32)
+            if map_values.shape != (n_texts, n_labels):
+                raise ValueError(
+                    f"the corpus map matrix must have shape {(n_texts, n_labels)}, "
+                    f"got {map_values.shape}"
                 )
 
         text_vectors = np.asarray(self.embedders.text.encode(items, "query"), dtype=np.float32)
@@ -702,6 +756,9 @@ class UprFeatureExtractor:
             # 8. the reranker's score (the CS-16 group)
             if rerank_index is not None:
                 values[:, rerank_index] = rerank_values[position]
+            # 9. the corpus map's per-cell score (the CS-32 group)
+            if map_index is not None:
+                values[:, map_index] = map_values[position]
         return matrix
 
     def _profile_sides(

@@ -52,7 +52,9 @@ from cluster_rag.eval.buckets import assign_label_buckets, labels_by_bucket
 from cluster_rag.eval.multilabel import (
     apply_decision_rule,
     decision_f1_metrics,
+    paired_counts_bootstrap,
     paired_metric_bootstrap,
+    per_row_f1_counts,
     ranking_metrics,
 )
 from cluster_rag.eval.report import build_label_report
@@ -110,6 +112,12 @@ from cluster_rag.text_processors.features.upr_features import (
     UprFeatureEmbedders,
     UprFeatureExtractor,
     UprLabel,
+)
+from cluster_rag.text_processors.lexical.corpus_map_score import (
+    cross_fit_scores,
+)
+from cluster_rag.text_processors.lexical.corpus_map_score import (
+    score_cells as map_score_cells,
 )
 from cluster_rag.text_processors.rerank.upr_rerank import (
     ORDER_TEXT_FIRST,
@@ -2740,6 +2748,7 @@ def _upr_learned_arms(
         top_k=learned.top_k,
         groups=learned.groups,
         catalog_available=bool(catalog),
+        corpus_map_available=learned.corpus_map_feature.enabled,
         profile_units=profile_units,
         profile_top_k=learned.profile_top_k,
     )
@@ -2767,6 +2776,7 @@ def _upr_learned_arms(
             top_k=learned.top_k,
             groups=learned.groups,
             catalog_available=bool(catalog),
+            corpus_map_available=learned.corpus_map_feature.enabled,
             profile_units=profile_units,
             profile_top_k=learned.profile_top_k,
         )
@@ -2779,6 +2789,36 @@ def _upr_learned_arms(
     rerank_train, rerank_eval = _upr_rerank_feature(
         config, setup, view, learned, decision_train, decision_eval
     )
+    # The corpus map's feature (the track's CS-32) and its **control** (the
+    # same pack without the group) and its **label-blind counterpart**.
+    corpus_map_block_data: dict[str, Any] = {}
+    corpus_map_train = corpus_map_eval = None
+    corpus_map_train_blind = corpus_map_eval_blind = None
+    control_extractor = None
+    if learned.corpus_map_feature.enabled:
+        corpus_map_block_data = _upr_corpus_map_feature(config, setup, view, learned)
+        corpus_map_train = corpus_map_block_data["train"]
+        corpus_map_eval = corpus_map_block_data["eval"]
+        corpus_map_train_blind = corpus_map_block_data["train_blind"]
+        corpus_map_eval_blind = corpus_map_block_data["eval_blind"]
+        control_groups = tuple(group for group in learned.groups if group != "corpus_map")
+        control_extractor = UprFeatureExtractor(
+            UprFeatureEmbedders(
+                text=text_embedder,
+                chunks=chunk_embedder,
+                labels=label_embedder,
+                text_sentences=sentence_embedder,
+                text_ngrams=ngram_embedder,
+            ),
+            labels=labels,
+            text_chunker=chunker,
+            top_k=learned.top_k,
+            groups=control_groups,
+            catalog_available=bool(catalog),
+            corpus_map_available=False,
+            profile_units=profile_units,
+            profile_top_k=learned.profile_top_k,
+        )
     result = score_upr_learned_arms(
         train_texts=train_texts,
         train_gold=train_gold,
@@ -2801,6 +2841,11 @@ def _upr_learned_arms(
         rerank_train=rerank_train,
         rerank_eval=rerank_eval,
         decision_eval=decision_eval,
+        corpus_map_train=corpus_map_train,
+        corpus_map_eval=corpus_map_eval,
+        corpus_map_train_blind=corpus_map_train_blind,
+        corpus_map_eval_blind=corpus_map_eval_blind,
+        control_extractor=control_extractor,
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
     arms: dict[str, dict[str, Any]] = {}
@@ -2839,10 +2884,227 @@ def _upr_learned_arms(
             "here."
         ),
     }
+    if corpus_map_block_data:
+        # The corpus map's comparison (the track's CS-32): the real arm minus
+        # the control (the same pack without the group) and minus the
+        # label-blind counterpart, paired over the texts.
+        arm = result.meta["arm"]
+        control_arm = f"{arm}_control"
+        blind_arm = f"{arm}_label_blind"
+        real_scores = np.asarray(result.scores[arm], dtype=np.float64)
+        meta["corpus_map"] = {
+            **dict(result.meta.get("corpus_map") or {}),
+            "provenance": corpus_map_block_data["meta"],
+            "paired_vs_control": (
+                _upr_paired(config, view, real_scores, result.scores[control_arm])
+                if control_arm in result.scores
+                else None
+            ),
+            "paired_vs_label_blind": (
+                _upr_paired(config, view, real_scores, result.scores[blind_arm])
+                if blind_arm in result.scores
+                else None
+            ),
+            "paired_label_blind_vs_control": (
+                # What the BLIND map buys over the same control: the falsification's
+                # second condition (it must be materially smaller than the real
+                # map's gain).
+                _upr_paired(config, view, result.scores[blind_arm], result.scores[control_arm])
+                if blind_arm in result.scores and control_arm in result.scores
+                else None
+            ),
+            "per_bucket_vs_control": (
+                _upr_paired_by_bucket(config, view, real_scores, result.scores[control_arm])
+                if control_arm in result.scores
+                else None
+            ),
+            "per_bucket_vs_label_blind": (
+                _upr_paired_by_bucket(config, view, real_scores, result.scores[blind_arm])
+                if blind_arm in result.scores
+                else None
+            ),
+        }
     backoff_meta = _upr_backoff_arms(config, setup, view, learned, result, arms, labels)
     if backoff_meta:
         meta["backoff"] = backoff_meta
     return arms, meta
+
+
+def _upr_corpus_map_feature(
+    config: AppConfig,
+    setup: EvalSetup,
+    view: UprView,
+    learned: Any,
+) -> dict[str, Any]:
+    """The corpus map's per-cell score matrices (the track's CS-32).
+
+    The map is built from the **train** split only. The evaluated split is
+    scored with the **full** train map; the **fit side** is scored with the
+    **cross-fit** map (each fold's cells scored against a map built from the
+    other folds), so the feature is not optimistically biased exactly where
+    the combiner learns its weight.
+
+    The **label-blind counterpart** rides along: the same map built with the
+    labels permuted among the train records (the per-label counts are
+    preserved, only the assignment changes).
+
+    Returns:
+        The block: the four matrices (``train``/``eval`` for the real map and
+        for the label-blind one) and the provenance (the folds, the seed, the
+        scoring function and the map's own shape).
+    """
+    feature = learned.corpus_map_feature
+    train_texts = [record.text for record in setup.train_records]
+    train_label_sets = [record.labels for record in setup.train_records]
+    eval_texts = [record.text for record in setup.records]
+    labels = list(setup.labels)
+    seed = learned.seed if learned.seed is not None else config.seed
+
+    corpus_map = build_corpus_map(train_texts, train_label_sets, labels)
+    eval_scores = map_score_cells(eval_texts, corpus_map, scoring=feature.scoring)
+    crossed = cross_fit_scores(
+        train_texts,
+        train_label_sets,
+        labels,
+        scorings=(feature.scoring,),
+        folds=feature.folds,
+        seed=seed,
+    )
+    train_scores = crossed[feature.scoring]
+
+    blind_sets = _permuted_label_sets(train_label_sets, seed)
+    blind_map = build_corpus_map(train_texts, blind_sets, labels)
+    blind_eval = map_score_cells(eval_texts, blind_map, scoring=feature.scoring)
+    blind_crossed = cross_fit_scores(
+        train_texts,
+        blind_sets,
+        labels,
+        scorings=(feature.scoring,),
+        folds=feature.folds,
+        seed=seed,
+    )
+    blind_train = blind_crossed[feature.scoring]
+    return {
+        "train": train_scores,
+        "eval": eval_scores,
+        "train_blind": blind_train,
+        "eval_blind": blind_eval,
+        "meta": {
+            "scoring": feature.scoring,
+            "folds": int(feature.folds),
+            "seed": int(seed),
+            "side": "the map is built from the train split only",
+            "fit_side": (
+                "cross-fit: each fold's cells are scored against a map built from "
+                "the other folds, so the feature is not optimistically biased "
+                "where the combiner learns its weight"
+            ),
+            "label_blind": (
+                "the counterpart's map is built with the labels permuted among the "
+                "train records (the per-label counts are preserved, only the "
+                "assignment changes)"
+            ),
+            "map": {
+                "n_texts": corpus_map.n_texts,
+                "n_labels": len(corpus_map.labels),
+                "n_words": corpus_map.n_words,
+                "n_pairs": corpus_map.n_pairs,
+                "labels_with_examples": sum(
+                    1 for label in corpus_map.labels if corpus_map.label_counts.get(label)
+                ),
+            },
+        },
+    }
+
+
+def _permuted_label_sets(label_sets: Sequence[Sequence[str]], seed: int) -> list[list[str]]:
+    """The train records' label sets permuted among the records.
+
+    The per-label counts are preserved (only the assignment changes), so the
+    map's *construction* is the same and only the word↔label association is
+    destroyed — the track's own label-permutation discipline.
+
+    Args:
+        label_sets: Each train record's labels.
+        seed: The permutation's seed.
+
+    Returns:
+        The permuted label sets, in the records' own order.
+    """
+    order = np.random.default_rng(seed).permutation(len(label_sets))
+    return [list(label_sets[int(index)]) for index in order]
+
+
+def _upr_paired_by_bucket(
+    config: AppConfig,
+    view: UprView,
+    left: np.ndarray,
+    right: np.ndarray,
+) -> dict[str, Any]:
+    """The paired difference per **label bucket** (the harness's own view).
+
+    The pooled interval can hide a bucket (the hypothesis is often about the
+    tail), so every bucket gets its own paired interval. The convention is the
+    harness's: the decision is taken on the **whole** matrix (the global
+    top-k) and the bucket's columns are then masked — the same view the
+    arms' own per-bucket blocks use — so the numbers here and the numbers
+    there are the same measurement.
+
+    Args:
+        config: The resolved app config (the decision rule and the bootstrap).
+        view: The model-independent view of the split.
+        left: The left scorer's score matrix.
+        right: The right scorer's score matrix.
+
+    Returns:
+        One block per bucket: the interval, the counts and the point
+        estimates.
+    """
+    decision = eval_decision(config)
+    bootstrap = config.upr_analysis.bootstrap
+    seed = bootstrap.seed if bootstrap.seed is not None else config.seed
+    gold = np.asarray(view.gold, dtype=bool)
+    left_matrix = np.asarray(left, dtype=np.float64)
+    right_matrix = np.asarray(right, dtype=np.float64)
+    left_decision = apply_decision_rule(
+        left_matrix,
+        rule=decision["rule"],
+        k=decision.get("k"),
+        threshold=decision.get("threshold"),
+        min_score=decision.get("min_score"),
+    )
+    right_decision = apply_decision_rule(
+        right_matrix,
+        rule=decision["rule"],
+        k=decision.get("k"),
+        threshold=decision.get("threshold"),
+        min_score=decision.get("min_score"),
+    )
+    out: dict[str, Any] = {}
+    for bucket, mask in _upr_bucket_masks(view).items():
+        columns = np.flatnonzero(mask)
+        if columns.size == 0:
+            continue
+        rows = np.flatnonzero(gold[:, columns].any(axis=1))
+        if rows.size < 2:
+            continue
+        left_counts = np.stack(
+            per_row_f1_counts(left_decision[rows][:, columns], gold[rows][:, columns]), axis=1
+        )
+        right_counts = np.stack(
+            per_row_f1_counts(right_decision[rows][:, columns], gold[rows][:, columns]), axis=1
+        )
+        out[bucket] = {
+            "n_texts": int(rows.size),
+            "n_labels": int(columns.size),
+            "micro_f1": paired_counts_bootstrap(
+                left_counts,
+                right_counts,
+                resamples=bootstrap.resamples,
+                seed=seed,
+            ),
+        }
+    return out
 
 
 def _upr_decision_feature(
