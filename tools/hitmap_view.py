@@ -1016,23 +1016,47 @@ def render(
             colour=colour,
         )
     )
-    add(
-        paint(
-            f"  {'word':<20}{'coverage':>11}   {'bar':<28}",
-            DIM,
-            colour=colour,
-        )
+
+    def _topic_side(label: str, heading: str, *, header: bool = False) -> None:
+        """One label's name words and how much of each the text has.
+
+        The block asks the same question of every label it shows, so the
+        helper is the block itself: the focus topic first, then the other gold
+        labels of the text (CS-28).
+        """
+        add(paint(heading, DIM, colour=colour))
+        if header:
+            add(
+                paint(
+                    f"  {'word':<20}{'coverage':>11}   {'bar':<28}",
+                    DIM,
+                    colour=colour,
+                )
+            )
+        contributions = list(label_word_contributions(text, label))
+        maximum = max((item.coverage for item in contributions), default=0.0)
+        for item in contributions:
+            code = ramp_code(item.coverage, maximum, GREEN_RAMP)
+            add(
+                "    "
+                + paint(f"{item.word:<20}", CYAN, colour=colour)
+                + f"{item.coverage:>11.4f}   "
+                + paint(f"{_bar(item.coverage, maximum):<28}", code, colour=colour)
+            )
+
+    _topic_side(
+        focus,
+        f'  the focus topic "{focus}" — the feature\'s value {cell_coverage(text, focus):.4f}',
+        header=True,
     )
-    topic_rows = list(label_word_contributions(text, focus))
-    topic_maximum = max((item.coverage for item in topic_rows), default=0.0)
-    for item in topic_rows:
-        code = ramp_code(item.coverage, topic_maximum, GREEN_RAMP)
-        add(
-            "  "
-            + paint(f"{item.word:<20}", CYAN, colour=colour)
-            + f"{item.coverage:>11.4f}   "
-            + paint(f"{_bar(item.coverage, topic_maximum):<28}", code, colour=colour)
-        )
+    other_gold = [label for label in gold_labels if label != focus]
+    if other_gold:
+        add(paint("  the other gold labels of this text:", DIM, colour=colour))
+        for label in other_gold:
+            _topic_side(
+                label,
+                f'  "{label}" — the feature\'s value {cell_coverage(text, label):.4f}',
+            )
     add(
         paint(
             "  the topic's name words are in cyan; the bar's shade is the coverage's size "
@@ -1110,41 +1134,52 @@ def render(
                 colour=colour,
             )
         )
-        topic_rows_all = corpus_topic_rows(context.corpus_map, focus)
-        topic_rows = corpus_topic_rows(context.corpus_map, focus, min_df=min_df)
-        if not topic_rows_all:
-            add(
-                paint(
-                    f"  {focus!r} has no train example: its table is empty by construction",
-                    DIM,
-                    colour=colour,
+
+        def _corpus_side(label: str, heading: str, *, header: bool = False) -> None:
+            """One label's corpus table: the words that go with it in the corpus.
+
+            The block asks the same question of every label it shows, so the
+            helper is the block itself: the focus topic first, then the other
+            gold labels of the text (CS-28).
+            """
+            add(paint(heading, DIM, colour=colour))
+            rows_all = corpus_topic_rows(context.corpus_map, label)
+            rows = corpus_topic_rows(context.corpus_map, label, min_df=min_df)
+            if not rows_all:
+                add(
+                    paint(
+                        f"    {label!r} has no train example: its table is empty by construction",
+                        DIM,
+                        colour=colour,
+                    )
                 )
-            )
-        elif not topic_rows:
-            add(
-                paint(
-                    f"  the --min-df {min_df} filter hides every row of this topic's table "
-                    f"({len(topic_rows_all)} rows in the artifact)",
-                    DIM,
-                    colour=colour,
+                return
+            if not rows:
+                add(
+                    paint(
+                        f"    the --min-df {min_df} filter hides every row of this label's "
+                        f"table ({len(rows_all)} rows in the artifact)",
+                        DIM,
+                        colour=colour,
+                    )
                 )
-            )
-        else:
-            add(
-                paint(
-                    f"  {'word':<20}{'n_with':>8}{'df':>6}{'lift':>9}{'log-odds':>11}",
-                    DIM,
-                    colour=colour,
+                return
+            if header:
+                add(
+                    paint(
+                        f"    {'word':<20}{'n_with':>8}{'df':>6}{'lift':>9}{'log-odds':>11}",
+                        DIM,
+                        colour=colour,
+                    )
                 )
-            )
-            log_odds_max = max((abs(float(row["log_odds"])) for row in topic_rows), default=0.0)
-            for row in topic_rows[:top_k]:
+            log_odds_max = max((abs(float(row["log_odds"])) for row in rows), default=0.0)
+            for row in rows[:top_k]:
                 word = str(row["word"])
                 in_text = word in text_words
                 log_odds = float(row["log_odds"])
                 code = signed_ramp(log_odds, log_odds_max)
                 add(
-                    "  "
+                    "    "
                     + paint(
                         f"{word:<20}",
                         # the word that is in this text is bold on top of its
@@ -1160,23 +1195,34 @@ def render(
                     )
                     + paint("  ★ in this text" if in_text else "", BOLD, colour=colour)
                 )
+
+        _corpus_side(
+            focus,
+            f'  the focus topic "{focus}":',
+            header=True,
+        )
+        corpus_other_gold = [label for label in gold_labels if label != focus]
+        if corpus_other_gold:
+            add(paint("  the other gold labels of this text:", DIM, colour=colour))
+            for label in corpus_other_gold:
+                _corpus_side(label, f'  "{label}":')
+        add(
+            paint(
+                "  the rows are the corpus's own (by log-odds); the counts sit next to the "
+                "number, so the noise is visible.",
+                DIM,
+                colour=colour,
+            )
+        )
+        if min_df > 0:
             add(
                 paint(
-                    "  the rows are the corpus's own (by log-odds); the counts sit next to the "
-                    "number, so the noise is visible.",
+                    f"  the --min-df {min_df} filter is display-time: the artifact keeps "
+                    "every pair.",
                     DIM,
                     colour=colour,
                 )
             )
-            if min_df > 0:
-                add(
-                    paint(
-                        f"  the --min-df {min_df} filter is display-time: the artifact keeps "
-                        "every pair.",
-                        DIM,
-                        colour=colour,
-                    )
-                )
         add("")
         add(
             paint(

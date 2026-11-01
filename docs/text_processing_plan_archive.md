@@ -3627,3 +3627,86 @@ line). The verdict and the numbers are the track log's §CS-27.*
     ramp's (a test on the coloured output); and the gate is green (703 tests,
     ruff clean, the two verify tools OK, both final sweeps reproducing field
     for field).
+
+---
+
+## The viewer shows every gold label (CS-28) — the pre-registration and the verdict
+
+*Added on 2026-11-01, when the round was executed: the live plan's §7.3
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-28.*
+
+### 7.1 The viewer shows every gold label (CS-28)
+
+- [x] **CS-28 — the viewer shows every gold label.** The two blocks that ask
+  a question **of a label** ask it of every gold label of the text, not only
+  of the focus topic.
+
+  **The mechanism.** In both blocks the focus topic comes first (named), and
+  the **other gold labels** follow, each with its own words, their numbers and
+  the label's own value. A label with no train example keeps saying so (its
+  corpus table is empty **by construction**) rather than being skipped.
+
+  **The cost.** Presentation only; **0 model calls**. **No run, no artifact and
+  no table row** — the viewer is a tool (as in CS-20, CS-25 and CS-27).
+
+  **The exit criteria.** The plain output still carries every number and every
+  marker (CS-25's strip-and-compare test); every gold label of the text
+  appears in both blocks with its words and its value; the gate green.
+
+  **The runs.** None (a tool change). The log section is `## CS-28 — the viewer
+  shows every gold label` in `docs/experiments_text_processing.md`.
+
+  *(pre-registered 2026-11-01; **executed 2026-11-01** — the change set is a
+  **tool** change: the viewer changes, it writes no artifact and appends no
+  table row, and it costs **0 model calls**. The log section is
+  `## CS-28 — the viewer shows every gold label` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (the tool's own `--sample --seed 7`
+  draw on the UPR **val** split; every number on it is the artifacts' or the
+  tool's own reading of the model).**
+
+  - **The topic side.** The focus topic first (named), then the other gold
+    labels of the text, each with its own name words, their coverage in this
+    text and the label's own value:
+    - the focus topic "Right to education" — the feature's value **0.9000**
+      (*right* 0.8000, *education* 1.0000);
+    - "ESC rights - general" — **0.3810** (*esc* 0.0000, *rights* 1.0000,
+      *general* 0.1429);
+    - "Labour rights" — **0.5000** (*labour* 0.0000, *rights* 1.0000);
+    - "Minority rights" — **0.8750** (*minority* **0.7500**, *rights* 1.0000).
+  - **The corpus map.** The same shape: the focus topic's table first, then
+    the other gold labels' tables (the train corpus's own counts):
+    - "Right to education": *dropout* 6/6 (the log-odds 5.461), *education*
+      79/120 (5.317, the word is in this text), *higher* 3/3 (4.808),
+      *illiteracy* 3/3 (4.808), *students* 3/3 (4.808);
+    - "ESC rights - general": **no train example** — the table is empty **by
+      construction** (it is one of the eight held-out labels);
+    - "Labour rights": *workers* 35/39 (5.454), *189* 4/4 (5.131), *labour*
+      31/36 (5.061), *icrmw* 2/2 (4.520), *trade* 2/2 (4.520);
+    - "Minority rights": *minorities* 18/19 (**6.225**, the word is in this
+      text), *minority* 17/18 (6.145), *roma* 10/11 (5.474), *albinism* 2/2
+      (4.983), *dalits* 2/2 (4.983).
+  - **What the blocks now say that they did not say before.** The text carries
+    "**minorities**", and "Minority rights"'s own word is "minority", so the
+    topic side's coverage is **0.7500** and not 1.0 — the word's last three
+    characters differ; and the corpus map says the same thing from the other
+    side: the corpus's word for that label is "**minorities**" (18 of the 19
+    train texts that have it carry the label, the log-odds **6.225**), with
+    "minority" right behind (6.145). "Labour rights" scores 0.5000 because the
+    text has no "labour" at all — while the corpus's own words for that label
+    are "workers" (35 of 39, the log-odds 5.454), "labour" (31 of 36) and
+    "icrmw". So the two blocks are two readings of the same near-miss: the
+    topic side says how much of the label's *name* the text has, the corpus map
+    says which *words* the label actually travels with.
+  - **No number moved**: the values on the added rows are the feature's own
+    values (the same `lex_label_coverage` the ranking shows) and the corpus
+    map's own counts (the same rows the artifact holds); the change adds rows.
+  - **The exit criteria.** The plain output still carries every number and
+    every marker (CS-25's strip-and-compare test); every gold label of the
+    text appears in **both** blocks with its words and its value (two tests on
+    the fixture, including the label without a train example); and the gate is
+    green (705 tests, ruff clean, the two verify tools OK, both final sweeps
+    reproducing field for field).

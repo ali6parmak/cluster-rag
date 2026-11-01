@@ -633,6 +633,12 @@ per change set, so a reader can always tell *moved* from *lost*:
   archive's §7.1 (the surrogate's full vector) and the track log's §CS-24.
 - **CS-25** (a clearer screen, and the colour) → executed 2026-11-01 → the
   archive's §7.1 (the clearer screen) and the track log's §CS-25.
+- **CS-27** (the gold labels are always visible, and the in-text row keeps its
+  shade) → executed 2026-11-01 → the archive's §7.1 (the gold labels are always
+  visible) and the track log's §CS-27.
+- **CS-28** (the viewer shows every gold label) → executed 2026-11-01 → the
+  archive's §7.1 (the viewer shows every gold label) and the track log's
+  §CS-28.
 
 The change sets still open:
 
@@ -776,32 +782,19 @@ computed), and three things came out of it:
    ranking, and its topic-side rank was not shown at all;
 2. **the corpus map's row for a word that is in the text lost its ramp shade**
    — it was printed bold, so the log-odds' size was unreadable on that row;
-3. **the topic side of the feature showed only the focus topic** — the block
-   "THE TOPIC'S OWN WORDS" answers "how much of the topic's name is in the
-   text?", and the *truth* for the other gold labels of the text was readable
-   only as a number in the ranking, never as the words that carry it.
+3. **two blocks answered their question for the focus topic only** — the topic
+   side of the feature ("THE TOPIC'S OWN WORDS": how much of the topic's name is
+   in the text?) and the corpus map ("THE CORPUS'S OWN WORDS FOR THIS TOPIC":
+   which words go with this label in the training corpus?) did it for the
+   focus topic alone, so the truth for the other gold labels of the text was
+   readable only as a number in the ranking, never as the words that carry it.
 
 - **CS-27** (the gold labels are always visible, and the in-text row keeps its shade) →
   executed 2026-11-01 → the archive's §7.1 (the gold labels are always visible) and the
   track log's §CS-27.
-- [ ] **CS-28 — the topic side shows every gold label.** The block
-  "THE TOPIC'S OWN WORDS" answers the same question for every gold label of
-  the text, not only for the focus topic.
-
-  **The mechanism.** The focus topic's name words stay where they are (first,
-  and named), and the **other gold labels** follow, each with its own name
-  words, their coverage in this text and the label's own value. The block asks
-  the same question of each of them, so it answers it for all of them.
-
-  **The cost.** Presentation only; **0 model calls**. **No run, no artifact and
-  no table row** — the viewer is a tool (as in CS-20, CS-25 and CS-27).
-
-  **The exit criteria.** The plain output still carries every number and every
-  marker (CS-25's strip-and-compare test); every gold label of the text
-  appears in the topic-side block with its words and its value; the gate green.
-
-  **The runs.** None (a tool change). The log section is `## CS-28 — the topic
-  side shows every gold label` in `docs/experiments_text_processing.md`.
+- **CS-28** (the viewer shows every gold label) → executed 2026-11-01 → the
+  archive's §7.1 (the viewer shows every gold label) and the track log's
+  §CS-28.
 
 ## 8. The durable deliverable (named, so it is not lost)
 

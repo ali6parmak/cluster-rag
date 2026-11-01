@@ -80,6 +80,7 @@ research record and are **not** indexed here.
 | [CS-24 — the surrogate's full vector](#cs-24--the-surrogates-full-vector-2026-11-01) | the CS-19 sweep re-run (`upr-hitmap-surrogate` + `upr-hitmap-text`; **0 new model calls**, 16.6 s) | the surrogate's **whole** fitted vector (68 topics × 1,203 features = **81,804** numbers, 1.37 MB) now sits beside the top-15 lists; every number CS-19 reported is **reproduced unchanged**, and the viewer's surrogate column is complete (a word outside the model's vocabulary reads "not in the model's vocabulary", never zero) | `results/upr-hitmap-surrogate/hitmap.json` |
 | [CS-25 — a clearer screen, and the colour](#cs-25--a-clearer-screen-and-the-colour-2026-11-01) | no run (a **tool**): the viewer's headings, blocks and palette | every block names **the question it answers** (the mode letters leave the headings), the two instruments that shared one table now have their own blocks, the topic side of the feature is on the screen at all, and the screen has **colour** — with the rule that the coloured screen stripped of its codes is the plain screen, so `--no-colour` loses nothing | the CS-19/CS-23 artifacts (read, not re-measured) |
 | [CS-27 — the gold labels are always visible](#cs-27--the-gold-labels-are-always-visible-2026-11-01) | no run (a **tool**): the viewer's two ranking blocks and the corpus map's in-text row | a gold label below the top-5 is now listed with its **true rank** in both rankings (the text-side 17 and 27, the topic-side 11 and 27 on the seed-7 draw), and the corpus map's in-text row keeps its ramp's shade under the bold — **no number moved** | the CS-19/CS-23 artifacts (read, not re-measured) |
+| [CS-28 — the viewer shows every gold label](#cs-28--the-viewer-shows-every-gold-label-2026-11-01) | no run (a **tool**): the viewer's topic-side block and the corpus map's block | both blocks now answer their question for **every gold label** of the text (the focus topic first, then the others, each with its words and its value) — so the ranking's numbers come with the words that carry them: "Minority rights" 0.8750 (*minority* 0.7500, because the text says "minorities") and the corpus's own words for it (*minorities* 18 of 19, the log-odds 6.225) | the CS-19/CS-23 artifacts (read, not re-measured) |
 
 ## Change sets
 
@@ -6019,6 +6020,115 @@ in the artifact's ranking (the viewer recomputes the whole ranking, it just
 printed only its head); nothing about the model (the viewer is still the tool,
 not a number source); nothing about `test`; and nothing about the clause
 ablation in the viewer — that block is CS-26's.
+
+## CS-28 — the viewer shows every gold label (2026-11-01)
+
+**The run: none.** A **tool** change, like CS-20, CS-25 and CS-27: the
+viewer changes, it writes no artifact and appends no table row, and it costs
+**0 model calls**.
+
+**What prompted it.** The same review session's third finding: two blocks
+answered their question for the **focus topic only**, while the truth for the
+other gold labels of the text was readable as a number in the ranking, but
+never as the words that carry it.
+
+- the **topic side** of the feature ("THE TOPIC'S OWN WORDS") answered "how
+  much of the topic's name is in the text?" for the focus topic alone;
+- the **corpus map** ("THE CORPUS'S OWN WORDS FOR THIS TOPIC") answered "which
+  words go with this label in the training corpus?" for the focus topic alone —
+  and the corpus's own words for the *other* gold labels (the ones the model
+  actually reads) were nowhere on the screen.
+
+**What changed.** Both blocks now ask the same question of **every gold label**
+of the text: the focus topic first (named), then the others, each with its own
+words, their numbers and the label's own value.
+
+The example (the viewer's own `--sample --seed 7` draw, the UPR **val** split):
+
+```
+  the focus topic "Right to education" — the feature's value 0.9000
+  word                   coverage   bar
+    right                    0.8000   ███████████████████
+    education                1.0000   ████████████████████████
+  the other gold labels of this text:
+  "ESC rights - general" — the feature's value 0.3810
+    esc                      0.0000
+    rights                   1.0000   ████████████████████████
+    general                  0.1429   ███
+  "Labour rights" — the feature's value 0.5000
+    labour                   0.0000
+    rights                   1.0000   ████████████████████████
+  "Minority rights" — the feature's value 0.8750
+    minority                 0.7500   ██████████████████
+    rights                   1.0000   ████████████████████████
+```
+
+and the corpus map's block, for the same text:
+
+```
+  the focus topic "Right to education":
+    word                  n_with    df     lift   log-odds
+    dropout                    6     6    18.02      5.461
+    education                 79   120    11.86      5.317  ★ in this text
+    higher                     3     3    18.02      4.808
+    illiteracy                 3     3    18.02      4.808
+    students                   3     3    18.02      4.808
+  the other gold labels of this text:
+  "ESC rights - general":
+    'ESC rights - general' has no train example: its table is empty by construction
+  "Labour rights":
+    workers                   35    39    17.09      5.454
+    189                        4     4    19.05      5.131
+    labour                    31    36    16.40      5.061
+    icrmw                      2     2    19.05      4.520
+    trade                      2     2    19.05      4.520
+  "Minority rights":
+    minorities                18    19    27.86      6.225  ★ in this text
+    minority                  17    18    27.77      6.145
+    roma                      10    11    26.73      5.474
+    albinism                   2     2    29.40      4.983
+    dalits                     2     2    29.40      4.983
+```
+
+**What the blocks now say that they did not say before.** The text carries
+"**minorities**", and "Minority rights"'s own word is "minority" — the topic
+side's coverage is **0.7500**, not 1.0, because the word's last three
+characters differ; and the corpus map says the same thing from the other side:
+the corpus's word for that label is "**minorities**" (18 of the 19 train texts
+that have it carry the label, the log-odds **6.225**), with "minority" right
+behind (6.145). "Labour rights" scores 0.5000 because the text has **no**
+"labour" at all — while the corpus's own words for that label are "workers"
+(35 of 39, the log-odds 5.454), "labour" (31 of 36) and "icrmw". And "ESC
+rights - general" is one of the eight **held-out** labels: its table is empty
+**by construction**, and the screen says so instead of hiding it.
+
+So the two blocks are now two readings of the same near-miss: the topic side
+says how much of the label's *name* the text has, the corpus map says which
+*words* the label actually travels with.
+
+### The exit criteria, read out one by one
+
+1. **The plain output still carries every number and every marker** — **holds**:
+   CS-25's strip-and-compare test still passes (the coloured screen stripped
+   of its codes is the plain screen, character for character): the change adds
+   rows, it moves none.
+2. **Every gold label of the text appears in both blocks, with its words and
+   its value** — **holds**: two tests on the fixture assert, for every gold
+   label, that the label is named, that its numbers are on the screen and that
+   its own words are there (and, for a label without a train example, that the
+   screen says its table is empty by construction).
+3. **The gate green** — 705 tests, ruff clean, the two verify tools OK and both
+   final sweeps reproducing field for field.
+
+### What this change set does not say
+
+Nothing new was measured and **no number moved**: the values on the added rows
+are the feature's own values (the same `lex_label_coverage` the ranking shows)
+and the corpus map's own counts (the same rows the artifact holds); nothing
+about the model (the viewer is still the tool, not a number source); nothing
+about `test`; and nothing about the clause ablation in the viewer — that block
+is CS-26's.
+
 
 
 

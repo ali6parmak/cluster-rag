@@ -836,3 +836,69 @@ def test_the_in_text_corpus_row_keeps_its_shade(
         assert any(
             code in row_text for code in (*viewer_module.GREEN_RAMP, *viewer_module.RED_RAMP)
         )
+
+
+# --- the topic side shows every gold label (CS-28) ---
+
+
+def test_the_topic_side_answers_for_every_gold_label(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The topic-side block asks its question of every gold label, not only the focus."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    record = context.records[0]
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    block = out[out.index("THE TOPIC'S OWN WORDS") : out.index("WHO THE WORDS SAY IT IS")]
+    focus, _rule = viewer_module._default_focus(record, context.labels)
+    for label in record.labels:
+        # the label is named, and its own value is on the screen
+        assert f'"{label}"' in block
+        assert f"{viewer_module.cell_coverage(record.text, label):.4f}" in block
+        # and so are its own name words
+        for word in viewer_module.topic_words(record.text, label):
+            assert word in block
+    # the focus topic is named as the focus, the others as the other gold labels
+    assert f'the focus topic "{focus}"' in block
+    assert "the other gold labels of this text:" in block
+
+
+def test_the_corpus_block_answers_for_every_gold_label(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The corpus block asks its question of every gold label, not only the focus."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    record = context.records[0]
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    block = out[
+        out.index("THE CORPUS'S OWN WORDS FOR THIS TOPIC") : out.index(
+            "THIS TEXT'S WORDS AND THE LABELS THEY LEAN TO"
+        )
+    ]
+    for label in record.labels:
+        # the label is named, and its own table is there (or said to be empty)
+        assert f'"{label}"' in block
+        rows = viewer_module.corpus_topic_rows(context.corpus_map, label)
+        if rows:
+            assert any(str(row["word"]) in block for row in rows[:3])
+        else:
+            assert "has no train example" in block
