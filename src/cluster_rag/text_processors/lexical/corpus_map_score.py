@@ -40,6 +40,14 @@ predicted. The filter rides into the cross-fit too (``stability_min``): each
 fold's filter is estimated on **that fold's own map**, so the fit side reads
 the same kind of map the evaluated split is scored with.
 
+**CS-37 adds the abstention**: a scoring call may let a label with **no table
+at all** **abstain** (``abstain``) — its cells carry ``NaN`` ("no evidence")
+instead of the floor ("impossible"). The abstention is the **pack's** channel,
+not the classifier's: the harness rejects non-finite scores, so the
+``corpus_map`` predictor never abstains. The abstention rides into the
+cross-fit too: a label with no example in a fold's training texts abstains in
+that fold (the fold's map really does not know it).
+
 **The unit is the map's own**: a **distinct** content word, tokenized exactly
 as the map was built (``content_tokens`` — the lower-cased alphanumeric tokens
 without the stopwords). A word repeated in the text counts once, because the
@@ -201,6 +209,7 @@ def score_cells(
     restrict: Sequence[str] | None = None,
     restrict_pos: Sequence[str] | None = None,
     keep: Mapping[str, frozenset[str]] | None = None,
+    abstain: bool = False,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> np.ndarray:
     """Score every text against every label from the map's own weights.
@@ -219,13 +228,17 @@ def score_cells(
             words mapping. A label with no surviving pair carries the row's
             floor, exactly like a label with no train example. ``None`` keeps
             every pair.
+        abstain: The **abstention** (CS-37): a label with no table at all
+            carries ``NaN`` ("no evidence") instead of the floor
+            ("impossible"). ``False`` (the default) is the floor.
         stopwords: The tokenizer's stopwords — the map's own, so the words
             match the tables.
 
     Returns:
         A ``(n_texts, n_labels)`` float64 score matrix, higher = more likely.
         The labels with no train example carry the row's floor (the smallest
-        seen score minus one), so they are ranked last in every row.
+        seen score minus one), so they are ranked last in every row — or
+        ``NaN`` when the call **abstains**.
 
     Raises:
         ValueError: On an unknown scoring function, an unknown word class or an
@@ -272,9 +285,18 @@ def score_cells(
         # the empty tables: no evidence at all, so they are ranked last in
         # their row (the harness's scores must be finite, so the floor is the
         # row's smallest seen score minus one).
-        seen = np.delete(scores, empty_columns, axis=1)
-        floor = (seen.min(axis=1) - FLOOR_GAP) if seen.shape[1] else np.full(len(texts), -FLOOR_GAP)
-        scores[:, empty_columns] = floor[:, None]
+        if abstain:
+            # the abstention (CS-37): "no evidence", not "impossible" -- the
+            # value is absent, so a learner can tell the two apart. The
+            # harness rejects non-finite scores, so the classifier never
+            # abstains; this is the pack's channel.
+            scores[:, empty_columns] = np.nan
+        else:
+            seen = np.delete(scores, empty_columns, axis=1)
+            floor = (
+                (seen.min(axis=1) - FLOOR_GAP) if seen.shape[1] else np.full(len(texts), -FLOOR_GAP)
+            )
+            scores[:, empty_columns] = floor[:, None]
     return scores
 
 
@@ -292,6 +314,7 @@ def cross_fit_scores(
     keep: Mapping[str, frozenset[str]] | None = None,
     stability_min: float | None = None,
     stability_resamples: int = 500,
+    abstain: bool = False,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> dict[str, np.ndarray]:
     """The **out-of-fold** score matrices: each fold's texts scored by the other folds.
@@ -327,6 +350,10 @@ def cross_fit_scores(
             is estimated on that fold's own map.
         stability_resamples: How many bootstrap resamples the fold's stability
             estimate rests on.
+        abstain: The **abstention** (CS-37): a label with no table in this
+            fold's map carries ``NaN`` instead of the floor. The abstention
+            rides into the cross-fit: a label with no example in a fold's
+            training texts abstains in that fold.
         stopwords: The tokenizer's stopwords.
 
     Returns:
@@ -384,6 +411,7 @@ def cross_fit_scores(
                 restrict=restrict,
                 restrict_pos=restrict_pos,
                 keep=fold_keep,
+                abstain=abstain,
                 stopwords=stopwords,
             )
     return out

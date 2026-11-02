@@ -5326,3 +5326,209 @@ line). The verdict and the numbers are the track log's §CS-36.*
     are auto-appended; the log section reads the numbers out with the
     falsification conditions; the paired comparison's tool checks its own
     rebuild against the runs' artifacts (the filter included); the gate green.
+
+---
+
+## The selective map (CS-37) — the pre-registration and the verdict
+
+*Added on 2026-11-02, when the round was executed: the live plan's §7.5
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone
+line). The verdict and the numbers are the track log's §CS-37.*
+
+### 7.5 The map's quality round (CS-36 … CS-41)
+
+- [x] **CS-37 — the selective map: "unknown" instead of "impossible".** The
+  map's abstention, made honest.
+
+  **The mechanism.** The map's per-cell score has two states today: evidence
+  (a number) and no evidence (the **floor** — the row's smallest seen score
+  minus one, which ranks the label last in every row). The floor is what makes
+  CS-32's pack lose the eight held-out labels outright (the unseen bucket
+  0.4867 → **0.0000**): the combiner learns to trust the channel, and the
+  channel says "impossible" where it should say "I don't know". The change: a
+  label with **no table at all** (and, in the deeper variant, a cell where the
+  text says nothing about the label) **abstains** — the cell carries "no
+  evidence" instead of "impossible", so the combiner can learn that the channel
+  is silent there rather than that the label is out of the question. The
+  encodings are alternatives to be pre-registered: a **flag column**
+  (combiner-agnostic) or **NaN** (the gradient booster takes NaN natively; the
+  logistic combiner does not).
+
+  **The falsification, registered in advance.** (i) The **abstention test**:
+  with the abstention, the map's arm must **not** lose the unseen bucket — the
+  eight must keep the plain pack's number (about 0.45) instead of collapsing to
+  0.0000. If they still collapse, the combiner's *trust* in the channel (not
+  the floor) is what costs them, and the abstention is a null. (ii) The **no
+  free lunch** test: the seen buckets and the pooled number must not fall — the
+  abstention must not cost what it buys. (iii) The **label-blind control** must
+  still buy nothing (the track's yardstick).
+
+  **The cost.** About a day. **No new dependency.**
+
+  **The pre-registration (2026-11-02, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **The abstention.** A label with **no table at all** — the eight held-out
+    labels — **abstains**: every one of its cells carries "no evidence"
+    instead of the floor. The abstention is the **pack's** channel, not the
+    classifier's: the harness rejects non-finite scores, so the `corpus_map`
+    predictor's floor stays exactly as it is (CS-30's numbers are untouched).
+
+  - **The encoding: NaN.** The abstaining cells carry **NaN** in the pack's
+    feature cube — the value is *absent*, not a number that could be misread
+    as evidence. The gradient-boosted combiner takes NaN natively
+    (`HistGradientBoostingClassifier`); the logistic combiner does not, so the
+    abstention arm is registered for the **gradient-boosted** pack alone (the
+    pack's arm in every run of this round).
+
+  - **What is NOT registered.** (i) The **flag column** (the
+    combiner-agnostic alternative): with the floor left in place the booster
+    can still split on it — on the fit side the floor is perfectly predictive
+    of "this label is never positive" — so a flag would need a second decision
+    (what the score column carries where the channel abstains), and one change
+    set fixes one thing. (ii) The **deeper variant** (a cell where the *text*
+    says nothing about the label): the map's `sum_zscore_positive` arm's 0.0
+    means both "no word of the text is in the label's table" and "only
+    negative evidence", so the variant needs its own definition of "says
+    nothing" per arm. Both are the reviewer's to open, not this change set's.
+
+  - **Where the code lives.** The abstention is a **scorer** option
+    (`text_processors/lexical/corpus_map_score.py`: `score_cells` and
+    `cross_fit_scores` gain an `abstain` flag — the empty columns' cells
+    become NaN instead of the floor); the command computes both score matrices
+    (the floor version and the abstaining one, for the real map and for the
+    blind one); the pack fits two more arms (`upr_learning.py`). The config's
+    knob is `upr_analysis.learned.corpus_map_feature.abstain` (**off** by
+    default, so every earlier run's artifact keeps its exact content).
+
+  - **The guard (unchanged, and not optional).** The fit side's map is
+    **cross-fit** over 5 folds (CS-32's rule), and the abstention rides into
+    it: a label with no example in a fold's training texts abstains **in that
+    fold** (the honest reading — the fold's map really does not know it).
+
+  - **The run.** One: `upr-analyze-cmap-abstain` — the `analyze-upr` command
+    with the learned arm's groups `embedding + lexical + chunk_profile +
+    corpus_map` (CS-32's configuration), the gradient-boosted combiner, `top_k`
+    k=2 on the **val** split. The sweep file
+    `experiments_text_processing/upr_learned_cmap_abstain_sweep.py` (the sweep
+    label `upr_learned_cmap_abstain`, so the table's section is
+    `## UPR — upr_learned_cmap_abstain`); the artifact
+    `results/upr-analyze-cmap-abstain/analysis.json`. **Five arms** in the one
+    artifact:
+    1. `learned_histgb` — the map's column with the floor (CS-32's arm);
+    2. `learned_histgb_control` — the pack without the group;
+    3. `learned_histgb_label_blind` — the blind map with the floor;
+    4. `learned_histgb_abstain` — the map's column with the abstention (the
+       new arm);
+    5. `learned_histgb_abstain_label_blind` — the blind map with the
+       abstention (the new control).
+
+    The pack's own floors (the chance floor, the control-role floor, the
+    random-vector floor) ride along unchanged.
+
+  - **The measurement.** The **paired** Δ micro-F1 (the resampling unit the
+    text; 2,000 resamples; seed 42) through `tools/compare_upr_arms.py`,
+    pooled and per bucket, plus the tool's **seen view** (the head, the torso
+    and the tail pooled):
+    - the abstention arm − the map's arm (the floor): **the abstention's own
+      effect**;
+    - the abstention arm − the control: the abstention arm's gain over the
+      plain pack;
+    - the blind abstention arm − the control: the label-blind control.
+
+  - **The falsification, registered in advance.**
+    1. **The abstention test.** The paired difference on the **unseen view**
+       (the abstention arm − the map's arm with the floor) must be **positive
+       with an interval that excludes zero** — the abstention must move the
+       eight — **and** the abstention arm's unseen micro-F1 must be **at least
+       0.40** (the plain pack's own number is 0.4867 — CS-32's control — and
+       the collapse was 0.0000; the bar sits a little under the plain pack's
+       number because the abstention may cost a little of the eight too). If
+       the eight still collapse, the combiner's *trust* in the channel (not
+       the floor) is what costs them, and the abstention is a null.
+    2. **The no free lunch test.** The paired difference on the **seen view**
+       (the abstention arm − the map's arm) must have an interval that
+       **includes zero** — the abstention must not cost the seen buckets — and
+       the **pooled** difference must be **not negative**: the abstention must
+       not cost what it buys.
+    3. **The label-blind control.** On the **seen view**, the blind abstention
+       arm's Δ against the control must be **materially smaller** than the real
+       abstention arm's (CS-32's reading: the blind Δ's interval includes zero
+       while the real Δ's excludes it). The **unseen** recovery is **not** a
+       label-driven gain and is not read as one: the blind map's eight labels
+       have empty tables too, so the blind arm gets the same recovery — that is
+       the abstention's doing, and the blind arm is what shows it.
+
+  - **The exit criteria.** The artifact holds the five arms with their
+    per-bucket numbers and the abstention's provenance (the eight abstaining
+    labels, the cross-fit's folds); the table row is auto-appended; the log
+    section reads the numbers out with the falsification conditions; **CS-32's
+    own run reproduces its artifact field for field** (the abstention is off by
+    default, so nothing of CS-32's moves); the gate green (ruff over
+    `src`/`tests`/`experiments`/`tools`, the full pytest suite, the two verify
+    tools, and both final sweeps reproducing their artifacts field for field).
+  *(pre-registered 2026-11-02; **executed 2026-11-02** — the run is
+  `upr-analyze-cmap-abstain` (the artifact
+  `results/upr-analyze-cmap-abstain/analysis.json`), the sweep is
+  `experiments_text_processing/upr_learned_cmap_abstain_sweep.py` (the label
+  `upr_learned_cmap_abstain`), the log section is `## CS-37 — the selective map:
+  "unknown" instead of "impossible"` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (UPR **val**: 660 texts, `top_k` k=2,
+  the gradient-boosted combiner, the pack `embedding + lexical + chunk_profile
+  + corpus_map`; the map is built from the **train** split only and the fit
+  side's map is **cross-fit** over 5 folds; no model calls; 153 s).**
+
+  - **The arms**:
+
+    | the arm | micro-F1 | macro-F1 | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+    |---|---|---|---|---|---|---|---|---|
+    | the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+    | the map's arm (the floor) — CS-32's arm | 0.5502 | 0.5081 | 0.6931 | 0.5088 | 0.5566 | 0.0000 | 0.6694 | 0.7979 |
+    | **the abstention arm** | **0.5532** | **0.5173** | 0.6900 | 0.5161 | **0.5761** | **0.0000** | **0.6734** | 0.7972 |
+    | the **control** (the pack without the group) | 0.4818 | 0.4652 | 0.5505 | 0.4122 | 0.4531 | **0.4469** | 0.6137 | 0.8909 |
+    | the blind map (the floor) | 0.4309 | 0.4277 | 0.5395 | 0.4099 | 0.4665 | 0.0066 | 0.5493 | 0.7741 |
+    | the blind map, abstaining | 0.4293 | 0.4354 | 0.5280 | 0.4157 | 0.4832 | 0.0067 | 0.5508 | 0.7808 |
+    | the pack's random-vector floor | 0.5357 | 0.4787 | 0.6758 | 0.4885 | 0.5223 | 0.0000 | 0.6506 | 0.7729 |
+
+  - **The falsification, read out.**
+    1. **The abstention test FAILS**: the paired difference on the unseen view
+       (the abstention arm − the map's arm with the floor) is **+0.0000
+       [+0.0000, +0.0000]** — exactly zero in every one of the 2,000
+       resamples — and the abstention arm's unseen micro-F1 is **0.0000**, far
+       under the registered bar of 0.40. The eight do not come back.
+    2. **The no-free-lunch test passes**: the seen view's paired difference is
+       **+0.0032 [−0.0037, +0.0100]** (the interval includes zero) and the
+       pooled difference is **+0.0030 [−0.0030, +0.0091]** — not negative; and
+       no seen bucket's own interval separates (the head −0.0030 [−0.0138,
+       +0.0070], the torso +0.0074 [−0.0119, +0.0278], the tail +0.0194
+       [−0.0148, +0.0538]).
+    3. **The label-blind control passes**: on the seen view the blind
+       abstention arm's Δ against the control is **−0.0053 [−0.0189, +0.0091]**
+       (the interval includes zero) against the real arm's **+0.1351 [+0.1108,
+       +0.1603]**.
+  - **The reading: the "impossible" verdict was never in the encoding.**
+    Re-encoding the silence as NaN changes nothing for the eight (the decision
+    view is exactly 0.0000 apart; the unseen nDCG@5 is 0.6544 against the map's
+    arm's 0.6380, a paired +0.0163 [−0.0089, +0.0418] — the eight are not
+    ranked terribly, they are simply never in the top 2); the **blind** map —
+    which carries no word↔label information at all — collapses them the same
+    way (the unseen 0.0067, a paired −0.4402 [−0.4926, −0.3826] against the
+    control); and the pack **without** the column keeps them (the control's
+    unseen 0.4469). So it is the **presence** of the column on the fit side
+    that costs them: on train, the eight held-out labels are exactly the labels
+    the map is silent about **and** exactly the labels that are never
+    positive, so a learner that uses the column learns "the channel is silent
+    ⇒ the label is out of the question" — NaN says "no evidence" faithfully,
+    but the fit side answers the question the learner asks. **On a
+    label-holdout split, any channel that is silent exactly for the held-out
+    labels will be read as "impossible", whatever the encoding.** The map's
+    column stays a **seen-labels** channel (CS-32's finding).
+  - **The exit criteria.** The artifact holds the five arms with their
+    per-bucket numbers and the abstention's provenance (the eight abstaining
+    labels, the encoding, the cross-fit's folds); the table row is
+    auto-appended; the log section reads the numbers out with the falsification
+    conditions; **CS-32's own run reproduces its artifact field for field**;
+    the gate green.

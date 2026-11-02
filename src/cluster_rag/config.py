@@ -1903,6 +1903,14 @@ class UprCorpusMapFeatureConfig(BaseModel):
             train records) — the yardstick that says how much of the feature's
             contribution is the map's construction rather than the corpus's
             word↔label association.
+        abstain: Whether the run also computes the **abstention** (the track's
+            CS-37): a label with **no table at all** carries ``NaN``
+            ("no evidence") instead of the floor ("impossible"), so the
+            combiner can learn that the channel is silent there rather than
+            that the label is out of the question. The default is ``False``,
+            so every earlier run's artifact keeps its exact content. The
+            encoding is ``NaN``, which the gradient-boosted combiner takes
+            natively.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1911,6 +1919,7 @@ class UprCorpusMapFeatureConfig(BaseModel):
     scoring: str = "sum_zscore_positive"
     folds: int = Field(default=5, ge=2)
     label_blind: bool = True
+    abstain: bool = False
 
 
 class UprLabelLexiconConfig(BaseModel):

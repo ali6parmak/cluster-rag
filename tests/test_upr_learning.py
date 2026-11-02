@@ -514,3 +514,66 @@ def test_the_reporting_block_is_absent_by_default() -> None:
         permutation_resamples=0,
     )
     assert "reporting" not in result.meta
+
+
+def test_the_abstention_arm_is_fitted_with_the_abstaining_column() -> None:
+    """The track's CS-37: the abstention rides into the pack as its own arm."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    train_gold = np.asarray([[True, False], [False, True]])
+    eval_gold = np.asarray([[True, False]])
+    n_labels = len(LABELS)
+    floor_scores = np.zeros((2, n_labels), dtype=np.float64)
+    floor_scores[:, 0] = 1.0
+    # the abstaining matrix: the second label has no table, so it carries NaN
+    abstain_scores = floor_scores.copy()
+    abstain_scores[:, 1] = np.nan
+    eval_scores = floor_scores[:1]
+    eval_abstain = abstain_scores[:1]
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=train_gold,
+        eval_texts=["eval one"],
+        eval_gold=eval_gold,
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=floor_scores,
+        corpus_map_eval=eval_scores,
+        corpus_map_train_abstain=abstain_scores,
+        corpus_map_eval_abstain=eval_abstain,
+        corpus_map_train_abstain_blind=abstain_scores,
+        corpus_map_eval_abstain_blind=eval_abstain,
+    )
+    assert "learned_abstain" in result.scores
+    assert "learned_abstain_label_blind" in result.scores
+    assert result.scores["learned_abstain"].shape == (1, n_labels)
+    meta = result.meta["corpus_map"]
+    assert meta["abstain"]["arm"] == "learned_abstain"
+    assert meta["abstain_label_blind"]["arm"] == "learned_abstain_label_blind"
+
+
+def test_the_abstention_arm_is_absent_by_default() -> None:
+    """The earlier runs' artifacts keep their exact content (the knob is off)."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    n_labels = len(LABELS)
+    scores = np.zeros((2, n_labels), dtype=np.float64)
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=np.asarray([[True, False], [False, True]]),
+        eval_texts=["eval one"],
+        eval_gold=np.asarray([[True, False]]),
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=scores,
+        corpus_map_eval=scores[:1],
+    )
+    assert "learned_abstain" not in result.scores
+    assert "learned_abstain_label_blind" not in result.scores
+    assert "corpus_map" not in result.meta

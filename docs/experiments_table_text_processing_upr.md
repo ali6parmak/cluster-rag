@@ -594,3 +594,15 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | upr-analyze-cmap | 2026-11-02 | val | learned_histgb_control | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 44.139 |
 | upr-analyze-cmap | 2026-11-02 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4309 | 0.4277 | 0.4149 | 0.926 | 0.2300 | 0.6400 | 0.5493 | 0.7741 | 0.2889 | 0.6601 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 44.139 |
 | upr-analyze-cmap | 2026-11-02 | val | learned_histgb_random | learned | atoms | n/a | 0.5357 | 0.4787 | 0.5118 | 0.882 | 0.2679 | 0.6851 | 0.6506 | 0.7729 | 0.3559 | 0.7119 | 0.0147 | 0.5000 | 0.0209 | -0.5318 | 0.0000 | 1.95 | 660 | 44.139 |
+
+## UPR — upr_learned_cmap_abstain
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-cmap-abstain | 2026-11-02 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb | learned | atoms | n/a | 0.5502 | 0.5081 | 0.5251 | 0.897 | 0.2770 | 0.7149 | 0.6694 | 0.7979 | 0.3659 | 0.7492 | 0.0147 | 0.5000 | 0.0205 | -0.5321 | 0.0000 | 1.95 | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb_control | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4309 | 0.4277 | 0.4149 | 0.926 | 0.2300 | 0.6400 | 0.5493 | 0.7741 | 0.2889 | 0.6601 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb_abstain | learned | atoms | n/a | 0.5532 | 0.5173 | 0.5284 | 0.882 | 0.2794 | 0.7104 | 0.6734 | 0.7972 | 0.3651 | 0.7470 | 0.0147 | 0.5000 | 0.0208 | -0.5319 | 0.0000 | 1.95 | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb_abstain_label_blind | learned | atoms | n/a | 0.4293 | 0.4354 | 0.4150 | 0.897 | 0.2306 | 0.6371 | 0.5508 | 0.7808 | 0.2904 | 0.6547 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 146.038 |
+| upr-analyze-cmap-abstain | 2026-11-02 | val | learned_histgb_random | learned | atoms | n/a | 0.5357 | 0.4787 | 0.5118 | 0.882 | 0.2679 | 0.6851 | 0.6506 | 0.7729 | 0.3559 | 0.7119 | 0.0147 | 0.5000 | 0.0209 | -0.5318 | 0.0000 | 1.95 | 660 | 146.038 |

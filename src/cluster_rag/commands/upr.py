@@ -3209,6 +3209,8 @@ def _upr_learned_arms(
     corpus_map_block_data: dict[str, Any] = {}
     corpus_map_train = corpus_map_eval = None
     corpus_map_train_blind = corpus_map_eval_blind = None
+    corpus_map_train_abstain = corpus_map_eval_abstain = None
+    corpus_map_train_abstain_blind = corpus_map_eval_abstain_blind = None
     control_extractor = None
     if learned.corpus_map_feature.enabled:
         corpus_map_block_data = _upr_corpus_map_feature(config, setup, view, learned)
@@ -3216,6 +3218,10 @@ def _upr_learned_arms(
         corpus_map_eval = corpus_map_block_data["eval"]
         corpus_map_train_blind = corpus_map_block_data["train_blind"]
         corpus_map_eval_blind = corpus_map_block_data["eval_blind"]
+        corpus_map_train_abstain = corpus_map_block_data["train_abstain"]
+        corpus_map_eval_abstain = corpus_map_block_data["eval_abstain"]
+        corpus_map_train_abstain_blind = corpus_map_block_data["train_abstain_blind"]
+        corpus_map_eval_abstain_blind = corpus_map_block_data["eval_abstain_blind"]
         control_groups = tuple(group for group in learned.groups if group != "corpus_map")
         control_extractor = _pack(
             labels,
@@ -3314,6 +3320,10 @@ def _upr_learned_arms(
         corpus_map_eval=corpus_map_eval,
         corpus_map_train_blind=corpus_map_train_blind,
         corpus_map_eval_blind=corpus_map_eval_blind,
+        corpus_map_train_abstain=corpus_map_train_abstain,
+        corpus_map_eval_abstain=corpus_map_eval_abstain,
+        corpus_map_train_abstain_blind=corpus_map_train_abstain_blind,
+        corpus_map_eval_abstain_blind=corpus_map_eval_abstain_blind,
         control_extractor=control_extractor,
         train_features=fit_cubes.get("train"),
         control_train_features=fit_cubes.get("control"),
@@ -3384,8 +3394,10 @@ def _upr_learned_arms(
         arm = result.meta["arm"]
         control_arm = f"{arm}_control"
         blind_arm = f"{arm}_label_blind"
+        abstain_arm = f"{arm}_abstain"
+        abstain_blind_arm = f"{arm}_abstain_label_blind"
         real_scores = np.asarray(result.scores[arm], dtype=np.float64)
-        meta["corpus_map"] = {
+        corpus_map_meta: dict[str, Any] = {
             **dict(result.meta.get("corpus_map") or {}),
             "provenance": corpus_map_block_data["meta"],
             "paired_vs_control": (
@@ -3417,6 +3429,28 @@ def _upr_learned_arms(
                 else None
             ),
         }
+        if abstain_arm in result.scores:
+            # -- the abstention (the track's CS-37) --
+            corpus_map_meta["paired_vs_abstain"] = _upr_paired(
+                config, view, result.scores[abstain_arm], real_scores
+            )
+            corpus_map_meta["per_bucket_vs_abstain"] = _upr_paired_by_bucket(
+                config, view, result.scores[abstain_arm], real_scores
+            )
+            if control_arm in result.scores:
+                corpus_map_meta["paired_abstain_vs_control"] = _upr_paired(
+                    config, view, result.scores[abstain_arm], result.scores[control_arm]
+                )
+            if abstain_blind_arm in result.scores and control_arm in result.scores:
+                # the control's own condition: the blind abstention arm must buy
+                # materially less than the real abstention arm on the seen view.
+                corpus_map_meta["paired_abstain_label_blind_vs_control"] = _upr_paired(
+                    config,
+                    view,
+                    result.scores[abstain_blind_arm],
+                    result.scores[control_arm],
+                )
+        meta["corpus_map"] = corpus_map_meta
     backoff_meta = _upr_backoff_arms(config, setup, view, learned, result, arms, labels)
     if backoff_meta:
         meta["backoff"] = backoff_meta
@@ -3441,10 +3475,16 @@ def _upr_corpus_map_feature(
     labels permuted among the train records (the per-label counts are
     preserved, only the assignment changes).
 
+    The **abstention** (the track's CS-37) rides along too: the same map's
+    score matrix, but a label with **no table at all** carries ``NaN``
+    ("no evidence") instead of the floor ("impossible"). It is a **separate
+    matrix** (the main arm keeps the floor, so CS-32's numbers do not move).
+
     Returns:
         The block: the four matrices (``train``/``eval`` for the real map and
-        for the label-blind one) and the provenance (the folds, the seed, the
-        scoring function and the map's own shape).
+        for the label-blind one), the two abstaining matrices (when the knob is
+        on) and the provenance (the folds, the seed, the scoring function and
+        the map's own shape).
     """
     feature = learned.corpus_map_feature
     train_texts = [record.text for record in setup.train_records]
@@ -3477,36 +3517,100 @@ def _upr_corpus_map_feature(
         seed=seed,
     )
     blind_train = blind_crossed[feature.scoring]
+
+    # The abstention (the track's CS-37): the same maps, but a label with no
+    # table at all carries NaN ("no evidence") instead of the floor.
+    abstain_train = abstain_eval = None
+    abstain_train_blind = abstain_eval_blind = None
+    if feature.abstain:
+        abstain_eval = map_score_cells(
+            eval_texts,
+            corpus_map,
+            scoring=feature.scoring,
+            abstain=True,
+        )
+        abstain_train = cross_fit_scores(
+            train_texts,
+            train_label_sets,
+            labels,
+            scorings=(feature.scoring,),
+            folds=feature.folds,
+            seed=seed,
+            abstain=True,
+        )[feature.scoring]
+        abstain_eval_blind = map_score_cells(
+            eval_texts,
+            blind_map,
+            scoring=feature.scoring,
+            abstain=True,
+        )
+        abstain_train_blind = cross_fit_scores(
+            train_texts,
+            blind_sets,
+            labels,
+            scorings=(feature.scoring,),
+            folds=feature.folds,
+            seed=seed,
+            abstain=True,
+        )[feature.scoring]
+
+    meta: dict[str, Any] = {
+        "scoring": feature.scoring,
+        "folds": int(feature.folds),
+        "seed": int(seed),
+        "side": "the map is built from the train split only",
+        "fit_side": (
+            "cross-fit: each fold's cells are scored against a map built from "
+            "the other folds, so the feature is not optimistically biased "
+            "where the combiner learns its weight"
+        ),
+        "label_blind": (
+            "the counterpart's map is built with the labels permuted among the "
+            "train records (the per-label counts are preserved, only the "
+            "assignment changes)"
+        ),
+        "map": {
+            "n_texts": corpus_map.n_texts,
+            "n_labels": len(corpus_map.labels),
+            "n_words": corpus_map.n_words,
+            "n_pairs": corpus_map.n_pairs,
+            "labels_with_examples": sum(
+                1 for label in corpus_map.labels if corpus_map.label_counts.get(label)
+            ),
+        },
+    }
+    if feature.abstain:
+        # the abstention's provenance (the track's CS-37): the key is absent
+        # when the knob is off, so the earlier runs' artifacts keep their exact
+        # content.
+        meta["abstain"] = {
+            "enabled": True,
+            "encoding": "NaN",
+            "rule": (
+                "a label with no table at all carries NaN ('no evidence') "
+                "instead of the floor ('impossible')"
+            ),
+            "labels_without_a_table": [
+                label for label in labels if not corpus_map.label_counts.get(label)
+            ],
+            "note": (
+                "the abstention is the pack's channel, not the classifier's: the "
+                "harness rejects non-finite scores, so the corpus_map predictor's "
+                "floor stays as it is. On the fit side the abstention rides into "
+                "the cross-fit: a label with no example in a fold's training "
+                "texts abstains in that fold"
+            ),
+        }
     return {
         "train": train_scores,
         "eval": eval_scores,
         "train_blind": blind_train,
         "eval_blind": blind_eval,
-        "meta": {
-            "scoring": feature.scoring,
-            "folds": int(feature.folds),
-            "seed": int(seed),
-            "side": "the map is built from the train split only",
-            "fit_side": (
-                "cross-fit: each fold's cells are scored against a map built from "
-                "the other folds, so the feature is not optimistically biased "
-                "where the combiner learns its weight"
-            ),
-            "label_blind": (
-                "the counterpart's map is built with the labels permuted among the "
-                "train records (the per-label counts are preserved, only the "
-                "assignment changes)"
-            ),
-            "map": {
-                "n_texts": corpus_map.n_texts,
-                "n_labels": len(corpus_map.labels),
-                "n_words": corpus_map.n_words,
-                "n_pairs": corpus_map.n_pairs,
-                "labels_with_examples": sum(
-                    1 for label in corpus_map.labels if corpus_map.label_counts.get(label)
-                ),
-            },
-        },
+        "train_abstain": abstain_train,
+        "eval_abstain": abstain_eval,
+        "train_abstain_blind": abstain_train_blind,
+        "eval_abstain_blind": abstain_eval_blind,
+        "meta": meta,
     }
 
 

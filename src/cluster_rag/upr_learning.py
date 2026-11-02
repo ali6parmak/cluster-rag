@@ -222,6 +222,10 @@ def score_upr_learned_arms(
     corpus_map_eval: np.ndarray | None = None,
     corpus_map_train_blind: np.ndarray | None = None,
     corpus_map_eval_blind: np.ndarray | None = None,
+    corpus_map_train_abstain: np.ndarray | None = None,
+    corpus_map_eval_abstain: np.ndarray | None = None,
+    corpus_map_train_abstain_blind: np.ndarray | None = None,
+    corpus_map_eval_abstain_blind: np.ndarray | None = None,
     control_extractor: UprFeatureExtractor | None = None,
     train_features: np.ndarray | None = None,
     control_train_features: np.ndarray | None = None,
@@ -273,6 +277,16 @@ def score_upr_learned_arms(
             train records).
         corpus_map_eval_blind: The label-blind counterpart's evaluated-split
             score matrix.
+        corpus_map_train_abstain: The **abstention**'s fit-side score matrix
+            (the track's CS-37: a label with no table at all carries ``NaN``
+            instead of the floor). ``None`` (the default) computes no
+            abstention arm.
+        corpus_map_eval_abstain: The abstention's evaluated-split score
+            matrix.
+        corpus_map_train_abstain_blind: The label-blind counterpart's
+            **abstaining** fit-side score matrix.
+        corpus_map_eval_abstain_blind: The label-blind counterpart's
+            abstaining evaluated-split score matrix.
         control_extractor: The **control**'s extractor (the same pack without
             the ``corpus_map`` group). Fitted and scored in the same run, so
             the difference against the real arm is paired by construction.
@@ -366,6 +380,66 @@ def score_upr_learned_arms(
                 "preserved, only the assignment changes): it says how much of the "
                 "feature's contribution is the map's construction and not the "
                 "corpus's word<->label association"
+            ),
+        }
+
+    # -- the abstention (the track's CS-37) --
+    # The same pack, but a label with **no table at all** carries NaN ("no
+    # evidence") instead of the floor ("impossible"): the combiner can then
+    # learn that the channel is silent there rather than that the label is out
+    # of the question. The label-blind counterpart rides along: the blind map's
+    # eight labels have empty tables too, so the blind arm gets the same
+    # recovery -- that is the abstention's doing, not a label-driven gain.
+    if corpus_map_train_abstain is not None and corpus_map_eval_abstain is not None:
+        abstain_train = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train_abstain
+        )
+        abstain_eval = extractor.extract(
+            eval_texts, decision_eval, rerank_eval, corpus_map_eval_abstain
+        )
+        abstain_rows, abstain_labels = _fit_rows(abstain_train, train_gold)
+        abstain_combiner = combiner_factory().fit(abstain_rows, abstain_labels, weights)
+        abstain_scores = np.asarray(
+            abstain_combiner.score(abstain_eval.reshape(-1, abstain_eval.shape[-1])),
+            dtype=np.float64,
+        ).reshape(abstain_eval.shape[0], abstain_eval.shape[1])
+        scores[f"{arm_name}_abstain"] = abstain_scores
+        corpus_map_meta["abstain"] = {
+            "arm": f"{arm_name}_abstain",
+            "note": (
+                "the same pack, but the corpus map's column abstains where the "
+                "channel has no evidence at all: a label with no table carries NaN "
+                "instead of the floor ('impossible'). The value is absent, so the "
+                "combiner can tell the two apart"
+            ),
+        }
+    if corpus_map_train_abstain_blind is not None and corpus_map_eval_abstain_blind is not None:
+        blind_abstain_train = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train_abstain_blind
+        )
+        blind_abstain_eval = extractor.extract(
+            eval_texts, decision_eval, rerank_eval, corpus_map_eval_abstain_blind
+        )
+        blind_abstain_rows, blind_abstain_labels = _fit_rows(blind_abstain_train, train_gold)
+        blind_abstain_combiner = combiner_factory().fit(
+            blind_abstain_rows, blind_abstain_labels, weights
+        )
+        blind_abstain_scores = np.asarray(
+            blind_abstain_combiner.score(
+                blind_abstain_eval.reshape(-1, blind_abstain_eval.shape[-1])
+            ),
+            dtype=np.float64,
+        ).reshape(blind_abstain_eval.shape[0], blind_abstain_eval.shape[1])
+        scores[f"{arm_name}_abstain_label_blind"] = blind_abstain_scores
+        corpus_map_meta["abstain_label_blind"] = {
+            "arm": f"{arm_name}_abstain_label_blind",
+            "note": (
+                "the abstention's label-blind counterpart: the same pack and the "
+                "same abstention, but the map is built with the labels permuted "
+                "among the train records. The blind map's eight labels have empty "
+                "tables too, so this arm gets the same recovery of the held-out "
+                "labels -- the recovery is the abstention's doing, not a "
+                "label-driven gain"
             ),
         }
 
