@@ -39,6 +39,7 @@ from cluster_rag.config import (
     UprAnalysisConfig,
     UprDecisionConfig,
     UprHitMapConfig,
+    UprLabelPairsConfig,
 )
 from cluster_rag.sweep import HitMapUprCell, define_sweep
 
@@ -52,6 +53,16 @@ LENGTH_BUCKETS: tuple[int, ...] = (100, 200, 300)
 # two numbers, so the run's readout and the arms' filter are the same object.
 STABILITY_RESAMPLES = 500
 STABILITY_HEAD_K = 10
+
+# The **label-pair relation**'s knobs (the track's CS-38): the vocabulary
+# Jaccard at which two labels count as near-duplicates, the share of a label's
+# own table that must lie inside one partner's table for it to count as having
+# no vocabulary of its own, how many neighbours the readout lists, and the
+# separation bootstrap's resample count (the resampling unit is the text).
+NEAR_DUPLICATE = 0.50
+CONTAINMENT = 0.80
+N_NEIGHBOURS = 20
+BOOTSTRAP_RESAMPLES = 2000
 
 # The UPR-native **task** instruction (the same one the CS-9b grid run used, so
 # the intact-text calls are that run's cache hits).
@@ -126,6 +137,18 @@ cells = [
                 # off. No model call: the map is a description of the data.
                 stability_resamples=STABILITY_RESAMPLES,
                 stability_head_k=STABILITY_HEAD_K,
+                # the **label-pair relation** (the track's CS-38): the corpus
+                # map read the other way round -- a relation between the labels
+                # themselves (the vocabulary they share and how often they
+                # co-occur), read against the catalog's own relation.
+                label_pairs=UprLabelPairsConfig(
+                    enabled=True,
+                    near_duplicate=NEAR_DUPLICATE,
+                    containment=CONTAINMENT,
+                    n_neighbours=N_NEIGHBOURS,
+                    bootstrap_resamples=BOOTSTRAP_RESAMPLES,
+                    bootstrap_seed=42,
+                ),
             ),
         ),
     )

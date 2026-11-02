@@ -589,6 +589,7 @@ def corpus_map_block(
     tagger: Mapping[str, object] | None = None,
     distribution: Mapping[str, Counter[str]] | None = None,
     stability: Mapping[str, object] | None = None,
+    label_pairs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """The corpus map as the artifact's own block (JSON-friendly).
 
@@ -605,6 +606,9 @@ def corpus_map_block(
         stability: The map's **stability** block (CS-36), already built by the
             caller (the stability module imports this one, so the block cannot
             be built here without a circular import).
+        label_pairs: The **label-pair relation**'s block (CS-38), already built
+            by the caller (the label-pairs module imports this one, so the
+            block cannot be built here without a circular import).
 
     Returns:
         The block (JSON-friendly).
@@ -669,6 +673,17 @@ def corpus_map_block(
                 "note": (
                     "this run estimated no stability: the map's own uncertainty was "
                     "not measured (the stability_resamples knob is off)"
+                ),
+            }
+        ),
+        "label_pairs": (
+            dict(label_pairs)
+            if label_pairs is not None
+            else {
+                "available": False,
+                "note": (
+                    "this run computed no label-pair relation: the label space's own "
+                    "geometry was not measured (the label_pairs knob is off)"
                 ),
             }
         ),

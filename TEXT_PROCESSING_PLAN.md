@@ -1326,7 +1326,12 @@ the unseen bucket goes **0.4867 → 0.0000** (CS-32) — **and CS-37 measured th
 this is not an encoding problem**: re-encoding the channel's silence as "no
 evidence" instead of "impossible" changes nothing (the eight stay at 0.0000),
 because on the fit side the silence is a *perfect* proxy for the label's
-absence from the training data. So the round's question is
+absence from the training data. And the label space's own geometry is **not a
+lexical discovery**: the corpus **rediscovers the taxonomy** (CS-38: the labels
+that share a catalog parent are closer in vocabulary, **+0.0413 [+0.0372,
++0.0451]**, and there are no lexical twins at all) — so what the map can add
+is the **words**, and where it has nothing to add is the labels whose own
+lexical identity is thin. So the round's question is
 one question: **how good is the corpus map, and where does it not know?**
 
 **The order:** CS-36 (the stability map) → CS-37 (the selective map) → CS-38
@@ -1385,129 +1390,23 @@ CS-41 (the lexical kNN).
   could still work: a channel that is silent for *many* cells is no longer a
   perfect proxy for the label's absence.
 
-- [ ] **CS-38 — the label-pair map: the lexical neighbours, the twins, the
-  labels with no vocabulary of their own.** The label space's own geometry.
+- **CS-38** (the label-pair map: the lexical neighbours, the twins, the
+  labels with no vocabulary of their own) → executed 2026-11-02 → the archive's
+  §7.5 (the label-pair map) and the track log's §CS-38. **The relation is a
+  null and the class is a finding**: the corpus's label-pair relation **is**
+  the taxonomy's (the registered disagreement test fires on both legs — the
+  sibling pairs' mean vocabulary Jaccard is **+0.0413 [+0.0372, +0.0451]**
+  above the other pairs' and **11 of the corpus's 20 closest pairs** are
+  siblings against a bar of 4; their co-occurrence lift is four times the
+  others'), so **the corpus knows nothing the taxonomy did not already say**
+  and no action is licensed; but the **"no vocabulary of their own" class**
+  exists with **13** members (the eight held-out labels plus five whose own
+  words lie almost entirely inside one neighbour's table — *Sexual and
+  reproductive rights* 94 % inside *Women's rights*, *Freedom of assembly* 91 %
+  inside *Detention*), and **there are no lexical twins** at all (not one of
+  the 2,278 pairs reaches the registered near-duplicate threshold; the closest
+  is 0.489).
 
-  **The mechanism.** Read the map's reverse tables (word → labels) as a
-  **label-pair** relation: for every pair of labels, how much vocabulary they
-  share (the overlap of their word tables) and how often they co-occur in the
-  same train text. Then the **readout**: which labels are lexical
-  near-duplicates, which pairs are neighbours, and which labels have **no
-  vocabulary of their own** (an empty table, or a table that is nearly a subset
-  of a neighbour's) — against the catalog's 12 parents, which CS-11 measured to
-  carry almost nothing per cell (the AUC 0.4705–0.5433). The comparison is the
-  point: the parents are a *type* relation and the lexicon a *vocabulary* one,
-  so the comparison says whether **the corpus knows the taxonomy better than
-  the taxonomy's writer did**.
-
-  **Why.** It is the structural version of what CS-35 brute-forced (the
-  expansion route), and it has a hypothesis worth stating: the eight held-out
-  labels include three `- general` ones, and they may be exactly the lexical
-  twins with no vocabulary of their own — in which case the label-holdout is a
-  *lexical* fact and the expansion route's failure is explained rather than
-  merely measured.
-
-  **The falsification, registered in advance.** The relation must be a
-  **finding**, not a confirmation: (i) the corpus-derived label-pair relation
-  must **not** be the catalog's 12-parent relation — if the two agree on the
-  pairs, the corpus knows nothing the taxonomy did not already say; and (ii)
-  the "no vocabulary of their own" class must **exist and be read**, and the
-  eight held-out labels must be **in** it. If either fails, the readout is
-  reported as a null (the relation is the taxonomy's, or the vocabulary-less
-  class is empty or elsewhere) and no action is licensed.
-
-  **The cost.** About a day. **No new dependency.**
-
-  **The pre-registration (2026-11-02, written before the first call).** The
-  block above fixes the mechanism; this fixes the *shape* of the number.
-
-  - **Where the code lives.** The **relation** is pure and lives in a new
-    module `text_processors/lexical/label_pairs.py` (the standard library only
-    — no model client, no I/O); the **readout** is a new sub-block of the
-    map's **own** artifact (the existing block is neither renamed nor
-    reshaped), written by the same `hitmap-upr` command that wrote CS-23's
-    block. The **catalog** is read at the edge (the committed
-    `catalogs/upr_labels.jsonl` ✓).
-
-  - **The relation** — for every pair of the 68 labels, two halves:
-    - the **vocabulary half**: the shared words' count, the **Jaccard**
-      (`|T₁ ∩ T₂| / |T₁ ∪ T₂|`) and the **containment** (the share of the
-      *smaller* table that lies inside the larger one);
-    - the **co-occurrence half**: the number of **train** texts carrying both
-      labels, the **lift** over independence (the observed count over the
-      expected one) and the Jaccard of the two labels' text sets.
-
-  - **The readout** (the map's own artifact, `corpus_map.label_pairs`):
-    - the **near-duplicates**: the pairs whose vocabulary **Jaccard ≥ 0.50**
-      (fixed in advance), ranked by the Jaccard;
-    - the **neighbours**: the **20** pairs with the strongest **co-occurrence
-      lift** (fixed in advance);
-    - the **"no vocabulary of their own"** class: the labels with an **empty
-      table** (the eight held-out ones, by construction) ∪ the labels whose
-      table lies **≥ 0.80 inside a single partner's table** (the containment
-      threshold, fixed in advance — the plan's "nearly a subset of a
-      neighbour's");
-    - the **per-label** summary: the table size, the best partner (by the
-      Jaccard and by the lift), the containment, the number of near-duplicate
-      partners and the number of co-occurring partners.
-
-  - **The catalog's comparison — the *sibling* relation.** The catalog's 12
-    parents are **types, not labels** (none of the 68 entries is a parent), so
-    the measurable form of the taxonomy's own claim about the label space is
-    the **sibling** relation: the pairs of labels that **share a parent**
-    (**227** pairs of the 2,278). The readout reports the siblings' and the
-    other pairs' mean Jaccard, containment and lift, the **ranking
-    agreement** (how many of the corpus's 20 strongest pairs by the Jaccard are
-    sibling pairs — the chance rate is 227/2,278 ≈ 10 %), and the **separation
-    with a bootstrap over the train texts** (the resampling unit the text;
-    2,000 resamples; seed 42; the map is rebuilt on each resample, so the
-    interval is over the corpus itself).
-
-  - **One reading settled before the first call.** The block above says the
-    eight held-out labels "include three `- general` ones". The map's own
-    measurement (CS-23) says **two**: `ESC rights - general` and `General` —
-    `CP rights - general` **has** a table. The hypothesis is untouched (the
-    held-out labels may be the ones with no vocabulary of their own); only the
-    count in the block's premise is corrected here.
-
-  - **The falsification, registered in advance.**
-    1. **The disagreement test** (the relation must be a finding, not a
-       confirmation): (a) the bootstrap CI of the sibling pairs' mean vocabulary
-       Jaccard **minus** the other pairs' mean must **include zero** (the
-       corpus does not rank the taxonomy's own pairs higher than chance), and
-       (b) the corpus's 20 strongest pairs by the Jaccard must contain **at
-       most 4** sibling pairs (the chance expectation is about 2). If either
-       fails, the corpus's relation **is** the taxonomy's: the readout is a
-       **null**, no action is licensed, and it is reported as a null.
-    2. **The vocabulary-less class test**: the class must **exist** and be
-       read, and the eight held-out labels must be **in** it (they are, by
-       their empty tables) — and the class's **extra** members (the labels
-       whose table lies ≥ 0.80 inside one partner's) must be **read** (the
-       readout lists them with their partner and their share). If the class is
-       empty of extra members and the eight, the readout is a **null** (the
-       vocabulary-less class is empty or elsewhere) and no action is licensed.
-
-  - **The run.** The map's own artifact, re-written once:
-    `results/upr-hitmap-corpus/hitmap.json` (the new `corpus_map.label_pairs`
-    block) — the sweep
-    `experiments_text_processing/upr_hitmap_corpus_sweep.py` (the sweep label
-    `upr_hitmap_corpus`), so the row lands in the **track's** UPR table under
-    `## UPR — upr_hitmap_corpus`. No model call, no embedding: the relation is
-    a description of the corpus.
-
-  - **The exit criteria.** The map's artifact carries the label-pair block
-    (every pair's two halves, the near-duplicates, the neighbours, the
-    vocabulary-less class, the per-label summary and the catalog's comparison
-    with its bootstrap); every number CS-23, CS-31, CS-33, CS-34 and CS-36
-    reported is **reproduced unchanged** (the block grew, nothing else moved);
-    the table row is auto-appended; the log section reads the numbers out with
-    the falsification conditions; the gate green (ruff over
-    `src`/`tests`/`experiments`/`tools`, the full pytest suite, the two verify
-    tools, and both final sweeps reproducing their artifacts field for field).
-
-  - **The cost, in compute.** The relation is 2,278 pairs over the train
-    split's 1,676 texts; the bootstrap (2,000 map rebuilds) is about four
-    minutes. **No new dependency.**
 
 - [ ] **CS-39 — the phrase map: do phrases beat their own words?** The map's
   unit, one step finer.

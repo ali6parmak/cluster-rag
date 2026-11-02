@@ -72,7 +72,7 @@ from cluster_rag.experiment_table import (
     RERANK_UPR_COLUMNS,
     RERANK_UPR_KEY_COLUMNS,
 )
-from cluster_rag.label_catalog import LabelEntry
+from cluster_rag.label_catalog import LabelEntry, load_label_catalog
 from cluster_rag.omct_analysis import BASELINE_ARM
 from cluster_rag.omct_decision import DecisionArm, score_cells
 from cluster_rag.pos.cache import CachedTagger
@@ -129,6 +129,11 @@ from cluster_rag.text_processors.lexical.label_lexicon import (
     LabelLexicon,
     build_label_lexicon,
     label_lexicon_block,
+)
+from cluster_rag.text_processors.lexical.label_pairs import (
+    label_pair_relation,
+    label_pairs_block,
+    separation_bootstrap,
 )
 from cluster_rag.text_processors.lexical.pos_class import (
     POS_CLASSES,
@@ -946,12 +951,19 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
                     head_k=hitmap.stability_head_k,
                 )
                 stability_data = stability_block(stability_report)
+            # the label-pair relation (CS-38): the corpus map read the other
+            # way round -- a relation between the labels themselves (the
+            # vocabulary they share and how often they co-occur).
+            label_pairs_data: dict[str, Any] | None = None
+            if hitmap.label_pairs.enabled:
+                label_pairs_data = _upr_label_pairs(config, hitmap, train_records, labels)
             corpus_block = corpus_map_block(
                 corpus_map,
                 split="train",
                 tagger=pos_provenance,
                 distribution=pos_distribution or None,
                 stability=stability_data,
+                label_pairs=label_pairs_data,
             )
 
     # -- Version B: the ablation map (the decision model's own ablation) ----------
@@ -3612,6 +3624,74 @@ def _upr_corpus_map_feature(
         "eval_abstain_blind": abstain_eval_blind,
         "meta": meta,
     }
+
+
+def _upr_label_pairs(
+    config: AppConfig,
+    hitmap: Any,
+    train_records: Sequence[Any],
+    labels: Sequence[str],
+) -> dict[str, Any]:
+    """The **label-pair relation**'s readout (the track's CS-38).
+
+    The corpus map read the other way round: a relation between the **labels**
+    themselves — the vocabulary two labels share and how often they co-occur
+    in the same train text. The readout names the lexical near-duplicates, the
+    neighbours and the labels with **no vocabulary of their own**, and compares
+    the corpus's own geometry with the catalog's (the **sibling** relation: the
+    pairs of labels that share a catalog parent).
+
+    The catalog is read at the edge (the committed JSONL file ✓); a run without
+    one still gets the relation, and the comparison says so.
+
+    Args:
+        config: The resolved app config (the catalog's path).
+        hitmap: The hit map's settings (the readout's knobs).
+        train_records: The train split's records (the map's corpus).
+        labels: The label space (the map's columns).
+
+    Returns:
+        The readout block (JSON-friendly).
+    """
+    knobs = hitmap.label_pairs
+    texts = [record.text for record in train_records]
+    label_sets = [list(record.labels) for record in train_records]
+    corpus_map = build_corpus_map(texts, label_sets, list(labels))
+    parents: dict[str, str] = {}
+    catalog_path = config.paths.label_catalog
+    if catalog_path is not None and Path(catalog_path).is_file():
+        for name, entry in load_label_catalog(Path(catalog_path)).items():
+            if entry.parent:
+                parents[name] = entry.parent
+    relation = label_pair_relation(corpus_map, label_sets, parents=parents)
+    separation = None
+    if knobs.bootstrap_resamples > 0:
+        separation = separation_bootstrap(
+            texts,
+            label_sets,
+            list(labels),
+            parents=parents,
+            resamples=knobs.bootstrap_resamples,
+            seed=knobs.bootstrap_seed,
+        )
+    block = label_pairs_block(
+        relation,
+        near_duplicate=knobs.near_duplicate,
+        containment_threshold=knobs.containment,
+        n_neighbours=knobs.n_neighbours,
+        separation=separation,
+    )
+    block["catalog"] = {
+        "available": bool(parents),
+        "n_labels_with_a_parent": len(parents),
+        "n_parents": len(set(parents.values())),
+        "note": (
+            "the catalog's own relation: the parents are types, not labels, so the "
+            "measurable form of the taxonomy's claim about the label space is the "
+            "sibling relation (the pairs of labels that share a parent)"
+        ),
+    }
+    return block
 
 
 def _permuted_label_sets(label_sets: Sequence[Sequence[str]], seed: int) -> list[list[str]]:

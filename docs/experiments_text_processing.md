@@ -90,7 +90,7 @@ research record and are **not** indexed here.
 | [CS-35 — the label→word lexicon as a label-side channel](#cs-35--the-labelword-lexicon-as-a-label-side-channel-2026-11-02) | seven runs (`upr-labelembed-embeddinggemma-mined`, `upr-eval-fusionc-embeddinggemma-k10-c1-mined`, `upr-analyze-learned-lexicon-*`) | the mined words are the **best cell-level signal in the pack** (the AUC **0.8109**, above the whole-text cosine's 0.7818 and the description's 0.7067) and the channel buys **+0.0493 / +0.0507** of seen-bucket micro-F1 over the control — but the **pre-registered bar is not met** (the head-to-head against the name+description channel: +0.0217 [−0.0014, +0.0445] and +0.0272 [+0.0044, +0.0502], only one of three seen buckets clearing) → the lexicon **does not become a catalog channel**; the **expansion route** is a null for the eight | `results/upr-analyze-learned-lexicon-minedfeat/analysis.json` |
 | [CS-36 — the stability map](#cs-36--the-stability-map-which-links-survive-resampling-2026-11-02) | five `upr-eval-corpus-map-sum-zscore-positive-{stable75,stable90,stable75-blind,stable90-blind,blind}-val` runs + the map's re-written `corpus_map.stability` block | the map's bulk is **measurably noise**: the survival curve has a **cliff at 63 %** (1 − e⁻¹) and **not one** of the 12,483 single-text links survives τ = 0.75 (only 27.6 % of the map does) — but the **model test fires**: the filtered map's fit side's out-of-fold micro-F1 is **lower** (0.6544 / 0.6473 against the full map's 0.6613) and the val number agrees (a paired **+0.0053 [−0.0015, +0.0128]**) → the **filter is a null**, the readout is the deliverable; the head words keep their place in only **50 %** of the resamples | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-37 — the selective map](#cs-37--the-selective-map-unknown-instead-of-impossible-2026-11-02) | one `upr-analyze-cmap-abstain` run (the pack + the map's column, the control, the blind map and the two abstaining arms) | the abstention ("no evidence" as NaN instead of the floor's "impossible") is a **null**: the eight held-out labels stay at **0.0000** (the paired unseen-view difference is exactly **+0.0000**) — the "impossible" verdict was never in the **encoding**: a map with no word↔label information at all collapses them the same way, and it is the **channel's silence on the fit side** (the eight are the labels the map is silent about *and* the labels that are never positive) that costs them; the seen buckets are untouched (a paired **+0.0032 [−0.0037, +0.0100]**) and the label-blind control buys nothing | `results/upr-analyze-cmap-abstain/analysis.json` |
-
+| [CS-38 — the label-pair map](#cs-38--the-label-pair-map-the-lexical-neighbours-the-twins-the-labels-with-no-vocabulary-of-their-own-2026-11-02) | one `upr-hitmap-corpus` run (the map's own artifact, re-written with the `corpus_map.label_pairs` block) | the corpus's label-pair relation **is** the taxonomy's (the registered disagreement test fires on both legs: the sibling pairs' mean vocabulary Jaccard is **+0.0413 [+0.0372, +0.0451]** above the other pairs' and **11 of the corpus's 20 closest pairs** are siblings against a bar of 4) — so the relation is a **null**; and the **vocabulary-less class** is a finding (**13 labels**: the eight held-out ones plus five whose own words lie almost entirely inside one neighbour's table, *Sexual and reproductive rights* 94 % inside *Women's rights*) | `results/upr-hitmap-corpus/hitmap.json` |
 ## Change sets
 
 Infrastructure change sets (no run artifact, hence no numbers):
@@ -7406,3 +7406,146 @@ set on it.
   have no out-of-fold counterpart (the pack is fitted on train and scored on
   val), so the discipline here is the paired CI plus the label-blind control —
   CS-32's own shape.
+
+## CS-38 — the label-pair map: the lexical neighbours, the twins, the labels with no vocabulary of their own (2026-11-02)
+
+**The question.** The corpus map (CS-23) is a relation between **labels and
+words**. Read the other way round, it is a relation between the **labels**:
+two labels that share their vocabulary are near-duplicates, two labels that
+keep appearing in the same train texts are neighbours. This change set reads
+that relation out and compares it with the catalog's own claim about the label
+space.
+
+**The run.** The map's own artifact, re-written once:
+`results/upr-hitmap-corpus/hitmap.json` (the new block `corpus_map.label_pairs`).
+The sweep is `experiments_text_processing/upr_hitmap_corpus_sweep.py` (the
+sweep label `upr_hitmap_corpus`), so the row lands in the **track's** UPR
+table under `## UPR — upr_hitmap_corpus`. **266 s**, no model call, no
+embedding: the relation is a description of the corpus (the 2,000-resample
+separation bootstrap is most of the time).
+
+**The mechanism.** For every pair of the 68 labels, two halves: the
+**vocabulary** (the shared words' count, the **Jaccard**, the
+**containment** — the share of the smaller table inside the larger) and the
+**co-occurrence** (the train texts carrying both, the **lift** over
+independence, the Jaccard of the two labels' text sets). The catalog's 12
+parents are **types, not labels** (none of the 68 entries is a parent), so the
+measurable form of the taxonomy's claim about the label space is the
+**sibling** relation: the **227** pairs of labels that share a parent.
+
+### The readout (the map's own block: `corpus_map.label_pairs`)
+
+| what | the number |
+|---|---|
+| the labels / the pairs | 68 (60 with a table) / **2,278** |
+| the **sibling** pairs (the catalog's claim) | **227** (a chance rate of 9.96 %) |
+| the mean vocabulary Jaccard / containment / lift | 0.1162 / 0.2906 / 0.5276 |
+| the **near-duplicates** (the vocabulary Jaccard ≥ 0.50) | **0** — the closest pair is at **0.489** |
+| the **vocabulary-less** class | **13** labels (the eight held-out ones + five more) |
+
+**The closest pairs** (the vocabulary Jaccard's top 20) — **11 of the 20 are
+sibling pairs**:
+
+| the pair | the Jaccard | the containment | the shared words | a sibling? |
+|---|---|---|---|---|
+| Rights of the Child / Women's rights | **0.489** | 0.703 | 694 | yes |
+| Freedom of opinion and expression / Freedom of the press | 0.479 | 0.663 | 171 | yes |
+| Labour rights / Migrants | 0.441 | 0.678 | 246 | no |
+| Civil society / Human rights defenders | 0.413 | 0.644 | 163 | yes |
+| Discrimination / Sexual Orientation and Gender Identity | 0.382 | 0.634 | 175 | yes |
+| Poverty / Right to food | 0.371 | 0.545 | 146 | yes |
+
+**The neighbours** (the 20 strongest co-occurrence lifts) — **10 of the 20 are
+sibling pairs**: *Freedom of opinion and expression / Freedom of the press*
+(lift **18.6**, 18 shared texts), *Civil society / Human rights defenders*
+(16.5), *Racial discrimination / Violent extremism and human rights* (15.8, not
+siblings), *Indigenous peoples / Right to land* (15.7, not siblings),
+*Enforced disappearances / Extrajudicial executions* (15.7), *Right to health /
+Sexual and reproductive rights* (14.6), *Labour rights / Migrants* (10.8, not
+siblings).
+
+**The "no vocabulary of their own" class** — **13 labels**:
+
+- the **eight held-out labels** (their tables are empty by construction):
+  *Asylum-seekers - refugees*, *ESC rights - general*, *Freedom of
+  association and peaceful assembly*, *Freedom of religion and belief*,
+  *Gender-based violence*, *General*, *Other*, *Special procedures*;
+- and **five more**, whose own words lie almost entirely inside one
+  neighbour's table:
+
+  | the label | the partner | the share of its own table |
+  |---|---|---|
+  | Sexual and reproductive rights | Women's rights | **0.935** |
+  | Freedom of assembly | Detention | **0.909** |
+  | Statelessness and the right to nationality | Rights of the Child | **0.864** |
+  | CP rights - general | International instruments | **0.843** |
+  | Trafficking | Rights of the Child | **0.808** |
+
+### The falsification, read out
+
+1. **The disagreement test FAILS — the corpus's relation IS the taxonomy's.**
+   (a) The **separation** (the sibling pairs' mean vocabulary Jaccard minus
+   the other pairs') is **+0.0413 [+0.0372, +0.0451]** (the bootstrap over the
+   train texts; 2,000 resamples; seed 42): the interval **excludes zero**,
+   where the registered test wanted it to include it. (b) The corpus's **20
+   closest pairs** contain **11** sibling pairs, where the registered bar was
+   at most 4 (the chance expectation is about 2). The co-occurrence agrees as
+   loudly: the siblings' mean lift is **1.62** against the other pairs' **0.41**
+   (four times), and **10 of the 20** strongest neighbours are siblings. So
+   **the corpus knows nothing the taxonomy did not already say** — the falsification
+   fires and the readout is a **null** for the relation's claim, and no action
+   is licensed.
+2. **The vocabulary-less class test PASSES.** The class **exists** (13
+   members), it is **read** (the table above), and the **eight held-out labels
+   are in it** — the label-holdout is a **lexical** fact: the held-out labels
+   are exactly the ones the corpus says nothing about. The class's five extra
+   members are the more interesting half: *CP rights - general* (the plan's
+   third "`- general`" label, which the map's own measurement shows is **not**
+   held out — but it *is* vocabulary-less: 84 % of its words lie inside
+   *International instruments*), *Freedom of assembly* (91 % inside *Detention*),
+   *Sexual and reproductive rights* (94 % inside *Women's rights*),
+   *Statelessness and the right to nationality* (86 % inside *Rights of the
+   Child*) and *Trafficking* (81 % inside *Rights of the Child*).
+
+### The reading: the corpus has no twins, and the taxonomy is right
+
+- **There are no lexical twins.** Not one pair of the 2,278 reaches the
+  registered near-duplicate threshold: the closest is *Rights of the Child* /
+  *Women's rights* at **0.489** — half their words in common, but each keeps
+  its own half too (the biggest table, *Rights of the Child* with 1,125 words,
+  shares 694 of them with *Women's rights* and keeps 431 of its own). The
+  map's vocabulary is **broad and flat**, not a set of duplicates.
+- **What the corpus's relation adds is the taxonomy's, confirmed.** The
+  families the catalog's writer drew are the families the corpus's words draw:
+  the sibling pairs are closer in vocabulary (+0.0413 [+0.0372, +0.0451]) and
+  co-occur four times more than chance. The label space's geometry is not a
+  *lexical* discovery — it is a **rediscovery**, and the round's question ("does
+  the corpus know the taxonomy better than the taxonomy's writer did?") is
+  answered **no**.
+- **Where the corpus *does* say something new** is the vocabulary-less class:
+  five labels that are not held out but that the corpus says almost nothing
+  about on their own (*Sexual and reproductive rights* is 94 % *Women's
+  rights*; *Freedom of assembly* is 91 % *Detention*; *Trafficking* and
+  *Statelessness* are *Rights of the Child*). Those are the labels whose own
+  lexical identity is thin — the ones a lexical channel would have the least
+  to say about.
+
+### What this change set does not say
+
+- Nothing about **test** (the round's numbers are val only) and nothing about
+  the **classifier**: the relation is a description of the corpus, not a
+  model, and no arm was fitted.
+- Nothing about the **near-duplicate threshold** being the right one: it was
+  fixed in advance (0.50) and it finds **nothing**, so the "twins" the plan
+  hoped for do not exist at that level — a threshold sweep was not registered
+  and is not measured here.
+- Nothing about the **corpus's own label-space structure** beyond the
+  relation: the plan's other half (CS-39's phrase map, CS-38's own successors)
+  is untouched.
+- Nothing about the **falsification's two legs disagreeing**: the
+  disagreement test failed on both legs (the separation's interval excluded
+  zero and the top-20 hit count was 11 against a bar of 4), and the
+  vocabulary-less test passed — the readout is reported as a **null for the
+  relation** and as a **finding for the class**, exactly as the plan's rule
+  says ("if either fails, the readout is reported as a null ... and no action is
+  licensed").

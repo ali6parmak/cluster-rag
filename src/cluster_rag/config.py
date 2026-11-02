@@ -1374,6 +1374,42 @@ class UprDecisionRuleConfig(BaseModel):
         return value
 
 
+class UprLabelPairsConfig(BaseModel):
+    """The **label-pair relation**'s readout (the track's CS-38).
+
+    The corpus map read the other way round: a relation between **labels** —
+    the vocabulary two labels share and how often they co-occur in the same
+    train text. The readout names the lexical near-duplicates, the neighbours
+    and the labels with **no vocabulary of their own**, and compares the
+    corpus's own geometry with the catalog's (the **sibling** relation: the
+    pairs of labels that share a catalog parent).
+
+    Attributes:
+        enabled: Whether the run computes the relation at all. The default is
+            ``False``, so the earlier runs' artifacts keep their exact content.
+        near_duplicate: The vocabulary **Jaccard** at which two labels count
+            as lexical near-duplicates.
+        containment: The share of a label's own table that must lie inside one
+            partner's table for the label to count as having **no vocabulary of
+            its own**.
+        n_neighbours: How many pairs the readout lists as the **neighbours**
+            (the strongest co-occurrence lifts).
+        bootstrap_resamples: How many bootstrap resamples the **separation**
+            between the catalog's sibling pairs and the rest rests on (the
+            resampling unit is the text: the map is rebuilt on every resample).
+        bootstrap_seed: The resampling's seed (deterministic).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    near_duplicate: float = Field(default=0.5, ge=0.0, le=1.0)
+    containment: float = Field(default=0.8, ge=0.0, le=1.0)
+    n_neighbours: int = Field(default=20, ge=1)
+    bootstrap_resamples: int = Field(default=2000, ge=0)
+    bootstrap_seed: int = 42
+
+
 class UprHitMapConfig(BaseModel):
     """The **hit map**'s settings (the track's CS-18).
 
@@ -1428,6 +1464,10 @@ class UprHitMapConfig(BaseModel):
         stability_head_k: How many of a label's top words by log-odds count as
             its **head words** (the second stability statistic: does the pair
             keep its place among them?).
+        label_pairs: The **label-pair relation**'s readout (the track's CS-38):
+            the corpus's own geometry over the label space (the vocabulary
+            overlap and the co-occurrence of every pair of labels), read
+            against the catalog's own relation. Off by default.
         catch_all_labels: The generic catch-alls the map reports beside the
             held-out labels.
         surrogate_lambda: The ridge penalty of the surrogate (the larger, the
@@ -1451,6 +1491,7 @@ class UprHitMapConfig(BaseModel):
     include_corpus_map: bool = True
     stability_resamples: int = Field(default=0, ge=0)
     stability_head_k: int = Field(default=10, ge=1)
+    label_pairs: UprLabelPairsConfig = Field(default_factory=UprLabelPairsConfig)
     catch_all_labels: tuple[str, ...] = ("General", "Other")
     surrogate_lambda: float = Field(default=1.0, ge=0.0)
     surrogate_min_df: int = Field(default=3, ge=1)
