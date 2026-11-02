@@ -588,6 +588,7 @@ def corpus_map_block(
     split: str = "train",
     tagger: Mapping[str, object] | None = None,
     distribution: Mapping[str, Counter[str]] | None = None,
+    stability: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """The corpus map as the artifact's own block (JSON-friendly).
 
@@ -601,6 +602,9 @@ def corpus_map_block(
         split: The split the corpus is (the artifact records it).
         tagger: The tagger's provenance (CS-34), when the corpus was tagged.
         distribution: The corpus's per-word tag counts (CS-34).
+        stability: The map's **stability** block (CS-36), already built by the
+            caller (the stability module imports this one, so the block cannot
+            be built here without a circular import).
 
     Returns:
         The block (JSON-friendly).
@@ -657,6 +661,17 @@ def corpus_map_block(
         "estimator": estimator_block(corpus_map),
         "word_classes": word_class_block(corpus_map),
         "pos_classes": pos_class_block(corpus_map, tagger=tagger, distribution=distribution),
+        "stability": (
+            dict(stability)
+            if stability is not None
+            else {
+                "available": False,
+                "note": (
+                    "this run estimated no stability: the map's own uncertainty was "
+                    "not measured (the stability_resamples knob is off)"
+                ),
+            }
+        ),
         "per_label": [
             {
                 "label": label,

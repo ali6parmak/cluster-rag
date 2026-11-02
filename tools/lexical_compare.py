@@ -42,6 +42,8 @@ from cluster_rag.eval.multilabel import (
 )
 from cluster_rag.text_processors.features.corpus_map import build_corpus_map
 from cluster_rag.text_processors.lexical.corpus_map_score import score_cells
+from cluster_rag.text_processors.lexical.label_blind import permuted_label_sets
+from cluster_rag.text_processors.lexical.stability import HEAD_K, estimate_stability
 
 DEFAULT_RESULTS = Path("results")
 
@@ -91,6 +93,10 @@ def _arm_scores(run_id: str, results: Path) -> tuple[np.ndarray, np.ndarray, dic
     scoring = (predictor.get("params") or {}).get("scoring", "sum_logodds")
     restrict = (predictor.get("params") or {}).get("restrict")
     restrict_pos = (predictor.get("params") or {}).get("restrict_pos")
+    stability_min = (predictor.get("params") or {}).get("stability_min")
+    stability_resamples = (predictor.get("params") or {}).get("stability_resamples", 500)
+    label_blind = (predictor.get("params") or {}).get("label_blind", False)
+    seed = config.get("seed", 42)
     word_pos: dict[str, str] = {}
     if restrict_pos is not None:
         # the grammatical classes (CS-34): the train corpus is tagged with the
@@ -101,18 +107,36 @@ def _arm_scores(run_id: str, results: Path) -> tuple[np.ndarray, np.ndarray, dic
             load_config(run_dir / "config.yaml"),
             [record.text for record in train_records],
         )
+    train_label_sets = [record.labels for record in train_records]
+    if label_blind:
+        # the label-blind counterpart (CS-36): the same map with the labels
+        # permuted among the train records.
+        train_label_sets = permuted_label_sets(train_label_sets, seed)
     corpus_map = build_corpus_map(
         [record.text for record in train_records],
-        [record.labels for record in train_records],
+        train_label_sets,
         labels,
         word_pos=word_pos or None,
     )
+    keep = None
+    if stability_min is not None:
+        # the stability filter (CS-36): the same estimate the run applied.
+        report = estimate_stability(
+            [record.text for record in train_records],
+            train_label_sets,
+            corpus_map,
+            resamples=stability_resamples,
+            seed=seed,
+            head_k=HEAD_K,
+        )
+        keep = report.label_survivors(stability_min)
     scores = score_cells(
         [record.text for record in records],
         corpus_map,
         scoring=scoring,
         restrict=restrict,
         restrict_pos=restrict_pos,
+        keep=keep,
     )
     gold = build_label_matrix(records, labels)
     return scores, gold, artifact

@@ -46,6 +46,13 @@ CHAMPION_EMBEDDING_RUN = "upr-embed-embeddinggemma"
 CHAMPION_LABEL_EMBEDDING_RUN = "upr-labelembed-embeddinggemma-about"
 LENGTH_BUCKETS: tuple[int, ...] = (100, 200, 300)
 
+# The map's own **stability** (the track's CS-36): the number of bootstrap
+# resamples the estimate rests on (B = 500, the pre-registered value) and the
+# head size (K = 10). The classifier arms that apply the filter use the same
+# two numbers, so the run's readout and the arms' filter are the same object.
+STABILITY_RESAMPLES = 500
+STABILITY_HEAD_K = 10
+
 # The UPR-native **task** instruction (the same one the CS-9b grid run used, so
 # the intact-text calls are that run's cache hits).
 INSTRUCTIONS = "Is the text about the topic in the question?"
@@ -113,6 +120,12 @@ cells = [
                 include_ablation=False,
                 include_label_blind=True,
                 include_corpus_map=True,
+                # the map's own **stability** (CS-36): the train split's texts
+                # are resampled with replacement, the map is rebuilt on each
+                # resample, and every (label, word) pair's survival is read
+                # off. No model call: the map is a description of the data.
+                stability_resamples=STABILITY_RESAMPLES,
+                stability_head_k=STABILITY_HEAD_K,
             ),
         ),
     )

@@ -1420,6 +1420,14 @@ class UprHitMapConfig(BaseModel):
             its own; it is **on** by default (the reviewer's decision of
             2026-11-01), so every ``hitmap-upr`` run carries it and a re-run
             of the earlier sweeps grows the artifact by a few MB.
+        stability_resamples: How many **bootstrap resamples** the map's own
+            **stability** (CS-36) is estimated on: the train split's texts are
+            resampled with replacement, the map is rebuilt on each resample,
+            and every (label, word) pair's survival is read off. **0** (the
+            default) measures nothing — the stability block then says so.
+        stability_head_k: How many of a label's top words by log-odds count as
+            its **head words** (the second stability statistic: does the pair
+            keep its place among them?).
         catch_all_labels: The generic catch-alls the map reports beside the
             held-out labels.
         surrogate_lambda: The ridge penalty of the surrogate (the larger, the
@@ -1441,6 +1449,8 @@ class UprHitMapConfig(BaseModel):
     include_ablation: bool = True
     include_label_blind: bool = True
     include_corpus_map: bool = True
+    stability_resamples: int = Field(default=0, ge=0)
+    stability_head_k: int = Field(default=10, ge=1)
     catch_all_labels: tuple[str, ...] = ("General", "Other")
     surrogate_lambda: float = Field(default=1.0, ge=0.0)
     surrogate_min_df: int = Field(default=3, ge=1)

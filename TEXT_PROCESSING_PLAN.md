@@ -1312,11 +1312,15 @@ one text").
 is the round's centrepiece, and we now know three things about it that were
 never designed for. Its **bulk is fragile**: **66.7 %** of the 18,707
 (label, word) pairs rest on a **single train text** and **13.6 %** are hapaxes —
-while its **heads are clean** (not one of CS-35's 600 mined words is a hapax:
-the idf factor already demotes them), so the noise sits in the **tail** the sum
-arms add up. Its **estimator is asymptotic** (CS-31's z-score), never
-empirical: nothing has measured how much of the map is sampling noise. And its
-**biggest defect is not its quality but its abstention**: the empty tables make
+**CS-36 measured that fragility** (not one of the 12,483 single-text links
+survives a resampling) **and found that removing it makes the classifier
+worse**, so the fragility is real but it is not what the map's classifier is
+made of — while its **heads are clean** (not one of CS-35's 600 mined words is
+a hapax: the idf factor already demotes them), so the noise sits in the
+**tail** the sum arms add up. Its **estimator is asymptotic** (CS-31's
+z-score), never empirical — but the empirical counterpart now exists
+(CS-36's resampling). And its **biggest defect is not its quality but its
+abstention**: the empty tables make
 the eight held-out labels *impossible*, and with the map's column in the pack
 the unseen bucket goes **0.4867 → 0.0000** (CS-32). So the round's question is
 one question: **how good is the corpus map, and where does it not know?**
@@ -1345,182 +1349,20 @@ CS-41 (the lexical kNN).
    the estimator's work (CS-31) has to be redone per unit — or the new map will
    look worse for a reason that has nothing to do with phrases.
 
-- [ ] **CS-36 — the stability map: which links survive resampling.** The map's
-  uncertainty, measured.
-
-  **The mechanism.** Resample the **train** split's texts (B bootstrap
-  resamples, seeded), rebuild the corpus map on each, and read every
-  (label, word) pair's **stability**: the share of resamples in which the pair is
-  present in the label's table and keeps its sign (and, separately, the share in
-  which it keeps its place among the label's head words). Then two things: the
-  **readout** — the stability of every pair, the share of the map that survives
-  at a stated threshold, and the per-label stability — and the **payoff** — the
-  map restricted to the stable pairs, through the **existing** scorer, as a
-  classifier against the full map.
-
-  **Why.** The map's bulk is fragile (two thirds of its pairs rest on one train
-  text) and we have never measured how much of it is sampling noise: CS-31's
-  z-score is an *asymptotic* repair, this is the empirical one. And the target
-  is known: the **heads are already clean** (CS-35's 600 mined words contain no
-  hapax), so what a stability filter can remove is the **tail** the sum arms
-  add up — and CS-33 already said the tail is where the trouble is (the
-  distinctive-only map is a much worse classifier: 0.0798).
-
-  **The falsification, registered in advance.** (i) The **noise test**: if the
-  share of links that survive at the stated threshold is high, the map is not
-  noise-dominated and the filter has nothing to remove — the readout is then
-  the deliverable and the filter is a null, reported as a null. (ii) The
-  **model test**: the filtered map must move the **fit side's** classifier — the
-  out-of-fold train micro-F1 (CS-30's instrument) must be **higher** than the
-  full map's; if it does not move, the better description is not a better model
-  (CS-31's shape). The val number is read beside the fit side's, never as the
-  selection.
-
-  **The cost.** About a day. **No new dependency.**
-
-  **The pre-registration (2026-11-02, written before the first call).** The
-  block above fixes the mechanism; this fixes the *shape* of the number.
-
-  - **Where the code lives.** The **stability estimator** is pure and lives in
-    `text_processors/lexical/stability.py` (numpy and the standard library only
-    — no model client, no I/O). The **filter** rides into the **existing**
-    scorer (`text_processors/lexical/corpus_map_score.py`: `score_cells` and
-    `cross_fit_scores`) as a new argument, and into the **existing**
-    `corpus_map` predictor as new parameters (`stability_min`,
-    `stability_resamples`, `label_blind`). The **readout** is a new sub-block
-    of the map's **own** artifact, written by the same `hitmap-upr` command that
-    wrote CS-23's block — the block is **not** renamed or reshaped.
-
-  - **The resampling.** The **train** split's texts (1,676) are resampled
-    **B = 500** times, **with replacement** (the ordinary bootstrap: each
-    resample draws 1,676 texts uniformly with replacement from the 1,676),
-    seeded with the **run's seed (42)**. On each resample the corpus map is
-    rebuilt **from scratch** — the same builder, the same tokenizer, the same
-    label space. No val text, no val label, no test text enters any resample.
-    The resample is a *corpus*, so a text drawn twice counts as two documents
-    (the document frequencies see it twice). The resamples are **streamed**: one
-    map is alive at a time.
-
-  - **The statistic.** For every **(label, word) pair of the full map** (the
-    18,707 pairs), three numbers, each a **share of the 500 resamples**:
-    - **`present_share`** — the share of resamples in which the pair is **in
-      the label's table** at all (the word occurs in at least one resampled
-      text that carries the label);
-    - **`sign_stability`** — the share of resamples in which the pair is
-      present **and keeps its sign**: the sign of its log-odds is the sign it
-      has in the full map. **This is the statistic the filter uses** — a link
-      whose sign flips from sample to sample is not a link, it is a coin;
-    - **`head_stability`** — the share of resamples in which the pair is
-      present **and keeps its place among the label's head words**: it is
-      still among the label's **top 10** words by log-odds (**K = 10**, the
-      head size — CS-35's top-10 convention, so the number is the same
-      convention as the mined lexicon's). This one is **reported, not filtered
-      on**: it is the "does the map's own ordering survive" question, and the
-      plan asks for it separately.
-
-  - **The filter.** A pair **survives** at a threshold **τ** iff its
-    **`sign_stability` ≥ τ**; the dropped pairs are removed from the label's
-    table entirely (as if they had never been in it). **A label whose every
-    pair is dropped has, by construction, no evidence left**: it is then
-    treated exactly like a label with no train example — it carries the row's
-    floor and can never be predicted. (The filter's one extra rule, fixed here,
-    in advance.)
-
-  - **The thresholds (two, pre-registered).** **τ = 0.75** and **τ = 0.90**.
-    The reading: a link that rests on a **single** train text is present in
-    about **63 %** of the resamples (1 − e⁻¹) and one that rests on **two** in
-    about **86 %**, so τ = 0.75 is the level at which "the link rests on at
-    least two train texts" and τ = 0.90 is roughly "at least three". **The
-    choice between them is never made on val**: the arm with the higher **fit
-    side's out-of-fold** micro-F1 is the selected one (CS-30's instrument), and
-    the val numbers of both are reported beside it.
-
-  - **The readout** (the map's own artifact,
-    `results/upr-hitmap-corpus/hitmap.json`, a new `stability` sub-block
-    inside the existing `corpus_map` block):
-    - the knobs (B, the seed, K) and the statistic's own definitions;
-    - **every** pair's three shares, beside its `n_with`, its `df` and its
-      log-odds, so any threshold can be read off the table;
-    - the **survival curve**: the share of the map's pairs that survives at
-      every threshold from 0.00 to 1.00 in steps of 0.05 (the readout itself is
-      threshold-free; the two registered thresholds are read off it);
-    - the survival share **by support** — the pairs resting on 1, 2, 3, … train
-      texts — the reading of the fragility the plan states;
-    - the **per-label** stability: each label's table size before and after the
-      filter at each threshold, its mean `sign_stability`, and the labels that
-      lose their whole table.
-
-  - **The payoff.** The **existing** scorer (the arm `sum_zscore_positive` —
-    CS-31's fit-side selection, the arm every map arm uses) and the
-    **existing** `evaluate` command, on UPR **val** at the same `top_k` k=2
-    operating point: the map restricted to the stable pairs, against the full
-    map. The filter rides into the **fit side's cross-fit**: each fold's
-    filter is estimated on **that fold's own map** (the fold's training texts
-    resampled), so the fit side reads the same kind of map the evaluated split
-    is scored with.
-
-  - **The runs.** Four `evaluate` runs — all UPR **val**, `top_k` k=2, the arm
-    `sum_zscore_positive` — in the sweep
-    `experiments_text_processing/corpus_map_stability_sweep.py` (the sweep
-    label `corpus_map_stability`, so the rows land in the **main** UPR table's
-    `## UPR — corpus_map_stability` section), plus the **readout**: the map's
-    own artifact is re-written once (the `corpus_map.stability` block).
-
-    | run | what |
-    |---|---|
-    | `upr-eval-corpus-map-sum-zscore-positive-stable75-val` | τ = 0.75, the real map |
-    | `upr-eval-corpus-map-sum-zscore-positive-stable90-val` | τ = 0.90, the real map |
-    | `upr-eval-corpus-map-sum-zscore-positive-stable75-blind-val` | τ = 0.75, the **label-blind** counterpart |
-    | `upr-eval-corpus-map-sum-zscore-positive-stable90-blind-val` | τ = 0.90, the label-blind counterpart |
-
-    The label-blind counterpart is the **same map built with the labels
-    permuted among the train records** (the per-label counts are preserved,
-    only the assignment changes — the track's own label-permutation control,
-    as in CS-32).
-
-  - **What is measured.** Each run's **val** micro-F1 (pooled and per bucket)
-    and the **paired** difference against the full map (`tools/lexical_compare.py`:
-    the same texts, the same operating point, the bootstrap over the texts as
-    the resampling unit), and the **fit side's** in-fold and out-of-fold
-    micro-F1 (CS-30's instrument). The full map's numbers are the ones already
-    in the artifact (`upr-eval-corpus-map-sum-zscore-positive-val`: pooled
-    **0.5243**, the fit side's out-of-fold **0.6613**).
-
-  - **The falsification, registered in advance.**
-    1. **The noise test.** At the primary threshold (τ = 0.75), the share of
-       the map's pairs that survives must be **below 0.90**. If **90 % or more**
-       of the map survives, the map is **not** noise-dominated, the filter has
-       almost nothing to remove, and the filter is a **null** — the readout is
-       then the deliverable, and it is reported as a null.
-    2. **The model test.** The **selected** arm's **fit side's out-of-fold**
-       micro-F1 must be **strictly higher** than the full map's **0.6613**. If
-       it does not move, the better description is not a better model (CS-31's
-       shape) and the filter is a **null**, reported as a null. If the fit side
-       moves but the **val** paired interval **includes zero**, the reading is
-       *not established on val* and the filter does not become the map's
-       default. The val number is read **beside** the fit side's, never as the
-       selection.
-    3. **The control test.** The **label-blind** counterpart must buy
-       **nothing**: its paired Δ (filtered − full) must not be positive with an
-       interval that excludes zero, and its pooled micro-F1 must stay at the
-       chance level. If the blind arm's Δ is positive with an interval that
-       excludes zero, the filter's gain is **not label-driven** and the claim
-       is withdrawn.
-
-  - **The exit criteria.** The map's artifact carries the stability block
-    (every pair's three shares, the survival curve, the per-label stability);
-    the four runs hold their numbers and their fit-side blocks; the table rows
-    are auto-appended; the log section reads the numbers out with the
-    falsification conditions; the paired comparison's tool checks its own
-    rebuild against the runs' artifacts (the filter included); the gate green
-    (ruff over `src`/`tests`/`experiments`/`tools`, the full pytest suite, the
-    two verify tools, and both final sweeps reproducing their artifacts field
-    for field).
-
-  - **The cost, in compute.** The readout is 500 map builds (about 40 s); each
-    filtered run also estimates the filter on each of the 5 cross-fit folds
-    (about 3 min per run), so the four runs are about 15 min of compute. **No
-    new dependency.**
+- **CS-36** (the stability map: which word-to-label links survive the
+  resampling) → executed 2026-11-02 → the archive's §7.5 (the stability map)
+  and the track log's §CS-36. **The readout is the deliverable and the filter
+  is a null**: the map's bulk *is* sampling noise, now measured (the survival
+  curve has a **cliff at 63 %** — 1 − e⁻¹, exactly where a single-text link
+  belongs — and **not one** of the map's 12,483 single-text links survives
+  τ = 0.75; only **27.6 %** of the map does), but the **model test fires**: the
+  filtered map's fit side's out-of-fold micro-F1 is **lower** (0.6544 at
+  τ = 0.75, 0.6473 at τ = 0.90, against the full map's **0.6613**) and the val
+  number agrees (a paired **+0.0053 [−0.0015, +0.0128]**) — a better
+  description is not a better model, so **the filter does not ship**. The
+  label-blind control buys nothing (the blind map stays at chance and the
+  filter makes it worse), and the map's **head words** keep their place among
+  the head in only **50 %** of the resamples.
 
 - [ ] **CS-37 — the selective map: "unknown" instead of "impossible".** The
   map's abstention, made honest.

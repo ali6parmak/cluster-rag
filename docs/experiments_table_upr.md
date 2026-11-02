@@ -350,26 +350,26 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-eval-corpus-map-sum-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4901 | 0.4573 | 0.4685 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 | 660 | 1.277 |
-| upr-eval-corpus-map-sum-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4924 | 0.4582 | 0.4712 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 | 660 | 1.275 |
-| upr-eval-corpus-map-max-logodds-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4848 | 0.4439 | 0.4625 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 | 660 | 1.288 |
-| upr-eval-corpus-map-support-count-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 1.334 |
-| upr-eval-corpus-map-sum-zscore-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.1011 | 0.0429 | 0.0982 | 0.765 | 0.0636 | 0.2393 | 0.1399 | 0.6566 | 660 | 1.294 |
-| upr-eval-corpus-map-sum-zscore-positive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.5243 | 0.4662 | 0.4999 | 0.853 | 0.2585 | 0.6429 | 0.6327 | 0.7157 | 660 | 1.267 |
+| upr-eval-corpus-map-sum-logodds-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.4901 | 0.4573 | 0.4685 | 0.882 | 0.2582 | 0.6746 | 0.6086 | 0.7289 | 660 | 1.416 |
+| upr-eval-corpus-map-sum-positive-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.4924 | 0.4582 | 0.4712 | 0.882 | 0.2630 | 0.6869 | 0.6176 | 0.7307 | 660 | 1.399 |
+| upr-eval-corpus-map-max-logodds-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.4848 | 0.4439 | 0.4625 | 0.882 | 0.2539 | 0.6646 | 0.5990 | 0.7294 | 660 | 1.431 |
+| upr-eval-corpus-map-support-count-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.2698 | 0.2050 | 0.2537 | 0.750 | 0.1845 | 0.5813 | 0.3716 | 0.7229 | 660 | 1.396 |
+| upr-eval-corpus-map-sum-zscore-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.1011 | 0.0429 | 0.0982 | 0.765 | 0.0636 | 0.2393 | 0.1399 | 0.6566 | 660 | 1.405 |
+| upr-eval-corpus-map-sum-zscore-positive-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.5243 | 0.4662 | 0.4999 | 0.853 | 0.2585 | 0.6429 | 0.6327 | 0.7157 | 660 | 1.412 |
 
 ## UPR — corpus_map_classes
 
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-eval-corpus-map-sum-zscore-positive-nogeneric-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.3815 | 0.3755 | 0.3605 | 0.868 | 0.1879 | 0.4872 | 0.4607 | 0.6553 | 660 | 0.793 |
-| upr-eval-corpus-map-sum-zscore-positive-distinctive-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.0798 | 0.1213 | 0.0774 | 0.853 | 0.0458 | 0.1590 | 0.1072 | 0.5880 | 660 | 0.627 |
+| upr-eval-corpus-map-sum-zscore-positive-nogeneric-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.3815 | 0.3755 | 0.3605 | 0.868 | 0.1879 | 0.4872 | 0.4607 | 0.6553 | 660 | 0.848 |
+| upr-eval-corpus-map-sum-zscore-positive-distinctive-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.0798 | 0.1213 | 0.0774 | 0.853 | 0.0458 | 0.1590 | 0.1072 | 0.5880 | 660 | 0.665 |
 
 ## UPR — corpus_map_pos
 
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-eval-corpus-map-sum-zscore-positive-noun-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.4840 | 0.4224 | 0.4608 | 0.838 | 0.2324 | 0.5764 | 0.5761 | 0.6857 | 660 | 1.81 |
-| upr-eval-corpus-map-sum-zscore-positive-verb-val | 2026-11-01 | val | corpus_map | n/a | top_k k=2 | 0.1261 | 0.1197 | 0.1184 | 0.750 | 0.0664 | 0.2048 | 0.1620 | 0.6110 | 660 | 0.973 |
+| upr-eval-corpus-map-sum-zscore-positive-noun-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.4840 | 0.4224 | 0.4608 | 0.838 | 0.2324 | 0.5764 | 0.5761 | 0.6857 | 660 | 1.344 |
+| upr-eval-corpus-map-sum-zscore-positive-verb-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.1261 | 0.1197 | 0.1184 | 0.750 | 0.0664 | 0.2048 | 0.1620 | 0.6110 | 660 | 0.958 |
 
 ## UPR — upr_learned_lexicon
 
@@ -377,3 +377,13 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-labelembed-embeddinggemma-mined | 2026-11-02 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.182 | 68 | 0 |
 | upr-eval-fusionc-embeddinggemma-k10-c1-mined | 2026-11-02 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4961 | 0.5262 | 0.868 | 0.2770 | 0.7085 | 0.6737 | 0.7375 | 660 | 0.139 |
+
+## UPR — corpus_map_stability
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-corpus-map-sum-zscore-positive-stable75-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.5190 | 0.4846 | 0.4952 | 0.809 | 0.2536 | 0.6216 | 0.6236 | 0.7067 | 660 | 217.756 |
+| upr-eval-corpus-map-sum-zscore-positive-stable90-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.5122 | 0.4856 | 0.4896 | 0.809 | 0.2485 | 0.6119 | 0.6154 | 0.7062 | 660 | 219.764 |
+| upr-eval-corpus-map-sum-zscore-positive-stable75-blind-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.0281 | 0.0094 | 0.0243 | 0.441 | 0.0227 | 0.1087 | 0.0429 | 0.5771 | 660 | 249.558 |
+| upr-eval-corpus-map-sum-zscore-positive-stable90-blind-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.0160 | 0.0027 | 0.0146 | 0.147 | 0.0173 | 0.0970 | 0.0304 | 0.5687 | 660 | 240.146 |
+| upr-eval-corpus-map-sum-zscore-positive-blind-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.0372 | 0.0187 | 0.0341 | 0.853 | 0.0330 | 0.1359 | 0.0615 | 0.5895 | 660 | 1.545 |

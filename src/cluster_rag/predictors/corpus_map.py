@@ -19,6 +19,20 @@ count). A selection on the in-fold number would prejudge the very ablation the
 change set exists to run. Both numbers are reported, so the bias is a
 measurement and not an assertion.
 
+**The stability filter (CS-36).** The map's links are fragile — two thirds of
+them rest on a single train text — and the predictor can measure that: with
+``stability_min`` set, the train split is resampled (the ordinary bootstrap),
+the map is rebuilt on every resample, and only the (label, word) pairs whose
+sign survives in at least that share of the resamples contribute to a cell's
+score. The filter rides into the cross-fit too: each fold's filter is
+estimated on **that fold's own map**, so the fit side reads the same kind of
+map the evaluated split is scored with.
+
+**The label-blind counterpart (CS-36).** With ``label_blind`` set, the map is
+built with the labels permuted among the train records (the per-label counts
+are preserved, only the assignment changes): the control that says whether a
+gain is label-driven.
+
 The scorer is pure and lives in the track's package
 (:mod:`cluster_rag.text_processors.lexical.corpus_map_score`); this module is
 the adapter: the construction wiring, the contract checks, the fit side's
@@ -42,8 +56,19 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
     cross_fit_scores,
     score_cells,
 )
+from cluster_rag.text_processors.lexical.label_blind import permuted_label_sets
 from cluster_rag.text_processors.lexical.pos_class import POS_CLASSES
+from cluster_rag.text_processors.lexical.stability import (
+    HEAD_K,
+    StabilityReport,
+    estimate_stability,
+)
 from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES
+
+# The default number of bootstrap resamples a stability estimate rests on
+# (CS-36's B = 500: a pair's share then carries a Monte-Carlo standard error of
+# at most 0.5/sqrt(500) = 0.022).
+DEFAULT_STABILITY_RESAMPLES = 500
 
 
 def _micro_f1_at(scores: np.ndarray, gold: np.ndarray, k: int) -> float:
@@ -77,15 +102,35 @@ class CorpusMapPredictor:
             the map with the generic class dropped, or the distinctive-only map.
         restrict_pos: the grammatical classes to **keep** (CS-34; default every
             class) — the map with the nouns only, or the verbs only.
+        stability_min: the **stability filter** (CS-36): the survival
+            threshold. When set, only the (label, word) pairs that keep their
+            sign in at least that share of the bootstrap resamples contribute to
+            a cell's score; the dropped pairs leave the label's table. ``None``
+            (the default) is the full map.
+        stability_resamples: how many bootstrap resamples the stability
+            estimate rests on (default 500).
+        label_blind: the **label-blind counterpart** (CS-36): the map is built
+            with the labels permuted among the train records, so every
+            word↔label association is destroyed. The control that says whether
+            a gain is label-driven.
 
-    Deterministic: the map, the fold split and the scoring are all
-    deterministic given the train split and the seed.
+    Deterministic: the map, the fold split, the resampling and the scoring are
+    all deterministic given the train split and the seed.
     """
 
     REQUIRES_EMBEDDINGS: bool = False
     REQUIRED_KINDS: tuple[str, ...] = ()
     ALLOWED_PARAMS: frozenset[str] = frozenset(
-        {"scoring", "fit_side_k", "folds", "restrict", "restrict_pos"}
+        {
+            "scoring",
+            "fit_side_k",
+            "folds",
+            "restrict",
+            "restrict_pos",
+            "stability_min",
+            "stability_resamples",
+            "label_blind",
+        }
     )
     NAME: str = "corpus_map"
 
@@ -155,22 +200,69 @@ class CorpusMapPredictor:
                 "part-of-speech tagger (the pos: config section) so the train "
                 "corpus is tagged"
             )
+        stability_min = params.get("stability_min")
+        if stability_min is not None:
+            if isinstance(stability_min, bool) or not isinstance(stability_min, (int, float)):
+                raise ValueError(
+                    f"predictor {self.NAME!r} params['stability_min'] must be a number in "
+                    f"[0, 1], got {stability_min!r}"
+                )
+            if not 0.0 <= float(stability_min) <= 1.0:
+                raise ValueError(
+                    f"predictor {self.NAME!r} params['stability_min'] must be a number in "
+                    f"[0, 1], got {stability_min!r}"
+                )
+        stability_resamples = params.get("stability_resamples", DEFAULT_STABILITY_RESAMPLES)
+        if (
+            not isinstance(stability_resamples, int)
+            or isinstance(stability_resamples, bool)
+            or stability_resamples < 1
+        ):
+            raise ValueError(
+                f"predictor {self.NAME!r} params['stability_resamples'] must be an integer "
+                f">= 1, got {stability_resamples!r}"
+            )
+        label_blind = params.get("label_blind", False)
+        if not isinstance(label_blind, bool):
+            raise ValueError(
+                f"predictor {self.NAME!r} params['label_blind'] must be a boolean, "
+                f"got {label_blind!r}"
+            )
         self._scoring = scoring
         self._fit_side_k = fit_side_k
         self._folds = folds
         self._restrict = tuple(restrict) if restrict is not None else None
         self._restrict_pos = tuple(restrict_pos) if restrict_pos is not None else None
+        self._stability_min = float(stability_min) if stability_min is not None else None
+        self._stability_resamples = stability_resamples
+        self._label_blind = label_blind
         self._labels = context.labels
         self._seed = seed
 
         train_texts = [record.text for record in context.train_records]
         train_label_sets = [record.labels for record in context.train_records]
+        if label_blind:
+            # the label-blind counterpart (the track's own yardstick): the
+            # per-label counts are preserved, only the assignment changes.
+            train_label_sets = permuted_label_sets(train_label_sets, seed)
         self._map = build_corpus_map(
             train_texts,
             train_label_sets,
             context.labels,
             word_pos=context.word_pos or None,
         )
+        self._stability: StabilityReport | None = None
+        self._keep: dict[str, frozenset[str]] | None = None
+        if self._stability_min is not None:
+            self._stability = estimate_stability(
+                train_texts,
+                train_label_sets,
+                self._map,
+                resamples=stability_resamples,
+                seed=seed,
+                head_k=HEAD_K,
+            )
+            self._keep = self._stability.label_survivors(self._stability_min)
         self._fit_side = self._fit_side_block(context, train_texts, train_label_sets)
 
     def _fit_side_block(
@@ -194,6 +286,7 @@ class CorpusMapPredictor:
                 scoring=arm,
                 restrict=self._restrict,
                 restrict_pos=self._restrict_pos,
+                keep=self._keep,
             )
             in_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
         out_of_fold: dict[str, float] = {}
@@ -206,6 +299,8 @@ class CorpusMapPredictor:
             restrict=self._restrict,
             restrict_pos=self._restrict_pos,
             word_pos=context.word_pos or None,
+            stability_min=self._stability_min,
+            stability_resamples=self._stability_resamples,
         )
         for arm, scores in crossed.items():
             out_of_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
@@ -216,6 +311,11 @@ class CorpusMapPredictor:
             "cross_fit_folds": self._folds,
             "restrict": list(self._restrict) if self._restrict is not None else None,
             "restrict_pos": list(self._restrict_pos) if self._restrict_pos is not None else None,
+            "stability_min": self._stability_min,
+            "stability_resamples": (
+                self._stability_resamples if self._stability_min is not None else None
+            ),
+            "label_blind": self._label_blind,
             "in_fold_micro_f1": {arm: round(value, 6) for arm, value in in_fold.items()},
             "out_of_fold_micro_f1": {arm: round(value, 6) for arm, value in out_of_fold.items()},
             "selected": selected,
@@ -226,7 +326,10 @@ class CorpusMapPredictor:
                 "log-odds the map itself computed); the selection is made on the "
                 "out-of-fold number, the fit side's honest reading. A restricted "
                 "run (CS-33, CS-34) reads the same restricted map on the fit side, "
-                "so the numbers here belong to the map the val split is scored with."
+                "so the numbers here belong to the map the val split is scored with. "
+                "A filtered run (CS-36) estimates the filter on EACH FOLD's own map, "
+                "so the out-of-fold numbers belong to a filtered map that never saw "
+                "the texts it scores."
             ),
         }
 
@@ -241,7 +344,53 @@ class CorpusMapPredictor:
             scoring=self._scoring,
             restrict=self._restrict,
             restrict_pos=self._restrict_pos,
+            keep=self._keep,
         )
+
+    def _stability_block(self) -> dict[str, Any]:
+        """The **stability** block (CS-36): the filter's own numbers.
+
+        The readout (every pair's shares, the survival curve, the per-label
+        stability) lives in the map's own artifact; this block is the run's own
+        summary of the filter it applied.
+        """
+        if self._stability is None or self._keep is None:
+            return {
+                "enabled": False,
+                "note": (
+                    "no stability filter: the map is the full map (every pair "
+                    "contributes). Set params['stability_min'] to filter the map by "
+                    "the resampling's stability (CS-36)."
+                ),
+            }
+        report = self._stability
+        n_pairs = len(report.pairs)
+        surviving = sum(len(words) for words in self._keep.values())
+        emptied = [
+            label
+            for label in self._map.labels
+            if self._map.label_counts.get(label) and not self._keep.get(label)
+        ]
+        return {
+            "enabled": True,
+            "threshold": self._stability_min,
+            "resamples": report.resamples,
+            "seed": report.seed,
+            "head_k": report.head_k,
+            "n_pairs": n_pairs,
+            "n_surviving_pairs": surviving,
+            "survival_share": round(surviving / n_pairs, 6) if n_pairs else 0.0,
+            "n_labels_without_examples": len(self._map.labels_without_examples()),
+            "labels_that_lose_their_table": emptied,
+            "note": (
+                "the filter keeps the pairs whose sign survives in at least the "
+                "threshold's share of the bootstrap resamples of the train split; a "
+                "label whose every pair is dropped carries no evidence left and is "
+                "ranked last in every row, exactly like a label with no train "
+                "example. On the fit side the filter is estimated on EACH FOLD's "
+                "own map (the fold's training texts resampled)."
+            ),
+        }
 
     def describe(self) -> dict[str, Any]:
         """Name, the parameters, the map's shape and the fit side's numbers."""
@@ -252,6 +401,7 @@ class CorpusMapPredictor:
             "fit_side_k": self._fit_side_k,
             "restrict": list(self._restrict) if self._restrict is not None else None,
             "restrict_pos": list(self._restrict_pos) if self._restrict_pos is not None else None,
+            "label_blind": self._label_blind,
             "map": {
                 "split": "train",
                 "n_texts": self._map.n_texts,
@@ -273,6 +423,7 @@ class CorpusMapPredictor:
                     "keeps only the words of the named classes."
                 ),
             },
+            "stability": self._stability_block(),
             "fit_side": self._fit_side,
             "floor": {
                 "rule": (

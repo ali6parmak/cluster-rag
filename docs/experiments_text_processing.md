@@ -88,6 +88,7 @@ research record and are **not** indexed here.
 | [CS-33 — the word-class readout](#cs-33--the-word-class-readout-what-kind-of-words-affect-the-label-in-which-way-2026-11-01) | two `upr-eval-corpus-map-sum-zscore-positive-{nogeneric,distinctive}-val` runs + the map's and the surrogate's re-written blocks | the classes separate widely (the **distinctive** words are 100 % positive at a mean of **+4.2676**, the **generic** 81 % at **+0.8439**) — the registered null does not fire — but the payoff is a **loss**: the class-restricted maps are much worse (0.3815 and 0.0798 against the full map's 0.5243), because the strongest words are **rare** and the register is **everywhere**; the model, by contrast, leans on the **name words** (82.9 % positive at **+0.208**) | `results/upr-eval-corpus-map-sum-zscore-positive-distinctive-val/metrics.json` |
 | [CS-34 — real part-of-speech tags](#cs-34--real-part-of-speech-tags-the-grammatical-axis-2026-11-01) | two `upr-eval-corpus-map-sum-zscore-positive-{noun,verb}-val` runs + the map's and the surrogate's re-written blocks | **both halves of the registered falsification fail** (the nouns do not separate from the verbs: +2.0044 against +1.9856; the noun-only map is materially worse: 0.4840 against 0.5243, a paired **+0.0403 [+0.0258, +0.0545]**) → the **grammatical axis is a null** and the `nltk` dependency is not worth keeping | `results/upr-eval-corpus-map-sum-zscore-positive-noun-val/metrics.json` |
 | [CS-35 — the label→word lexicon as a label-side channel](#cs-35--the-labelword-lexicon-as-a-label-side-channel-2026-11-02) | seven runs (`upr-labelembed-embeddinggemma-mined`, `upr-eval-fusionc-embeddinggemma-k10-c1-mined`, `upr-analyze-learned-lexicon-*`) | the mined words are the **best cell-level signal in the pack** (the AUC **0.8109**, above the whole-text cosine's 0.7818 and the description's 0.7067) and the channel buys **+0.0493 / +0.0507** of seen-bucket micro-F1 over the control — but the **pre-registered bar is not met** (the head-to-head against the name+description channel: +0.0217 [−0.0014, +0.0445] and +0.0272 [+0.0044, +0.0502], only one of three seen buckets clearing) → the lexicon **does not become a catalog channel**; the **expansion route** is a null for the eight | `results/upr-analyze-learned-lexicon-minedfeat/analysis.json` |
+| [CS-36 — the stability map](#cs-36--the-stability-map-which-links-survive-resampling-2026-11-02) | five `upr-eval-corpus-map-sum-zscore-positive-{stable75,stable90,stable75-blind,stable90-blind,blind}-val` runs + the map's re-written `corpus_map.stability` block | the map's bulk is **measurably noise**: the survival curve has a **cliff at 63 %** (1 − e⁻¹) and **not one** of the 12,483 single-text links survives τ = 0.75 (only 27.6 % of the map does) — but the **model test fires**: the filtered map's fit side's out-of-fold micro-F1 is **lower** (0.6544 / 0.6473 against the full map's 0.6613) and the val number agrees (a paired **+0.0053 [−0.0015, +0.0128]**) → the **filter is a null**, the readout is the deliverable; the head words keep their place in only **50 %** of the resamples | `results/upr-hitmap-corpus/hitmap.json` |
 
 ## Change sets
 
@@ -7114,3 +7115,169 @@ mined arms was not a pre-registered arm. The numbers above are the honest
   catalog channel; the numbers above (a better cell-level signal than the
   description's, the same pack-level gain, no head-to-head separation) are the
   reviewer's to read.
+
+## CS-36 — the stability map: which links survive resampling (2026-11-02)
+
+**The question.** The corpus map (CS-23) is the train split's own word↔label
+association: 18,707 (label, word) pairs over 3,049 content words. Its bulk is
+fragile — two thirds of the pairs rest on a **single** train text — and until
+now nothing had measured how much of it is **sampling noise**. CS-31's z-score
+is an *asymptotic* repair (a standard error over a table); this is the
+**empirical** one: resample the corpus, rebuild the map on each resample, and
+read every pair's own survival.
+
+**The runs.** Five `evaluate` runs and the map's own artifact, re-written once.
+
+- `upr-eval-corpus-map-sum-zscore-positive-stable75-val` and
+  `upr-eval-corpus-map-sum-zscore-positive-stable90-val` — the **filtered**
+  map (the survival threshold τ = 0.75 and τ = 0.90), the same arm as CS-31's
+  fit-side selection (`sum_zscore_positive`), the same texts and the same
+  operating point (`top_k` k=2). UPR **val**, 660 texts, 218 s and 220 s: no
+  model call, no embedding — 500 map rebuilds for the evaluated map and 500
+  more for each of the 5 cross-fit folds.
+- `upr-eval-corpus-map-sum-zscore-positive-stable75-blind-val` and
+  `upr-eval-corpus-map-sum-zscore-positive-stable90-blind-val` — the same two
+  arms on the **label-blind** map (the labels permuted among the train
+  records): the control that says whether a gain is label-driven.
+- `upr-eval-corpus-map-sum-zscore-positive-blind-val` — the control's **own
+  baseline**: the blind map *without* the filter. (The pre-registration listed
+  four runs; the control test's paired difference needs the blind map's
+  unfiltered arm, so this fifth run was added. It is the control's baseline,
+  not a new arm.)
+- The map's own artifact, re-written once:
+  `results/upr-hitmap-corpus/hitmap.json` (the block `corpus_map.stability`).
+  Every number CS-23 and CS-31 reported is **reproduced unchanged** — the block
+  grew, nothing else moved (checked field for field).
+
+**The mechanism.** The ordinary bootstrap: 500 resamples of the train split's
+1,676 texts, each drawing 1,676 texts uniformly with replacement, each resample
+rebuilding the map **from scratch** (the same builder, the same tokenizer, the
+same label space). The seed is the run's own (42). A resample is a *corpus*,
+so a text drawn twice counts as two documents. No val text, no val label and no
+test text enters any resample. Every pair carries three shares of the 500
+resamples: **present** (the pair is in the label's table), **sign** (it is
+there *and* keeps its log-odds' sign — the statistic the filter uses) and
+**head** (it is there *and* keeps its place among the label's top 10 words by
+log-odds; reported, not filtered on). The filter keeps the pairs whose sign
+stability reaches τ, and a label whose every pair is dropped has no evidence
+left: it then carries the row's floor, exactly like a label with no train
+example. On the fit side the filter is estimated on **each fold's own map**,
+so the out-of-fold numbers belong to a filtered map that never saw the texts it
+scores.
+
+### The readout (the map's own block: `corpus_map.stability`)
+
+**The survival curve** — the share of the map's 18,707 pairs that survives at
+each threshold (the readout is threshold-free; the two registered thresholds
+are read off it):
+
+| τ | 0.50 | 0.55 | 0.60 | **0.65** | 0.70 | **0.75** | 0.80 | 0.85 | **0.90** | 0.95 | 1.00 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| the pairs that survive | 17,804 | 17,397 | 15,957 | **7,798** | 5,378 | **5,168** | 4,889 | 4,155 | **2,349** | 1,744 | 518 |
+| the share | 0.9517 | 0.9300 | 0.8530 | **0.4168** | 0.2875 | **0.2763** | 0.2613 | 0.2221 | **0.1256** | 0.0932 | 0.0277 |
+
+The curve has a **cliff** between τ = 0.60 and τ = 0.65, and the cliff is
+exactly where the arithmetic says it must be: a link that rests on a *single*
+train text is present in about **1 − e⁻¹ = 63 %** of the resamples.
+
+**The survival share by support** — the map's own fragility, now measured:
+
+| the pairs resting on | the pairs | the mean presence | the mean sign | **at τ = 0.75** | **at τ = 0.90** |
+|---|---|---|---|---|---|
+| **1** train text | **12,483** (66.7 %) | 0.6313 | 0.6095 | **0** | **0** |
+| 2 train texts | 2,798 | 0.8645 | 0.8046 | 2,263 | 13 |
+| 3 train texts | 1,106 | 0.9498 | 0.8582 | 888 | 678 |
+| 4 train texts | 638 | 0.9820 | 0.8888 | 543 | 407 |
+| 5 train texts | 365 | 0.9934 | 0.9085 | 313 | 263 |
+| 6 or more | 1,317 | 0.9993 | 0.9254 | 1,161 | 988 |
+
+So the map's bulk is **fragile, and now measurably so**: not one of the 12,483
+single-text links survives τ = 0.75, and only 13 of the 2,798 two-text links
+survive τ = 0.90. The pairs' mean presence share rises with their support
+exactly as the bootstrap predicts (0.63, 0.86, 0.95, 0.98, 0.99).
+
+**The head words.** The 600 head words (the 60 labelled tables' own top 10) are
+present in **81.1 %** of the resamples on average and keep their **sign**
+whenever they are present — but they keep their **place among the head** in
+only **50.2 %** of the resamples. The map's own ordering is half a resampling
+artefact: half the time, a label's top 10 words are not its top 10 words in
+the resample. (Read on the head words themselves: over *all* the pairs the
+mean head stability is 0.032, because most pairs are never among the top 10.)
+
+**The per-label stability.** The tables differ a lot: the most stable are
+*Death penalty* (mean sign 0.731), *National action plan* (0.711),
+*Human rights defenders* (0.711), *Human rights education and training* (0.708)
+and *Poverty* (0.707); the least stable is *Freedom of assembly* (0.622, and
+it has **11 pairs, all of them single-text**) — at τ ≥ 0.65 it loses its table
+entirely and joins the eight held-out labels in the floor. *Freedom of
+movement* (151 pairs) loses its table only at τ = 1.00.
+
+### The falsification, read out — **the filter is a null**
+
+1. **The noise test does NOT fire.** At the primary threshold (τ = 0.75) the
+   share of the map's pairs that survives is **0.2763**, far below the
+   registered 0.90: the map *is* noise-dominated in the link sense, and the
+   filter has plenty to remove. (The test's other side is what fires: see the
+   model test.)
+2. **The model test FIRES.** The **selected** arm's fit side's **out-of-fold**
+   micro-F1 must be **strictly higher** than the full map's **0.6613**. It is
+   **lower**: **0.6544** at τ = 0.75 and **0.6473** at τ = 0.90. The selected
+   threshold is τ = 0.75 (the higher of the two, and the choice is made on the
+   fit side, never on val), and it is 0.0069 **below** the full map. So the
+   better description is **not** a better model (CS-31's shape), and the filter
+   is a **null** — reported as a null. The val number agrees: the paired
+   bootstrap over the texts gives **+0.0053 [−0.0015, +0.0128]** (the full map
+   minus the τ = 0.75 map — the interval includes zero) and **+0.0122 [+0.0045,
+   +0.0198]** against τ = 0.90 (the interval excludes zero: the strict filter
+   is materially worse).
+3. **The control test passes.** The label-blind counterpart buys **nothing**:
+   its pooled micro-F1 is at the chance level (**0.0372** without the filter,
+   **0.0281** and **0.0160** with it, against the real map's 0.5243), and the
+   filter's paired difference on the blind map is **negative** with an interval
+   that excludes zero (**−0.0091 [−0.0187, −0.0008]** at τ = 0.75 and
+   **−0.0213 [−0.0323, −0.0100]** at τ = 0.90): the filter destroys the noise
+   the blind classifier was accidentally using. Nothing is claimed on the
+   strength of the blind arms.
+
+### The arms (UPR **val**: 660 texts, `top_k` k=2, the arm `sum_zscore_positive`)
+
+| the map | micro-F1 | macro-F1 | the fit side's **out-of-fold** | head | torso | tail | unseen | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|
+| the **full** map (CS-31) | **0.5243** | 0.4662 | **0.6613** | 0.6886 | 0.4180 | 0.5435 | 0.0000 | 0.7157 |
+| the filtered map, τ = 0.75 | 0.5190 | 0.4846 | 0.6544 | 0.6948 | 0.3907 | **0.5645** | 0.0000 | 0.7067 |
+| the filtered map, τ = 0.90 | 0.5122 | 0.4856 | 0.6473 | **0.6960** | 0.3714 | **0.5654** | 0.0000 | 0.7062 |
+| the **blind** map (the control) | 0.0372 | 0.0187 | 0.0512 | 0.0847 | 0.0074 | 0.0167 | 0.0000 | 0.5895 |
+| the blind map, τ = 0.75 | 0.0281 | 0.0094 | 0.0398 | 0.0627 | 0.0149 | 0.0000 | 0.0000 | 0.5771 |
+| the blind map, τ = 0.90 | 0.0160 | 0.0027 | 0.0264 | 0.0177 | 0.0197 | 0.0000 | 0.0000 | 0.5687 |
+
+**The reading.** The filter trades the **torso** for the **tail**: the torso
+loses 0.0273 (τ = 0.75) and 0.0466 (τ = 0.90) of micro-F1 while the tail
+gains 0.0210 and 0.0219, and the head gains a little. Pooled, the trade is a
+small loss, and the fit side says the same thing (0.6613 → 0.6544 → 0.6473) —
+so it is not a val artefact. The reason is CS-33's reason, measured again: the
+map's classifier works on **coverage**, not on the strength of its best words.
+The fragile tail — two thirds of the map — contributes *many weak links* whose
+sum is worth something even when each link is a coin; deleting them deletes
+the coverage. The map's fragility is real and now measured, but **it is not
+what the classifier is made of**.
+
+The one thing the filter *does* buy is the tail, and it buys it the way a
+rarer-label feature does: *Freedom of assembly* loses its whole table at
+τ ≥ 0.65 and becomes un-predictable, which is the cost, and the tail's gain
+comes from the labels whose tables survive with fewer, better links.
+
+### What this change set does not say
+
+- Nothing about **test** (the round's numbers are val only); nothing about the
+  **other** corpora (the resampling is over the train split's texts only).
+- Nothing about the **estimate's own precision**: a pair's share carries a
+  Monte-Carlo standard error of at most 0.5/√500 = 0.022, so the survival
+  shares near a threshold carry about ±4 points of noise (the *curve's* shape
+  is far outside that; the borderline pairs are not).
+- Nothing about a **filter on the head words** (the head stability is reported,
+  not filtered on — that was the pre-registration's rule); nothing about a
+  **threshold between 0.75 and 0.90** (the two registered thresholds are the
+  two arms; the curve is in the artifact for anyone who wants to read another).
+- Nothing about **the map's other uses**: the map as a pack feature (CS-32)
+  and the mined lexicon (CS-35) are untouched by this measurement — the filter
+  is not applied to them, and their numbers stand.

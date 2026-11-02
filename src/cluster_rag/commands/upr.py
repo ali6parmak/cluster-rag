@@ -124,6 +124,7 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
 from cluster_rag.text_processors.lexical.corpus_map_score import (
     score_cells as map_score_cells,
 )
+from cluster_rag.text_processors.lexical.label_blind import permuted_label_sets
 from cluster_rag.text_processors.lexical.label_lexicon import (
     LabelLexicon,
     build_label_lexicon,
@@ -134,6 +135,10 @@ from cluster_rag.text_processors.lexical.pos_class import (
     merge_distributions,
     modal_classes,
     word_tag_counts,
+)
+from cluster_rag.text_processors.lexical.stability import (
+    estimate_stability,
+    stability_block,
 )
 from cluster_rag.text_processors.lexical.word_class import label_name_words
 from cluster_rag.text_processors.rerank.upr_rerank import (
@@ -926,11 +931,27 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             word_pos=pos_classes or None,
         )
         if hitmap.include_corpus_map:
+            # the map's own **stability** (CS-36): the train split's texts are
+            # resampled with replacement, the map is rebuilt on each resample,
+            # and every (label, word) pair's survival is read off. It needs no
+            # model call (the map is a description of the data).
+            stability_data: dict[str, Any] | None = None
+            if hitmap.stability_resamples > 0:
+                stability_report = estimate_stability(
+                    [record.text for record in train_records],
+                    [record.labels for record in train_records],
+                    corpus_map,
+                    resamples=hitmap.stability_resamples,
+                    seed=config.seed,
+                    head_k=hitmap.stability_head_k,
+                )
+                stability_data = stability_block(stability_report)
             corpus_block = corpus_map_block(
                 corpus_map,
                 split="train",
                 tagger=pos_provenance,
                 distribution=pos_distribution or None,
+                stability=stability_data,
             )
 
     # -- Version B: the ablation map (the decision model's own ablation) ----------
@@ -3494,7 +3515,9 @@ def _permuted_label_sets(label_sets: Sequence[Sequence[str]], seed: int) -> list
 
     The per-label counts are preserved (only the assignment changes), so the
     map's *construction* is the same and only the word↔label association is
-    destroyed — the track's own label-permutation discipline.
+    destroyed — the track's own label-permutation discipline. The permutation
+    itself lives in the track's pure package, so CS-32's blind feature and
+    CS-36's blind classifier arm are the **same** control.
 
     Args:
         label_sets: Each train record's labels.
@@ -3503,8 +3526,7 @@ def _permuted_label_sets(label_sets: Sequence[Sequence[str]], seed: int) -> list
     Returns:
         The permuted label sets, in the records' own order.
     """
-    order = np.random.default_rng(seed).permutation(len(label_sets))
-    return [list(label_sets[int(index)]) for index in order]
+    return permuted_label_sets(label_sets, seed)
 
 
 def _upr_paired_by_bucket(
