@@ -1442,6 +1442,89 @@ CS-41 (the lexical kNN).
   map's block is not renamed or reshaped: the phrase table is a **separate**
   builder.
 
+  **The pre-registration (2026-11-02, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **One reading settled before the first call.** The block says the phrases
+    are the bigrams "over the track's own content tokens" and then names
+    "continue to" and "ensure that" as the genre's formulas — but the track's
+    stopword list holds **"to"** and **"that"**, so those two are **not**
+    bigrams over the content tokens. The block's *purpose* ("where the genre's
+    structure would show") needs the formulas, so the phrase unit is fixed
+    here as: **the consecutive bigrams of the track's own token stream**
+    (`tokenize` — the lower-cased alphanumeric tokens, the stopwords **kept**),
+    with the track's own tokenization ✓ (the same unit the map's words come
+    from).
+
+  - **The phrase table** (a **separate builder** ✓ — the word map's block is
+    neither renamed nor reshaped): the (label, phrase) pairs of the train
+    corpus, with the **same measures** as the word map (the log-odds, the
+    z-score, the counts ✓ — the estimator's 2×2 table over the phrase's
+    presence in a text ✓).
+
+  - **The readout** (the map's own artifact, a **new** `phrase_map` block
+    beside the corpus map's ✓):
+    - the phrase table's **shape**: the distinct phrases, the (label, phrase)
+      pairs, and the **hapax share** (the pairs resting on a single train
+      text ✓ — the round's fragility, one unit finer ✓);
+    - the **class split** over the phrase table (CS-33's own machinery ✓): the
+      pairs per class, the generic share and the mean log-odds — beside the
+      word table's own numbers ✓;
+    - the **pair interaction**: for every (label, phrase) pair, the phrase's
+      log-odds **minus** the sum of its two words' log-odds in the same label's
+      table ✓ (how much more the phrase says than its parts ✓) — its mean, its
+      distribution and the **20 pairs that carry the most** ✓.
+
+  - **The payoff — the union.** The **same scorer** over **both** tables: a
+    cell's score is the word map's `sum_zscore_positive` **plus** the phrase
+    map's own `sum_zscore_positive` (the phrase arm's units are the text's
+    bigrams ✓). The union is the arm, **not** the phrase map alone (the
+    topical phrases are rare ✓ — the round's prior ✓). The fit side is
+    **cross-fit** over 5 folds ✓ (CS-32/CS-30's rule ✓): each fold's **phrase**
+    map is built from the fold's training texts ✓, so the fit side reads the
+    same kind of map the evaluated split is scored with.
+
+  - **The runs.** Two `evaluate` runs on UPR **val** at the champion's own
+    `top_k` k=2 (the `corpus_map` predictor, the new arm):
+    `upr-eval-corpus-map-sum-zscore-positive-phrase-val` (the union) and
+    `upr-eval-corpus-map-sum-zscore-positive-phrase-blind-val` (the union on
+    the **label-blind** maps — the per-label counts preserved, only the
+    assignment changed ✓). The sweep file
+    `experiments_text_processing/corpus_map_phrase_sweep.py` (the sweep label
+    `corpus_map_phrase`); the rows land in the **main** UPR table. The
+    **readout**: the map's own artifact, re-written once with the new
+    `phrase_map` block.
+
+  - **The falsification, registered in advance.**
+    1. **The formulaic test.** The phrase table's **generic share** (the
+       generic class's share of the phrase table's pairs ✓) must be **at least
+       10 points above the word table's own** (**43.6 %** ✓ — CS-33's
+       readout ✓): the phrases are mostly the register. If it is not, the
+       phrase table's classes look like the word table's, the unit change buys
+       nothing, and the readout is reported as a **null**.
+    2. **The model test.** The union's **fit side's out-of-fold** train
+       micro-F1 must be **strictly higher** than the word map's (**0.6613** ✓
+       — the same instrument CS-30/CS-31/CS-36 read). If it does not move, the
+       phrases say nothing their words do not say and the unit change is a
+       **null**, reported as a null. The val number is read **beside** the fit
+       side's, never as the selection.
+    3. **The label-blind control.** The blind union's gain over the word map's
+       own blind arm must be materially smaller than the real union's ✓ — the
+       round's discipline ✓ (CS-32's reading ✓).
+
+  - **The exit criteria.** The map's artifact carries the `phrase_map` block
+    (the shape, the class split, the pair interaction); the two runs hold their
+    numbers and their fit-side blocks; the table rows are auto-appended; the
+    log section reads the numbers out with the falsification conditions; the
+    paired comparison's tool checks its own rebuild against the runs' artifacts
+    (the union included ✓); every number CS-23, CS-31, CS-33, CS-34, CS-36
+    and CS-38 reported is **reproduced unchanged**; the gate green (ruff over
+    `src`/`tests`/`experiments`/`tools`, the full pytest suite, the two verify
+    tools, and both final sweeps reproducing their artifacts field for field).
+
+  - **The cost, in compute.** The phrase table is 1,676 texts' bigrams; the
+    union's fit side rebuilds the phrase map 5 times. **No new dependency.**
+
 - [ ] **CS-40 — the contrastive map: "why A and not B".** The map's explanation
   of itself, in the viewer.
 
