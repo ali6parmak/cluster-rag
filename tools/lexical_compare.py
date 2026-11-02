@@ -41,7 +41,11 @@ from cluster_rag.eval.multilabel import (
     paired_metric_bootstrap,
 )
 from cluster_rag.text_processors.features.corpus_map import build_corpus_map
-from cluster_rag.text_processors.lexical.corpus_map_score import score_cells
+from cluster_rag.text_processors.features.phrase_map import build_phrase_map, phrase_units
+from cluster_rag.text_processors.lexical.corpus_map_score import (
+    UNION_SCORING,
+    score_cells,
+)
 from cluster_rag.text_processors.lexical.label_blind import permuted_label_sets
 from cluster_rag.text_processors.lexical.stability import HEAD_K, estimate_stability
 
@@ -130,14 +134,39 @@ def _arm_scores(run_id: str, results: Path) -> tuple[np.ndarray, np.ndarray, dic
             head_k=HEAD_K,
         )
         keep = report.label_survivors(stability_min)
-    scores = score_cells(
-        [record.text for record in records],
-        corpus_map,
-        scoring=scoring,
-        restrict=restrict,
-        restrict_pos=restrict_pos,
-        keep=keep,
-    )
+    if scoring == UNION_SCORING:
+        # the union arm (the track's CS-39): the word map's score plus the
+        # phrase map's own.
+        phrase_map = build_phrase_map(
+            [record.text for record in train_records],
+            train_label_sets,
+            labels,
+        )
+        scores = score_cells(
+            [record.text for record in records],
+            corpus_map,
+            scoring="sum_zscore_positive",
+            restrict=restrict,
+            restrict_pos=restrict_pos,
+            keep=keep,
+        ) + score_cells(
+            [record.text for record in records],
+            phrase_map,
+            scoring="sum_zscore_positive",
+            restrict=restrict,
+            restrict_pos=restrict_pos,
+            keep=keep,
+            units=phrase_units,
+        )
+    else:
+        scores = score_cells(
+            [record.text for record in records],
+            corpus_map,
+            scoring=scoring,
+            restrict=restrict,
+            restrict_pos=restrict_pos,
+            keep=keep,
+        )
     gold = build_label_matrix(records, labels)
     return scores, gold, artifact
 

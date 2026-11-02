@@ -1374,6 +1374,28 @@ class UprDecisionRuleConfig(BaseModel):
         return value
 
 
+class UprPhraseMapConfig(BaseModel):
+    """The **phrase table**'s readout (the track's CS-39).
+
+    The corpus map read over the corpus's **bigrams**: the same relation
+    between labels and units, one unit finer. The readout carries the table's
+    shape (how many phrases, how many pairs, how fragile they are), the class
+    split over it (CS-33's own machinery, applied to phrases) and the **pair
+    interaction** (how much more a phrase says than its two words).
+
+    Attributes:
+        enabled: Whether the run computes the phrase table at all. The default
+            is ``False``, so the earlier runs' artifacts keep their exact
+            content.
+        n_top: How many interactions the readout lists.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    n_top: int = Field(default=20, ge=1)
+
+
 class UprLabelPairsConfig(BaseModel):
     """The **label-pair relation**'s readout (the track's CS-38).
 
@@ -1464,6 +1486,9 @@ class UprHitMapConfig(BaseModel):
         stability_head_k: How many of a label's top words by log-odds count as
             its **head words** (the second stability statistic: does the pair
             keep its place among them?).
+        phrase_map: The **phrase table**'s readout (the track's CS-39): the
+            corpus map read over the corpus's bigrams, with the class split and
+            the pair interaction. Off by default.
         label_pairs: The **label-pair relation**'s readout (the track's CS-38):
             the corpus's own geometry over the label space (the vocabulary
             overlap and the co-occurrence of every pair of labels), read
@@ -1491,6 +1516,7 @@ class UprHitMapConfig(BaseModel):
     include_corpus_map: bool = True
     stability_resamples: int = Field(default=0, ge=0)
     stability_head_k: int = Field(default=10, ge=1)
+    phrase_map: UprPhraseMapConfig = Field(default_factory=UprPhraseMapConfig)
     label_pairs: UprLabelPairsConfig = Field(default_factory=UprLabelPairsConfig)
     catch_all_labels: tuple[str, ...] = ("General", "Other")
     surrogate_lambda: float = Field(default=1.0, ge=0.0)

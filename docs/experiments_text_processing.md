@@ -91,6 +91,8 @@ research record and are **not** indexed here.
 | [CS-36 — the stability map](#cs-36--the-stability-map-which-links-survive-resampling-2026-11-02) | five `upr-eval-corpus-map-sum-zscore-positive-{stable75,stable90,stable75-blind,stable90-blind,blind}-val` runs + the map's re-written `corpus_map.stability` block | the map's bulk is **measurably noise**: the survival curve has a **cliff at 63 %** (1 − e⁻¹) and **not one** of the 12,483 single-text links survives τ = 0.75 (only 27.6 % of the map does) — but the **model test fires**: the filtered map's fit side's out-of-fold micro-F1 is **lower** (0.6544 / 0.6473 against the full map's 0.6613) and the val number agrees (a paired **+0.0053 [−0.0015, +0.0128]**) → the **filter is a null**, the readout is the deliverable; the head words keep their place in only **50 %** of the resamples | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-37 — the selective map](#cs-37--the-selective-map-unknown-instead-of-impossible-2026-11-02) | one `upr-analyze-cmap-abstain` run (the pack + the map's column, the control, the blind map and the two abstaining arms) | the abstention ("no evidence" as NaN instead of the floor's "impossible") is a **null**: the eight held-out labels stay at **0.0000** (the paired unseen-view difference is exactly **+0.0000**) — the "impossible" verdict was never in the **encoding**: a map with no word↔label information at all collapses them the same way, and it is the **channel's silence on the fit side** (the eight are the labels the map is silent about *and* the labels that are never positive) that costs them; the seen buckets are untouched (a paired **+0.0032 [−0.0037, +0.0100]**) and the label-blind control buys nothing | `results/upr-analyze-cmap-abstain/analysis.json` |
 | [CS-38 — the label-pair map](#cs-38--the-label-pair-map-the-lexical-neighbours-the-twins-the-labels-with-no-vocabulary-of-their-own-2026-11-02) | one `upr-hitmap-corpus` run (the map's own artifact, re-written with the `corpus_map.label_pairs` block) | the corpus's label-pair relation **is** the taxonomy's (the registered disagreement test fires on both legs: the sibling pairs' mean vocabulary Jaccard is **+0.0413 [+0.0372, +0.0451]** above the other pairs' and **11 of the corpus's 20 closest pairs** are siblings against a bar of 4) — so the relation is a **null**; and the **vocabulary-less class** is a finding (**13 labels**: the eight held-out ones plus five whose own words lie almost entirely inside one neighbour's table, *Sexual and reproductive rights* 94 % inside *Women's rights*) | `results/upr-hitmap-corpus/hitmap.json` |
+| [CS-39 — the phrase map](#cs-39--the-phrase-map-do-phrases-beat-their-own-words-2026-11-02) | two `upr-eval-corpus-map-sum-zscore-positive-phrase{,-blind}-val` runs + the map's re-written `phrase_map` block | the **formulaic test fails** (the phrase table's generic share is **15.5 %**, far below the word table's **43.6 %** — the phrases are too rare to sit in many tables, so the class measure reads rarity as topicality) and the **control fails** (the blind union gains **more** on the fit side, +0.0240 against the real union's +0.0050) — so the unit change is a **null**; the register is real but it is a **fragment** (the top interactions are "on its", "with an", "and will") and the phrases are **too rare to be a table** (82.8 % hapax) | `results/upr-eval-corpus-map-sum-zscore-positive-phrase-val/metrics.json` |
+
 ## Change sets
 
 Infrastructure change sets (no run artifact, hence no numbers):
@@ -7549,3 +7551,136 @@ siblings).
   relation** and as a **finding for the class**, exactly as the plan's rule
   says ("if either fails, the readout is reported as a null ... and no action is
   licensed").
+
+## CS-39 — the phrase map: do phrases beat their own words? (2026-11-02)
+
+**The question.** The corpus map's unit is a single word and UPR's genre is
+formulaic, so the **phrase table** — the map read over the corpus's bigrams —
+is where the genre's structure would show. This change set builds it, reads
+it out, and measures the **union** (the word map's score plus the phrase map's
+own) against the word map alone.
+
+**One reading settled before the first call.** The plan's block says the
+bigrams run "over the track's own content tokens" and then names "continue to"
+and "ensure that" as the genre's formulas — but the track's stopword list
+holds **"to"** and **"that"**, so those two are **not** bigrams over the content
+tokens. The block's purpose ("where the genre's structure would show") needs
+the formulas, so the phrase unit is the consecutive bigrams of the track's own
+**token stream** (the stopwords kept).
+
+**The runs.** Two `evaluate` runs, plus the map's own artifact re-written once
+with the new `phrase_map` block.
+
+- `upr-eval-corpus-map-sum-zscore-positive-phrase-val` — the **union** (the
+  word map's score plus the phrase map's own, both under the z-scored "evidence
+  for" sum). UPR **val**, 660 texts, 3.1 s: no model call, no embedding.
+- `upr-eval-corpus-map-sum-zscore-positive-phrase-blind-val` — the union on
+  the **label-blind** maps (the labels permuted among the train records, the
+  per-label counts preserved).
+- The map's own artifact, re-written once: `results/upr-hitmap-corpus/hitmap.json`
+  (the block `phrase_map`). Every number CS-23, CS-31, CS-33, CS-34, CS-36 and
+  CS-38 reported is **reproduced unchanged** (the block grew; nothing else
+  moved — checked field for field).
+
+**The guard.** The fit side is **cross-fit** over 5 folds, and the cross-fit
+rides into the phrase map too: each fold's phrase map is built from the fold's
+training texts, so the fit side never sees its own texts.
+
+### The readout (the map's own block: `phrase_map`)
+
+**The shape.** The phrase table is much bigger and much more fragile than the
+word table:
+
+| | the word table | the phrase table |
+|---|---|---|
+| the units | 3,049 words | **14,167 phrases** |
+| the (label, unit) pairs | 18,707 | **45,587** |
+| the pairs resting on **one** train text | 66.7 % | **82.8 %** |
+
+**The class split** (CS-33's own machinery, applied to phrases) — and here the
+plan's premise is **refuted**:
+
+| the class | the phrase table's pairs | its share | the word table's pairs | its share |
+|---|---|---|---|---|
+| distinctive | 12,193 | 26.7 % | 1,836 | 9.8 % |
+| shared | 26,331 | 57.8 % | 8,711 | 46.6 % |
+| **generic** | 7,063 | **15.5 %** | 8,160 | **43.6 %** |
+
+**The pair interaction** (the phrase's log-odds minus its two words' in the
+same label's table): the mean **+0.6679**, the median **+0.7077**, **68.7 %**
+of the pairs positive (the 10th percentile −1.2942, the 90th +2.7123). And
+the **top** interactions are the genre's fragments: *Freedom of assembly* ←
+**"on its"** and **"with an"** (log-odds +7.605 each, the interaction the same
+because neither word is in the table), *Right to life* ← **"and will"**,
+**"or when"**, **"under a"**, *Human rights defenders* ← **"out their"**,
+*Transitional justice* ← **"measures of"**, *HIV - Aids* ← **"rights such"**.
+
+### The arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | the fit side's **out-of-fold** | head | torso | tail | unseen |
+|---|---|---|---|---|---|---|---|
+| the **word map** (CS-31's arm) | 0.5243 | 0.4662 | 0.6613 | **0.6886** | 0.4180 | **0.5435** | 0.0000 |
+| the **union** (the word map + the phrase map) | **0.5342** | 0.4663 | **0.6663** | 0.6644 | **0.5056** | 0.4943 | 0.0000 |
+| the blind word map (the control) | 0.0372 | 0.0187 | 0.0512 | — | — | — | — |
+| the blind union (the control) | 0.0456 | 0.0186 | 0.0752 | — | — | — | — |
+
+The **paired** difference (the resampling unit the text; 2,000 resamples; seed
+42): the union minus the word map **+0.0099 [−0.0008, +0.0214]** (the
+interval includes zero; the union wins on 95.7 % of the resamples), and on the
+blind maps **+0.0084 [−0.0023, +0.0202]** (the interval includes zero too).
+
+### The falsification, read out — **the unit change is a null**
+
+1. **The formulaic test FAILS.** The phrase table's **generic share is 15.5 %**
+   — far **below** the word table's **43.6 %**, where the registered test
+   wanted it at least ten points **above**. The reason is in the table's own
+   shape: **82.8 %** of the phrase pairs rest on a single train text (the word
+   table's: 66.7 %), and a rare unit cannot sit in many labels' tables, so
+   the class measure — which reads a unit's **breadth** — reads the phrases'
+   rarity as topicality. The plan's premise ("the phrases are mostly the
+   register") is **refuted by the unit's rarity, not by the genre**.
+2. **The model test PASSES, mechanically.** The union's fit side's out-of-fold
+   micro-F1 is **0.6663** against the word map's **0.6613** — strictly higher
+   ✓, the registered condition ✓ — and the val number agrees in sign
+   (**0.5342** against 0.5243) but not in significance (the paired interval
+   includes zero ✓).
+3. **The label-blind control FAILS.** The registered condition: the blind
+   union's gain over the word map's own blind arm must be **materially
+   smaller** than the real union's. On the fit side's out-of-fold it is
+   **larger**: the blind union moves **+0.0240** (0.0512 → 0.0752) where the
+   real union moves **+0.0050** (0.6613 → 0.6663). On val neither difference
+   is established (both intervals include zero ✓). So the phrase table's
+   contribution is **not label-driven**: a map with no word↔label information
+   at all gains *more* from the phrases than the real one does.
+
+### The reading: the register is real, but it is a fragment
+
+- **The genre shows up — in the interaction, not in the class split.** The
+  phrases with the largest interaction are the **fragments that straddle a
+  stopword** ("on its", "with an", "and will", "or when", "under a", "out
+  their") ✓✓ — the corpus's formulas, which say nothing about the topic but
+  say a lot about the genre. The class split cannot see them (a fragment is
+  rare ✓ → distinctive ✓); the interaction can ✓.
+- **The phrases are too rare to be a table.** 82.8 % of the phrase pairs rest
+  on one train text ✓ — the hapax problem one unit finer ✓ (the word table's
+  66.7 % ✓) — and the union's gain is not established on val ✓ and is
+  *larger* on the blind maps ✓. The phrases add **noise**, not signal: a
+  unit this rare cannot carry the label's meaning in a 1,676-text corpus.
+- **What the union does move is the torso** (0.4180 → **0.5056** ✓) and what
+  it loses is the **head** (0.6886 → 0.6644 ✓) and the **tail** (0.5435 →
+  0.4943 ✓) — the trade a noisier channel makes ✓.
+
+### What this change set does not say
+
+- Nothing about **test** (the round's numbers are val only) and nothing about
+  the **classifier's other arms**: the union is one arm of the `corpus_map`
+  predictor ✓ and the other six are untouched ✓ (their artifacts reproduce
+  field for field ✓).
+- Nothing about a **phrase table of the content tokens** (the other reading of
+  the plan's unit): the block's examples fix the token stream ✓ and the
+  content-token variant was not registered ✓.
+- Nothing about **trigrams** or longer units ✓ (not registered ✓) and nothing
+  about a phrase table built on the **val** split ✓ (the corpus is the train
+  split only ✓).
+- Nothing about the **interaction's** own stability (CS-36's resampling was
+  not run over the phrases ✓ — not registered ✓).

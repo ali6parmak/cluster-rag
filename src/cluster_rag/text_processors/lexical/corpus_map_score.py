@@ -75,7 +75,7 @@ Pure core: numpy + the standard library only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -109,6 +109,14 @@ _ARMS: dict[str, tuple[str, str, bool]] = {
     "sum_zscore": ("sum", "z_score", False),
     "sum_zscore_positive": ("sum", "z_score", True),
 }
+
+# The **union** arm (CS-39): the word map's score plus the phrase map's own.
+# It is not one of the scoring functions above -- it needs **two** maps -- so
+# the predictor composes it (and the name lives here, beside the others).
+UNION_SCORING = "sum_zscore_positive_phrase"
+
+# Every arm the predictor accepts: the six scoring functions and the union.
+ALL_SCORING_FUNCTIONS: tuple[str, ...] = SCORING_FUNCTIONS + (UNION_SCORING,)
 
 # The gap between the empty tables' floor and the row's smallest seen score.
 # Any strictly positive gap works; one unit is enough, because the floor only
@@ -210,6 +218,7 @@ def score_cells(
     restrict_pos: Sequence[str] | None = None,
     keep: Mapping[str, frozenset[str]] | None = None,
     abstain: bool = False,
+    units: Callable[[str], Iterable[str]] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> np.ndarray:
     """Score every text against every label from the map's own weights.
@@ -231,6 +240,10 @@ def score_cells(
         abstain: The **abstention** (CS-37): a label with no table at all
             carries ``NaN`` ("no evidence") instead of the floor
             ("impossible"). ``False`` (the default) is the floor.
+        units: The map's **unit**: the callable that turns a text into the
+            units the map's tables are keyed by (the default is the track's
+            own content-word tokenizer; the **phrase table** (CS-39) passes
+            the bigram tokenizer instead).
         stopwords: The tokenizer's stopwords — the map's own, so the words
             match the tables.
 
@@ -265,9 +278,10 @@ def score_cells(
         # no evidence left, so it joins the empty tables (the floor).
         empty_columns = [column for column, label in enumerate(labels) if not keep.get(label)]
     take_max = aggregation == "max"
+    unit_of = units or (lambda text: content_tokens(text, stopwords))
     for row, text in enumerate(texts):
         matched = np.zeros(len(labels), dtype=bool) if take_max else None
-        for token in set(content_tokens(text, stopwords)):
+        for token in set(unit_of(text)):
             entries = index.get(token)
             if not entries:
                 continue
@@ -315,6 +329,7 @@ def cross_fit_scores(
     stability_min: float | None = None,
     stability_resamples: int = 500,
     abstain: bool = False,
+    units: Callable[[str], Iterable[str]] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> dict[str, np.ndarray]:
     """The **out-of-fold** score matrices: each fold's texts scored by the other folds.
@@ -354,6 +369,10 @@ def cross_fit_scores(
             fold's map carries ``NaN`` instead of the floor. The abstention
             rides into the cross-fit: a label with no example in a fold's
             training texts abstains in that fold.
+        units: The map's **unit** (the default is the track's own content-word
+            tokenizer; the **phrase table** (CS-39) passes the bigram
+            tokenizer instead). It rides into the cross-fit: each fold's map is
+            built over the same units the evaluated split is scored with.
         stopwords: The tokenizer's stopwords.
 
     Returns:
@@ -387,6 +406,7 @@ def cross_fit_scores(
             labels,
             stopwords=stopwords,
             word_pos=word_pos,
+            units=units,
         )
         fold_keep = keep
         if stability_min is not None:
@@ -412,6 +432,7 @@ def cross_fit_scores(
                 restrict_pos=restrict_pos,
                 keep=fold_keep,
                 abstain=abstain,
+                units=units,
                 stopwords=stopwords,
             )
     return out

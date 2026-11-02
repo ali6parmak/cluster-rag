@@ -50,9 +50,12 @@ from cluster_rag.data import build_label_matrix
 from cluster_rag.eval.multilabel import apply_decision_rule, decision_f1_metrics
 from cluster_rag.predictors.base import PredictorContext, check_no_extra_params
 from cluster_rag.text_processors.features.corpus_map import build_corpus_map
+from cluster_rag.text_processors.features.phrase_map import build_phrase_map, phrase_units
 from cluster_rag.text_processors.lexical.corpus_map_score import (
+    ALL_SCORING_FUNCTIONS,
     FLOOR_GAP,
     SCORING_FUNCTIONS,
+    UNION_SCORING,
     cross_fit_scores,
     score_cells,
 )
@@ -142,10 +145,10 @@ class CorpusMapPredictor:
     ) -> None:
         check_no_extra_params(params, self.ALLOWED_PARAMS, self.NAME)
         scoring = params.get("scoring", "sum_logodds")
-        if scoring not in SCORING_FUNCTIONS:
+        if scoring not in ALL_SCORING_FUNCTIONS:
             raise ValueError(
                 f"predictor {self.NAME!r} params['scoring'] must be one of "
-                f"{list(SCORING_FUNCTIONS)}, got {scoring!r}"
+                f"{list(ALL_SCORING_FUNCTIONS)}, got {scoring!r}"
             )
         fit_side_k = params.get("fit_side_k", 2)
         if not isinstance(fit_side_k, int) or isinstance(fit_side_k, bool) or fit_side_k < 1:
@@ -251,6 +254,15 @@ class CorpusMapPredictor:
             context.labels,
             word_pos=context.word_pos or None,
         )
+        # the **phrase table** (the track's CS-39): the same map over the
+        # corpus's bigrams, used by the union arm. It is built only when that
+        # arm is asked for, so every other run's artifact keeps its exact
+        # content.
+        self._phrase_map = (
+            build_phrase_map(train_texts, train_label_sets, context.labels)
+            if scoring == UNION_SCORING
+            else None
+        )
         self._stability: StabilityReport | None = None
         self._keep: dict[str, frozenset[str]] | None = None
         if self._stability_min is not None:
@@ -289,6 +301,10 @@ class CorpusMapPredictor:
                 keep=self._keep,
             )
             in_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
+        if self._scoring == UNION_SCORING:
+            in_fold[UNION_SCORING] = _micro_f1_at(
+                self._union_scores(train_texts), gold, self._fit_side_k
+            )
         out_of_fold: dict[str, float] = {}
         crossed = cross_fit_scores(
             train_texts,
@@ -304,7 +320,28 @@ class CorpusMapPredictor:
         )
         for arm, scores in crossed.items():
             out_of_fold[arm] = _micro_f1_at(scores, gold, self._fit_side_k)
-        selected = max(SCORING_FUNCTIONS, key=lambda arm: out_of_fold[arm])
+        if self._scoring == UNION_SCORING:
+            # the union arm (CS-39): the word map's cross-fit plus the phrase
+            # map's own cross-fit -- each fold's phrase map is built from the
+            # fold's training texts, so the fit side never sees its own texts.
+            crossed_phrases = cross_fit_scores(
+                train_texts,
+                train_label_sets,
+                list(context.labels),
+                folds=self._folds,
+                seed=self._seed,
+                restrict=self._restrict,
+                restrict_pos=self._restrict_pos,
+                units=phrase_units,
+            )
+            out_of_fold[UNION_SCORING] = _micro_f1_at(
+                crossed["sum_zscore_positive"] + crossed_phrases["sum_zscore_positive"],
+                gold,
+                self._fit_side_k,
+            )
+        # the selection is over the arms this run has (the union only when it
+        # is asked for ✓); the tie-break order is the arms' own order ✓
+        selected = max(out_of_fold, key=lambda arm: out_of_fold[arm])
         return {
             "side": "the train split (the fit side); the val split is never fitted",
             "metric": f"micro-F1 at top_k k={self._fit_side_k}",
@@ -333,11 +370,38 @@ class CorpusMapPredictor:
             ),
         }
 
+    def _union_scores(self, texts: Sequence[str]) -> np.ndarray:
+        """The **union** arm's scores: the word map's plus the phrase map's.
+
+        Both halves use the same scoring function (the z-scored "evidence for"
+        sum ✓); the phrase half's units are the text's bigrams ✓.
+        """
+        words = score_cells(
+            texts,
+            self._map,
+            scoring="sum_zscore_positive",
+            restrict=self._restrict,
+            restrict_pos=self._restrict_pos,
+            keep=self._keep,
+        )
+        phrases = score_cells(
+            texts,
+            self._phrase_map,
+            scoring="sum_zscore_positive",
+            restrict=self._restrict,
+            restrict_pos=self._restrict_pos,
+            keep=self._keep,
+            units=phrase_units,
+        )
+        return words + phrases
+
     def score(self, texts: Sequence[str], *, query_vectors: np.ndarray | None = None) -> np.ndarray:
         """Per-label map scores: ``(n_texts, n_labels)`` float64.
 
         ``query_vectors`` is ignored: this predictor is embedding-free.
         """
+        if self._scoring == UNION_SCORING:
+            return self._union_scores(texts)
         return score_cells(
             texts,
             self._map,

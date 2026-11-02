@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
@@ -201,6 +201,7 @@ def build_corpus_map(
     *,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     word_pos: Mapping[str, str] | None = None,
+    units: Callable[[str], Iterable[str]] | None = None,
 ) -> CorpusMap:
     """Build the corpus map from a corpus's texts and their labels.
 
@@ -217,6 +218,10 @@ def build_corpus_map(
         word_pos: The words' **grammatical classes** (CS-34), when the corpus
             was tagged. The class is a property of the word, so it rides on
             every table the word sits in.
+        units: The corpus's **unit**: the callable that turns a text into the
+            units its tables are keyed by. The default is the track's own
+            content-word tokenizer; the **phrase table** (CS-39) passes the
+            bigram tokenizer instead.
 
     Returns:
         The corpus map.
@@ -230,8 +235,9 @@ def build_corpus_map(
     document_frequency: Counter[str] = Counter()
     label_counts: Counter[str] = Counter()
     pairs: dict[str, Counter[str]] = {label: Counter() for label in label_space}
+    unit_of = units or (lambda text: content_tokens(text, stopwords))
     for text, record_labels in zip(texts, label_sets, strict=True):
-        words = set(content_tokens(text, stopwords))
+        words = set(unit_of(text))
         document_frequency.update(words)
         for label in set(record_labels):
             if label not in pairs:

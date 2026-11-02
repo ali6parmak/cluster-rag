@@ -108,6 +108,10 @@ from cluster_rag.text_processors.features.lexical_map import (
     exactness_check,
     label_word_classes,
 )
+from cluster_rag.text_processors.features.phrase_map import (
+    build_phrase_map,
+    phrase_map_block,
+)
 from cluster_rag.text_processors.features.upr_backoff import (
     control_labels,
     sibling_backoff,
@@ -921,6 +925,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
     # own block is written only when the run asks for it.
     corpus_block: dict[str, Any] | None = None
     corpus_map: CorpusMap | None = None
+    phrase_block: dict[str, Any] | None = None
     pos_classes: dict[str, str] = {}
     pos_distribution: dict[str, Counter[str]] = {}
     pos_provenance: dict[str, Any] = {}
@@ -936,6 +941,10 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
             word_pos=pos_classes or None,
         )
         if hitmap.include_corpus_map:
+            # the **phrase table** (CS-39): the same map over the corpus's
+            # bigrams -- a separate builder, its own block.
+            if hitmap.phrase_map.enabled:
+                phrase_block = _upr_phrase_map(hitmap, train_records, labels, corpus_map)
             # the map's own **stability** (CS-36): the train split's texts are
             # resampled with replacement, the map is rebuilt on each resample,
             # and every (label, word) pair's survival is read off. It needs no
@@ -1157,6 +1166,7 @@ def _cmd_hitmap_upr(config: AppConfig) -> int:
         "lexical_map": lexical_block,
         "text_side_map": text_side_block,
         "corpus_map": corpus_block,
+        "phrase_map": phrase_block,
         "ablation_map": {"arms": arms},
         "config": {
             "unit": hitmap.unit,
@@ -3624,6 +3634,36 @@ def _upr_corpus_map_feature(
         "eval_abstain_blind": abstain_eval_blind,
         "meta": meta,
     }
+
+
+def _upr_phrase_map(
+    hitmap: Any,
+    train_records: Sequence[Any],
+    labels: Sequence[str],
+    corpus_map: Any,
+) -> dict[str, Any]:
+    """The **phrase table**'s readout (the track's CS-39).
+
+    The corpus map read over the corpus's **bigrams**: a separate builder, so
+    the word map's own block is neither renamed nor reshaped ✓. The readout
+    carries the table's shape (the phrases, the pairs and the hapax share),
+    the class split over it (CS-33's own machinery, applied to phrases) beside
+    the word table's own numbers, and the **pair interaction** (how much more a
+    phrase says than its two words).
+
+    Args:
+        hitmap: The hit map's settings (the readout's knobs).
+        train_records: The train split's records (the table's corpus).
+        labels: The label space (the table's columns).
+        corpus_map: The word map (the word table's own numbers).
+
+    Returns:
+        The readout block (JSON-friendly).
+    """
+    texts = [record.text for record in train_records]
+    label_sets = [list(record.labels) for record in train_records]
+    phrase_map = build_phrase_map(texts, label_sets, list(labels))
+    return phrase_map_block(phrase_map, corpus_map, n_top=hitmap.phrase_map.n_top)
 
 
 def _upr_label_pairs(

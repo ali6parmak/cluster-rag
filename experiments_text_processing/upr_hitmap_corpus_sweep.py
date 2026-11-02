@@ -40,6 +40,7 @@ from cluster_rag.config import (
     UprDecisionConfig,
     UprHitMapConfig,
     UprLabelPairsConfig,
+    UprPhraseMapConfig,
 )
 from cluster_rag.sweep import HitMapUprCell, define_sweep
 
@@ -63,6 +64,10 @@ NEAR_DUPLICATE = 0.50
 CONTAINMENT = 0.80
 N_NEIGHBOURS = 20
 BOOTSTRAP_RESAMPLES = 2000
+
+# The phrase table's readout: how many of the phrase interactions (how much
+# more a phrase says than its two words) the block lists.
+N_TOP_INTERACTIONS = 20
 
 # The UPR-native **task** instruction (the same one the CS-9b grid run used, so
 # the intact-text calls are that run's cache hits).
@@ -141,6 +146,10 @@ cells = [
                 # map read the other way round -- a relation between the labels
                 # themselves (the vocabulary they share and how often they
                 # co-occur), read against the catalog's own relation.
+                # the **phrase table** (the track's CS-39): the corpus map
+                # read over the corpus's bigrams -- a separate builder, its
+                # own block (the word map's block is not reshaped).
+                phrase_map=UprPhraseMapConfig(enabled=True, n_top=N_TOP_INTERACTIONS),
                 label_pairs=UprLabelPairsConfig(
                     enabled=True,
                     near_duplicate=NEAR_DUPLICATE,
