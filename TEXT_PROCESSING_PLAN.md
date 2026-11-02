@@ -1295,6 +1295,234 @@ port only.
   the lexicon **does not become a catalog channel**; the **expansion route** is
   a null for the eight.
 
+### 7.5 The map's quality round (CS-36 … CS-41)
+
+**What prompted it (2026-11-02).** The reviewer's seven ideas, after CS-35: the
+map's unit could be a **phrase** ("do phrases beat their own words?"); the map
+could have a **pair interaction** ("which pairs say more than their parts?"); the
+**label space** could have a lexical geometry of its own ("which labels are
+lexical neighbours or near-duplicates; which have no vocabulary of their own");
+the map could have a **stability** ("which word-to-label links survive
+resampling"); the **retrieval** could be lexical ("how much of retrieval is
+words alone"); the map could say **"unknown"** instead of "impossible", per
+label and per text; and the map could **explain itself** ("why A and not B for
+one text").
+
+**What the round so far established, in one paragraph.** The corpus map (CS-23)
+is the round's centrepiece, and we now know three things about it that were
+never designed for. Its **bulk is fragile**: **66.7 %** of the 18,707
+(label, word) pairs rest on a **single train text** and **13.6 %** are hapaxes —
+while its **heads are clean** (not one of CS-35's 600 mined words is a hapax:
+the idf factor already demotes them), so the noise sits in the **tail** the sum
+arms add up. Its **estimator is asymptotic** (CS-31's z-score), never
+empirical: nothing has measured how much of the map is sampling noise. And its
+**biggest defect is not its quality but its abstention**: the empty tables make
+the eight held-out labels *impossible*, and with the map's column in the pack
+the unseen bucket goes **0.4867 → 0.0000** (CS-32). So the round's question is
+one question: **how good is the corpus map, and where does it not know?**
+
+**The order:** CS-36 (the stability map) → CS-37 (the selective map) → CS-38
+(the label-pair map) → CS-39 (the phrase map) → CS-40 (the contrastive map) →
+CS-41 (the lexical kNN).
+
+**The reviewer's decisions of 2026-11-02 (they bind the change sets below).**
+
+1. **The batch is authorised, one change set at a time.** Each change set is
+   pre-registered (the mechanism, the shape of the number, the falsification and
+   the cost) **before its first call**, and the round runs in the order above; a
+   change set that turns out to need a decision stops and asks.
+2. **Every number this round produces is a UPR *val* number** and never a UPR
+   *test* number; the test split stays untouched.
+3. **The corpus map's existing block is not renamed or reshaped.** The phrase
+   table (CS-39) is a **separate** builder, and every number CS-23 and CS-31
+   reported stays reproducible from its own artifact.
+4. **The multiple-comparisons discipline.** This round adds arms to a val split
+   that has now carried about sixty of them, so a claim that the map "got
+   better" must carry the **fit side's out-of-fold** number (CS-30's
+   instrument) beside the val one, and the **label-blind control** (the track's
+   own yardstick) must still buy nothing.
+5. **A new unit inherits the hapax problem.** A phrase is rarer than a word, so
+   the estimator's work (CS-31) has to be redone per unit — or the new map will
+   look worse for a reason that has nothing to do with phrases.
+
+- [ ] **CS-36 — the stability map: which links survive resampling.** The map's
+  uncertainty, measured.
+
+  **The mechanism.** Resample the **train** split's texts (B bootstrap
+  resamples, seeded), rebuild the corpus map on each, and read every
+  (label, word) pair's **stability**: the share of resamples in which the pair is
+  present in the label's table and keeps its sign (and, separately, the share in
+  which it keeps its place among the label's head words). Then two things: the
+  **readout** — the stability of every pair, the share of the map that survives
+  at a stated threshold, and the per-label stability — and the **payoff** — the
+  map restricted to the stable pairs, through the **existing** scorer, as a
+  classifier against the full map.
+
+  **Why.** The map's bulk is fragile (two thirds of its pairs rest on one train
+  text) and we have never measured how much of it is sampling noise: CS-31's
+  z-score is an *asymptotic* repair, this is the empirical one. And the target
+  is known: the **heads are already clean** (CS-35's 600 mined words contain no
+  hapax), so what a stability filter can remove is the **tail** the sum arms
+  add up — and CS-33 already said the tail is where the trouble is (the
+  distinctive-only map is a much worse classifier: 0.0798).
+
+  **The falsification, registered in advance.** (i) The **noise test**: if the
+  share of links that survive at the stated threshold is high, the map is not
+  noise-dominated and the filter has nothing to remove — the readout is then
+  the deliverable and the filter is a null, reported as a null. (ii) The
+  **model test**: the filtered map must move the **fit side's** classifier — the
+  out-of-fold train micro-F1 (CS-30's instrument) must be **higher** than the
+  full map's; if it does not move, the better description is not a better model
+  (CS-31's shape). The val number is read beside the fit side's, never as the
+  selection.
+
+  **The cost.** About a day. **No new dependency.**
+
+- [ ] **CS-37 — the selective map: "unknown" instead of "impossible".** The
+  map's abstention, made honest.
+
+  **The mechanism.** The map's per-cell score has two states today: evidence
+  (a number) and no evidence (the **floor** — the row's smallest seen score
+  minus one, which ranks the label last in every row). The floor is what makes
+  CS-32's pack lose the eight held-out labels outright (the unseen bucket
+  0.4867 → **0.0000**): the combiner learns to trust the channel, and the
+  channel says "impossible" where it should say "I don't know". The change: a
+  label with **no table at all** (and, in the deeper variant, a cell where the
+  text says nothing about the label) **abstains** — the cell carries "no
+  evidence" instead of "impossible", so the combiner can learn that the channel
+  is silent there rather than that the label is out of the question. The
+  encodings are alternatives to be pre-registered: a **flag column**
+  (combiner-agnostic) or **NaN** (the gradient booster takes NaN natively; the
+  logistic combiner does not).
+
+  **The falsification, registered in advance.** (i) The **abstention test**:
+  with the abstention, the map's arm must **not** lose the unseen bucket — the
+  eight must keep the plain pack's number (about 0.45) instead of collapsing to
+  0.0000. If they still collapse, the combiner's *trust* in the channel (not
+  the floor) is what costs them, and the abstention is a null. (ii) The **no
+  free lunch** test: the seen buckets and the pooled number must not fall — the
+  abstention must not cost what it buys. (iii) The **label-blind control** must
+  still buy nothing (the track's yardstick).
+
+  **The cost.** About a day. **No new dependency.**
+
+- [ ] **CS-38 — the label-pair map: the lexical neighbours, the twins, the
+  labels with no vocabulary of their own.** The label space's own geometry.
+
+  **The mechanism.** Read the map's reverse tables (word → labels) as a
+  **label-pair** relation: for every pair of labels, how much vocabulary they
+  share (the overlap of their word tables) and how often they co-occur in the
+  same train text. Then the **readout**: which labels are lexical
+  near-duplicates, which pairs are neighbours, and which labels have **no
+  vocabulary of their own** (an empty table, or a table that is nearly a subset
+  of a neighbour's) — against the catalog's 12 parents, which CS-11 measured to
+  carry almost nothing per cell (the AUC 0.4705–0.5433). The comparison is the
+  point: the parents are a *type* relation and the lexicon a *vocabulary* one,
+  so the comparison says whether **the corpus knows the taxonomy better than
+  the taxonomy's writer did**.
+
+  **Why.** It is the structural version of what CS-35 brute-forced (the
+  expansion route), and it has a hypothesis worth stating: the eight held-out
+  labels include three `- general` ones, and they may be exactly the lexical
+  twins with no vocabulary of their own — in which case the label-holdout is a
+  *lexical* fact and the expansion route's failure is explained rather than
+  merely measured.
+
+  **The falsification, registered in advance.** The relation must be a
+  **finding**, not a confirmation: (i) the corpus-derived label-pair relation
+  must **not** be the catalog's 12-parent relation — if the two agree on the
+  pairs, the corpus knows nothing the taxonomy did not already say; and (ii)
+  the "no vocabulary of their own" class must **exist and be read**, and the
+  eight held-out labels must be **in** it. If either fails, the readout is
+  reported as a null (the relation is the taxonomy's, or the vocabulary-less
+  class is empty or elsewhere) and no action is licensed.
+
+  **The cost.** About a day. **No new dependency.**
+
+- [ ] **CS-39 — the phrase map: do phrases beat their own words?** The map's
+  unit, one step finer.
+
+  **The mechanism.** Build a **phrase table** — the (label, bigram) pairs of the
+  train corpus, over the track's own content tokens, so the phrases are the
+  corpus's own units (the topical ones: "human rights", "death penalty", "early
+  marriage"; and the genre's formulas: "continue to", "ensure that"). Then three
+  things: the **readout** — the class split over the phrase table (CS-33's own
+  machinery applied to phrases), i.e. **how much of the phrase table is
+  formulaic and how much is topical**; the **pair interaction** — for each
+  pair, how much more the phrase says than its two words say
+  (`logodds(pair) − [logodds(w₁) + logodds(w₂)]` in the label's table), which
+  names the phrases that carry more than their parts; and the **payoff** — the
+  **union** of the word map and the phrase map (the same scorer over both
+  tables) against the word map alone, paired, with the label-blind control.
+
+  **Why.** The map's unit is a single word and UPR's genre is formulaic, so the
+  phrase table is where the genre's structure would show. The prior from the
+  round: the topical phrases are **rare**, so a phrase map *alone* inherits the
+  hapax problem (CS-33's distinctive-only map: 0.0798) — hence the **union** is
+  the arm, not the phrase map alone.
+
+  **The falsification, registered in advance.** (i) The **formulaic test**: the
+  phrase table's generic share must be materially above the word table's (the
+  phrases are mostly the register) — if the phrase table's classes look like the
+  word table's, the unit change buys nothing. (ii) The **model test**: the
+  union's **fit side's** out-of-fold train micro-F1 must be **higher** than the
+  word map's — if it does not move, the phrases say nothing their words do not
+  say, and the unit change is a null.
+
+  **The cost.** About a day and a half. **No new dependency.** The existing
+  map's block is not renamed or reshaped: the phrase table is a **separate**
+  builder.
+
+- [ ] **CS-40 — the contrastive map: "why A and not B".** The map's explanation
+  of itself, in the viewer.
+
+  **The mechanism.** A **viewer's** block: for one text and two candidate
+  labels, the words that discriminate them — the words in A's table with a
+  positive log-odds and in B's with a negative one (or the largest log-odds
+  difference between the two tables), with the numbers beside them. The map's
+  artifact already holds every (label, word) pair, so this is a **read**, not a
+  new corpus pass; the block names the question it answers (CS-25's rule).
+
+  **The falsification, registered in advance.** A tool change must move **no
+  number** (the existing artifacts and every run stay exactly as they are), and
+  the block must answer a question the viewer's other blocks cannot: if the
+  discriminating words are the ones the topic-side and the text-side maps
+  already show, the block adds nothing and is dropped.
+
+  **The cost.** Half a day. **No new dependency.**
+
+- [ ] **CS-41 — the lexical kNN: how much of the retrieval is words alone?**
+  The retrieval side's lexical counterpart.
+
+  **The mechanism.** A **predictor** kind (the main pipeline's, like CS-29's
+  lexical floor): the TF-IDF nearest neighbours of the text over the **train**
+  split (the same tokenizer and the same TF-IDF as CS-29's floor), their labels
+  voted with the **existing** kNN machinery (`retrieve/knn.py` — the same
+  votes, the same powers, the same top-k). The measurement is the same harness
+  at the same `top_k` k=2 operating point, and above all the **shortlist R@50**
+  — the candidate generator's ceiling, where the embedding's advantage is
+  largest (the champion's fusion 0.7423 against the embedding kNN's 0.89–0.96).
+
+  **Why.** It is the evidence PLAN.md's deferred BM25 checkbox is waiting for:
+  "is a lexical retrieval channel worth adding to the fusion?" — and the answer
+  needs the lexical retrieval's own **ceiling**, not the lexical classifier's
+  **floor** (CS-29's 0.3845). The decomposition it delivers is the useful one:
+  "the embedding's retrieval buys X of micro-F1 over the lexical retrieval".
+
+  **The falsification, registered in advance.** (i) The **retrieval test**: if
+  the lexical kNN's shortlist R@50 is materially **below** the embedding kNN's,
+  the words alone retrieve less, the fusion's shortlist gap (0.7423 against
+  0.89–0.96) is not a *lexical* breadth gap, and the BM25 checkbox stays
+  closed. If it is **at or above** the embedding kNN's, the lexical route *is* a
+  viable candidate generator and the BM25 question is live — that is the reading
+  that would change the main plan. (ii) The **decomposition**: the lexical kNN's
+  own micro-F1 in the same harness, beside the embedding kNN's and the
+  champion's, so the reader sees what the embedding's retrieval buys.
+
+  **The cost.** About a day. **No new dependency** (the TF-IDF machinery is
+  CS-29's). It is a **main-pipeline** change: its rows land in the main UPR
+  table, the narrative in the track log (CS-29's shape).
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
