@@ -1582,19 +1582,91 @@ lexicon) → the bonus CS-46.
 thread, and the evidence PLAN.md's deferred BM25 checkbox is waiting for.
 
 - [ ] **CS-46 — the union of the lexical and embedding kNN candidate sets.**
-  Union the TF-IDF kNN and the embedding kNN candidate sets and measure
-  recall@10/50 (no model calls).
+  Fuse the TF-IDF kNN and the embedding kNN **rankings** and measure the
+  candidate generator's recall@10 and recall@50 (no model calls).
 
-  **Why.** The lexical kNN reaches R@50 **0.9437**, the embedding kNN **0.9576**,
-  the champion's fusion only **0.7423** (chance 0.7353); the decision model's
-  union is **0.9120** at k=10.
+  **The mechanism.** Two retrievers reach nearly the same **breadth** (CS-41:
+  the lexical kNN's shortlist R@50 **0.9437**, the embedding kNN's **0.9576**)
+  and differ in their **failures**: the words miss what only the embedding
+  geometry can see, the embedding misses what only the words can see. The
+  **union** is the track's own fusion rule — the per-row **z-max** of the two
+  score matrices (CS-14's rule, `text_processors/decision/upr_union.py`) — a
+  **measurement, not a component**: it says how much breadth the two
+  retrievers have **together**, and it is the number PLAN.md's deferred BM25
+  decision is waiting for.
 
-  **The falsification.** If the union is **>= 0.9120 at k=10**, the deferred
-  BM25 decision gets its evidence; if below, the shortlist gap is not a breadth
-  gap.
+  **Why.** CS-41 left the question open: the fusion's own shortlist (0.7423,
+  barely above the 0.7353 chance level) is the *worse* candidate generator,
+  and the lexical route's shortlist floor is high (the label-blind arm 0.8111),
+  so the payoff must be read on the **union** of the two candidate sets. The
+  decision model's union already reaches **0.9120** at k = 10 (CS-14) — the
+  bar this measurement is read against.
 
-  **The cost.** One `evaluate` run, ~1 minute (cache hits, no model calls);
-  about half a day; no new dependency.
+  **The rule, fixed before the call.** Both halves at **k = 10** (the
+  champion's own kNN k — the like-for-like operating point CS-41 used), the
+  machinery's default power (1.0), the TF-IDF knobs CS-29's/CS-41's (word 1-2
+  grams, min_df 1, sublinear tf, no stop-word list); the union is the per-row
+  z-max of the two score matrices, nothing else. The label-blind counterpart
+  (the track's own yardstick) permutes the train records' label sets **once**
+  and hands the same permuted labels to both halves, so the fusion's floor is
+  measured on the same control as the arms'.
+
+  **Where the code lives.** A new predictor
+  `src/cluster_rag/predictors/knn_union.py` (the registry
+  `src/cluster_rag/predictors/__init__.py` gains the name): it constructs the
+  existing lexical kNN predictor (CS-41's) and the existing embedding kNN
+  predictor (Phase 4's) **unmodified**, scores both, and returns the z-max of
+  the two matrices. It is embedding-dependent (`REQUIRES_EMBEDDINGS = True`,
+  `REQUIRED_KINDS = ("document", "query")`) because one half is, and its
+  `label_blind` builds the permuted train context both halves read.
+
+  **The runs.** Two `evaluate` runs on UPR **val** in
+  `experiments/knn_union_sweep.py` (the sweep label `knn_union`):
+  `upr-eval-knn-union-val` and `upr-eval-knn-union-blind-val`. `evaluate` is a
+  **main-pipeline** command, so the rows land in the **main** UPR table
+  (`docs/experiments_table_upr.md`, `## UPR — knn_union`) and the narrative in
+  the **track log** (CS-29's/CS-41's shape). Artifacts
+  `results/upr-eval-knn-union-val/metrics.json` and
+  `results/upr-eval-knn-union-blind-val/metrics.json`.
+
+  **The shape of the number.** The headline is the union's **recall@10**
+  (the share of gold cells whose label is in the row's top 10) beside its
+  **recall@50**; the two arms' own R@10 / R@50 (the lexical kNN 0.6326 /
+  0.9437, the embedding kNN 0.6933 / 0.9576, both from their artifacts) and
+  the **decision model's union** (0.9120 at k = 10, CS-14) sit beside it. The
+  blind union's R@10 / R@50 and its micro-F1 are the fusion's empirical floor.
+  The micro-F1 of the union's decisions is reported (it is not a classifier —
+  the union's value is the candidate set).
+
+  **The falsification, registered in advance.** The union's **recall@10 must
+  be at least 0.9120** (the decision model's union at the same k). At or above
+  it, the two lexical retrievers together supply the breadth the decision
+  model's union supplies, and **PLAN.md's deferred BM25 decision gets its
+  evidence**; below it, the shortlist gap is **not** a breadth gap — the
+  fusion is not buying back what the individual retrievers already see — and
+  the BM25 checkbox stays closed. The recall@50 is read beside it: the union
+  should not fall below the better arm's 0.9576 (a fusion that dilutes the
+  breadth is a null regardless of its recall@10), and a union at 0.9576 or
+  above means the two retrievers are almost mutually redundant at that depth.
+
+  **The cost.** Two `evaluate` runs, about half a minute each (cache hits: the
+  embeddings are already cached, the TF-IDF is fitted on the train split);
+  **no model calls**, no new dependency; about half a day including tests and
+  docs.
+
+  **What is NOT registered.** A k sweep (k = 10, the champion's own); a
+  different fusion rule (only the z-max); a BM25 channel, a lexical term in
+  the fusion or a fourth fusion parameter (the dependency and the wiring are
+  the reviewer's); the union as a **component** (it is a measurement — CS-14's
+  shape); the decision model's own union re-measured (CS-14's artifact is the
+  reference); **test**.
+
+  **The exit criteria.** The two artifacts hold the union's metrics (R@10,
+  R@50, the micro-F1, the blind floor); the rows are auto-appended to the
+  **main** UPR table; the log section §CS-46 reads the union out against the
+  two conditions; the checkbox is ticked; the block is moved verbatim to the
+  archive; the gate is green (ruff, pytest, and the CLI's own evaluate guard);
+  one commit.
 
 ## 8. The durable deliverable (named, so it is not lost)
 
