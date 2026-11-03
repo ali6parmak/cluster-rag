@@ -1476,6 +1476,119 @@ CS-41 (the lexical kNN).
   CS-29's). It is a **main-pipeline** change: its rows land in the main UPR
   table, the narrative in the track log (CS-29's shape).
 
+  **The pre-registration (2026-11-03, written before the first call).** The
+  block above fixes the mechanism; this fixes the *shape* of the number.
+
+  - **Where the code lives.** A new **predictor** in the main pipeline's
+    package: `src/cluster_rag/predictors/lexical_knn.py` (the registry
+    `src/cluster_rag/predictors/__init__.py` gains the name). The **TF-IDF** is
+    CS-29's floor's own (`src/cluster_rag/predictors/lexical_tfidf.py` — the
+    same vectorizer, the same knobs, fitted on the **train** split only ✓); the
+    **votes** are the main pipeline's own (`src/cluster_rag/retrieve/knn.py` —
+    `knn_vote_scores`: the same votes ✓, the same clipping ✓, the same power
+    ✓, the same top-k ✓ and the same tie-break ✓). The predictor is
+    **embedding-free** (`REQUIRES_EMBEDDINGS = False` ✓), so the `evaluate`
+    command needs no embedding run ✓ — the same wiring as CS-29's floor ✓.
+
+  - **One reading settled before the first call.** The block says "the TF-IDF
+    nearest neighbours of the text over the **train** split (the same tokenizer
+    and the same TF-IDF as CS-29's floor)". The TF-IDF's rows are
+    **l2-normalised** ✓ (CS-29's vectorizer's own `norm="l2"` ✓), so the dot
+    product the kNN machinery computes **is** the cosine ✓ — the same geometry
+    the embedding kNN uses ✓, and the "nearest" neighbour is the nearest in the
+    TF-IDF cosine ✓. The one thing the machinery needs and the TF-IDF does not
+    give is a **float32 dense** matrix (the kNN core is dense ✓), so the sparse
+    matrix is materialised dense ✓ — the numbers are unchanged by that ✓ (the
+    zeros stay zeros ✓). A text with **no** known feature (a row of zeros ✓)
+    has no neighbour with a positive similarity ✓, so its votes are 0 ✓ and it
+    is ranked by the harness's own tie-break ✓ — reported, never dropped ✓.
+
+  - **The arms.** The same harness (`evaluate` ✓), the same `top_k` k=2
+    operating point ✓ (the champion's own ✓), the **val** split ✓:
+    - the **grid**: k ∈ {1, 3, 5, 10, 20} ✓ — the **pool-cut family's own
+      grid** ✓ (the embedding kNN was measured on exactly it ✓) — at the
+      machinery's default power (1.0 ✓, the embedding kNN's own ✓);
+    - the **primary**: k = 10 ✓ — the **champion's own** kNN k ✓ (the fusion's
+      a-term uses k=10 ✓), so the like-for-like comparison is with
+      `upr-eval-knn-embeddinggemma-k10` ✓;
+    - the **label-blind control** at k = 10 ✓ (the track's own yardstick ✓: the
+      train records' label sets permuted among the records ✓, the retrieval
+      untouched ✓) — the **empirical floor** of the shortlist ✓.
+
+    The **power** is **not** swept ✓ (the machinery's default ✓): one thing at
+    a time ✓.
+
+  - **The runs.** Six `evaluate` runs on UPR **val** ✓, in the sweep file
+    `experiments/lexical_knn_sweep.py` (the sweep label `lexical_knn` ✓) — a
+    **main-pipeline** change ✓, so the rows land in the **main** UPR table
+    (`docs/experiments_table_upr.md` ✓) and the narrative in the **track log** ✓
+    (CS-29's shape ✓): `upr-eval-lexical-knn-k{1,3,5,10,20}-val` and
+    `upr-eval-lexical-knn-k10-blind-val` ✓.
+
+  - **What is measured.** Each run's own numbers from its artifact ✓: the
+    **shortlist R@50** above all ✓ (the candidate generator's ceiling ✓), the
+    **shortlist R@20** and **R@100** ✓, the **micro-F1** ✓ (the decomposition
+    ✓), the macro- and sample-F1 ✓, the nDCG@5 ✓, the coverage ✓ and the
+    per-bucket view ✓ (the head, the torso, the tail, the unseen ✓).
+
+  - **The numbers it is read against** (all from the artifacts ✓):
+    - the **champion's fusion** (`upr-eval-fusionc-embeddinggemma-k10-c1`):
+      micro-F1 **0.5479**, shortlist R@50 **0.7423** ✓;
+    - the **embedding kNN at the same k** (`upr-eval-knn-embeddinggemma-k10`):
+      micro-F1 **0.5388**, shortlist R@50 **0.9576** ✓ — and the pool-cut
+      family's range over its 70 runs: shortlist R@50 **0.8918 … 0.9605** ✓;
+    - **CS-29's lexical floor** (`upr-eval-lexical-tfidf-val`): micro-F1
+      **0.3845**, shortlist R@50 **0.7205** ✓ — the **classifier**'s floor ✓,
+      not the **retrieval**'s ceiling ✓;
+    - the **chance level of the shortlist**: with 68 labels, a ranking that
+      knows nothing still puts a gold label in the top 50 with probability
+      **50/68 = 0.7353** ✓ — so the fusion's 0.7423 is **barely above chance** ✓
+      and the blind control measures the floor empirically ✓.
+
+  - **The falsification, registered in advance.**
+    1. **The retrieval test.** The lexical kNN's shortlist R@50 must be **at
+       least 0.8918** — the **lowest** of the embedding kNN family's 70 runs ✓
+       (the family's own floor ✓) — for the lexical route to count as "at or
+       above the embedding kNN's" ✓. If it is **materially below** that ✓, the
+       words alone retrieve less ✓, the fusion's shortlist gap (0.7423 against
+       0.89–0.96 ✓) is **not** a lexical breadth gap ✓ and PLAN.md's BM25
+       checkbox **stays closed** ✓. If it is at or above ✓, the lexical route
+       **is** a viable candidate generator ✓ and the BM25 question is **live**
+       ✓ — the reading that would change the main plan ✓. The like-for-like
+       number (the champion's own embedding kNN at k=10, **0.9576** ✓) is
+       reported beside it ✓, and so is the lexical kNN's **best** k on the
+       grid ✓.
+    2. **The decomposition.** The lexical kNN's own micro-F1 at the primary k,
+       beside the embedding kNN's (**0.5388** ✓) and the champion's (**0.5479**
+       ✓) — so the reader sees what the embedding's retrieval buys ✓.
+    3. **The label-blind control.** The blind arm's shortlist R@50 and its
+       micro-F1 are the **empirical floor** ✓: the lexical route's numbers are
+       read against them ✓ (and against the naive chance level 0.7353 ✓). The
+       control buys nothing ✓ — the track's yardstick ✓.
+
+  - **What is NOT registered.** (i) The **power** sweep (the machinery's
+    default only ✓). (ii) A **BM25** channel (the dependency and the fourth
+    fusion term are the reviewer's ✓ — this change set measures the *route* ✓,
+    not the term ✓). (iii) The **fit side**: the `evaluate` command has no
+    cross-fit ✓ and this change set measures a **ceiling** ✓, not a claim that
+    anything improved ✓ (the corpus map's fit-side instrument belongs to the
+    `analyze-upr` command ✓, and CS-29's floor has no fit side either ✓).
+    (iv) The **phrase** unit (CS-39's verdict: the phrases are noise ✓).
+
+  - **The exit criteria.** The six runs hold their numbers ✓; the rows are
+    auto-appended in the **main** UPR table ✓; the log section reads the
+    numbers out with the falsification conditions ✓; every number CS-29,
+    CS-30, CS-31, CS-32, CS-36, CS-37, CS-38, CS-39 and CS-40 reported is
+    **reproduced unchanged** ✓ — in particular **CS-29's floor** ✓ (the TF-IDF
+    knobs are shared now ✓, so its artifact must reproduce field for field ✓);
+    the gate green (ruff over `src`/`tests`/`experiments`/`tools` and the track's
+    sweep folder ✓, the full pytest suite ✓, the two verify tools ✓, and both
+    final sweeps reproducing their artifacts field for field ✓).
+
+  - **The cost, in compute.** The TF-IDF is fitted on the train split's 1,676
+    texts ✓ (17,217 features ✓ — CS-29's own count ✓); the kNN's similarities
+    are one dense matmul ✓ (660 × 1,676 × 17,217 ✓). **No new dependency** ✓.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
