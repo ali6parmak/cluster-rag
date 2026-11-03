@@ -1539,21 +1539,110 @@ lexicon) → the bonus CS-46.
   0.5874).
 
 - [ ] **CS-44 — lend the neighbour's words to the five thin labels.** For the
-  five labels whose table is >= 80 % inside a partner's, add the partner's words
-  with a discount (or as a separate "borrowed" column).
+  five labels whose table is >= 80 % inside a partner's, the partner's words are
+  added to the thin label's table with a **discount**.
 
-  **Why.** CS-38's `corpus_map.label_pairs.vocabulary_less.subset_of_a_neighbour`:
-  *Sexual and reproductive rights* **0.935** inside *Women's rights*; *Freedom of
-  assembly* **0.909** inside *Detention*; *Statelessness* **0.864** inside
-  *Rights of the Child*; *CP rights - general* **0.843** inside *International
-  instruments*; *Trafficking* **0.808** inside *Rights of the Child*.
+  **The mechanism.** Five labels have (almost) no vocabulary of their own: their
+  dictionary tables lie inside a partner's (CS-38's
+  `corpus_map.label_pairs.vocabulary_less.subset_of_a_neighbour` — *Sexual and
+  reproductive rights* **0.935** inside *Women's rights*; *Freedom of assembly*
+  **0.909** inside *Detention*; *Statelessness* **0.864** inside *Rights of the
+  Child*; *CP rights - general* **0.843** inside *International instruments*;
+  *Trafficking* **0.808** inside *Rights of the Child*). So the map's column is
+  evidence-poor for them exactly where it is evidence-rich for the partner: a
+  text about sexual and reproductive rights is scored high on *Women's rights*
+  and, for *Sexual and reproductive rights* itself, only on the words the two
+  share. The change: the thin label's column also reads the partner's
+  **evidence-for** words that its own table does not carry, at a **discount** —
+  the words are lent, not copied, and the partner's own column is untouched.
 
-  **The falsification.** Those five improve without the **partner** falling
-  (paired on the pair's own cells). The risk is that the pair becomes confusable
-  and the top-2 swaps them.
+  **The rule, fixed before the call.** The pairs: the labels with a non-empty
+  table whose **best containment** is at or above **0.80** (CS-38's registered
+  threshold), the partner being the first maximal containment in the label
+  order — the five above. The lent entries: the partner's (label, word) pairs
+  whose **z-score is positive** and whose word is **not in the lent label's own
+  table**, each contributed at **discount 0.5** × the partner's weight (the
+  arm's measure is the pack's own `sum_zscore_positive`). The lending relation
+  is computed **once from the full train map** and recorded; it is applied to
+  **every fold's own weights** on the fit side (the cross-fit: the pairs are a
+  train-side fact, the weights are the fold's). A label whose own table is
+  emptied on the fit side (the stability filter, CS-42's mask) does not borrow —
+  the borrow composes with `keep`.
 
-  **The cost.** About a day; the map is a corpus statistic, so the fit side's
-  guard is the cross-fit; no new dependency.
+  **Where the code lives.** `text_processors/lexical/label_pairs.py` gains
+  `containment_partners` (the map-only containment, the same computation CS-38's
+  readout uses); `text_processors/lexical/corpus_map_score.py` gains
+  `borrowed_tables` and the `borrow` option on `score_cells` / `cross_fit_scores`;
+  the command (`commands/upr.py::_upr_corpus_map_feature`) computes the pairs,
+  the two score matrices and the new arm's provenance; `upr_learning.py` fits the
+  arm; the reporting (`eval/report.py::build_label_report` and
+  `upr_analysis.py::arm_block`) gains **label sets** — a named label group's own
+  section (`metrics.per_label_set`) — **off unless declared**, so every earlier
+  artifact keeps its exact content. The config key is
+  `upr_analysis.learned.corpus_map_feature.borrow` (`enabled`, `discount`,
+  `threshold`; **off** by default).
+
+  **The run.** One: `upr-analyze-cmap-borrow` — the `analyze-upr` command with
+  CS-32's configuration exactly, plus the borrow knob. Sweep
+  `experiments_text_processing/upr_learned_cmap_borrow_sweep.py`, label
+  `upr_learned_cmap_borrow`; artifact
+  `results/upr-analyze-cmap-borrow/analysis.json`. **Five arms**: the real arm
+  (the plain column — CS-32's), the control (the pack without the group), the
+  label-blind counterpart, the **borrow arm** (the lent column on both sides) and
+  the random-vector floor; the chance and control-role floors ride along. The
+  label sets declared in the run: the **five thin labels** and **their partners**
+  (four distinct labels — *Rights of the Child* serves two pairs) as two pooled
+  sets, plus the **ten labels individually**.
+
+  **The shape of the number.** The **thin set's pooled micro-F1** in the borrow
+  arm vs the plain arm — a paired Δ by text (2,000 resamples, seed 42) — and the
+  same for the **partner set** and for the ten labels. The power is stated up
+  front: the five thin labels carry **63** val gold cells (7 / 15 / 8 / 13 / 20)
+  and the partners **274** (101 / 20 / 85 / 68), so the per-label intervals are
+  wide and the **pooled sets are the instrument**. Reported beside the deltas:
+  each arm's per-label-set sections, the pooled overall, the per-bucket view, the
+  shortlist R@50 and the per-pair **swap readout** (how many val texts each arm
+  predicts the thin label, the partner, both or neither).
+
+  **The falsification, registered in advance.**
+  1. **The lending test.** The thin set's paired Δ (borrow − plain) must be
+     **positive with an interval that excludes zero**, and **at least 4 of the 5**
+     individual thin labels' point estimates must be positive (the sign-
+     consistency leg: one label may not carry the pooled gain alone). A positive
+     point estimate whose interval includes zero is **unresolved (underpowered)**
+     — with 63 gold cells that is a real possibility — and it does **not** license
+     the change.
+  2. **The partner test.** The partners' set's paired Δ must **not fall
+     materially**: its point estimate **and** its interval's lower bound at or
+     above **−0.02**. The partner's own column is untouched by the lending, so a
+     fall can only come from the top-2 competition — exactly the registered risk
+     ("the pair becomes confusable and the top-2 swaps them").
+  3. **The swap readout (descriptive, no bar).** Per pair, the counts of val
+     texts where each arm predicts the thin label, the partner, both or neither.
+
+  **The guard.** The run's real arm, control, blind arm and random floor
+  reproduce CS-32's numbers exactly (the knob is off in them); the lending
+  relation reproduces CS-38's `subset_of_a_neighbour` — the same five labels,
+  partners and shares (0.935 / 0.909 / 0.864 / 0.843 / 0.808); the reference arm
+  reproduces its `evaluate` run field by field.
+
+  **The cost.** One run, about 2–3 minutes (cache hits, **no model calls**); the
+  change set about a day including tests and docs; **no new dependency**.
+
+  **What is NOT registered.** The **map classifier** as the instrument (the pack
+  is — it is where the dictionary's column lives and where the plan's cost line
+  puts the cross-fit guard); a **discount or threshold sweep** (0.5 and 0.80, one
+  value each); a **separate "borrowed" column** (the lending is folded into the
+  lent label's own column); the combination with CS-42's mask or CS-43's
+  description (one thing at a time); the **mined lexicon** (CS-45); **test**.
+
+  **The exit criteria.** The artifact holds the five arms, the label sets, the
+  lending provenance (the five pairs and their shares, the discount and the
+  threshold, the per-fold application) and the paired blocks; the lending
+  relation reproduces CS-38's five; the table row is auto-appended; the log
+  section §CS-44 reads the numbers out against the three conditions; the
+  checkbox is ticked; the block is moved verbatim to the archive; the gate is
+  green (ruff, pytest, `tools/verify_upr_baseline.py` on the run); one commit.
 
 - [ ] **CS-45 — retry the mined lexicon with a distinctive filter.** CS-35's
   label lexicon, but keep only the distinctive/shared words (CS-33's classes)
