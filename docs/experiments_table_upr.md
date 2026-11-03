@@ -21,7 +21,7 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-random-topk3-val | 2026-11-01 | val | random | n/a | top_k k=3 | 0.0346 | 0.0294 | 0.0333 | 1.000 | 0.0294 | 0.1496 | 0.0533 | 0.7792 | 660 | 0.019 |
 | upr-eval-mf-topk2-test | 2026-11-01 | test | most_frequent | n/a | top_k k=2 | 0.1433 | 0.0074 | 0.1283 | 0.029 | 0.0940 | 0.2954 | 0.1762 | 0.6808 | 664 | 0.016 |
 | upr-eval-random-topk2-test | 2026-11-01 | test | random | n/a | top_k k=2 | 0.0234 | 0.0196 | 0.0209 | 1.000 | 0.0274 | 0.1438 | 0.0463 | 0.7308 | 664 | 0.019 |
-| upr-eval-lexical-tfidf-val | 2026-11-01 | val | lexical_tfidf | n/a | top_k k=2 | 0.3845 | 0.2772 | 0.3676 | 0.588 | 0.2161 | 0.6085 | 0.5053 | 0.7205 | 660 | 61.609 |
+| upr-eval-lexical-tfidf-val | 2026-11-03 | val | lexical_tfidf | n/a | top_k k=2 | 0.3845 | 0.2772 | 0.3676 | 0.588 | 0.2161 | 0.6085 | 0.5053 | 0.7205 | 660 | 57.8 |
 
 ## UPR — embed_pool
 
@@ -394,3 +394,14 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-eval-corpus-map-sum-zscore-positive-phrase-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.5342 | 0.4663 | 0.5105 | 0.868 | 0.2615 | 0.6598 | 0.6391 | 0.7229 | 660 | 3.107 |
 | upr-eval-corpus-map-sum-zscore-positive-phrase-blind-val | 2026-11-02 | val | corpus_map | n/a | top_k k=2 | 0.0456 | 0.0186 | 0.0438 | 0.868 | 0.0406 | 0.1663 | 0.0746 | 0.6071 | 660 | 3.6 |
+
+## UPR — lexical_knn
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-lexical-knn-k1-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.3146 | 0.2928 | 0.3017 | 0.868 | 0.1609 | 0.4256 | 0.3900 | 0.8463 | 660 | 0.164 |
+| upr-eval-lexical-knn-k3-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.3913 | 0.3271 | 0.3766 | 0.868 | 0.2167 | 0.5761 | 0.5069 | 0.9125 | 660 | 0.145 |
+| upr-eval-lexical-knn-k5-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.4263 | 0.3509 | 0.4093 | 0.882 | 0.2264 | 0.6176 | 0.5416 | 0.9293 | 660 | 0.146 |
+| upr-eval-lexical-knn-k10-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.4605 | 0.4035 | 0.4434 | 0.868 | 0.2403 | 0.6326 | 0.5803 | 0.9437 | 660 | 0.146 |
+| upr-eval-lexical-knn-k20-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.4749 | 0.4392 | 0.4575 | 0.868 | 0.2488 | 0.6559 | 0.5987 | 0.9415 | 660 | 0.147 |
+| upr-eval-lexical-knn-k10-blind-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.0707 | 0.0244 | 0.0659 | 0.838 | 0.0576 | 0.2097 | 0.1104 | 0.8111 | 660 | 0.148 |

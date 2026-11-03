@@ -61,6 +61,76 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "class_weight": None,
 }
 
+# The **TF-IDF knobs** the lexical predictors share: this floor (CS-29) and the
+# lexical kNN (CS-41) read the same words with the same vectorizer, so the
+# knobs live here once (the pre-registered values above).
+TFIDF_PARAMS: dict[str, Any] = {
+    "ngram_max": DEFAULT_PARAMS["ngram_max"],
+    "min_df": DEFAULT_PARAMS["min_df"],
+    "sublinear_tf": DEFAULT_PARAMS["sublinear_tf"],
+    "lowercase": DEFAULT_PARAMS["lowercase"],
+    "stop_words": DEFAULT_PARAMS["stop_words"],
+}
+
+
+def resolve_tfidf_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    """The effective TF-IDF knobs, validated (a bad value fails before the fit).
+
+    Args:
+        params: The configured knobs (the shared subset).
+
+    Returns:
+        The effective knobs: the pre-registered defaults, overridden by the
+        configured ones.
+
+    Raises:
+        ValueError: On an unsupported type or an out-of-range value.
+    """
+    effective = dict(TFIDF_PARAMS)
+    effective.update({key: value for key, value in params.items() if key in TFIDF_PARAMS})
+
+    ngram_max = effective["ngram_max"]
+    if not isinstance(ngram_max, int) or isinstance(ngram_max, bool) or ngram_max < 1:
+        raise ValueError(
+            f"the TF-IDF params['ngram_max'] must be a positive integer, got {ngram_max!r}"
+        )
+    min_df = effective["min_df"]
+    if not isinstance(min_df, int) or isinstance(min_df, bool) or min_df < 1:
+        raise ValueError(f"the TF-IDF params['min_df'] must be a positive integer, got {min_df!r}")
+    for flag in ("sublinear_tf", "lowercase"):
+        if not isinstance(effective[flag], bool):
+            raise ValueError(
+                f"the TF-IDF params[{flag!r}] must be a boolean, got {effective[flag]!r}"
+            )
+    if effective["stop_words"] not in (None, "english"):
+        raise ValueError(
+            f"the TF-IDF params['stop_words'] must be null or 'english', "
+            f"got {effective['stop_words']!r}"
+        )
+    return effective
+
+
+def build_tfidf_vectorizer(params: Mapping[str, Any]) -> TfidfVectorizer:
+    """The TF-IDF vectorizer (the shared knobs), fitted by the caller.
+
+    The rows are **l2-normalised** (``norm="l2"``), so the dot product of two
+    rows is their cosine — the geometry the kNN machinery (CS-41) reads.
+
+    Args:
+        params: The effective TF-IDF knobs (from :func:`resolve_tfidf_params`).
+
+    Returns:
+        The vectorizer (unfitted).
+    """
+    return TfidfVectorizer(
+        ngram_range=(1, params["ngram_max"]),
+        min_df=params["min_df"],
+        sublinear_tf=params["sublinear_tf"],
+        lowercase=params["lowercase"],
+        stop_words=params["stop_words"],
+        norm="l2",
+    )
+
 
 def _resolve_params(params: Mapping[str, Any]) -> dict[str, Any]:
     """The effective parameters, validated (a bad value fails before the fit).
@@ -77,29 +147,8 @@ def _resolve_params(params: Mapping[str, Any]) -> dict[str, Any]:
     """
     effective = dict(DEFAULT_PARAMS)
     effective.update(params)
+    effective.update(resolve_tfidf_params(params))
 
-    ngram_max = effective["ngram_max"]
-    if not isinstance(ngram_max, int) or isinstance(ngram_max, bool) or ngram_max < 1:
-        raise ValueError(
-            f"predictor 'lexical_tfidf' params['ngram_max'] must be a positive integer, "
-            f"got {ngram_max!r}"
-        )
-    min_df = effective["min_df"]
-    if not isinstance(min_df, int) or isinstance(min_df, bool) or min_df < 1:
-        raise ValueError(
-            f"predictor 'lexical_tfidf' params['min_df'] must be a positive integer, got {min_df!r}"
-        )
-    for flag in ("sublinear_tf", "lowercase"):
-        if not isinstance(effective[flag], bool):
-            raise ValueError(
-                f"predictor 'lexical_tfidf' params[{flag!r}] must be a boolean, "
-                f"got {effective[flag]!r}"
-            )
-    if effective["stop_words"] not in (None, "english"):
-        raise ValueError(
-            "predictor 'lexical_tfidf' params['stop_words'] must be null or 'english', "
-            f"got {effective['stop_words']!r}"
-        )
     c_value = effective["C"]
     if not isinstance(c_value, (int, float)) or isinstance(c_value, bool) or c_value <= 0:
         raise ValueError(
@@ -146,14 +195,7 @@ class LexicalTfidfPredictor:
         self._column_of = {label: index for index, label in enumerate(context.labels)}
 
         train_texts = [record.text for record in context.train_records]
-        self._vectorizer = TfidfVectorizer(
-            ngram_range=(1, self._params["ngram_max"]),
-            min_df=self._params["min_df"],
-            sublinear_tf=self._params["sublinear_tf"],
-            lowercase=self._params["lowercase"],
-            stop_words=self._params["stop_words"],
-            norm="l2",
-        )
+        self._vectorizer = build_tfidf_vectorizer(self._params)
         matrix = self._vectorizer.fit_transform(train_texts)
         self._n_features = int(matrix.shape[1])
 

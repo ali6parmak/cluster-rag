@@ -93,6 +93,7 @@ research record and are **not** indexed here.
 | [CS-38 — the label-pair map](#cs-38--the-label-pair-map-the-lexical-neighbours-the-twins-the-labels-with-no-vocabulary-of-their-own-2026-11-02) | one `upr-hitmap-corpus` run (the map's own artifact, re-written with the `corpus_map.label_pairs` block) | the corpus's label-pair relation **is** the taxonomy's (the registered disagreement test fires on both legs: the sibling pairs' mean vocabulary Jaccard is **+0.0413 [+0.0372, +0.0451]** above the other pairs' and **11 of the corpus's 20 closest pairs** are siblings against a bar of 4) — so the relation is a **null**; and the **vocabulary-less class** is a finding (**13 labels**: the eight held-out ones plus five whose own words lie almost entirely inside one neighbour's table, *Sexual and reproductive rights* 94 % inside *Women's rights*) | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-39 — the phrase map](#cs-39--the-phrase-map-do-phrases-beat-their-own-words-2026-11-02) | two `upr-eval-corpus-map-sum-zscore-positive-phrase{,-blind}-val` runs + the map's re-written `phrase_map` block | the **formulaic test fails** (the phrase table's generic share is **15.5 %**, far below the word table's **43.6 %** — the phrases are too rare to sit in many tables, so the class measure reads rarity as topicality) and the **control fails** (the blind union gains **more** on the fit side, +0.0240 against the real union's +0.0050) — so the unit change is a **null**; the register is real but it is a **fragment** (the top interactions are "on its", "with an", "and will") and the phrases are **too rare to be a table** (82.8 % hapax) | `results/upr-eval-corpus-map-sum-zscore-positive-phrase-val/metrics.json` |
 | [CS-40 — the contrastive map](#cs-40--the-contrastive-map-why-a-and-not-b-2026-11-03) | no run (a **tool**): the viewer's contrastive block + the measurement tool | the block stays: the discriminating words are **not** the ones the topic-side and the text-side maps show (the vocabulary share **0.6100** against the bar 0.50) and for **80 %** of its rows the screen does not print **both** of the pair's log-odds — the reader could not have formed the difference; and **62.5 %** of the measured pairs have a word of **this** text that pulls the two labels in **opposite** directions | the CS-23 artifact (read, not re-measured) |
+| [CS-41 — the lexical kNN](#cs-41--the-lexical-knn-how-much-of-the-retrieval-is-words-alone-2026-11-03) | six `upr-eval-lexical-knn-k{1,3,5,10,20}-val` runs + the label-blind counterpart (the **main** UPR table) | **the lexical route is a viable candidate generator**: the words alone retrieve nearly as well as the embedding (the shortlist R@50 **0.9437** against the embedding kNN's **0.9576** at the same k, and above the embedding family's floor 0.8918) — so **PLAN.md's BM25 checkbox is LIVE**; and the **champion's fusion is the worse candidate generator** (0.7423, barely above the 0.7353 chance level) — the fusion dilutes the shortlist. The embedding's advantage is in the **ordering** (micro-F1 +0.0783), not in the **breadth** | `results/upr-eval-lexical-knn-k10-val/metrics.json` |
 
 ## Change sets
 
@@ -7814,3 +7815,104 @@ novelty is a real test of the contrast).
 - Nothing about the **pair's stability** ✓ (CS-36's resampling was not run
   over the contrast ✓ — not registered ✓) and nothing about the catalog's
   **siblings** as the pair ✓ (not registered ✓).
+
+## CS-41 — the lexical kNN: how much of the retrieval is words alone? (2026-11-03)
+
+**The question.** The lexical floor (CS-29) measured the **classifier** the
+words alone can support (micro-F1 **0.3845**). This change set measures the
+**retrieval** they alone can support: the TF-IDF nearest neighbours of the text
+over the **train** split, their labels voted with the main pipeline's **own**
+kNN machinery (`retrieve/knn.py` — the same votes, the same clipping at zero,
+the same power, the same top-k and the same tie-break as the embedding kNN
+reads).
+
+**The mechanism.** A new **predictor** (`lexical_knn`, the registry's
+`predictors/__init__.py`), embedding-free ✓: the TF-IDF is CS-29's floor's own
+(the same vectorizer, the same knobs, fitted on the **train** split only ✓ —
+the knobs now live in one place, `predictors/lexical_tfidf.py` ✓, and **CS-29's
+own artifact reproduces field for field** ✓), the rows are l2-normalised ✓ so
+the kNN machinery's dot product **is** the cosine ✓, and the labels are voted
+by `knn_vote_scores` ✓ — the same function the embedding kNN reads ✓.
+
+**The arms.** The same harness (`evaluate` ✓), the same `top_k` k=2 operating
+point ✓ (the champion's own ✓), the **val** split ✓ (660 texts; no model call,
+no embedding; the six runs 0.9 s in total):
+
+| the arm | micro-F1 | macro-F1 | shortlist R@20 | **shortlist R@50** | nDCG@5 | R@10 | the head | the torso | the tail | the unseen |
+|---|---|---|---|---|---|---|---|---|---|---|
+| the lexical kNN, k=1 | 0.3146 | 0.2928 | 0.5235 | 0.8463 | 0.3900 | 0.4256 | 0.4778 | 0.2321 | 0.2500 | 0.0000 |
+| the lexical kNN, k=3 | 0.3913 | 0.3271 | 0.6486 | 0.9125 | 0.5069 | 0.5761 | 0.5201 | 0.3479 | 0.3109 | 0.0000 |
+| the lexical kNN, k=5 | 0.4263 | 0.3509 | 0.6770 | 0.9293 | 0.5416 | 0.6176 | 0.5606 | 0.3752 | 0.3445 | 0.0000 |
+| **the lexical kNN, k=10 (the primary)** | **0.4605** | 0.4035 | 0.6967 | **0.9437** | 0.5803 | 0.6326 | 0.5795 | 0.4150 | 0.4414 | 0.0000 |
+| the lexical kNN, k=20 | **0.4749** | **0.4392** | 0.6996 | 0.9415 | **0.5987** | **0.6559** | 0.5716 | 0.4620 | 0.4925 | 0.0000 |
+| the **label-blind** counterpart (k=10) | 0.0707 | 0.0244 | 0.3854 | 0.8111 | 0.1104 | 0.2097 | 0.1086 | 0.0185 | 0.0105 | 0.0000 |
+
+The numbers it is read against (all from the artifacts ✓): the **champion's
+fusion** (micro-F1 **0.5479**, shortlist R@50 **0.7423** ✓), the **embedding
+kNN at the same k** (micro-F1 **0.5388**, shortlist R@50 **0.9576** ✓) and the
+pool-cut family's range over its 70 runs (shortlist R@50 **0.8918 … 0.9605**
+✓), and **CS-29's lexical floor** (micro-F1 **0.3845**, shortlist R@50
+**0.7205** ✓). And the **chance level of the shortlist**: with 68 labels, a
+ranking that knows nothing still puts a gold label in the top 50 with
+probability **50/68 = 0.7353** ✓.
+
+### The falsification, read out — **the lexical route is a viable candidate generator**
+
+1. **The retrieval test HOLDS.** The lexical kNN's shortlist R@50 at the
+   primary k is **0.9437** — above the registered bar **0.8918** (the
+   embedding kNN family's own floor over its 70 runs ✓) and **98.5 %** of the
+   champion's own embedding kNN at the same k (0.9576 ✓). The words alone
+   retrieve nearly as well as the embedding does ✓. **The BM25 question is
+   LIVE** ✓ — the reading that would change the main plan ✓.
+2. **The decomposition.** The lexical kNN's own micro-F1 at the primary k is
+   **0.4605**, against the embedding kNN's **0.5388** and the champion's
+   **0.5479** ✓: the embedding's retrieval buys **+0.0783** of micro-F1 over
+   the lexical retrieval (and the champion **+0.0874**) — but on the
+   **shortlist** the gap is only **0.0139** ✓. The embedding's advantage is in
+   the **ordering**, not in the **breadth** ✓.
+3. **The label-blind control.** The blind arm (the train records' label sets
+   permuted among the records ✓, the retrieval untouched ✓) reaches a
+   micro-F1 of **0.0707** ✓ — the association is worth **+0.3898** ✓ — and a
+   shortlist R@50 of **0.8111** ✓. That floor is **high**, and the reading
+   matters: with 68 labels and a top-50 shortlist, the **label frequencies
+   alone** put 81 % of the gold cells inside the shortlist ✓, so the absolute
+   shortlist numbers are less discriminating than they look ✓ (the label-driven
+   part of the lexical route's shortlist is **+0.1326** ✓).
+
+### The reading: the words retrieve almost as well as the embedding — and both beat the champion
+
+- **The lexical route is a real candidate generator.** Its shortlist R@50
+  (**0.9437**) is above the embedding kNN family's floor (**0.8918**) ✓ and
+  close to the champion's own embedding kNN (**0.9576**) ✓, while its
+  classifier (CS-29's floor, micro-F1 0.3845 ✓) is far behind the
+  champion's. The lexical route's value is **breadth**, exactly the role PLAN
+  Phase 4's deferred BM25 checkbox was waiting for ✓.
+- **The champion is a worse candidate generator than either route alone.** The
+  fusion's shortlist R@50 is **0.7423** — **barely above the 0.7353 chance
+  level** ✓ — against the lexical route's 0.9437 ✓ and the embedding kNN's
+  0.9576 ✓. The fusion **dilutes** the candidate set ✓ (CS-8b's finding, now
+  with a lexical witness ✓): mixing the kNN, the prototype and the zero-shot
+  terms pushes gold cells *out* of the top 50 ✓.
+- **What the numbers do not settle.** The blind arm shows that the shortlist
+  metric has a **high floor** ✓ (the frequencies alone: 0.8111 ✓), so the
+  decision about a lexical term in the fusion should be made on a number that
+  accounts for that floor — the fusion's own shortlist with the lexical term,
+  or the **union** of the two candidate sets ✓ (the union candidate generator
+  is the track's own instrument, CS-14 ✓) — and not on the shortlist alone ✓.
+  The embedding kNN's **own** blind counterpart is **not measured** (not
+  registered ✓), so the two routes' shortlist numbers are compared as they
+  are, with the lexical route's floor beside them ✓.
+
+### What this change set does not say
+
+- Nothing about **test** (the round's numbers are val only ✓) and nothing about
+  a **BM25** channel, a **lexical term in the fusion** or a **fourth fusion
+  parameter**: the dependency and the wiring are the reviewer's ✓ — this
+  change set measures the **route** ✓, not the term ✓.
+- Nothing about the **power** (the machinery's default ✓, not swept ✓) and
+  nothing about the **fit side** (the `evaluate` command has no cross-fit ✓;
+  this change set measures a **ceiling** ✓, not a claim that anything improved
+  ✓).
+- Nothing about the **phrase** unit (CS-39's verdict: the phrases are noise ✓)
+  and nothing about the **embedding kNN's own blind counterpart** ✓ (not
+  registered ✓).
