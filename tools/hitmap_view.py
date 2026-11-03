@@ -89,20 +89,28 @@ from cluster_rag.text_processors.features.pair_features import (
     DEFAULT_STOPWORDS,
     content_tokens,
 )
+from cluster_rag.text_processors.lexical.contrastive import (
+    DISPLAY_TOP_K,
+    LEAN_LIMIT,
+    corpus_contrast_rows,
+    default_contrast_label,
+    focus_label,
+    text_contrast_rows,
+)
 
 # The defaults (the tool's own configuration surface; every one of them is a CLI
 # flag, so nothing is hard-coded in the logic).
 DEFAULT_CONFIG = Path("configs/base.yaml")
 DEFAULT_SPLIT = "val"
 DEFAULT_SEED = 42
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = DISPLAY_TOP_K
 DEFAULT_MAX_QUESTIONS = 64
 TEXT_MAP_RUN = "upr-hitmap-text"
 SURROGATE_RUN = "upr-hitmap-surrogate"
 CORPUS_MAP_RUN = "upr-hitmap-corpus"
 
 # How many labels a text's word "leans to" in the corpus map's reverse table.
-CORPUS_WORD_LABELS = 3
+CORPUS_WORD_LABELS = LEAN_LIMIT
 
 # The artifacts' values are rounded to six decimals, so the cross-check's
 # tolerance is the rounding (plus a hair).
@@ -517,6 +525,21 @@ def corpus_word_rows(
     return []
 
 
+def corpus_tables(
+    artifact: Mapping[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Every label's word table, from the artifact (the map's own rows).
+
+    The tables are the artifact's, not a rebuild's: the contrastive block
+    (CS-40) reads them as they are stored.
+    """
+    block = corpus_block(artifact)
+    return {
+        str(row.get("label")): [dict(word) for word in row.get("words", [])]
+        for row in block.get("per_label", [])
+    }
+
+
 def corpus_class_readout(artifact: Mapping[str, Any] | None) -> dict[str, Any]:
     """The corpus map's **word-class readout** (CS-33) from the artifact.
 
@@ -556,6 +579,8 @@ def corpus_cross_check(
     context: ViewerContext,
     label: str,
     words: Sequence[str] = (),
+    *,
+    extra_labels: Sequence[str] = (),
 ) -> list[str]:
     """The corpus map's numbers against the artifact's (the stale-artifact guard).
 
@@ -564,6 +589,10 @@ def corpus_cross_check(
     counts and the two measures) and the reverse table's rows for the words of
     the text on screen. A mismatch means the artifact and the data disagree — a
     **stale artifact** — and it is reported, never smoothed over.
+
+    The **extra labels** are the other tables the screen reads (the contrastive
+    block's second table, CS-40): their rows are guarded the same way, so a
+    stale table is caught whichever block shows it.
     """
     problems: list[str] = []
     artifact = context.corpus_map
@@ -574,6 +603,52 @@ def corpus_cross_check(
         [record.labels for record in context.train_records],
         context.labels,
     )
+    for checked in (label, *extra_labels):
+        problems += _corpus_table_problems(corpus, artifact, checked)
+    stored_words = {
+        row.get("word"): row for row in artifact.get("corpus_map", {}).get("per_word", [])
+    }
+    for word in words:
+        mine_rows = corpus.word_rows(word)
+        their_rows = [dict(entry) for entry in (stored_words.get(word) or {}).get("labels", [])]
+        if len(mine_rows) != len(their_rows):
+            problems.append(
+                f"the artifact holds {len(their_rows)} labels for the word {word!r}, "
+                f"the viewer's map has {len(mine_rows)}"
+            )
+            continue
+        for pair, row in zip(mine_rows, their_rows, strict=False):
+            if row.get("label") != pair.label:
+                problems.append(
+                    f"the artifact's label {row.get('label')!r} for the word {word!r} is "
+                    f"not the viewer's {pair.label!r}"
+                )
+                break
+            if abs(float(row.get("log_odds", 0.0)) - pair.log_odds) > VALUE_TOLERANCE:
+                problems.append(
+                    f"the artifact's log-odds for {word!r}/{pair.label!r} is "
+                    f"{row.get('log_odds')}, the viewer's is {pair.log_odds:.6f}"
+                )
+                break
+    return problems
+
+
+def _corpus_table_problems(
+    corpus: Any,
+    artifact: Mapping[str, Any],
+    label: str,
+) -> list[str]:
+    """One label's table against the artifact's (the counts and the measures).
+
+    Args:
+        corpus: The viewer's own map (rebuilt from the train split).
+        artifact: The map's artifact.
+        label: The label whose table is checked.
+
+    Returns:
+        The problems (empty when the two agree).
+    """
+    problems: list[str] = []
     stored_labels = {
         row.get("label"): row for row in artifact.get("corpus_map", {}).get("per_label", [])
     }
@@ -610,31 +685,6 @@ def corpus_cross_check(
                 f"the viewer's is {pair.log_odds:.6f}"
             )
             break
-    stored_words = {
-        row.get("word"): row for row in artifact.get("corpus_map", {}).get("per_word", [])
-    }
-    for word in words:
-        mine_rows = corpus.word_rows(word)
-        their_rows = [dict(entry) for entry in (stored_words.get(word) or {}).get("labels", [])]
-        if len(mine_rows) != len(their_rows):
-            problems.append(
-                f"the artifact holds {len(their_rows)} labels for the word {word!r}, "
-                f"the viewer's map has {len(mine_rows)}"
-            )
-            continue
-        for pair, row in zip(mine_rows, their_rows, strict=False):
-            if row.get("label") != pair.label:
-                problems.append(
-                    f"the artifact's label {row.get('label')!r} for the word {word!r} is "
-                    f"not the viewer's {pair.label!r}"
-                )
-                break
-            if abs(float(row.get("log_odds", 0.0)) - pair.log_odds) > VALUE_TOLERANCE:
-                problems.append(
-                    f"the artifact's log-odds for {word!r}/{pair.label!r} is "
-                    f"{row.get('log_odds')}, the viewer's is {pair.log_odds:.6f}"
-                )
-                break
     return problems
 
 
@@ -799,14 +849,17 @@ def _default_focus(record: Record, labels: Sequence[str]) -> tuple[str, str]:
     topic-side measure, ``lex_label_coverage``): the topic the text is really
     about, and not the catch-all that happens to be listed first. The tie-break
     is the record's own label order, so the choice is deterministic.
+
+    The rule itself is the track's own (:func:`focus_label`), so the viewer and
+    the measurement tool (CS-40) pick the same topic.
     """
     candidates = [label for label in record.labels if label in labels]
     if not candidates:
         return (labels[0] if labels else ""), "the label space's first label"
-    scores = [(label, cell_coverage(record.text, label)) for label in candidates]
-    best = max(score for _, score in scores)
-    focus = next(label for label, score in scores if score == best)
-    return focus, "the gold label whose own words the text carries the most"
+    return (
+        focus_label(record.text, record.labels, labels),
+        "the gold label whose own words the text carries the most",
+    )
 
 
 def render(
@@ -826,6 +879,7 @@ def render(
     what_if_baseline: np.ndarray | None = None,
     what_if_calls: int = 0,
     min_df: int = 0,
+    contrast: str = "",
     problems: Sequence[str] = (),
 ) -> str:
     """The whole screen, as text (the tool's own output).
@@ -1493,6 +1547,138 @@ def render(
             )
             add("")
 
+            # -- the contrastive map (CS-40): why A and not B ---------------------
+            add(
+                paint(
+                    "WHY A AND NOT B — a contrastive question: which words separate these two "
+                    "labels in the corpus?",
+                    BOLD,
+                    colour=colour,
+                )
+            )
+            add(
+                paint(
+                    "  a description of the data (the train split's own counts) read as a "
+                    "difference between two tables — never the model's reading",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            tables = corpus_tables(context.corpus_map)
+            against = contrast or default_contrast_label(
+                tables,
+                text_words,
+                exclude=gold_labels,
+                labels=labels,
+            )
+            if not against:
+                add(
+                    paint(
+                        "  no pair: no label this text does not carry shares a word with it, so "
+                        "the map has nothing to contrast",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                add("")
+            else:
+                add(f"  A: {label_cell(focus)}   B: {label_cell(against)}")
+                if not contrast:
+                    add(
+                        paint(
+                            "  (B is the map's own runner-up among the labels this text does "
+                            "not carry — --contrast asks for another one)",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                rows_a = tables.get(focus) or []
+                rows_b = tables.get(against) or []
+                own_rows = text_contrast_rows(rows_a, rows_b, text_words=text_words)
+                add(
+                    paint(
+                        "  the words of THIS text that separate them:",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                if not own_rows:
+                    add(
+                        paint(
+                            "    none of this text's words is in either table",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                else:
+                    add(
+                        paint(
+                            f"    {'word':<20}{'in A':>10}{'in B':>10}{'the difference':>16}",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                    own_max = max(abs(row.contrast) for row in own_rows)
+                    for row in own_rows:
+                        code = signed_ramp(row.contrast, own_max)
+                        markers = "  ★ in this text"
+                        if row.sign_disagreement:
+                            markers += "  ⚡ the signs disagree"
+                        add(
+                            "    "
+                            + paint(f"{row.word:<20}", DIM, colour=colour)
+                            + paint(f"{row.log_odds_a:>+10.3f}", code, colour=colour)
+                            + paint(f"{row.log_odds_b:>+10.3f}", code, colour=colour)
+                            + paint(f"{row.contrast:>+16.3f}", code, colour=colour)
+                            + paint(markers, BOLD, colour=colour)
+                        )
+                corpus_rows = corpus_contrast_rows(rows_a, rows_b)
+                add(
+                    paint(
+                        "  the corpus's own words that separate them:",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                if not corpus_rows:
+                    add(paint("    the two tables say the same thing", DIM, colour=colour))
+                else:
+                    add(
+                        paint(
+                            f"    {'word':<20}{'in A':>10}{'in B':>10}{'the difference':>16}"
+                            f"{'n_with A/B':>14}",
+                            DIM,
+                            colour=colour,
+                        )
+                    )
+                    corpus_max = max(abs(row.contrast) for row in corpus_rows)
+                    for row in corpus_rows:
+                        code = signed_ramp(row.contrast, corpus_max)
+                        markers = ""
+                        if row.in_text:
+                            markers += "  ★ in this text"
+                        if row.sign_disagreement:
+                            markers += "  ⚡ the signs disagree"
+                        add(
+                            "    "
+                            + paint(f"{row.word:<20}", DIM, colour=colour)
+                            + paint(f"{row.log_odds_a:>+10.3f}", code, colour=colour)
+                            + paint(f"{row.log_odds_b:>+10.3f}", code, colour=colour)
+                            + paint(f"{row.contrast:>+16.3f}", code, colour=colour)
+                            + paint(f"{row.n_with_a:>6}/{row.n_with_b:<7}", DIM, colour=colour)
+                            + paint(markers, BOLD, colour=colour)
+                        )
+                add(
+                    paint(
+                        "  the difference is A's log-odds minus B's; a word one table does not "
+                        "hold contributes 0 (the map's silence), so the row says which table "
+                        "holds it.",
+                        DIM,
+                        colour=colour,
+                    )
+                )
+                add("")
+
     elif context.corpus_map is None:
         add(
             paint(
@@ -1687,6 +1873,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--topic", default=None, help="the label to focus on (default: the first gold label)"
     )
     parser.add_argument(
+        "--contrast",
+        default=None,
+        help=(
+            "the second label of the contrastive block (CS-40; default: the map's own "
+            "runner-up among the labels this text does not carry)"
+        ),
+    )
+    parser.add_argument(
         "--top-k", type=int, default=DEFAULT_TOP_K, help="how many labels the rankings show"
     )
     parser.add_argument(
@@ -1757,11 +1951,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if focus not in context.labels:
         print(f"hitmap_view: {focus!r} is not a label of the split", file=sys.stderr)
         return 1
+    if args.contrast and args.contrast not in context.labels:
+        print(f"hitmap_view: {args.contrast!r} is not a label of the split", file=sys.stderr)
+        return 1
 
     problems = cross_check(context, row, record.text)
+    contrast_label = args.contrast or ""
     if context.corpus_map is not None:
         text_words = list(dict.fromkeys(content_tokens(record.text, DEFAULT_STOPWORDS)))
-        problems += corpus_cross_check(context, focus, text_words)
+        tables = corpus_tables(context.corpus_map)
+        if not contrast_label:
+            contrast_label = default_contrast_label(
+                tables,
+                text_words,
+                exclude=list(record.labels),
+                labels=context.labels,
+            )
+        extra = [contrast_label] if contrast_label and contrast_label != focus else []
+        problems += corpus_cross_check(context, focus, text_words, extra_labels=extra)
     picked = f"--text {args.text}" if args.text else f"--sample --seed {args.seed}"
     live: np.ndarray | None = None
     live_calls = 0
@@ -1838,6 +2045,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 what_if_baseline=baseline,
                 what_if_calls=what_if_calls,
                 min_df=args.min_df,
+                contrast=contrast_label,
                 problems=problems,
             )
         )

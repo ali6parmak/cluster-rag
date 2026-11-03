@@ -1334,7 +1334,14 @@ is the **words**, and where it has nothing to add is the labels whose own
 lexical identity is thin. And the map's **unit** stays the word: the phrase
 table (CS-39) is **too rare to be a table** (82.8 % of its pairs rest on one
 train text) and the union it buys is noise, not signal — the register shows up
-as a *fragment* ("on its", "with an"), not as a topic. So the round's question is
+as a *fragment* ("on its", "with an"), not as a topic. And the map **can
+explain itself**: CS-40's contrastive read of two tables against each other
+answers "why A and not B" — and the answer is **not** the name-overlap
+features' (the vocabulary share **0.6100** against the registered bar 0.50:
+for **80 %** of its rows the screen does not print both of the pair's
+log-odds), and the sharp case is the common one (**62.5 %** of the measured
+pairs have a word of this text that pulls the two labels in **opposite**
+directions). So the round's question is
 one question: **how good is the corpus map, and where does it not know?**
 
 **The order:** CS-36 (the stability map) → CS-37 (the selective map) → CS-38
@@ -1426,173 +1433,16 @@ CS-41 (the lexical kNN).
   topic. And the phrases are **too rare to be a table** (82.8 % of the phrase
   pairs rest on a single train text, against the word table's 66.7 %).
 
-- [ ] **CS-40 — the contrastive map: "why A and not B".** The map's explanation
-  of itself, in the viewer.
-
-  **The mechanism.** A **viewer's** block: for one text and two candidate
-  labels, the words that discriminate them — the words in A's table with a
-  positive log-odds and in B's with a negative one (or the largest log-odds
-  difference between the two tables), with the numbers beside them. The map's
-  artifact already holds every (label, word) pair, so this is a **read**, not a
-  new corpus pass; the block names the question it answers (CS-25's rule).
-
-  **The falsification, registered in advance.** A tool change must move **no
-  number** (the existing artifacts and every run stay exactly as they are), and
-  the block must answer a question the viewer's other blocks cannot: if the
-  discriminating words are the ones the topic-side and the text-side maps
-  already show, the block adds nothing and is dropped.
-
-  **The cost.** Half a day. **No new dependency.**
-
-  **The pre-registration (2026-11-03, written before the first call).** The
-  block above fixes the mechanism; this fixes the *shape* of the number.
-
-  - **Where the code lives.** The **contrast** is pure and lives in a new
-    module `text_processors/lexical/contrastive.py` (the standard library only
-    — no model client, no I/O): it reads **two tables** in the artifact's own
-    row shape and answers the pair's question. The **block** is in the
-    **viewer** (`tools/hitmap_view.py`), which reads the map's artifact and the
-    data. The **measurement** is a new tool `tools/contrastive_map_check.py`.
-    **No new run and no table row**: this is a **tool** change (the CS-25
-    shape), and **no existing artifact is re-written** — the map's own
-    artifact keeps its exact bytes.
-
-  - **The contrast — the exact definition.** For a pair of labels (A, B) and a
-    word w:
-    - `lo_A(w)` — A's log-odds for w: the **stored** value when the pair
-      (A, w) is in A's table, and **0** when it is not — the map's own
-      **silence convention** (a word the table does not hold contributes
-      nothing to that label, exactly as the map's scorer counts it);
-    - `lo_B(w)` — the same for B;
-    - `contrast(w) = lo_A(w) − lo_B(w)`: above 0 the word pulls A up relative
-      to B, below 0 it pulls B up relative to A, 0 it says nothing about the
-      pair;
-    - the **discriminating words** of the pair are the words of the **union**
-      of the two tables, ranked by `|contrast|`.
-    - **The flags** each row carries: `in_a` / `in_b` (which table holds the
-      word), `in_text` (the word is one of *this* text's content words), and
-      **`sign_disagreement`** — the word is in **both** tables and its two
-      log-odds have **opposite signs** (the block's first reading: the words
-      in A's table with a positive log-odds and in B's with a negative one).
-
-  - **One reading settled before the first call.** The block offers two
-    readings — the two-sided set ("in A's table with a positive log-odds and
-    in B's with a negative one") and the difference ("the largest log-odds
-    difference between the two tables"). The **difference is the measure** (it
-    is defined for **every** word of the union; the two-sided set is a subset
-    of it), and the two-sided set rides along as the `sign_disagreement` flag.
-    The difference is read with the map's **silence convention** (a missing
-    pair contributes 0), so a word only one table holds contributes that
-    table's own log-odds against the other side's 0 — and the row says which
-    table holds it, so the reader never has to guess.
-
-  - **The block (the shape on the screen).** Two halves, both read from the
-    artifact's own rows (no rebuild):
-    1. **the words of THIS text that separate them** — the text's content
-       words that are in either table, with `lo_A`, `lo_B` and the difference
-       (the actionable half);
-    2. **the corpus's own words that separate them** — the **top 10 in each
-       direction** of `|contrast|` over the union of the two tables (the map's
-       own head size — CS-36's `HEAD_K = 10`), with the counts beside the
-       numbers.
-
-    The block names the question it answers (CS-25's rule): *"WHY A AND NOT B
-    — a contrastive question: which words separate these two labels in the
-    corpus?"*, and it says what it is: *a description of the data (the train
-    split's own counts) read as a difference between two tables — never the
-    model's reading*.
-
-  - **The pair.** The block's **A** is the viewer's own **focus** (the gold
-    label whose own name words the text carries the most — the viewer's
-    existing rule, unchanged). Its **B** is the **map's own runner-up among
-    the labels the text does not carry**: the non-gold label with the largest
-    `sum_zscore_positive` score (the map's own arm, CS-31's — read from the
-    artifact's tables, the z-scores included), among the labels whose table is
-    not empty; ties → the label space's own order. When no non-gold label has
-    a positive score the pair is **empty** and the block says so. A
-    `--contrast <label>` flag overrides B (any label of the space).
-
-  - **The measurement.** A new tool, `tools/contrastive_map_check.py`, over the
-    UPR **val** split's 660 texts. It reads the map's artifact and the split
-    (no model call, no embedding) and writes **its own** artifact
-    `results/upr-hitmap-contrastive/contrastive.json` (a **tool's** readout,
-    not a CLI run's: it writes nothing else and touches no other artifact).
-    Two kinds of pairs, both fixed in advance:
-    - the **alternative** pair: A = the focus, B = the map's runner-up among
-      the labels the text does not carry (as above);
-    - the **sibling** pair: A = the focus, B = the text's **other** gold label
-      with the largest map score (the case where the screen already shows both
-      tables — the harder case for the novelty measure).
-
-    For each pair, the block's rows (the two halves, deduplicated by word) and
-    four numbers:
-    1. **the vocabulary share** — the share of the rows that are **neither a
-       name word of A or B nor one of the text's content words**: the corpus's
-       own vocabulary, which the **topic-side** and the **text-side** maps
-       (the name-overlap features) structurally **cannot** show. **Bar: the
-       mean over the measured pairs ≥ 0.50.**
-    2. **the relevance share** — the share of the pairs with at least one
-       **text word** among the rows: the block must be about *this* text, not
-       about the corpus in general. **Bar: ≥ 0.50.**
-    3. **the novelty share** — the share of the rows for which the screen (as
-       it is now) does **not** print **both** of the pair's log-odds: the
-       reader could not have formed the difference. "The screen prints the
-       log-odds of (w, L)" means: L is the focus or one of the text's gold
-       labels and w is among the **top-k** rows of L's displayed table
-       (k = the viewer's `--top-k`, default 5) or w is one of the text's words
-       in L's table; **or** w is one of the text's words and L is among the
-       **top-3** labels of w's reverse table. **Bar: the mean over the
-       measured pairs ≥ 0.50, and the share of the pairs with at least one
-       such row ≥ 0.50.**
-    4. **the sign-disagreement share** (reported, **no bar**): the share of the
-       pairs with at least one **text word** that is in **both** tables with
-       **opposite signs** — the plan's first reading, on the text's own words.
-
-  - **The falsification, registered in advance.**
-    1. **The no-moved-number test.** A tool change must move **no number**:
-       every existing artifact keeps its exact bytes (the map's own artifact
-       included — its sha256 is taken before and after the change set) and
-       every run's numbers reproduce. The change set writes **no artifact**
-       beyond the measurement tool's own readout, appends **no table row**, and
-       adds **no dependency**.
-    2. **The novelty test.** The block must answer a question the viewer's
-       other blocks cannot. If the **vocabulary share** (bar 1) or the
-       **relevance share** (bar 2) or the **novelty share** (bar 3) falls
-       below its registered bar, the discriminating words are the ones the
-       topic-side and the text-side maps already show, the block adds nothing
-       and is **dropped** (the module and the tool stay; the block comes off
-       the screen).
-    3. The **label-blind control does not apply here**: this change set
-       measures **no model** and **no classifier** — the falsification is the
-       screen's own coverage, not a number a model produced. (Stated so the
-       round's discipline is not read as a gap.)
-
-  - **What is NOT registered.** (i) The **phrase-level** contrast: the phrase
-    table is not in the artifact (CS-39 stored its shape, its classes and its
-    interaction, not its tables), so a phrase contrast would need a **rebuild**
-    — a corpus pass, which the block's mechanism excludes — and CS-39's
-    verdict is that the phrases are noise anyway. (ii) The **model's** own
-    top-2 as the pair: the block is the **map's** explanation, not the model's
-    ranking (the model's ranking is the viewer's own `--live` block). (iii)
-    The **pair's stability**: CS-36's resampling is not run over the contrast
-    (not registered). (iv) The catalog's **siblings** (CS-38's relation) as
-    the pair: the pair is the text's own, not the taxonomy's.
-
-  - **The exit criteria.** The viewer's block is on the screen with the
-    numbers beside the words, it names the question it answers, and its numbers
-    are the artifact's own (the viewer's own guard checks them against the
-    artifact); the measurement tool writes its readout and prints the verdict
-    against the registered bars; every existing artifact's sha256 is unchanged
-    and every run's numbers reproduce; the log section reads the numbers out
-    with the falsification conditions; the gate green (ruff over
-    `src`/`tests`/`experiments`/`tools` and the track's sweep folder, the full
-    pytest suite, the two verify tools, and both final sweeps reproducing their
-    artifacts field for field).
-
-  - **The cost, in compute.** The contrast is a read of the artifact (the
-    viewer's own corpus-map rebuild — the stale-artifact guard — already
-    dominates the run); the measurement over the 660 val texts is a table
-    lookup per text. **No new dependency.**
+- **CS-40** (the contrastive map: "why A and not B") → executed 2026-11-03 →
+  the archive's §7.5 (the contrastive map) and the track log's §CS-40. **The
+  block stays**: the discriminating words are **not** the ones the topic-side
+  and the text-side maps already show (the vocabulary share **0.6100** against
+  the registered bar 0.50) and for **80 %** of its rows the screen does not
+  print **both** of the pair's log-odds — the reader could not have formed the
+  difference; and the sharp case is the common one (**62.5 %** of the measured
+  pairs have a word of this text that pulls the two labels in **opposite**
+  directions). A **tool** change: no run, no table row, no artifact
+  re-written.
 
 - [ ] **CS-41 — the lexical kNN: how much of the retrieval is words alone?**
   The retrieval side's lexical counterpart.

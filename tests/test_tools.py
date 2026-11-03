@@ -162,3 +162,142 @@ def test_verify_upr_baseline_reports_an_unchecked_run(tmp_path: Path) -> None:
     )
     problems = module.check_run(results, "upr-analyze-x")
     assert problems and "no guard block" in problems[0]
+
+
+def _contrastive_setup(tmp_path: Path) -> tuple[Path, Path]:
+    """A tiny corpus map and a split for the contrastive measurement tool.
+
+    Returns:
+        The config path and the results folder.
+    """
+    data = tmp_path / "data.jsonl"
+    records = [
+        {"id": "r1", "text": "alpha beta", "language": "en", "labels": ["Alpha"]},
+        {"id": "r2", "text": "alpha gamma", "language": "en", "labels": ["Alpha"]},
+        {
+            "id": "r3",
+            "text": "alpha delta",
+            "language": "en",
+            "labels": ["Alpha", "Beta"],
+        },
+    ]
+    data.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+    splits = tmp_path / "splits"
+    splits.mkdir()
+    (splits / "train_ids.json").write_text(
+        json.dumps({"split": "train", "ids": ["r1", "r2"]}), encoding="utf-8"
+    )
+    (splits / "val_ids.json").write_text(
+        json.dumps({"split": "val", "ids": ["r3"]}), encoding="utf-8"
+    )
+    results = tmp_path / "results"
+    (results / "upr-hitmap-corpus").mkdir(parents=True)
+
+    def word(name: str, log_odds: float, z_score: float, name_word: bool) -> dict[str, Any]:
+        return {
+            "word": name,
+            "n_with": 2,
+            "df": 3,
+            "lift": 1.0,
+            "log_odds": log_odds,
+            "z_score": z_score,
+            "word_class": "distinctive",
+            "is_name_word": name_word,
+        }
+
+    (results / "upr-hitmap-corpus" / "hitmap.json").write_text(
+        json.dumps(
+            {
+                "run_id": "upr-hitmap-corpus",
+                "corpus_map": {
+                    "corpus": {"split": "train", "n_texts": 2, "n_labels": 3},
+                    "per_label": [
+                        {
+                            "label": "Alpha",
+                            "n_corpus_texts": 2,
+                            "n_words": 2,
+                            "words": [
+                                word("alpha", 3.0, 2.0, True),
+                                word("gamma", 1.0, 1.0, False),
+                            ],
+                        },
+                        {
+                            "label": "Beta",
+                            "n_corpus_texts": 1,
+                            "n_words": 2,
+                            "words": [
+                                word("alpha", -1.0, 0.5, True),
+                                word("beta", 2.0, 1.5, True),
+                            ],
+                        },
+                        {"label": "Gamma", "n_corpus_texts": 0, "n_words": 0, "words": []},
+                    ],
+                    "per_word": [
+                        {
+                            "word": "alpha",
+                            "df": 3,
+                            "word_class": "distinctive",
+                            "labels": [
+                                {"label": "Alpha", "n_with": 2, "lift": 1.0, "log_odds": 3.0},
+                                {"label": "Beta", "n_with": 2, "lift": 1.0, "log_odds": -1.0},
+                            ],
+                        },
+                        {
+                            "word": "beta",
+                            "df": 1,
+                            "word_class": "distinctive",
+                            "labels": [
+                                {"label": "Beta", "n_with": 1, "lift": 1.0, "log_odds": 2.0},
+                            ],
+                        },
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "run_id: upr-contrastive-check\n"
+        "paths:\n"
+        f"  data_raw: {data.as_posix()}\n"
+        f"  data_processed: {(tmp_path / 'processed').as_posix()}\n"
+        f"  data_splits: {splits.as_posix()}\n"
+        f"  cache: {(tmp_path / 'cache').as_posix()}\n"
+        f"  results: {results.as_posix()}\n",
+        encoding="utf-8",
+    )
+    return config, results
+
+
+def test_contrastive_map_check_measures_the_novelty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The tool reads the map's artifact and measures the block's novelty."""
+    module = _load("contrastive_map_check")
+    config, results = _contrastive_setup(tmp_path)
+    assert module.main(["--config", str(config), "--results", str(results)]) == 0
+    out = capsys.readouterr().out
+    assert "the registered bars" in out
+    payload = json.loads(
+        (results / "upr-hitmap-contrastive" / "contrastive.json").read_text("utf-8")
+    )
+    pooled = payload["summary"]["pooled"]
+    # one val text, one alternative pair (Gamma has no table, so it never wins)
+    assert pooled["n_pairs"] == 1
+    # the text's word "alpha" is in both tables with opposite signs
+    assert pooled["share_with_a_sign_disagreeing_text_row"] == pytest.approx(1.0)
+    assert pooled["share_with_a_text_row"] == pytest.approx(1.0)
+    # the corpus's words "gamma" and "beta" are not on the screen for the pair
+    # (the focus label's table shows "gamma", but never against the other one)
+    assert pooled["mean_novelty_share"] == pytest.approx(2 / 3)
+    # the map's own artifact is the source, and its hash is recorded
+    assert payload["source"]["corpus_map_sha256"]
+
+
+def test_contrastive_map_check_needs_the_map_artifact(tmp_path: Path) -> None:
+    """A missing map's artifact is an error, not an empty measurement."""
+    module = _load("contrastive_map_check")
+    config, results = _contrastive_setup(tmp_path)
+    (results / "upr-hitmap-corpus" / "hitmap.json").unlink()
+    assert module.main(["--config", str(config), "--results", str(results)]) == 1

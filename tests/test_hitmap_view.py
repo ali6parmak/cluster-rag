@@ -967,3 +967,123 @@ def test_the_corpus_block_answers_for_every_gold_label(
             assert any(str(row["word"]) in block for row in rows[:3])
         else:
             assert "has no train example" in block
+
+
+# --- the contrastive map (CS-40) on the screen ---
+
+
+def _contrast_pair(viewer_module: Any, context: Any, row: int) -> tuple[str, str, list[str]]:
+    """The pair the screen shows for a text: the focus and the runner-up.
+
+    Returns:
+        The focus label, the contrast label and the text's own content words.
+    """
+    record = context.records[row]
+    focus, _rule = viewer_module._default_focus(record, context.labels)
+    words = list(dict.fromkeys(viewer_module.content_tokens(record.text)))
+    tables = viewer_module.corpus_tables(context.corpus_map)
+    against = viewer_module.default_contrast_label(
+        tables, words, exclude=list(record.labels), labels=context.labels
+    )
+    return focus, against, words
+
+
+def test_the_viewer_shows_the_contrastive_block(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The contrastive block is on the screen, with the question it answers."""
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert "WHY A AND NOT B — a contrastive question:" in out
+    assert "the words of THIS text that separate them:" in out
+    assert "the corpus's own words that separate them:" in out
+    # the block says what it is (CS-25's rule): a description of the data
+    assert "never the model's reading" in out
+
+
+def test_the_contrast_numbers_are_the_artifacts_own(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The block's numbers are the artifact's own: the difference of the two."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    focus, against, words = _contrast_pair(viewer_module, context, 0)
+    assert focus and against
+    tables = viewer_module.corpus_tables(context.corpus_map)
+    rows = viewer_module.corpus_contrast_rows(tables.get(focus) or [], tables.get(against) or [])
+    assert rows, "the fixture's pair has no discriminating word"
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    for row in rows[:3]:
+        assert row.word in out
+        assert f"{row.contrast:>+16.3f}" in out
+    # and the text's own words are in the block too
+    own = viewer_module.text_contrast_rows(
+        tables.get(focus) or [], tables.get(against) or [], text_words=words
+    )
+    for row in own[:2]:
+        assert f"{row.log_odds_a:>+10.3f}" in out
+
+
+def test_the_contrast_flag_names_the_second_label(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--contrast`` asks for another label than the map's own runner-up."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    focus, _against, _words = _contrast_pair(viewer_module, context, 0)
+    other = next(label for label in context.labels if label != focus)
+    args = _view_args(
+        fixture_artifacts,
+        "--text",
+        str(fixture_artifacts["val_ids"][0]),
+        "--contrast",
+        other,
+    )
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert f"A: {focus}" in out
+    assert f"B: {other}" in out
+
+
+def test_the_stale_artifact_guard_covers_the_contrast_label(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The contrast label's table is guarded like the focus label's."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    _focus, against, _words = _contrast_pair(viewer_module, context, 0)
+    assert against
+    path = fixture_artifacts["results"] / fixture_artifacts["corpus_run"] / "hitmap.json"
+    payload = json.loads(path.read_text("utf-8"))
+    row = next(r for r in payload["corpus_map"]["per_label"] if r["label"] == against)
+    row["words"][0]["n_with"] = 999
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 1
+    out = capsys.readouterr().out
+    assert "THE ARTIFACTS AND THE DATA DISAGREE" in out
+    assert against in out

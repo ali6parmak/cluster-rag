@@ -92,6 +92,7 @@ research record and are **not** indexed here.
 | [CS-37 — the selective map](#cs-37--the-selective-map-unknown-instead-of-impossible-2026-11-02) | one `upr-analyze-cmap-abstain` run (the pack + the map's column, the control, the blind map and the two abstaining arms) | the abstention ("no evidence" as NaN instead of the floor's "impossible") is a **null**: the eight held-out labels stay at **0.0000** (the paired unseen-view difference is exactly **+0.0000**) — the "impossible" verdict was never in the **encoding**: a map with no word↔label information at all collapses them the same way, and it is the **channel's silence on the fit side** (the eight are the labels the map is silent about *and* the labels that are never positive) that costs them; the seen buckets are untouched (a paired **+0.0032 [−0.0037, +0.0100]**) and the label-blind control buys nothing | `results/upr-analyze-cmap-abstain/analysis.json` |
 | [CS-38 — the label-pair map](#cs-38--the-label-pair-map-the-lexical-neighbours-the-twins-the-labels-with-no-vocabulary-of-their-own-2026-11-02) | one `upr-hitmap-corpus` run (the map's own artifact, re-written with the `corpus_map.label_pairs` block) | the corpus's label-pair relation **is** the taxonomy's (the registered disagreement test fires on both legs: the sibling pairs' mean vocabulary Jaccard is **+0.0413 [+0.0372, +0.0451]** above the other pairs' and **11 of the corpus's 20 closest pairs** are siblings against a bar of 4) — so the relation is a **null**; and the **vocabulary-less class** is a finding (**13 labels**: the eight held-out ones plus five whose own words lie almost entirely inside one neighbour's table, *Sexual and reproductive rights* 94 % inside *Women's rights*) | `results/upr-hitmap-corpus/hitmap.json` |
 | [CS-39 — the phrase map](#cs-39--the-phrase-map-do-phrases-beat-their-own-words-2026-11-02) | two `upr-eval-corpus-map-sum-zscore-positive-phrase{,-blind}-val` runs + the map's re-written `phrase_map` block | the **formulaic test fails** (the phrase table's generic share is **15.5 %**, far below the word table's **43.6 %** — the phrases are too rare to sit in many tables, so the class measure reads rarity as topicality) and the **control fails** (the blind union gains **more** on the fit side, +0.0240 against the real union's +0.0050) — so the unit change is a **null**; the register is real but it is a **fragment** (the top interactions are "on its", "with an", "and will") and the phrases are **too rare to be a table** (82.8 % hapax) | `results/upr-eval-corpus-map-sum-zscore-positive-phrase-val/metrics.json` |
+| [CS-40 — the contrastive map](#cs-40--the-contrastive-map-why-a-and-not-b-2026-11-03) | no run (a **tool**): the viewer's contrastive block + the measurement tool | the block stays: the discriminating words are **not** the ones the topic-side and the text-side maps show (the vocabulary share **0.6100** against the bar 0.50) and for **80 %** of its rows the screen does not print **both** of the pair's log-odds — the reader could not have formed the difference; and **62.5 %** of the measured pairs have a word of **this** text that pulls the two labels in **opposite** directions | the CS-23 artifact (read, not re-measured) |
 
 ## Change sets
 
@@ -7684,3 +7685,132 @@ blind maps **+0.0084 [−0.0023, +0.0202]** (the interval includes zero too).
   split only ✓).
 - Nothing about the **interaction's** own stability (CS-36's resampling was
   not run over the phrases ✓ — not registered ✓).
+
+## CS-40 — the contrastive map: "why A and not B" (2026-11-03)
+
+**The question.** The corpus map (CS-23) is read **one label at a time**: this
+label's words, that label's words, this text's words and the labels they lean
+to. The question a reader actually has about a **pair** of labels — *why A and
+not B?* — was answered nowhere: the two tables are read separately, never
+against each other. This change set adds the **viewer's block** that reads them
+against each other, and **measures** whether it adds anything the screen does
+not already have.
+
+**The mechanism.** A **read** of the map's artifact (no corpus pass, no model
+call): for a pair (A, B) and a word w, `lo_A(w)` and `lo_B(w)` are the two
+**stored** log-odds — and **0** when the pair is not in that label's table (the
+map's own **silence convention**, the same one the map's scorer counts). The
+**contrast** is `lo_A(w) − lo_B(w)`: above 0 the word pulls A up relative to B,
+below 0 it pulls B up. The code is pure (`text_processors/lexical/contrastive.py`,
+the standard library only), the block is in the viewer (`tools/hitmap_view.py`)
+and the measurement is a new tool (`tools/contrastive_map_check.py`).
+
+**The block** (on the screen, under the focus topic):
+
+> **WHY A AND NOT B — a contrastive question: which words separate these two
+> labels in the corpus?**
+> *a description of the data (the train split's own counts) read as a difference
+> between two tables — never the model's reading*
+
+Two halves, both read from the artifact's own rows: **the words of THIS text
+that separate them** (the text's content words that are in either table, with
+`in A`, `in B` and the difference) and **the corpus's own words that separate
+them** (the top 10 in each direction over the union of the two tables, with the
+counts beside the numbers). The rows carry the flags: **★ in this text** and
+**⚡ the signs disagree** (the word is in **both** tables with **opposite**
+signs — the plan's first reading, as a flag).
+
+**The pair.** A is the viewer's own **focus** (the gold label whose own name
+words the text carries the most — the viewer's existing rule, unchanged). B is
+the **map's own runner-up among the labels the text does not carry**: the
+non-gold label with the largest `sum_zscore_positive` score (the map's own arm,
+CS-31's), among the labels whose table is not empty; the ties break by the
+label space's own order. `--contrast <label>` asks for another one.
+
+### The measurement (the registered falsification)
+
+The tool reads the map's artifact and the **val** split (660 texts; no model
+call, no embedding; 3.1 s) and writes **its own** artifact —
+`results/upr-hitmap-contrastive/contrastive.json` (a **tool's** readout, not a
+CLI run's; it touches no other artifact). Two kinds of pairs: the
+**alternative** pair (the map's runner-up among the labels the text does not
+carry) and the **sibling** pair (the text's other gold label with the largest
+map score — the case where the screen already shows both tables, so the
+novelty is a real test of the contrast).
+
+| the measure | the alternative pairs | the sibling pairs | the pooled | the bar |
+|---|---|---|---|---|
+| the pairs | 534 | 298 | 832 | — |
+| the **vocabulary share** (the rows that are neither a name word nor one of the text's words) | **0.6191** | 0.5939 | **0.6100** | ≥ 0.50 ✓ |
+| the **relevance share** (the pairs with a text word among the rows) | 1.0000 | 1.0000 | 1.0000 | ≥ 0.50 ✓ |
+| the **novelty share** (the rows for which the screen does **not** print both of the pair's log-odds) | **0.8305** | 0.7563 | **0.8039** | ≥ 0.50 ✓ |
+| the pairs with **at least one** such row | 1.0000 | 1.0000 | 1.0000 | ≥ 0.50 ✓ |
+| the **sign-disagreement share** (a text word in both tables with opposite signs — reported, no bar) | 0.5955 | 0.6779 | **0.6250** | — |
+
+(The mean block per pair: 29.9 rows.)
+
+### The falsification, read out
+
+1. **The no-moved-number test HOLDS.** This is a **tool** change: no run, no
+   table row, no new dependency, and **no artifact re-written**. The map's own
+   artifact is byte-identical to its state before the change set (its sha256
+   `ba2d7037…` before and after ✓, and the hash is recorded in the
+   measurement's own artifact ✓), and the only files under `results/` that
+   changed are the **nine** the gate's own final-sweep re-runs rewrote — and
+   those differ only in their wall-clock fields ✓ (their content is IDENTICAL
+   field for field ✓).
+2. **The novelty test HOLDS** — all three registered bars are met, on both
+   kinds of pairs and pooled: the discriminating words are **not** the ones the
+   topic-side and the text-side maps already show (the vocabulary share 0.61
+   against the bar 0.50), the block is about **this** text (every measured pair
+   has a text word among its rows), and for **80 %** of the rows the screen does
+   not print **both** of the pair's log-odds — the reader could not have formed
+   the difference. **The block stays.**
+3. The **label-blind control does not apply here** (as registered): no model
+   and no classifier are measured — the falsification is the screen's own
+   coverage.
+
+### The reading: the map can say *why*, and the sharp case is common
+
+- **The block answers a question the screen could not.** The screen shows each
+  label's table separately and only for the text's **gold** labels; the
+  contrast reads two tables **against each other**, for any pair — and for the
+  **tempting alternative** (the map's own runner-up among the labels the text
+  does *not* carry) the screen showed **nothing at all** about the second
+  label before this block.
+- **The sharp case is the common one**: **62.5 %** of the measured pairs have a
+  word of **this** text that is in **both** tables with **opposite** signs — the
+  same word pushing one label up and the other down. That is the plan's first
+  reading, and it is the block's most useful row.
+- **An example** (the viewer's own seed-7 draw): the focus is *Right to
+  education* and the map's runner-up is *Right to development*. The text says
+  "…in all socio-economic aspects in addition to education, medical service
+  and employment": **education** is **+5.317** in the first table and **−0.097**
+  in the second (the difference **+5.415**, the signs disagree ✓), **socio** is
+  **0.000** against **+5.437** (the difference **−5.437** — the word is the
+  second label's), and the corpus's own strongest discriminators are
+  *dropout* (+5.461, first table only), *gdp* / *road* / *vision* (−5.437,
+  second table only) and **education** (+5.415, in both tables, 79 against 3
+  train texts). The reader sees *why* the map prefers the first label: the
+  text's own topic word.
+- **The caveat the reader can see.** The corpus half's strongest rows are the
+  map's **fragile tail** (CS-36's finding): the top rows are the rare words
+  with the largest log-odds, and their counts sit beside the numbers
+  (`n_with A/B`) — *2025*, *2063*, *360* and *china* in the example above. The
+  text's half is the durable part; the corpus's half is the map's own
+  vocabulary, noise included.
+
+### What this change set does not say
+
+- Nothing about **test** (the round's numbers are val only) and nothing about
+  any **model**: the block is a read of the data's own statistics ✓ and the
+  measurement reads the screen's own coverage ✓.
+- Nothing about the **phrase-level** contrast ✓ (the phrase table is not in
+  the artifact ✓ — it would need a rebuild, a corpus pass ✓ — and CS-39's
+  verdict is that the phrases are noise anyway ✓).
+- Nothing about the **model's** own top-2 as the pair ✓ (not registered ✓: the
+  block is the **map's** explanation, and the model's ranking is the viewer's
+  own `--live` block ✓).
+- Nothing about the **pair's stability** ✓ (CS-36's resampling was not run
+  over the contrast ✓ — not registered ✓) and nothing about the catalog's
+  **siblings** as the pair ✓ (not registered ✓).
