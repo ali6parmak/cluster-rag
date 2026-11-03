@@ -270,6 +270,60 @@ def label_pair_relation(
     )
 
 
+def containment_partners(
+    corpus_map: CorpusMap,
+    *,
+    threshold: float = CONTAINMENT_THRESHOLD,
+) -> dict[str, tuple[str, float]]:
+    """The labels whose table lies (almost) entirely inside **one** partner's.
+
+    The map-only form of CS-38's class (no label sets needed): for every label
+    with a non-empty table, the share of its own table that lies inside each
+    other label's table; the label joins the class when its **best** share is at
+    or above the threshold, and its partner is that best one (the first maximal
+    in the map's label order, the same tie-break the relation's readout uses).
+
+    It is the **same computation** as
+    :func:`vocabulary_less_labels`' ``subset_of_a_neighbour`` — that readout
+    works from the relation's per-label summaries, this one from the map alone,
+    so a caller that has the map (the scorer) can ask without building the
+    relation.
+
+    Args:
+        corpus_map: The corpus map (the train split's word↔label association).
+        threshold: The share of a label's own table that must lie inside one
+            partner's table (CS-38's pre-registered 0.80).
+
+    Returns:
+        The label -> (partner, share) mapping, empty labels excluded.
+
+    Raises:
+        ValueError: If the threshold is not in ``(0, 1]``.
+    """
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError(f"the containment threshold must be in (0, 1], got {threshold!r}")
+    labels = tuple(corpus_map.labels)
+    tables = {
+        label: frozenset(pair.word for pair in corpus_map.topic_rows(label)) for label in labels
+    }
+    out: dict[str, tuple[str, float]] = {}
+    for label in labels:
+        table = tables[label]
+        if not table:
+            continue
+        best_share = 0.0
+        best_partner = ""
+        for other in labels:
+            if other == label:
+                continue
+            share = len(table & tables[other]) / len(table)
+            if share > best_share:
+                best_share, best_partner = share, other
+        if best_partner and best_share >= threshold:
+            out[label] = (best_partner, best_share)
+    return out
+
+
 def vocabulary_less_labels(
     relation: LabelPairRelation,
     *,

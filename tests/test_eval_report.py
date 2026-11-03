@@ -156,3 +156,68 @@ def test_report_validates_labels_and_bucket_names() -> None:
     bogus = {**BUCKETS, "d": "galaxy"}
     with pytest.raises(ValueError, match="unknown bucket name"):
         build_label_report(SCORES, GOLD, LABELS, bogus, PREDICTED, ks=(1,), shortlist_ms=(2,))
+
+
+def test_a_declared_label_set_gets_its_own_section() -> None:
+    """CS-44: a named label group is reported on its own cells, only when declared."""
+    plain = build_label_report(
+        SCORES, GOLD, LABELS, BUCKETS, PREDICTED, ks=(1, 2), shortlist_ms=(2,)
+    )
+    assert "per_label_set" not in plain
+
+    report = build_label_report(
+        SCORES,
+        GOLD,
+        LABELS,
+        BUCKETS,
+        PREDICTED,
+        ks=(1, 2),
+        shortlist_ms=(2,),
+        label_sets={"ab": ("a", "b"), "the d": ("d",)},
+    )
+    section = report["per_label_set"]["ab"]
+    assert section["bucket"] == "ab"
+    assert section["n_labels"] == 2
+    # the group's own cells: row 0 has gold a (predicted a) and row 1 has gold b
+    # (predicted b) -> micro-F1 1.0 on the group's two columns
+    assert section["f1"]["micro_f1"] == pytest.approx(1.0)
+    assert section["n_gold_cells"] == 2
+    single = report["per_label_set"]["the d"]
+    assert single["n_labels"] == 1 and single["n_gold_cells"] == 1
+    # the group's section equals the report on the masked columns
+    masked = build_label_report(
+        SCORES[:, [0, 1]],
+        GOLD[:, [0, 1]],
+        ["a", "b"],
+        {"a": "head", "b": "unseen"},
+        PREDICTED[:, [0, 1]],
+        ks=(1, 2),
+        shortlist_ms=(2,),
+    )
+    assert section["f1"]["micro_f1"] == pytest.approx(masked["overall"]["f1"]["micro_f1"])
+
+
+def test_a_label_set_validates_its_members() -> None:
+    """An empty group and a group naming an unknown label fail loudly."""
+    with pytest.raises(ValueError, match="empty"):
+        build_label_report(
+            SCORES,
+            GOLD,
+            LABELS,
+            BUCKETS,
+            PREDICTED,
+            ks=(1,),
+            shortlist_ms=(2,),
+            label_sets={"x": ()},
+        )
+    with pytest.raises(ValueError, match="outside the label space"):
+        build_label_report(
+            SCORES,
+            GOLD,
+            LABELS,
+            BUCKETS,
+            PREDICTED,
+            ks=(1,),
+            shortlist_ms=(2,),
+            label_sets={"x": ("a", "Q")},
+        )

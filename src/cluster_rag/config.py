@@ -1973,6 +1973,37 @@ class UprFitMaskConfig(BaseModel):
     seed: int = 42
 
 
+class UprBorrowConfig(BaseModel):
+    """The **lent tables** on the corpus map (the track's CS-44).
+
+    Five labels have (almost) no vocabulary of their own: their dictionary
+    tables lie inside a partner's (CS-38's containment class). With the borrow
+    on, such a label's column also reads the partner's **evidence-for** words
+    (positive z-score) that its own table does not carry, each at ``discount`` ×
+    the partner's weight — the words are lent, not copied, and the partner's own
+    column is untouched.
+
+    The lending relation is computed once from the **full train map** and
+    recorded in the artifact; on the fit side the same relation rides into every
+    fold, so each fold's cells read their own map's partner weights (the
+    cross-fit guard). The default is off, so every earlier run's artifact keeps
+    its exact content.
+
+    Attributes:
+        enabled: Whether the run fits the borrow arm at all.
+        discount: The share of the partner's weight a lent word carries
+            (CS-44's registered 0.5; one value, not swept).
+        threshold: The containment share that makes a label a borrower (CS-38's
+            registered 0.80; one value, not swept).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    discount: float = Field(default=0.5, gt=0.0, le=1.0)
+    threshold: float = Field(default=0.8, gt=0.0, le=1.0)
+
+
 class UprCorpusMapFeatureConfig(BaseModel):
     """The **corpus map**'s per-cell score as a **pack feature** (the track's CS-32).
 
@@ -2018,6 +2049,10 @@ class UprCorpusMapFeatureConfig(BaseModel):
             channel at the floor" and cannot read the floor as "impossible".
             The evaluation side is untouched. The default is off, so every
             earlier run's artifact keeps its exact content.
+        borrow: The **lent tables** (the track's CS-44): the labels with no
+            vocabulary of their own also read their partner's evidence-for
+            words, at a discount. The default is off, so every earlier run's
+            artifact keeps its exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2028,6 +2063,7 @@ class UprCorpusMapFeatureConfig(BaseModel):
     label_blind: bool = True
     abstain: bool = False
     fit_mask: UprFitMaskConfig = Field(default_factory=UprFitMaskConfig)
+    borrow: UprBorrowConfig = Field(default_factory=UprBorrowConfig)
 
 
 class UprLabelLexiconConfig(BaseModel):

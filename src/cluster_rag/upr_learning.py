@@ -227,6 +227,8 @@ def score_upr_learned_arms(
     corpus_map_train_abstain_blind: np.ndarray | None = None,
     corpus_map_eval_abstain_blind: np.ndarray | None = None,
     corpus_map_train_fit_mask: np.ndarray | None = None,
+    corpus_map_train_borrow: np.ndarray | None = None,
+    corpus_map_eval_borrow: np.ndarray | None = None,
     control_extractor: UprFeatureExtractor | None = None,
     train_features: np.ndarray | None = None,
     control_train_features: np.ndarray | None = None,
@@ -295,6 +297,13 @@ def score_upr_learned_arms(
             split is scored with the **unchanged** column
             (``corpus_map_eval``): the mask is a fit-side instrument.
             ``None`` (the default) computes no masked arm.
+        corpus_map_train_borrow: The **borrowed words**' fit-side score matrix
+            (the track's CS-44: the five labels with no vocabulary of their own
+            also read their partner's evidence-for words, at a discount; the
+            cross-fit carries each fold's own weights). ``None`` (the default)
+            computes no borrow arm.
+        corpus_map_eval_borrow: The borrow arm's evaluated-split score matrix
+            (the lent column on the full train map).
         control_extractor: The **control**'s extractor (the same pack without
             the ``corpus_map`` group). Fitted and scored in the same run, so
             the difference against the real arm is paired by construction.
@@ -477,6 +486,36 @@ def score_upr_learned_arms(
                 "positive, so the combiner cannot read the floor as 'the label is "
                 "out of the question'. The evaluated split is scored with the "
                 "unchanged column"
+            ),
+        }
+
+    # -- the borrowed words (the track's CS-44) --
+    # The same pack, but the corpus map's column is the **lent** one: the five
+    # labels with no vocabulary of their own also read their partner's
+    # evidence-for words, at a discount. Unlike the mask, the arm uses the lent
+    # column on BOTH sides (the borrowing is a different map, not a fit-side
+    # instrument).
+    if corpus_map_train_borrow is not None and corpus_map_eval_borrow is not None:
+        borrow_train = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train_borrow
+        )
+        borrow_eval = extractor.extract(
+            eval_texts, decision_eval, rerank_eval, corpus_map_eval_borrow
+        )
+        borrow_rows, borrow_labels = _fit_rows(borrow_train, train_gold)
+        borrow_combiner = combiner_factory().fit(borrow_rows, borrow_labels, weights)
+        borrow_scores = np.asarray(
+            borrow_combiner.score(borrow_eval.reshape(-1, borrow_eval.shape[-1])),
+            dtype=np.float64,
+        ).reshape(borrow_eval.shape[0], borrow_eval.shape[1])
+        scores[f"{arm_name}_borrow"] = borrow_scores
+        corpus_map_meta["borrow"] = {
+            "arm": f"{arm_name}_borrow",
+            "note": (
+                "the same pack, but the corpus map's column is the LENT one "
+                "(CS-44): the labels with no vocabulary of their own also read "
+                "their partner's evidence-for words, at the discount, on both "
+                "sides. The partner's own column is untouched"
             ),
         }
 

@@ -589,11 +589,11 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 
 | run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-analyze-cmap | 2026-11-03 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 66.257 |
-| upr-analyze-cmap | 2026-11-03 | val | learned_histgb | learned | atoms | n/a | 0.5502 | 0.5081 | 0.5251 | 0.897 | 0.2770 | 0.7149 | 0.6694 | 0.7979 | 0.3659 | 0.7492 | 0.0147 | 0.5000 | 0.0205 | -0.5321 | 0.0000 | 1.95 | 660 | 66.257 |
-| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_control | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 66.257 |
-| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4309 | 0.4277 | 0.4149 | 0.926 | 0.2300 | 0.6400 | 0.5493 | 0.7741 | 0.2889 | 0.6601 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 66.257 |
-| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_random | learned | atoms | n/a | 0.5357 | 0.4787 | 0.5118 | 0.882 | 0.2679 | 0.6851 | 0.6506 | 0.7729 | 0.3559 | 0.7119 | 0.0147 | 0.5000 | 0.0209 | -0.5318 | 0.0000 | 1.95 | 660 | 66.257 |
+| upr-analyze-cmap | 2026-11-03 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 93.139 |
+| upr-analyze-cmap | 2026-11-03 | val | learned_histgb | learned | atoms | n/a | 0.5502 | 0.5081 | 0.5251 | 0.897 | 0.2770 | 0.7149 | 0.6694 | 0.7979 | 0.3659 | 0.7492 | 0.0147 | 0.5000 | 0.0205 | -0.5321 | 0.0000 | 1.95 | 660 | 93.139 |
+| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_control | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 93.139 |
+| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4309 | 0.4277 | 0.4149 | 0.926 | 0.2300 | 0.6400 | 0.5493 | 0.7741 | 0.2889 | 0.6601 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 93.139 |
+| upr-analyze-cmap | 2026-11-03 | val | learned_histgb_random | learned | atoms | n/a | 0.5357 | 0.4787 | 0.5118 | 0.882 | 0.2679 | 0.6851 | 0.6506 | 0.7729 | 0.3559 | 0.7119 | 0.0147 | 0.5000 | 0.0209 | -0.5318 | 0.0000 | 1.95 | 660 | 93.139 |
 
 ## UPR — upr_learned_cmap_abstain
 
@@ -632,3 +632,14 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | upr-analyze-cmap-catalog-desc | 2026-11-03 | val | learned_histgb_control | learned | atoms | n/a | 0.5084 | 0.4872 | 0.4955 | 0.985 | 0.2758 | 0.7542 | 0.6557 | 0.8864 | 0.3331 | 0.7729 | 0.0147 | 0.5000 | 0.0490 | -0.5729 | 0.0000 | 1.95 | 660 | 144.403 |
 | upr-analyze-cmap-catalog-desc | 2026-11-03 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4483 | 0.4315 | 0.4337 | 0.912 | 0.2373 | 0.6639 | 0.5748 | 0.7726 | 0.3072 | 0.6745 | 0.0294 | 0.5000 | 0.0482 | -0.5736 | 0.0000 | 1.95 | 660 | 144.403 |
 | upr-analyze-cmap-catalog-desc | 2026-11-03 | val | learned_histgb_random | learned | atoms | n/a | 0.5312 | 0.4809 | 0.5074 | 0.897 | 0.2667 | 0.6865 | 0.6468 | 0.7836 | 0.3537 | 0.7104 | 0.0147 | 0.5000 | 0.0210 | -0.6008 | 0.0000 | 1.95 | 660 | 144.403 |
+
+## UPR — upr_learned_cmap_borrow
+
+| run_id | date | split | arm | predictor | chunker | aggregation | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | hit@1 | hit@10 | gold_rank_p50 | bg_rank_p50 | bg_mean | bg_mean_delta | bg_rank_delta | chunks_per_text | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-analyze-cmap-borrow | 2026-11-03 | val | full_text | fusion | full_text | n/a | 0.5479 | 0.5006 | 0.5269 | 0.868 | 0.2770 | 0.7126 | 0.6725 | 0.7423 | 0.3666 | 0.7462 | 0.0147 | 0.5000 | 0.5526 | n/a | n/a | n/a | 660 | 106.28 |
+| upr-analyze-cmap-borrow | 2026-11-03 | val | learned_histgb | learned | atoms | n/a | 0.5502 | 0.5081 | 0.5251 | 0.897 | 0.2770 | 0.7149 | 0.6694 | 0.7979 | 0.3659 | 0.7492 | 0.0147 | 0.5000 | 0.0205 | -0.5321 | 0.0000 | 1.95 | 660 | 106.28 |
+| upr-analyze-cmap-borrow | 2026-11-03 | val | learned_histgb_control | learned | atoms | n/a | 0.4818 | 0.4652 | 0.4659 | 1.000 | 0.2582 | 0.7396 | 0.6137 | 0.8909 | 0.3163 | 0.7614 | 0.0294 | 0.5000 | 0.0501 | -0.5026 | 0.0000 | 1.95 | 660 | 106.28 |
+| upr-analyze-cmap-borrow | 2026-11-03 | val | learned_histgb_label_blind | learned | atoms | n/a | 0.4309 | 0.4277 | 0.4149 | 0.926 | 0.2300 | 0.6400 | 0.5493 | 0.7741 | 0.2889 | 0.6601 | 0.0294 | 0.5000 | 0.0491 | -0.5035 | 0.0000 | 1.95 | 660 | 106.28 |
+| upr-analyze-cmap-borrow | 2026-11-03 | val | learned_histgb_borrow | learned | atoms | n/a | 0.5418 | 0.5060 | 0.5179 | 0.882 | 0.2770 | 0.7140 | 0.6659 | 0.7953 | 0.3613 | 0.7485 | 0.0147 | 0.5000 | 0.0220 | -0.5307 | 0.0000 | 1.95 | 660 | 106.28 |
+| upr-analyze-cmap-borrow | 2026-11-03 | val | learned_histgb_random | learned | atoms | n/a | 0.5357 | 0.4787 | 0.5118 | 0.882 | 0.2679 | 0.6851 | 0.6506 | 0.7729 | 0.3559 | 0.7119 | 0.0147 | 0.5000 | 0.0209 | -0.5318 | 0.0000 | 1.95 | 660 | 106.28 |

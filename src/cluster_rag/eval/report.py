@@ -121,6 +121,7 @@ def build_label_report(
     *,
     ks: Sequence[int],
     shortlist_ms: Sequence[int],
+    label_sets: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Build the full per-bucket label-evaluation report from one prediction.
 
@@ -137,11 +138,20 @@ def build_label_report(
         ks: k values for precision/recall/nDCG (e.g. 1, 3, 5, 10).
         shortlist_ms: m values for the full-view gold-cell shortlist recall
             (e.g. 20, 50, 100).
+        label_sets: Named **label groups** (CS-44): each group gets its own
+            section under ``per_label_set``, computed on the group's columns
+            with the rows that carry one of the group's labels — the group's
+            own cells. ``None`` (the default) computes none, so every earlier
+            artifact keeps its exact content.
 
     Returns:
-        Dict with an ``overall`` section (no restriction) and one section per
-        bucket under ``per_bucket`` (head / torso / tail / unseen), each with
-        its ranking, F1, coverage and shortlist metrics plus counts.
+        Dict with an ``overall`` section (no restriction), one section per
+        bucket under ``per_bucket`` (head / torso / tail / unseen) and, when
+        ``label_sets`` is given, one section per group under ``per_label_set``,
+        each with its ranking, F1, coverage and shortlist metrics plus counts.
+
+    Raises:
+        ValueError: On an empty label set or a label outside the label space.
     """
     score_matrix, truth, predictions = _validate_inputs(
         scores, gold, labels, label_buckets, predicted
@@ -171,4 +181,26 @@ def build_label_report(
             ks=ks,
             shortlist_ms=shortlist_ms,
         )
+    if label_sets:
+        columns = {label: index for index, label in enumerate(labels)}
+        report["per_label_set"] = {}
+        for name, members in label_sets.items():
+            if not members:
+                raise ValueError(f"the label set {name!r} is empty")
+            unknown = [label for label in members if label not in columns]
+            if unknown:
+                raise ValueError(
+                    f"the label set {name!r} names label(s) outside the label space: {unknown}"
+                )
+            mask = np.zeros(len(labels), dtype=bool)
+            mask[[columns[label] for label in members]] = True
+            report["per_label_set"][name] = _section(
+                name,
+                score_matrix,
+                truth,
+                predictions,
+                column_mask=mask,
+                ks=ks,
+                shortlist_ms=shortlist_ms,
+            )
     return report

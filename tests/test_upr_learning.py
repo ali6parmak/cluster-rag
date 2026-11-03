@@ -663,3 +663,73 @@ def test_the_fit_mask_arm_is_absent_by_default() -> None:
         corpus_map_eval=scores[:1],
     )
     assert "learned_fit_mask" not in result.scores
+
+
+def test_the_borrow_arm_is_fitted_and_scored_with_the_lent_column() -> None:
+    """CS-44: the lent column is the arm's column on BOTH sides (unlike the mask)."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    train_gold = np.asarray([[True, False], [False, True]])
+    eval_gold = np.asarray([[True, False]])
+    n_labels = len(LABELS)
+    plain_train = np.zeros((2, n_labels), dtype=np.float64)
+    plain_train[:, 0] = 1.0
+    lent_train = plain_train.copy()
+    lent_train[:, 0] = 1.5  # the lent label also reads its partner's words
+    plain_eval = plain_train[:1]
+    lent_eval = lent_train[:1]
+    fitted: list[_RecordingCombiner] = []
+
+    def factory() -> _RecordingCombiner:
+        combiner = _RecordingCombiner()
+        fitted.append(combiner)
+        return combiner
+
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=train_gold,
+        eval_texts=["eval one"],
+        eval_gold=eval_gold,
+        extractor=extractor,
+        combiner_factory=factory,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=plain_train,
+        corpus_map_eval=plain_eval,
+        corpus_map_train_borrow=lent_train,
+        corpus_map_eval_borrow=lent_eval,
+    )
+    assert "learned_borrow" in result.scores
+    assert result.scores["learned_borrow"].shape == (1, n_labels)
+    assert result.meta["corpus_map"]["borrow"]["arm"] == "learned_borrow"
+    column = list(extractor.feature_names).index("cmap_score")
+    # the fits: the real arm first, then the borrow arm
+    real_fit, borrow_fit = fitted[0], fitted[1]
+    assert np.allclose(real_fit.fit_matrix[:, column], plain_train.reshape(-1))
+    assert np.allclose(borrow_fit.fit_matrix[:, column], lent_train.reshape(-1))
+    # and the borrow arm is SCORED with the lent column (unlike the fit-side mask)
+    assert np.allclose(real_fit.score_matrix[:, column], plain_eval.reshape(-1))
+    assert np.allclose(borrow_fit.score_matrix[:, column], lent_eval.reshape(-1))
+
+
+def test_the_borrow_arm_is_absent_by_default() -> None:
+    """The earlier runs' artifacts keep their exact content (the knob is off)."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    n_labels = len(LABELS)
+    scores = np.zeros((2, n_labels), dtype=np.float64)
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=np.asarray([[True, False], [False, True]]),
+        eval_texts=["eval one"],
+        eval_gold=np.asarray([[True, False]]),
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=scores,
+        corpus_map_eval=scores[:1],
+    )
+    assert "learned_borrow" not in result.scores

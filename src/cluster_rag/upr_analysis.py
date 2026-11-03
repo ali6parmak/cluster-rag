@@ -282,6 +282,7 @@ def arm_block(
     chunker: str | None = None,
     aggregation: str | None = None,
     per_label_distributions: bool = True,
+    label_sets: Mapping[str, Sequence[str]] | None = None,
     paired: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The report block of one arm (one scoring method).
@@ -300,6 +301,10 @@ def arm_block(
         predictor: The arm's predictor description (the artifact's lineage).
         chunker: The arm's text-side chunker (the artifact's lineage).
         aggregation: The arm's folding rule (the artifact's lineage).
+        label_sets: The named **label groups** the run declares (CS-44): each
+            group's own section goes under ``metrics.per_label_set``. ``None``
+            (the default) computes none, so every earlier artifact keeps its
+            exact content.
 
     Returns:
         The JSON-serializable block of the arm.
@@ -315,25 +320,31 @@ def arm_block(
         predicted,
         ks=ks,
         shortlist_ms=shortlist_ms,
+        label_sets=label_sets,
     )
     percentiles = cell_rank_percentiles(matrix)
     gold_percentiles = percentiles[truth]
     background_percentiles = percentiles[~truth]
     hits = gold_hit_at_k(matrix, truth, HIT_KS)
     shift = _shift_block(matrix, truth, reference_scores)
+    metrics: dict[str, Any] = {
+        "overall": report["overall"],
+        "per_bucket": report["per_bucket"],
+        "per_length_bucket": _length_sections(
+            view, matrix, predicted, ks=ks, shortlist_ms=shortlist_ms
+        ),
+    }
+    if "per_label_set" in report:
+        # the declared groups' own sections (CS-44); absent unless declared, so
+        # every earlier run's artifact keeps its exact content.
+        metrics["per_label_set"] = report["per_label_set"]
     block: dict[str, Any] = {
         "arm": arm,
         "predictor": dict(predictor) if predictor else None,
         "chunker": chunker,
         "aggregation": aggregation,
         "chunks_per_text": chunks_block(chunks_per_text),
-        "metrics": {
-            "overall": report["overall"],
-            "per_bucket": report["per_bucket"],
-            "per_length_bucket": _length_sections(
-                view, matrix, predicted, ks=ks, shortlist_ms=shortlist_ms
-            ),
-        },
+        "metrics": metrics,
         "gold": {
             "n_cells": view.n_gold_cells,
             "rank_p50": float(np.median(gold_percentiles)) if gold_percentiles.size else None,

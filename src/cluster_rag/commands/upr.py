@@ -123,6 +123,7 @@ from cluster_rag.text_processors.features.upr_features import (
     UprLabel,
 )
 from cluster_rag.text_processors.lexical.corpus_map_score import (
+    borrowed_tables,
     cross_fit_scores,
 )
 from cluster_rag.text_processors.lexical.corpus_map_score import (
@@ -135,6 +136,7 @@ from cluster_rag.text_processors.lexical.label_lexicon import (
     label_lexicon_block,
 )
 from cluster_rag.text_processors.lexical.label_pairs import (
+    containment_partners,
     label_pair_relation,
     label_pairs_block,
     separation_bootstrap,
@@ -3234,6 +3236,7 @@ def _upr_learned_arms(
     corpus_map_train_abstain = corpus_map_eval_abstain = None
     corpus_map_train_abstain_blind = corpus_map_eval_abstain_blind = None
     corpus_map_train_fit_mask = None
+    corpus_map_train_borrow = corpus_map_eval_borrow = None
     control_extractor = None
     if learned.corpus_map_feature.enabled:
         corpus_map_block_data = _upr_corpus_map_feature(config, setup, view, learned)
@@ -3246,6 +3249,8 @@ def _upr_learned_arms(
         corpus_map_train_abstain_blind = corpus_map_block_data["train_abstain_blind"]
         corpus_map_eval_abstain_blind = corpus_map_block_data["eval_abstain_blind"]
         corpus_map_train_fit_mask = corpus_map_block_data["train_fit_mask"]
+        corpus_map_train_borrow = corpus_map_block_data["train_borrow"]
+        corpus_map_eval_borrow = corpus_map_block_data["eval_borrow"]
         control_groups = tuple(group for group in learned.groups if group != "corpus_map")
         control_extractor = _pack(
             labels,
@@ -3349,12 +3354,27 @@ def _upr_learned_arms(
         corpus_map_train_abstain_blind=corpus_map_train_abstain_blind,
         corpus_map_eval_abstain_blind=corpus_map_eval_abstain_blind,
         corpus_map_train_fit_mask=corpus_map_train_fit_mask,
+        corpus_map_train_borrow=corpus_map_train_borrow,
+        corpus_map_eval_borrow=corpus_map_eval_borrow,
         control_extractor=control_extractor,
         train_features=fit_cubes.get("train"),
         control_train_features=fit_cubes.get("control"),
         random_train_features=fit_cubes.get("random"),
     )
     chunks_per_text = extractor.chunks_per_text(eval_texts)
+    # The declared **label groups** (the track's CS-44): the five thin labels,
+    # their partners and the ten labels individually, so each arm's own numbers
+    # and the paired differences are read on the pair's own cells. Only when the
+    # borrow's provenance is in this run, so every earlier artifact is unchanged.
+    label_sets: dict[str, tuple[str, ...]] | None = None
+    chart = (
+        (corpus_map_block_data.get("meta") or {}).get("borrow") if corpus_map_block_data else None
+    )
+    if chart:
+        thin = tuple(sorted({row["label"] for row in chart["pairs"]}))
+        partners = tuple(sorted({row["partner"] for row in chart["pairs"]}))
+        label_sets = {"thin_five": thin, "partners": partners}
+        label_sets.update({label: (label,) for label in (*thin, *partners)})
     arms: dict[str, dict[str, Any]] = {}
     for name, scores in result.scores.items():
         arms[name] = arm_block(
@@ -3382,6 +3402,17 @@ def _upr_learned_arms(
             per_label_distributions=(
                 name == result.meta["arm"]
                 or (result.meta.get("corpus_map", {}).get("fit_mask", {}).get("arm") == name)
+                or (result.meta.get("corpus_map", {}).get("borrow", {}).get("arm") == name)
+            ),
+            label_sets=(
+                label_sets
+                if label_sets is not None
+                and name
+                in (
+                    result.meta["arm"],
+                    (result.meta.get("corpus_map", {}).get("borrow", {}) or {}).get("arm"),
+                )
+                else None
             ),
             paired=_upr_paired(config, view, scores, setup.scores),
         )
@@ -3481,6 +3512,38 @@ def _upr_learned_arms(
                     result.scores[abstain_blind_arm],
                     result.scores[control_arm],
                 )
+        borrow_arm = (result.meta.get("corpus_map", {}).get("borrow", {}) or {}).get("arm")
+        if borrow_arm in result.scores and label_sets is not None:
+            # -- the borrowed words (the track's CS-44) --
+            # The lending's own effect on the pair's cells: the borrow arm minus
+            # the plain arm, per declared group, with the same text-resampled
+            # paired procedure as every other comparison. The swap readout is
+            # the descriptive guard on the "top-2 swaps them" risk.
+            borrow_block = dict(corpus_map_meta.get("borrow") or {})
+            # the registered view: the group's own cells over every text (the
+            # standard F1 over the group's columns)
+            borrow_block["paired_by_label_set_vs_real"] = _upr_paired_by_label_sets(
+                config, view, result.scores[borrow_arm], real_scores, label_sets
+            )
+            # the secondary view: only the texts carrying one of the group's
+            # labels (the per-bucket views' convention) -- it says how well the
+            # group is found where it is, and hides the false positives
+            borrow_block["paired_by_label_set_on_gold_texts_vs_real"] = _upr_paired_by_label_sets(
+                config,
+                view,
+                result.scores[borrow_arm],
+                real_scores,
+                label_sets,
+                on_gold_texts=True,
+            )
+            borrow_block["swaps"] = _upr_borrow_swaps(
+                config,
+                view,
+                result.scores[borrow_arm],
+                real_scores,
+                corpus_map_meta["provenance"]["borrow"]["pairs"],
+            )
+            corpus_map_meta["borrow"] = borrow_block
         if fit_mask_arm in result.scores:
             # -- the fit-side mask (the track's CS-42) --
             # The mask's own effect: the masked arm minus the real arm on the
@@ -3659,6 +3722,54 @@ def _upr_corpus_map_feature(
             ),
         }
 
+    # The borrowed words (the track's CS-44): the labels with no vocabulary of
+    # their own also read their partner's evidence-for words, at a discount.
+    # The relation is read off the FULL train map once and applied to every
+    # fold's own weights on the fit side (the pairs are a train-side fact, the
+    # weights are the fold's).
+    borrow_train = None
+    borrow_meta: dict[str, Any] | None = None
+    if feature.borrow.enabled:
+        partners = containment_partners(corpus_map, threshold=feature.borrow.threshold)
+        lend = borrowed_tables(
+            corpus_map,
+            threshold=feature.borrow.threshold,
+            discount=feature.borrow.discount,
+        )
+        borrow_train = cross_fit_scores(
+            train_texts,
+            train_label_sets,
+            labels,
+            scorings=(feature.scoring,),
+            folds=feature.folds,
+            seed=seed,
+            borrow=lend,
+        )[feature.scoring]
+        borrow_meta = {
+            "enabled": True,
+            "arm": f"learned_{learned.combiner.name}_borrow",
+            "discount": float(feature.borrow.discount),
+            "threshold": float(feature.borrow.threshold),
+            "n_pairs": len(partners),
+            "pairs": [
+                {"label": label, "partner": partner, "share": round(share, 6)}
+                for label, (partner, share) in sorted(partners.items())
+            ],
+            "rule": (
+                "the labels whose best containment is at or above the threshold "
+                "(CS-38's class, the partner the first maximal in the label order) "
+                "also read the partner's (label, word) pairs with a positive z-score "
+                "whose word their own table does not carry, each at the discount x "
+                "the partner's weight; the relation is fixed from the full train map "
+                "and applied to every fold's own weights on the fit side"
+            ),
+            "note": (
+                "the words are lent, not copied: the partner's own column is "
+                "untouched, and a lent label whose own table is emptied on the fit "
+                "side (the stability filter, the fit-side mask) does not borrow"
+            ),
+        }
+
     meta: dict[str, Any] = {
         "scoring": feature.scoring,
         "folds": int(feature.folds),
@@ -3711,6 +3822,23 @@ def _upr_corpus_map_feature(
         # when the knob is off, so the earlier runs' artifacts keep their exact
         # content.
         meta["fit_mask"] = fit_mask_meta
+    if borrow_meta is not None:
+        # the borrowed words' provenance (the track's CS-44): the key is absent
+        # when the knob is off, so the earlier runs' artifacts keep their exact
+        # content.
+        meta["borrow"] = borrow_meta
+    borrow_eval = None
+    if feature.borrow.enabled:
+        borrow_eval = map_score_cells(
+            eval_texts,
+            corpus_map,
+            scoring=feature.scoring,
+            borrow=borrowed_tables(
+                corpus_map,
+                threshold=feature.borrow.threshold,
+                discount=feature.borrow.discount,
+            ),
+        )
     return {
         "train": train_scores,
         "eval": eval_scores,
@@ -3721,6 +3849,8 @@ def _upr_corpus_map_feature(
         "train_abstain_blind": abstain_train_blind,
         "eval_abstain_blind": abstain_eval_blind,
         "train_fit_mask": fit_mask_train,
+        "train_borrow": borrow_train,
+        "eval_borrow": borrow_eval,
         "meta": meta,
     }
 
@@ -3867,6 +3997,82 @@ def _upr_paired_by_bucket(
         One block per bucket: the interval, the counts and the point
         estimates.
     """
+    return _upr_paired_by_masks(config, view, left, right, _upr_bucket_masks(view))
+
+
+def _upr_paired_by_label_sets(
+    config: AppConfig,
+    view: UprView,
+    left: np.ndarray,
+    right: np.ndarray,
+    label_sets: Mapping[str, Sequence[str]],
+    *,
+    on_gold_texts: bool = False,
+) -> dict[str, Any]:
+    """The paired difference per **declared label group** (the track's CS-44).
+
+    The decision is the global top-k over the whole matrix, and the group's
+    columns are masked afterwards, so the interval compares the group's own
+    cells. Two row conventions are reported, because they answer different
+    questions:
+
+    - ``on_gold_texts=False`` (the default, the registered one): **every** text
+      is in the view, so a prediction of the group's label on a text that does
+      not carry it is a **false positive** — the standard F1 over the group's
+      columns, the same number the arm's ``per_label_set`` section carries;
+    - ``on_gold_texts=True``: only the texts carrying one of the group's labels,
+      the per-bucket views' convention — "how well the group is found where it
+      is", which hides the false positives on the other texts.
+
+    Args:
+        config: The resolved app config (the decision rule and the bootstrap).
+        view: The model-independent view of the split.
+        left: The left scorer's score matrix.
+        right: The right scorer's score matrix.
+        label_sets: The named groups (name -> the group's labels).
+        on_gold_texts: Whether the view is restricted to the texts carrying one
+            of the group's labels.
+
+    Returns:
+        One block per group: the interval, the counts and the point estimates.
+    """
+    columns = {label: index for index, label in enumerate(view.labels)}
+    masks: dict[str, np.ndarray] = {}
+    for name, members in label_sets.items():
+        mask = np.zeros(len(view.labels), dtype=bool)
+        unknown = [label for label in members if label not in columns]
+        if unknown:
+            raise ValueError(f"the label set {name!r} names unknown label(s) {unknown}")
+        mask[[columns[label] for label in members]] = True
+        masks[name] = mask
+    return _upr_paired_by_masks(config, view, left, right, masks, on_gold_texts=on_gold_texts)
+
+
+def _upr_paired_by_masks(
+    config: AppConfig,
+    view: UprView,
+    left: np.ndarray,
+    right: np.ndarray,
+    masks: Mapping[str, np.ndarray],
+    *,
+    on_gold_texts: bool = True,
+) -> dict[str, Any]:
+    """The paired difference per **column mask** (the shared implementation).
+
+    Args:
+        config: The resolved app config (the decision rule and the bootstrap).
+        view: The model-independent view of the split.
+        left: The left scorer's score matrix.
+        right: The right scorer's score matrix.
+        masks: The named boolean column masks.
+        on_gold_texts: Whether the view is restricted to the texts carrying one
+            of the mask's labels (the per-bucket convention). ``False`` keeps
+            every text, so the mask's outside-view predictions count as false
+            positives (the standard F1 over the masked columns).
+
+    Returns:
+        One block per mask: the interval, the counts and the point estimates.
+    """
     decision = eval_decision(config)
     bootstrap = config.upr_analysis.bootstrap
     seed = bootstrap.seed if bootstrap.seed is not None else config.seed
@@ -3888,11 +4094,14 @@ def _upr_paired_by_bucket(
         min_score=decision.get("min_score"),
     )
     out: dict[str, Any] = {}
-    for bucket, mask in _upr_bucket_masks(view).items():
+    for name, mask in masks.items():
         columns = np.flatnonzero(mask)
         if columns.size == 0:
             continue
-        rows = np.flatnonzero(gold[:, columns].any(axis=1))
+        if on_gold_texts:
+            rows = np.flatnonzero(gold[:, columns].any(axis=1))
+        else:
+            rows = np.arange(gold.shape[0])
         if rows.size < 2:
             continue
         left_counts = np.stack(
@@ -3901,7 +4110,7 @@ def _upr_paired_by_bucket(
         right_counts = np.stack(
             per_row_f1_counts(right_decision[rows][:, columns], gold[rows][:, columns]), axis=1
         )
-        out[bucket] = {
+        out[name] = {
             "n_texts": int(rows.size),
             "n_labels": int(columns.size),
             "micro_f1": paired_counts_bootstrap(
@@ -3912,6 +4121,75 @@ def _upr_paired_by_bucket(
             ),
         }
     return out
+
+
+def _upr_borrow_swaps(
+    config: AppConfig,
+    view: UprView,
+    borrow: np.ndarray,
+    plain: np.ndarray,
+    pairs: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """The pair-level **swap** counts (the track's CS-44, descriptive).
+
+    The lending's registered risk is that the pair becomes confusable and the
+    top-2 swaps the two labels. This readout counts, over the whole evaluated
+    split, how many texts each arm predicts the thin label, the partner, or
+    both — no interval, no bar: it is the risk's own description.
+
+    Args:
+        config: The resolved app config (the decision rule).
+        view: The model-independent view of the split (the label columns).
+        borrow: The borrow arm's score matrix.
+        plain: The plain arm's score matrix.
+        pairs: The lending's pairs (the provenance's rows).
+
+    Returns:
+        One row per pair: the two arms' prediction counts.
+    """
+    decision = eval_decision(config)
+    columns = {label: index for index, label in enumerate(view.labels)}
+    borrow_decision = apply_decision_rule(
+        np.asarray(borrow, dtype=np.float64),
+        rule=decision["rule"],
+        k=decision.get("k"),
+        threshold=decision.get("threshold"),
+        min_score=decision.get("min_score"),
+    )
+    plain_decision = apply_decision_rule(
+        np.asarray(plain, dtype=np.float64),
+        rule=decision["rule"],
+        k=decision.get("k"),
+        threshold=decision.get("threshold"),
+        min_score=decision.get("min_score"),
+    )
+
+    def _pair_counts(matrix: np.ndarray, first: int, second: int) -> dict[str, int]:
+        """How often one arm predicts the first label, the second, or both."""
+        left = matrix[:, first]
+        right = matrix[:, second]
+        return {
+            "n_label": int(left.sum()),
+            "n_partner": int(right.sum()),
+            "n_both": int((left & right).sum()),
+        }
+
+    rows: list[dict[str, Any]] = []
+    for pair in pairs:
+        label = str(pair["label"])
+        partner = str(pair["partner"])
+        first, second = columns[label], columns[partner]
+        rows.append(
+            {
+                "label": label,
+                "partner": partner,
+                "share": pair.get("share"),
+                "n_texts": int(np.asarray(borrow, dtype=np.float64).shape[0]),
+                "borrow": _pair_counts(borrow_decision, first, second),
+                "plain": _pair_counts(plain_decision, first, second),
+            }
+        )
+    return rows
 
 
 def _upr_decision_feature(

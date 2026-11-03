@@ -510,3 +510,25 @@ def test_analysis_stage3_chunker_params_are_validated() -> None:
         FeaturePackConfig.model_validate(
             {"paragraph_chunker": {"name": "word_windows", "params": {"nope": 1}}}
         )
+
+
+def test_the_corpus_map_borrow_defaults_off_and_validates() -> None:
+    """The lent tables (CS-44): off by default, one discount and one threshold."""
+    from cluster_rag.config import UprBorrowConfig, UprCorpusMapFeatureConfig
+
+    feature = UprCorpusMapFeatureConfig()
+    assert feature.borrow.enabled is False
+    assert feature.borrow.discount == 0.5
+    assert feature.borrow.threshold == 0.8
+
+    enabled = UprCorpusMapFeatureConfig.model_validate(
+        {"enabled": True, "borrow": {"enabled": True, "discount": 0.5, "threshold": 0.8}}
+    )
+    assert enabled.borrow.enabled is True
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        UprBorrowConfig(discount=0.0)
+    with pytest.raises(ValueError, match="less than or equal to 1"):
+        UprBorrowConfig(threshold=1.5)
+    with pytest.raises(ValueError, match="Extra inputs"):
+        UprBorrowConfig.model_validate({"nope": 1})

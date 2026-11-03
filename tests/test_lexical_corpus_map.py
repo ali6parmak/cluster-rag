@@ -19,6 +19,7 @@ from cluster_rag.text_processors.features.corpus_map import build_corpus_map
 from cluster_rag.text_processors.lexical.corpus_map_score import (
     FLOOR_GAP,
     SCORING_FUNCTIONS,
+    borrowed_tables,
     cross_fit_scores,
     fit_mask_keep,
     score_cells,
@@ -249,3 +250,101 @@ def test_fit_mask_keep_empty_the_masked_tables_only() -> None:
     # the unmasked map's own tables are recovered exactly
     unmasked = fit_mask_keep(corpus_map, [])
     assert unmasked["A"] == frozenset(pair.word for pair in corpus_map.per_label["A"])
+
+
+# --- CS-44: the borrowed words -------------------------------------------------
+
+BORROW_LABELS = ("A", "B", "Z")  # A's table is inside B's; Z has no table
+
+
+def _borrow_records() -> tuple[Record, ...]:
+    """A's table {alpha, bravo} lies inside B's {alpha, bravo, charlie, delta}."""
+    return (
+        Record(id="b1", text="alpha bravo", language="en", labels=["A"]),
+        Record(id="b2", text="alpha bravo", language="en", labels=["A"]),
+        Record(id="b3", text="alpha bravo charlie", language="en", labels=["B"]),
+        Record(id="b4", text="alpha bravo charlie delta", language="en", labels=["B"]),
+    )
+
+
+def _borrow_map():
+    records = _borrow_records()
+    return build_corpus_map(
+        [record.text for record in records],
+        [record.labels for record in records],
+        BORROW_LABELS,
+    )
+
+
+def test_containment_partners_agrees_with_the_relation_readout() -> None:
+    """CS-38's class, read off the map alone, is the relation's own subset list."""
+    from cluster_rag.text_processors.lexical.label_pairs import (
+        containment_partners,
+        label_pair_relation,
+        vocabulary_less_labels,
+    )
+
+    corpus_map = _borrow_map()
+    partners = containment_partners(corpus_map, threshold=0.8)
+    assert partners == {"A": ("B", 1.0)}
+    relation = label_pair_relation(corpus_map, [record.labels for record in _borrow_records()])
+    readout = vocabulary_less_labels(relation)
+    assert readout["subset_of_a_neighbour"] == [{"label": "A", "partner": "B", "share": 1.0}]
+
+
+def test_the_lent_words_are_the_partner_evidence_for_words_not_in_own_table() -> None:
+    """CS-44: the discount applies to the partner's positive z, and only to it."""
+    corpus_map = _borrow_map()
+    lend = borrowed_tables(corpus_map, threshold=0.8, discount=0.5)
+    assert lend == {"A": ("B", 0.5)}
+    z_charlie = next(pair.z_score for pair in corpus_map.topic_rows("B") if pair.word == "charlie")
+    assert z_charlie > 0.0
+    plain = score_cells(["charlie"], corpus_map, scoring="sum_zscore_positive")
+    lent = score_cells(["charlie"], corpus_map, scoring="sum_zscore_positive", borrow=lend)
+    a, b = 0, 1
+    assert plain[0, a] == 0.0
+    assert lent[0, a] == pytest.approx(0.5 * z_charlie)
+    # the partner's own column is untouched
+    assert lent[0, b] == plain[0, b]
+    # a word the two tables share is NOT lent (no double count)
+    shared_plain = score_cells(["alpha"], corpus_map, scoring="sum_zscore_positive")
+    shared_lent = score_cells(["alpha"], corpus_map, scoring="sum_zscore_positive", borrow=lend)
+    assert shared_lent[0, a] == shared_plain[0, a]
+
+
+def test_a_masked_lent_label_does_not_borrow() -> None:
+    """CS-42's mask empties the table; the borrow composes and lends nothing."""
+    corpus_map = _borrow_map()
+    lend = borrowed_tables(corpus_map, threshold=0.8, discount=0.5)
+    records = _borrow_records()
+    texts = [record.text for record in records]
+    label_sets = [record.labels for record in records]
+    plain = cross_fit_scores(texts, label_sets, BORROW_LABELS, folds=2, seed=42, borrow=lend)[
+        "sum_zscore_positive"
+    ]
+    masked = cross_fit_scores(
+        texts,
+        label_sets,
+        BORROW_LABELS,
+        folds=2,
+        seed=42,
+        borrow=lend,
+        mask_labels=["A"],
+    )["sum_zscore_positive"]
+    # the masked label's cells are the floor, exactly like the label with no table
+    assert np.array_equal(masked[:, 0], masked[:, 2])
+    # the mask beats the lending: A never gains from its partner's words
+    assert (masked[:, 0] <= plain[:, 0]).all()
+
+
+def test_the_borrow_validates_its_labels_threshold_and_discount() -> None:
+    """A bad borrow request fails before anything is scored."""
+    from cluster_rag.text_processors.lexical.label_pairs import containment_partners
+
+    corpus_map = _borrow_map()
+    with pytest.raises(ValueError, match="outside the map's label space"):
+        score_cells(["alpha"], corpus_map, scoring="sum_zscore_positive", borrow={"Q": ("B", 0.5)})
+    with pytest.raises(ValueError, match="discount"):
+        borrowed_tables(corpus_map, discount=0.0)
+    with pytest.raises(ValueError, match="threshold"):
+        containment_partners(corpus_map, threshold=0.0)

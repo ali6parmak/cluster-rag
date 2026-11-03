@@ -96,6 +96,7 @@ research record and are **not** indexed here.
 | [CS-41 — the lexical kNN](#cs-41--the-lexical-knn-how-much-of-the-retrieval-is-words-alone-2026-11-03) | six `upr-eval-lexical-knn-k{1,3,5,10,20}-val` runs + the label-blind counterpart (the **main** UPR table) | **the lexical route is a viable candidate generator**: the words alone retrieve nearly as well as the embedding (the shortlist R@50 **0.9437** against the embedding kNN's **0.9576** at the same k, and above the embedding family's floor 0.8918) — so **PLAN.md's BM25 checkbox is LIVE**; and the **champion's fusion is the worse candidate generator** (0.7423, barely above the 0.7353 chance level) — the fusion dilutes the shortlist. The embedding's advantage is in the **ordering** (micro-F1 +0.0783), not in the **breadth** | `results/upr-eval-lexical-knn-k10-val/metrics.json` |
 | [CS-42 — the fit-side mask](#cs-42--the-fit-side-mask-the-dictionarys-floor-stops-meaning-impossible-2026-11-03) | one `upr-analyze-cmap-fitmask` run (four arms + the pack's floors) | **the mask is a lever, but not the whole lever**: the eight recover **0.0000 → 0.2947** and five of them come back, but the registered bar was 0.45, so the recovery condition fires; the seen buckets **gain** (+0.1478 [+0.1236, +0.1710] against the control) and the pooled number reaches **0.5874** — the silence proxy is **part** of the cause; the three that stay down are the two catch-alls and the broad ESC category | `results/upr-analyze-cmap-fitmask/analysis.json` |
 | [CS-43 — the dictionary and the catalog description](#cs-43--the-dictionary-and-the-catalog-description-the-description-cannot-outvote-the-floor-2026-11-03) | two `upr-analyze-cmap-catalog{,-desc}` runs (four arms each) | **the dictionary overrules the description**: with the description in the pack the eight still collapse (**0.0066** / **0.0000** against the same runs' controls' **0.4824** / **0.4690**), while the pooled numbers pass (**0.5608** / **0.5532**, both >= 0.55) — the two channels are complementary on the seen labels and not on the eight; the registered "unseen at 0.00" branch fires (cell 2 exactly; cell 1 at 0.7 % of its control) | `results/upr-analyze-cmap-catalog/analysis.json` · `results/upr-analyze-cmap-catalog-desc/analysis.json` |
+| [CS-44 — the borrowed words](#cs-44--the-borrowed-words-the-partners-vocabulary-is-not-the-thin-labels-2026-11-03) | one `upr-analyze-cmap-borrow` run (five arms + the pack's floors) | **not licensed**: lending the partner's words lifts the thin labels' scores (their predicted counts **69 → 118**; *CP rights - general* genuinely gains **0.0000 → 0.2308**) but on the registered cells view the five **fall** (**−0.0707 [−0.1356, −0.0035]**, 2 of 5 signs positive), the partner set's lower bound crosses the −0.02 floor (−0.0270), and the pair becomes confusable exactly as registered (co-predictions 0–5 → 6–21) — the thin labels' evidence is *shared* evidence, and sharing it more does not make it theirs | `results/upr-analyze-cmap-borrow/analysis.json` |
 
 ## Change sets
 
@@ -8157,3 +8158,133 @@ field by field. So the in-run pair "with the column / without it" is clean.
   controls reproduce them field for field (the guard).
 - Nothing about a **per-label** view of the eight beyond the score
   distributions the artifacts carry.
+
+## CS-44 — the borrowed words: the partner's vocabulary is not the thin labels' (2026-11-03)
+
+**The question.** Five labels have (almost) no vocabulary of their own: their
+dictionary tables lie inside a partner's (CS-38's class). So the map's column is
+evidence-poor for them exactly where it is evidence-rich for the partner. Does
+**lending** the partner's *evidence-for* words, at a discount, give them the
+vocabulary they lack?
+
+**The run.** One: `upr-analyze-cmap-borrow` — CS-32's pack exactly (groups
+`embedding + lexical + chunk_profile + corpus_map`, the gradient-boosted
+combiner, the atoms chunker, `top_k` k=2 on the **val** split) plus the
+`borrow` knob. The artifact is `results/upr-analyze-cmap-borrow/analysis.json`;
+the row lands in the **track's** UPR table under
+`## UPR — upr_learned_cmap_borrow`. **106.3 s**, no model calls. **Five arms**:
+the real arm (the plain column), the control, the label-blind counterpart, the
+**borrow arm** (the lent column on both sides) and the random-vector floor;
+the chance and control-role floors ride along.
+
+**The lending, recorded.** The five pairs are computed from the **full train
+map** at CS-38's **0.80** containment threshold and reproduced **exactly** —
+same labels, partners and shares (*Sexual and reproductive rights* 0.935 inside
+*Women's rights*; *Freedom of assembly* 0.909 inside *Detention*; *Statelessness*
+0.864 inside *Rights of the Child*; *CP rights - general* 0.843 inside
+*International instruments*; *Trafficking* 0.808 inside *Rights of the Child*).
+A lent label's column also reads the partner's (label, word) pairs with a
+**positive z-score** that its own table does not carry, each at **0.5 ×** the
+partner's weight; the partner's own column is untouched. The relation is fixed
+from the full train map and **applied to every fold's own weights** on the fit
+side (the cross-fit). The guard held: the real, control, label-blind and
+random-vector arms reproduce CS-32's numbers **exactly** (0.5502 / 0.4818 /
+0.4309 / 0.5357), and the reference arm reproduces its `evaluate` run field by
+field.
+
+### The arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.868 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+| the real arm (the plain column) — CS-32's arm | 0.5502 | 0.5081 | 0.897 | 0.6931 | 0.5088 | 0.5566 | 0.0000 | 0.6694 | 0.7979 |
+| **the borrow arm (the lent column)** | **0.5418** | 0.5060 | 0.882 | 0.6896 | 0.5014 | 0.5321 | 0.0000 | 0.6659 | 0.7953 |
+| the **control** (the pack without the group) | 0.4818 | 0.4652 | 1.000 | 0.5505 | 0.4122 | 0.4531 | 0.4469 | 0.6137 | 0.8909 |
+| the blind map | 0.4309 | 0.4277 | 0.926 | 0.5395 | 0.4099 | 0.4665 | 0.0066 | 0.5493 | 0.7741 |
+| the pack's random-vector floor | 0.5357 | 0.4787 | 0.882 | 0.6758 | 0.4885 | 0.5223 | 0.0000 | 0.6506 | 0.7729 |
+
+### The pair's own cells — the registered view, and the secondary one
+
+The run declares the label groups, so the artifact carries each arm's per-group
+sections and the borrow arm's paired differences. **The registered view** is the
+standard F1 over the group's columns on **every** text (a prediction of a
+group's label on a text that does not carry it is a false positive); the
+secondary view restricts the texts to those carrying one of the group's labels
+(the per-bucket views' convention), and it hides exactly the false positives the
+lending creates.
+
+| the group | borrow arm F1 | plain arm F1 | paired Δ [95 % CI] — **cells view (registered)** | Δ — on the gold texts (secondary) |
+|---|---|---|---|---|
+| **the five thin labels** | **0.3536** | **0.4242** | **−0.0707 [−0.1356, −0.0035]** | +0.0580 [−0.0072, +0.1273] |
+| their partners (4 labels) | 0.7081 | 0.7094 | −0.0012 [−0.0270, +0.0241] | −0.0093 [−0.0322, +0.0123] |
+| *CP rights - general* | 0.2308 | 0.0000 | **+0.2308 [+0.0000, +0.4349]** | +0.3750 [+0.0000, +0.6316] |
+| *Trafficking* | 0.9048 | 0.8636 | **+0.0411 [+0.0000, +0.1095]** | +0.0000 [0, 0] |
+| *Freedom of assembly* | 0.2326 | 0.2500 | −0.0174 [−0.1818, +0.1622] | +0.1667 [+0.0000, +0.4011] |
+| *Sexual and reproductive rights* | 0.0556 | 0.2105 | −0.1550 [−0.3572, +0.0000] | −0.1944 [−0.6000, +0.0000] |
+| *Statelessness and the right to nationality* | 0.2353 | 0.4000 | −0.1647 [−0.3066, −0.0138] | +0.0000 [0, 0] |
+| their partners, individually | — | — | *Detention* −0.1026 [−0.2223, −0.0116]; *International instruments* +0.0019 [−0.0460, +0.0455]; *Rights of the Child* −0.0166 [−0.0668, +0.0323]; *Women's rights* +0.0286 [−0.0098, +0.0712] | — |
+
+### The falsification, read out — **the lending is not licensed**
+
+1. **The lending test FAILS.** On the registered cells view the thin set's
+   micro-F1 **falls** (0.4242 → 0.3536, a paired **−0.0707 [−0.1356,
+   −0.0035]**, the interval excluding zero), and the sign leg fails too: only
+   **2 of the 5** individual signs are positive (*CP rights - general* +0.2308,
+   *Trafficking* +0.0411) against three negative (*Sexual and reproductive
+   rights* −0.1550, *Statelessness* −0.1647, *Freedom of assembly* −0.0174).
+   The **secondary** view shows the opposite sign (+0.0580 [−0.0072, +0.1273] —
+   positive point, interval including zero, i.e. *unresolved*) because the
+   lending predicts the thin labels on far more texts than carry them: the
+   five's predicted counts rise **69 → 118** (*Sexual and reproductive rights*
+   12 → 29, *Freedom of assembly* 9 → 28, *Statelessness* 12 → 26). The standard
+   F1 over the whole split is the registered cells view, and it says the
+   lending's false positives cost more than its recall buys.
+2. **The partner test fails on its letter.** On the cells view the partner set's
+   Δ is **−0.0012 [−0.0270, +0.0241]**: the point estimate is inside the
+   registered −0.02 bar, but the interval's lower bound (−0.0270) crosses it, so
+   the condition does not hold as registered (the substance is "no material
+   change"). The individual partners are not all flat: *Detention* falls
+   **−0.1026 [−0.2223, −0.0116]** (a real fall), *Women's rights* rises +0.0286,
+   *International instruments* and *Rights of the Child* are flat.
+3. **The swap readout** (descriptive, no bar) shows the registered risk
+   materialising: the pair becomes confusable — the co-predictions rise from
+   0–5 to 6–21 (*Sexual and reproductive rights* + *Women's rights* 5 → 21;
+   *Statelessness* + *Rights of the Child* 5 → 19; *Freedom of assembly* +
+   *Detention* 0 → 9; *CP rights - general* + *International instruments* 0 → 6)
+   — and the partners' prediction counts fall slightly (*Women's rights* 136 →
+   130, *International instruments* 94 → 88, *Rights of the Child* 117 → 116,
+   *Detention* 19 → 19).
+
+### The reading: the words are not the thin labels' missing ingredient
+
+- **The lending works mechanically and one label genuinely gains.** *CP rights -
+  general*, whose partner is the broad *International instruments*, goes from
+  **0.0000 to 0.2308** (0 → 3 of its 13 cells found); *Trafficking* gains a
+  little (+0.0411). So the mechanism is not inert.
+- **But the partner's vocabulary is about the partner's topic.** Lending it to
+  the thin label makes the two look alike, and the thin label is then predicted
+  on 118 texts instead of 69 — the false positives on texts about neither cost
+  more than the recall gains. *Sexual and reproductive rights* falls 0.2105 →
+  0.0556 and *Statelessness* 0.4000 → 0.2353; *Detention* pays −0.1026.
+- **What separates the pairs is semantic (a sub-topic), not lexical.** The
+  corpus's words for sexual and reproductive rights **are** the corpus's words
+  for women's rights; re-weighting the same words cannot create a distinction
+  the words do not carry. So CS-38's "no vocabulary of their own" class is real,
+  and this change set shows **why**: the thin labels' evidence is *shared*
+  evidence, and sharing it more does not make it theirs. The one exception is
+  the pair whose partner is a *broad instrument* label rather than a
+  near-synonym — its words add topic evidence without a competing sub-topic.
+
+### What this change set does not say
+
+- Nothing about **test** (val only).
+- Nothing about the **map classifier** as an instrument (registered out): the
+  pack is where the dictionary's column lives, and the pack's fit side is the
+  cross-fit guard. The map's own readout would answer a different question.
+- Nothing about a **discount or threshold sweep** (0.5 and 0.80, one value
+  each, as registered); nothing about a **separate "borrowed" column** (the
+  lending is folded into the lent label's own column).
+- Nothing about combining the lending with CS-42's mask or CS-43's description
+  (one thing at a time), nor about the **mined lexicon** (CS-45).
+- Nothing about the **swap readout as a statistic**: it is described, not
+  tested, and no verdict rests on it.

@@ -6829,3 +6829,214 @@ The verdict and the numbers are the track log's §CS-43.*
     field ✓; the table rows are auto-appended ✓; the log section reads the two
     cells out against the three conditions ✓; the gate green ✓ (ruff, pytest,
     `tools/verify_upr_baseline.py` on both runs).
+
+
+---
+
+## The borrowed words (CS-44) — the pre-registration and the verdict
+
+*Added on 2026-11-03, when the change set was executed: the live plan's §7.6
+block moved here **verbatim** (the archive's convention: an executed change
+set's pre-registration moves here and the live plan keeps one tombstone line).
+The verdict and the numbers are the track log's §CS-44.*
+
+### 7.6 The fit-side dictionary round (CS-42 … CS-45)
+
+- [x] **CS-44 — lend the neighbour's words to the five thin labels.** For the
+  five labels whose table is >= 80 % inside a partner's, the partner's words are
+  added to the thin label's table with a **discount**.
+
+  **The mechanism.** Five labels have (almost) no vocabulary of their own: their
+  dictionary tables lie inside a partner's (CS-38's
+  `corpus_map.label_pairs.vocabulary_less.subset_of_a_neighbour` — *Sexual and
+  reproductive rights* **0.935** inside *Women's rights*; *Freedom of assembly*
+  **0.909** inside *Detention*; *Statelessness* **0.864** inside *Rights of the
+  Child*; *CP rights - general* **0.843** inside *International instruments*;
+  *Trafficking* **0.808** inside *Rights of the Child*). So the map's column is
+  evidence-poor for them exactly where it is evidence-rich for the partner: a
+  text about sexual and reproductive rights is scored high on *Women's rights*
+  and, for *Sexual and reproductive rights* itself, only on the words the two
+  share. The change: the thin label's column also reads the partner's
+  **evidence-for** words that its own table does not carry, at a **discount** —
+  the words are lent, not copied, and the partner's own column is untouched.
+
+  **The rule, fixed before the call.** The pairs: the labels with a non-empty
+  table whose **best containment** is at or above **0.80** (CS-38's registered
+  threshold), the partner being the first maximal containment in the label
+  order — the five above. The lent entries: the partner's (label, word) pairs
+  whose **z-score is positive** and whose word is **not in the lent label's own
+  table**, each contributed at **discount 0.5** × the partner's weight (the
+  arm's measure is the pack's own `sum_zscore_positive`). The lending relation
+  is computed **once from the full train map** and recorded; it is applied to
+  **every fold's own weights** on the fit side (the cross-fit: the pairs are a
+  train-side fact, the weights are the fold's). A label whose own table is
+  emptied on the fit side (the stability filter, CS-42's mask) does not borrow —
+  the borrow composes with `keep`.
+
+  **Where the code lives.** `text_processors/lexical/label_pairs.py` gains
+  `containment_partners` (the map-only containment, the same computation CS-38's
+  readout uses); `text_processors/lexical/corpus_map_score.py` gains
+  `borrowed_tables` and the `borrow` option on `score_cells` / `cross_fit_scores`;
+  the command (`commands/upr.py::_upr_corpus_map_feature`) computes the pairs,
+  the two score matrices and the new arm's provenance; `upr_learning.py` fits the
+  arm; the reporting (`eval/report.py::build_label_report` and
+  `upr_analysis.py::arm_block`) gains **label sets** — a named label group's own
+  section (`metrics.per_label_set`) — **off unless declared**, so every earlier
+  artifact keeps its exact content. The config key is
+  `upr_analysis.learned.corpus_map_feature.borrow` (`enabled`, `discount`,
+  `threshold`; **off** by default).
+
+  **The run.** One: `upr-analyze-cmap-borrow` — the `analyze-upr` command with
+  CS-32's configuration exactly, plus the borrow knob. Sweep
+  `experiments_text_processing/upr_learned_cmap_borrow_sweep.py`, label
+  `upr_learned_cmap_borrow`; artifact
+  `results/upr-analyze-cmap-borrow/analysis.json`. **Five arms**: the real arm
+  (the plain column — CS-32's), the control (the pack without the group), the
+  label-blind counterpart, the **borrow arm** (the lent column on both sides) and
+  the random-vector floor; the chance and control-role floors ride along. The
+  label sets declared in the run: the **five thin labels** and **their partners**
+  (four distinct labels — *Rights of the Child* serves two pairs) as two pooled
+  sets, plus the **ten labels individually**.
+
+  **The shape of the number.** The **thin set's pooled micro-F1** in the borrow
+  arm vs the plain arm — a paired Δ by text (2,000 resamples, seed 42) — and the
+  same for the **partner set** and for the ten labels. The power is stated up
+  front: the five thin labels carry **63** val gold cells (7 / 15 / 8 / 13 / 20)
+  and the partners **274** (101 / 20 / 85 / 68), so the per-label intervals are
+  wide and the **pooled sets are the instrument**. Reported beside the deltas:
+  each arm's per-label-set sections, the pooled overall, the per-bucket view, the
+  shortlist R@50 and the per-pair **swap readout** (how many val texts each arm
+  predicts the thin label, the partner, both or neither).
+
+  **The falsification, registered in advance.**
+  1. **The lending test.** The thin set's paired Δ (borrow − plain) must be
+     **positive with an interval that excludes zero**, and **at least 4 of the 5**
+     individual thin labels' point estimates must be positive (the sign-
+     consistency leg: one label may not carry the pooled gain alone). A positive
+     point estimate whose interval includes zero is **unresolved (underpowered)**
+     — with 63 gold cells that is a real possibility — and it does **not** license
+     the change.
+  2. **The partner test.** The partners' set's paired Δ must **not fall
+     materially**: its point estimate **and** its interval's lower bound at or
+     above **−0.02**. The partner's own column is untouched by the lending, so a
+     fall can only come from the top-2 competition — exactly the registered risk
+     ("the pair becomes confusable and the top-2 swaps them").
+  3. **The swap readout (descriptive, no bar).** Per pair, the counts of val
+     texts where each arm predicts the thin label, the partner, both or neither.
+
+  **The guard.** The run's real arm, control, blind arm and random floor
+  reproduce CS-32's numbers exactly (the knob is off in them); the lending
+  relation reproduces CS-38's `subset_of_a_neighbour` — the same five labels,
+  partners and shares (0.935 / 0.909 / 0.864 / 0.843 / 0.808); the reference arm
+  reproduces its `evaluate` run field by field.
+
+  **The cost.** One run, about 2–3 minutes (cache hits, **no model calls**); the
+  change set about a day including tests and docs; **no new dependency**.
+
+  **What is NOT registered.** The **map classifier** as the instrument (the pack
+  is — it is where the dictionary's column lives and where the plan's cost line
+  puts the cross-fit guard); a **discount or threshold sweep** (0.5 and 0.80, one
+  value each); a **separate "borrowed" column** (the lending is folded into the
+  lent label's own column); the combination with CS-42's mask or CS-43's
+  description (one thing at a time); the **mined lexicon** (CS-45); **test**.
+
+  **The exit criteria.** The artifact holds the five arms, the label sets, the
+  lending provenance (the five pairs and their shares, the discount and the
+  threshold, the per-fold application) and the paired blocks; the lending
+  relation reproduces CS-38's five; the table row is auto-appended; the log
+  section §CS-44 reads the numbers out against the three conditions; the
+  checkbox is ticked; the block is moved verbatim to the archive; the gate is
+  green (ruff, pytest, `tools/verify_upr_baseline.py` on the run); one commit.
+
+  *(pre-registered 2026-11-03; **executed 2026-11-03** — the run is
+  `upr-analyze-cmap-borrow` (the artifact
+  `results/upr-analyze-cmap-borrow/analysis.json`), the sweep is
+  `experiments_text_processing/upr_learned_cmap_borrow_sweep.py` (the label
+  `upr_learned_cmap_borrow`), the log section is `## CS-44 — the borrowed words:
+  the partner's vocabulary is not the thin labels'` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The numbers, in one screen (UPR **val**: 660 texts, `top_k` k=2, the
+  gradient-boosted pack `embedding + lexical + chunk_profile + corpus_map`; the
+  map is built from the **train** split only and the fit side's map is
+  **cross-fit** over 5 folds; the lending is the five pairs of CS-38's class at
+  the 0.80 containment, the partner's evidence-for words at the 0.5 discount;
+  no model calls; 106.3 s).**
+
+  - **The lending, recorded and reproduced**: the five pairs are computed from
+    the full train map and match CS-38's `subset_of_a_neighbour` exactly —
+    *Sexual and reproductive rights* 0.935 inside *Women's rights*; *Freedom of
+    assembly* 0.909 inside *Detention*; *Statelessness* 0.864 inside *Rights of
+    the Child*; *CP rights - general* 0.843 inside *International instruments*;
+    *Trafficking* 0.808 inside *Rights of the Child*. The guard: the real,
+    control, label-blind and random-vector arms reproduce CS-32's numbers
+    exactly (0.5502 / 0.4818 / 0.4309 / 0.5357), and the reference arm
+    reproduces its `evaluate` run field by field.
+
+  - **The arms**:
+
+    | the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+    |---|---|---|---|---|---|---|---|---|---|
+    | the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.868 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+    | the real arm (the plain column) — CS-32's arm | 0.5502 | 0.5081 | 0.897 | 0.6931 | 0.5088 | 0.5566 | 0.0000 | 0.6694 | 0.7979 |
+    | **the borrow arm (the lent column)** | **0.5418** | 0.5060 | 0.882 | 0.6896 | 0.5014 | 0.5321 | 0.0000 | 0.6659 | 0.7953 |
+    | the **control** (the pack without the group) | 0.4818 | 0.4652 | 1.000 | 0.5505 | 0.4122 | 0.4531 | 0.4469 | 0.6137 | 0.8909 |
+    | the blind map | 0.4309 | 0.4277 | 0.926 | 0.5395 | 0.4099 | 0.4665 | 0.0066 | 0.5493 | 0.7741 |
+    | the pack's random-vector floor | 0.5357 | 0.4787 | 0.882 | 0.6758 | 0.4885 | 0.5223 | 0.0000 | 0.6506 | 0.7729 |
+
+  - **The pair's own cells** (the registered view is the standard F1 over the
+    group's columns on **every** text; the secondary view restricts the texts to
+    those carrying one of the group's labels and hides the lending's false
+    positives):
+
+    | the group | borrow F1 | plain F1 | Δ [95 % CI] — cells view (registered) | Δ — on the gold texts (secondary) |
+    |---|---|---|---|---|
+    | **the five thin labels** | **0.3536** | **0.4242** | **−0.0707 [−0.1356, −0.0035]** | +0.0580 [−0.0072, +0.1273] |
+    | their partners (4 labels) | 0.7081 | 0.7094 | −0.0012 [−0.0270, +0.0241] | −0.0093 [−0.0322, +0.0123] |
+    | *CP rights - general* | 0.2308 | 0.0000 | **+0.2308 [+0.0000, +0.4349]** | +0.3750 [+0.0000, +0.6316] |
+    | *Trafficking* | 0.9048 | 0.8636 | **+0.0411 [+0.0000, +0.1095]** | +0.0000 [0, 0] |
+    | *Freedom of assembly* | 0.2326 | 0.2500 | −0.0174 [−0.1818, +0.1622] | +0.1667 [+0.0000, +0.4011] |
+    | *Sexual and reproductive rights* | 0.0556 | 0.2105 | −0.1550 [−0.3572, +0.0000] | −0.1944 [−0.6000, +0.0000] |
+    | *Statelessness and the right to nationality* | 0.2353 | 0.4000 | −0.1647 [−0.3066, −0.0138] | +0.0000 [0, 0] |
+    | the partners individually | — | — | *Detention* −0.1026 [−0.2223, −0.0116]; *International instruments* +0.0019 [−0.0460, +0.0455]; *Rights of the Child* −0.0166 [−0.0668, +0.0323]; *Women's rights* +0.0286 [−0.0098, +0.0712] | — |
+
+  - **The falsification, read out.**
+    1. **The lending test FAILS**: on the registered cells view the thin set
+       falls (0.4242 → 0.3536, a paired **−0.0707 [−0.1356, −0.0035]**, the
+       interval excluding zero) and the sign leg fails (only **2 of 5** signs
+       positive: *CP rights - general* +0.2308, *Trafficking* +0.0411; three
+       negative). The secondary view's opposite sign (+0.0580 [−0.0072,
+       +0.1273], *unresolved*) is the lending's false positives: the five's
+       predicted counts rise **69 → 118** (*Sexual and reproductive rights*
+       12 → 29, *Freedom of assembly* 9 → 28, *Statelessness* 12 → 26).
+    2. **The partner test fails on its letter**: the partner set's cells-view Δ
+       is −0.0012 [−0.0270, +0.0241] — the point estimate is inside the −0.02
+       bar, the interval's lower bound is not. *Detention* falls −0.1026
+       [−0.2223, −0.0116]; the others are flat or slightly up.
+    3. **The swap readout** (descriptive): the pair becomes confusable — the
+       co-predictions rise from 0–5 to 6–21 (*Sexual and reproductive rights* +
+       *Women's rights* 5 → 21; *Statelessness* + *Rights of the Child* 5 → 19;
+       *Freedom of assembly* + *Detention* 0 → 9; *CP rights - general* +
+       *International instruments* 0 → 6), while the partners' prediction counts
+       fall slightly (*Women's rights* 136 → 130, *International instruments*
+       94 → 88, *Rights of the Child* 117 → 116).
+  - **The reading: the words are not the thin labels' missing ingredient.** The
+    lending works mechanically and *one* label genuinely gains (*CP rights -
+    general*, whose partner is the broad *International instruments*: 0.0000 →
+    0.2308), but the partner's vocabulary is about the partner's topic: lending
+    it makes the two look alike, the thin labels are predicted on 118 texts
+    instead of 69, and the false positives cost more than the recall gains
+    (*Sexual and reproductive rights* 0.2105 → 0.0556, *Statelessness* 0.4000 →
+    0.2353, *Detention* −0.1026). What separates the pairs is **semantic (a
+    sub-topic), not lexical** — the corpus's words for sexual and reproductive
+    rights *are* its words for women's rights — so CS-38's "no vocabulary of
+    their own" class is real and this change set shows why: the thin labels'
+    evidence is *shared* evidence, and sharing it more does not make it theirs.
+    The one exception is the pair whose partner is a *broad instrument* label
+    rather than a near-synonym.
+  - **The exit criteria.** The artifact holds the five arms, the label sets,
+    the lending's provenance (the five pairs and their shares, the discount and
+    the threshold) and both paired views ✓; the lending relation reproduces
+    CS-38's five ✓; the table row is auto-appended ✓; the log section reads the
+    numbers out against the three conditions ✓; the gate green ✓ (ruff, pytest,
+    `tools/verify_upr_baseline.py` on the run).

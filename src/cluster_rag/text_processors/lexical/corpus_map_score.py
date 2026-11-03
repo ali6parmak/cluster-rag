@@ -55,6 +55,16 @@ stay positive. The mask is the **fit side's** instrument: it breaks the
 coincidence CS-37 measured ("the channel is silent" ⇔ "the label is never
 positive") without touching the evaluation side, which keeps the full map.
 
+**CS-44 adds the borrowed words**: five labels have (almost) no vocabulary of
+their own (CS-38: their tables lie inside a partner's), so a scoring call may
+**lend** the partner's *evidence-for* words to them (``borrow``): the partner's
+(label, word) pairs with a positive z-score whose word the lent label's own
+table does not carry, each at a **discount** × the partner's weight. The words
+are lent, not copied, and the partner's own column is untouched. The relation
+is computed from the map being scored (the full train map on the eval side,
+each fold's own map on the fit side), and a label whose own table is emptied
+(the stability filter, CS-42's mask) does not borrow.
+
 **The unit is the map's own**: a **distinct** content word, tokenized exactly
 as the map was built (``content_tokens`` — the lower-cased alphanumeric tokens
 without the stopwords). A word repeated in the text counts once, because the
@@ -88,6 +98,10 @@ import numpy as np
 
 from cluster_rag.text_processors.features.corpus_map import CorpusMap, build_corpus_map
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.label_pairs import (
+    CONTAINMENT_THRESHOLD,
+    containment_partners,
+)
 from cluster_rag.text_processors.lexical.pos_class import POS_CLASSES
 from cluster_rag.text_processors.lexical.stability import HEAD_K, estimate_stability
 from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES
@@ -256,6 +270,83 @@ def fit_mask_keep(
     return {label: frozenset(survivors.get(label, ())) for label in corpus_map.labels}
 
 
+def borrowed_tables(
+    corpus_map: CorpusMap,
+    *,
+    threshold: float = CONTAINMENT_THRESHOLD,
+    discount: float = 0.5,
+) -> dict[str, tuple[str, float]]:
+    """The **lent tables** (CS-44): label -> (partner, discount).
+
+    The five labels with no vocabulary of their own (CS-38's class: their table
+    lies inside one partner's, at or above the containment threshold) **borrow**
+    the partner's *evidence-for* words — the borrowing itself happens in
+    :func:`score_cells`; this helper fixes **who** borrows **from whom**.
+
+    Args:
+        corpus_map: The map the relation is read off. On the fit side the
+            caller computes the relation once from the **full train map** and
+            applies it to every fold's own weights (the relation is a train-side
+            fact; the weights are the fold's).
+        threshold: The containment share that makes a label a borrower (CS-38's
+            pre-registered 0.80).
+        discount: The share of the partner's weight a lent word carries
+            (CS-44's registered 0.5).
+
+    Returns:
+        The label -> (partner, discount) mapping (empty when no label qualifies).
+
+    Raises:
+        ValueError: On a discount outside ``(0, 1]`` or an invalid threshold.
+    """
+    if not 0.0 < discount <= 1.0:
+        raise ValueError(f"the borrow discount must be in (0, 1], got {discount!r}")
+    partners = containment_partners(corpus_map, threshold=threshold)
+    return {label: (partner, float(discount)) for label, (partner, _) in partners.items()}
+
+
+def _with_borrowed(
+    index: dict[str, tuple[tuple[int, float, float], ...]],
+    corpus_map: CorpusMap,
+    columns: Mapping[str, int],
+    borrow: Mapping[str, tuple[str, float]],
+    keep: Mapping[str, frozenset[str]] | None,
+) -> dict[str, tuple[tuple[int, float, float], ...]]:
+    """The word index with the **lent** entries added (CS-44).
+
+    A lent label's column also carries the partner's **evidence-for** words
+    (positive z-score) that the label's own table does not hold, each weighted
+    by ``discount`` × the partner's weight. The partner's own column is
+    untouched: the entries are added to the lent label's column only.
+
+    ``keep`` (the stability filter, CS-42's mask) composes: a lent label whose
+    own table is emptied does not borrow, and a filtered map lends only the
+    partner's surviving words.
+    """
+    mutable = {word: list(entries) for word, entries in index.items()}
+    for label, (partner, discount) in borrow.items():
+        if label not in columns or partner not in columns:
+            raise ValueError(
+                f"the borrow names label(s) outside the map's label space: {label!r} / {partner!r}"
+            )
+        if keep is not None and not keep.get(label):
+            continue
+        if keep is not None and not keep.get(partner):
+            continue
+        own = {pair.word for pair in corpus_map.topic_rows(label)}
+        allowed = keep.get(partner, frozenset()) if keep is not None else None
+        column = columns[label]
+        for pair in corpus_map.topic_rows(partner):
+            if pair.word in own or pair.z_score <= 0.0:
+                continue
+            if allowed is not None and pair.word not in allowed:
+                continue
+            mutable.setdefault(pair.word, []).append(
+                (column, discount * pair.log_odds, discount * pair.z_score)
+            )
+    return {word: tuple(entries) for word, entries in mutable.items()}
+
+
 def score_cells(
     texts: Sequence[str],
     corpus_map: CorpusMap,
@@ -265,6 +356,7 @@ def score_cells(
     restrict_pos: Sequence[str] | None = None,
     keep: Mapping[str, frozenset[str]] | None = None,
     abstain: bool = False,
+    borrow: Mapping[str, tuple[str, float]] | None = None,
     units: Callable[[str], Iterable[str]] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> np.ndarray:
@@ -287,6 +379,10 @@ def score_cells(
         abstain: The **abstention** (CS-37): a label with no table at all
             carries ``NaN`` ("no evidence") instead of the floor
             ("impossible"). ``False`` (the default) is the floor.
+        borrow: The **lent tables** (CS-44): label -> (partner, discount). The
+            lent label's column also carries the partner's evidence-for words
+            (positive z-score) that its own table does not hold, at the
+            discount. ``None`` (the default) is the plain map.
         units: The map's **unit**: the callable that turns a text into the
             units the map's tables are keyed by (the default is the track's
             own content-word tokenizer; the **phrase table** (CS-39) passes
@@ -301,8 +397,8 @@ def score_cells(
         ``NaN`` when the call **abstains**.
 
     Raises:
-        ValueError: On an unknown scoring function, an unknown word class or an
-            empty restriction.
+        ValueError: On an unknown scoring function, an unknown word class, an
+            empty restriction, or a borrowed label outside the label space.
     """
     if scoring not in SCORING_FUNCTIONS:
         raise ValueError(
@@ -316,6 +412,10 @@ def score_cells(
         restrict_pos=restrict_pos,
         keep=keep,
     )
+    if borrow:
+        index = _with_borrowed(
+            index, corpus_map, {label: i for i, label in enumerate(labels)}, borrow, keep
+        )
     scores = np.zeros((len(texts), len(labels)), dtype=np.float64)
     empty_columns = [
         column for column, label in enumerate(labels) if not corpus_map.label_counts.get(label)
@@ -377,6 +477,7 @@ def cross_fit_scores(
     stability_resamples: int = 500,
     abstain: bool = False,
     mask_labels: Sequence[str] | None = None,
+    borrow: Mapping[str, tuple[str, float]] | None = None,
     units: Callable[[str], Iterable[str]] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> dict[str, np.ndarray]:
@@ -423,6 +524,12 @@ def cross_fit_scores(
             instrument only — the evaluation side keeps the full map. It
             composes with ``keep`` / ``stability_min``: the mask empties the
             named labels on top of whatever filter the fold already has.
+        borrow: The **lent tables** (CS-44): label -> (partner, discount). The
+            relation is computed once from the **full train map** by the
+            caller; here it rides into every fold, so each fold's cells read
+            their own map's partner weights (the fit side's cross-fit). It
+            composes with ``keep`` / ``mask_labels``: a lent label whose own
+            table is emptied does not borrow.
         units: The map's **unit** (the default is the track's own content-word
             tokenizer; the **phrase table** (CS-39) passes the bigram
             tokenizer instead). It rides into the cross-fit: each fold's map is
@@ -502,6 +609,7 @@ def cross_fit_scores(
                 restrict_pos=restrict_pos,
                 keep=fold_keep,
                 abstain=abstain,
+                borrow=borrow,
                 units=units,
                 stopwords=stopwords,
             )
