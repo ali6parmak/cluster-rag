@@ -94,6 +94,7 @@ research record and are **not** indexed here.
 | [CS-39 — the phrase map](#cs-39--the-phrase-map-do-phrases-beat-their-own-words-2026-11-02) | two `upr-eval-corpus-map-sum-zscore-positive-phrase{,-blind}-val` runs + the map's re-written `phrase_map` block | the **formulaic test fails** (the phrase table's generic share is **15.5 %**, far below the word table's **43.6 %** — the phrases are too rare to sit in many tables, so the class measure reads rarity as topicality) and the **control fails** (the blind union gains **more** on the fit side, +0.0240 against the real union's +0.0050) — so the unit change is a **null**; the register is real but it is a **fragment** (the top interactions are "on its", "with an", "and will") and the phrases are **too rare to be a table** (82.8 % hapax) | `results/upr-eval-corpus-map-sum-zscore-positive-phrase-val/metrics.json` |
 | [CS-40 — the contrastive map](#cs-40--the-contrastive-map-why-a-and-not-b-2026-11-03) | no run (a **tool**): the viewer's contrastive block + the measurement tool | the block stays: the discriminating words are **not** the ones the topic-side and the text-side maps show (the vocabulary share **0.6100** against the bar 0.50) and for **80 %** of its rows the screen does not print **both** of the pair's log-odds — the reader could not have formed the difference; and **62.5 %** of the measured pairs have a word of **this** text that pulls the two labels in **opposite** directions | the CS-23 artifact (read, not re-measured) |
 | [CS-41 — the lexical kNN](#cs-41--the-lexical-knn-how-much-of-the-retrieval-is-words-alone-2026-11-03) | six `upr-eval-lexical-knn-k{1,3,5,10,20}-val` runs + the label-blind counterpart (the **main** UPR table) | **the lexical route is a viable candidate generator**: the words alone retrieve nearly as well as the embedding (the shortlist R@50 **0.9437** against the embedding kNN's **0.9576** at the same k, and above the embedding family's floor 0.8918) — so **PLAN.md's BM25 checkbox is LIVE**; and the **champion's fusion is the worse candidate generator** (0.7423, barely above the 0.7353 chance level) — the fusion dilutes the shortlist. The embedding's advantage is in the **ordering** (micro-F1 +0.0783), not in the **breadth** | `results/upr-eval-lexical-knn-k10-val/metrics.json` |
+| [CS-42 — the fit-side mask](#cs-42--the-fit-side-mask-the-dictionarys-floor-stops-meaning-impossible-2026-11-03) | one `upr-analyze-cmap-fitmask` run (four arms + the pack's floors) | **the mask is a lever, but not the whole lever**: the eight recover **0.0000 → 0.2947** and five of them come back, but the registered bar was 0.45, so the recovery condition fires; the seen buckets **gain** (+0.1478 [+0.1236, +0.1710] against the control) and the pooled number reaches **0.5874** — the silence proxy is **part** of the cause; the three that stay down are the two catch-alls and the broad ESC category | `results/upr-analyze-cmap-fitmask/analysis.json` |
 
 ## Change sets
 
@@ -7916,3 +7917,131 @@ probability **50/68 = 0.7353** ✓.
 - Nothing about the **phrase** unit (CS-39's verdict: the phrases are noise ✓)
   and nothing about the **embedding kNN's own blind counterpart** ✓ (not
   registered ✓).
+
+## CS-42 — the fit-side mask: the dictionary's floor stops meaning "impossible" (2026-11-03)
+
+**The question.** CS-32's pack loses the eight held-out labels outright
+(the unseen bucket 0.4469 → 0.0000) because the dictionary's tables for them
+are empty, and CS-37 showed the fix is not in the **encoding**: on the fit side
+"the dictionary is silent about this label" and "this label is never positive"
+are the same fact, so the learner reads the floor as "impossible". This change
+set breaks that coincidence: during the pack's **fit pass only**, the tables of
+a fixed, seed-chosen set of **seen** labels are emptied, so their gold rows
+carry the floor exactly like the held-out labels' do — and the combiner sees
+"positive with the channel at the floor". The **evaluation is unchanged** (the
+val split is scored with the full train map).
+
+**The run.** One: `upr-analyze-cmap-fitmask` — the `analyze-upr` command with
+CS-32's configuration (groups `embedding + lexical + chunk_profile +
+corpus_map`, the gradient-boosted combiner, the atoms chunker, `top_k` k=2 on
+the **val** split) plus the `fit_mask` knob. The artifact is
+`results/upr-analyze-cmap-fitmask/analysis.json`; the row lands in the **track's**
+UPR table under `## UPR — upr_learned_cmap_fitmask`. **123 s**, no model calls
+(the embeddings are cache hits). The reference arm reproduces
+`upr-eval-fusionc-embeddinggemma-k10-c1` field by field, and the real, control,
+label-blind and random-vector arms reproduce CS-32's numbers **exactly**
+(0.5502 / 0.4818 / 0.4309 / 0.5357): the knob is off in every earlier run, so
+nothing of CS-32's moves.
+
+**The mask's provenance.** Eight seen labels, drawn from the train map's 60
+labels with a table (`np.random.default_rng(42).choice(60, 8, replace=False)`,
+candidates sorted by name — never chosen on val):
+
+| masked label | train texts | bucket |
+|---|---|---|
+| Death penalty | 66 | torso |
+| Racial discrimination | 59 | torso |
+| Corruption | 30 | tail |
+| Sexual and reproductive rights | 29 | tail |
+| UPR process | 28 | tail |
+| Youth rights | 23 | tail |
+| Right to housing | 20 | tail |
+| Internally displaced persons | 19 | tail |
+
+### The arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.868 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+| the real arm (the map's column with the floor) — CS-32's arm | 0.5502 | 0.5081 | 0.897 | 0.6931 | 0.5088 | 0.5566 | 0.0000 | 0.6694 | 0.7979 |
+| **the fit-mask arm** | **0.5874** | **0.5577** | 1.000 | **0.7094** | **0.5150** | **0.5931** | **0.2947** | **0.7342** | **0.8922** |
+| the **control** (the pack without the group) | 0.4818 | 0.4652 | 1.000 | 0.5505 | 0.4122 | 0.4531 | 0.4469 | 0.6137 | 0.8909 |
+| the blind map | 0.4309 | 0.4277 | 0.926 | 0.5395 | 0.4099 | 0.4665 | 0.0066 | 0.5493 | 0.7741 |
+| the pack's random-vector floor | 0.5357 | 0.4787 | 0.882 | 0.6758 | 0.4885 | 0.5223 | 0.0000 | 0.6506 | 0.7729 |
+
+### The falsification, read out — **the recovery bar is not met, the other two pass**
+
+1. **The recovery test FAILS.** The fit-mask arm's unseen micro-F1 is
+   **0.2947**, far under the registered bar of **0.45** (the control's own
+   0.4469, rounded up). The mask does move the eight — the paired difference
+   against the real arm on the unseen bucket is **+0.2947 [+0.2333, +0.3550]**
+   (the interval excludes zero) — but it does not give them back. The
+   registered reading fires: **the silence proxy is not the binding cause**
+   (not alone), and P1 stops here.
+2. **The no-free-lunch test PASSES.** The seen buckets gain rather than fall:
+   the paired **seen-view** difference (fit-mask − control) is **+0.1478
+   [+0.1236, +0.1710]** (the registered floor was +0.10), and the pooled
+   micro-F1 is **0.5874**, above the registered 0.5502. Against the real arm the
+   seen buckets still gain a little (+0.0158 [+0.0052, +0.0268]) and the pooled
+   number gains **+0.0372 [+0.0257, +0.0490]**; the per-bucket differences
+   against the control are head **+0.1589 [+0.1230, +0.1952]**, torso **+0.1027
+   [+0.0587, +0.1444]**, tail **+0.1400 [+0.0721, +0.2111]**.
+3. **The label-blind control PASSES.** On the seen view the blind arm's Δ
+   against the control is **−0.0032 [−0.0181, +0.0119]** (it buys nothing), its
+   unseen bucket stays collapsed at **0.0066** (a paired −0.4403 [−0.4935,
+   −0.3835] against the control), and its pooled number is **−0.0509**. So the
+   gain is label-driven, not the pack's construction.
+
+### The reading: the mask is a lever, but not the whole lever
+
+- **Five of the eight come back, three do not.** The per-label score
+  distributions say which: the masked arm's gold cells for *Freedom of
+  association* (mean 0.384 against the arm's background 0.022), *Gender-based
+  violence* (0.402 / 0.030), *Special procedures* (0.373 / 0.008), *Freedom of
+  religion and belief* (0.353 / 0.011) and *Asylum-seekers - refugees*
+  (0.316 / 0.005) are no longer at the floor; *ESC rights - general* (0.023),
+  *General* (0.001) and *Other* (0.009) stay down. The three that stay down are
+  the ones whose meaning is not in the text's words in the first place (the two
+  **catch-alls**, and the broad ESC category), so no dictionary column can find
+  them — the mask removes the "impossible" verdict and what remains is the
+  other channels' own ceiling.
+- **The residual gap is measured.** Even with the coincidence broken, the
+  column still costs the eight: the fit-mask arm trails the control by
+  **0.1522 [0.1008, 0.2066]** on the unseen bucket (the paired difference,
+  fit-mask − control, is **−0.1522 [−0.2066, −0.1008]**; 0.2947 against the
+  control's 0.4469). The difference between "the floor is not impossible"
+  (learned) and "the floor is not the only evidence" (not learned) is what is
+  left: at eval the eight's cells still carry the column's most extreme value on
+  every text, and the combiner has learned to trust the column's *value*, not
+  just its presence.
+- **The mask costs the seen buckets nothing measurable.** Six of the masked
+  labels sit in the tail bucket and two in the torso, and both buckets are up
+  against the real arm (torso +0.0062 [−0.0184, +0.0302], tail +0.0365
+  [−0.0043, +0.0758], both intervals including zero; the head +0.0164
+  [+0.0024, +0.0302] excludes it) — the masked labels' own val numbers do not
+  fall enough to show at the bucket level. The artifact carries the per-label
+  **score distributions** (the `distributions.per_label` block), not a per-label
+  F1; the per-label F1 is therefore not read here and is recorded as a gap for
+  the next round.
+- **The pooled number is the track's second-best pack number.** 0.5874 sits
+  between CS-13's pack + decision feature (0.5965) and CS-32's map pack (0.5502),
+  and **above the champion** (0.5479) by +0.0395 — with no decision model and no
+  new embedding. The mask also gives the shortlist back: **R@50 0.8922** against
+  the real arm's 0.7979 (the control's 0.8909). It is **not** a replacement for
+  CS-13's number (the decision feature is a different channel, and CS-13's unseen
+  0.5697 is far above this arm's 0.2947).
+
+### What this change set does not say
+
+- Nothing about **test** (the number is val only) and nothing about the
+  **decision feature** (CS-13's pack: the two features are not combined here —
+  the mask is measured with CS-32's pack, one change at a time).
+- Nothing about the **description channel** (CS-43's question: the catalog is
+  non-silent for all 68 labels, and the two channels are not run together here).
+- Nothing about **mask sizes** other than 8 or **seeds** other than 42 (one
+  draw, registered), and nothing about a **second seed**'s stability.
+- Nothing about the **fit-mask arm's label-blind counterpart** (the extra
+  control offered in review and not taken), so whether a *blind* map with the
+  same mask would also recover the eight is unmeasured.
+- Nothing about the **per-label F1** of the masked arm (the artifact carries the
+  score distributions; the F1 is the round's recorded gap).

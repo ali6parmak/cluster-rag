@@ -350,6 +350,26 @@ def test_upr_analysis_defaults_and_validation() -> None:
         UprAnalysisConfig.model_validate({"nope": 1})
 
 
+def test_the_corpus_map_fit_mask_defaults_off_and_validates() -> None:
+    """The fit-side mask (CS-42): off by default, and its own config-time checks."""
+    from cluster_rag.config import UprCorpusMapFeatureConfig, UprFitMaskConfig
+
+    feature = UprCorpusMapFeatureConfig()
+    assert feature.fit_mask.enabled is False
+    assert feature.fit_mask.n_labels == 8
+    assert feature.fit_mask.seed == 42
+
+    enabled = UprCorpusMapFeatureConfig.model_validate(
+        {"enabled": True, "fit_mask": {"enabled": True, "n_labels": 8, "seed": 42}}
+    )
+    assert enabled.fit_mask.enabled is True
+
+    with pytest.raises(ValueError, match="greater than or equal to 1"):
+        UprFitMaskConfig(n_labels=0)
+    with pytest.raises(ValueError, match="Extra inputs"):
+        UprFitMaskConfig.model_validate({"nope": 1})
+
+
 def test_upr_arm_families_are_validated() -> None:
     """The UPR arm families: the checks that fail before the run starts."""
     from cluster_rag.config import UprArmConfig, UprWeightGridConfig

@@ -1939,6 +1939,40 @@ class UprDecisionFeatureConfig(BaseModel):
         return self
 
 
+class UprFitMaskConfig(BaseModel):
+    """The **fit-side mask** on the corpus map's tables (the track's CS-42).
+
+    During the pack's **fit pass only**, the map's tables of a fixed,
+    seed-chosen set of **seen** labels are emptied, so their gold rows carry the
+    floor in the dictionary's column exactly like the held-out labels' rows do.
+    The combiner then cannot learn "the channel is at the floor ⇒ the label is
+    out of the question" — the coincidence CS-37 measured on the fit side.
+
+    The **evaluation** side is untouched (the val split is scored with the full
+    train map): the mask is a fit-side instrument, a "pretend unseen" control.
+
+    The masked labels are never listed by hand: they are drawn from the train
+    map's own label list (the labels with a non-empty table), so no val
+    statistic and no per-run choice can pick them. The seed is separate from
+    ``upr_analysis.learned.seed``, so the draw is pinned independently of the
+    fold split and of the floors' permutations.
+
+    Attributes:
+        enabled: Whether the run fits the masked arm at all. The default is
+            ``False``, so every earlier run's artifact keeps its exact content.
+        n_labels: How many seen labels are masked (at least 1; the train map
+            must hold that many labels with a table).
+        seed: The draw's seed. The candidates are sorted by name before the
+            draw, so it does not depend on the label space's order.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    n_labels: int = Field(default=8, ge=1)
+    seed: int = 42
+
+
 class UprCorpusMapFeatureConfig(BaseModel):
     """The **corpus map**'s per-cell score as a **pack feature** (the track's CS-32).
 
@@ -1978,6 +2012,12 @@ class UprCorpusMapFeatureConfig(BaseModel):
             so every earlier run's artifact keeps its exact content. The
             encoding is ``NaN``, which the gradient-boosted combiner takes
             natively.
+        fit_mask: The **fit-side mask** (the track's CS-42): the map's tables
+            of a fixed, seed-chosen set of **seen** labels are emptied during
+            the pack's fit pass only, so the combiner sees "positive with the
+            channel at the floor" and cannot read the floor as "impossible".
+            The evaluation side is untouched. The default is off, so every
+            earlier run's artifact keeps its exact content.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1987,6 +2027,7 @@ class UprCorpusMapFeatureConfig(BaseModel):
     folds: int = Field(default=5, ge=2)
     label_blind: bool = True
     abstain: bool = False
+    fit_mask: UprFitMaskConfig = Field(default_factory=UprFitMaskConfig)
 
 
 class UprLabelLexiconConfig(BaseModel):

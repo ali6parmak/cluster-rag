@@ -577,3 +577,89 @@ def test_the_abstention_arm_is_absent_by_default() -> None:
     assert "learned_abstain" not in result.scores
     assert "learned_abstain_label_blind" not in result.scores
     assert "corpus_map" not in result.meta
+
+
+class _RecordingCombiner:
+    """A combiner that records the matrices it was fitted on and asked to score."""
+
+    def __init__(self) -> None:
+        self.fit_matrix: np.ndarray | None = None
+        self.score_matrix: np.ndarray | None = None
+
+    def fit(self, features, labels, sample_weight=None) -> _RecordingCombiner:
+        self.fit_matrix = np.asarray(features, dtype=np.float64)
+        return self
+
+    def score(self, features) -> np.ndarray:
+        self.score_matrix = np.asarray(features, dtype=np.float64)
+        return self.score_matrix[:, 0] * 0.0 + 0.5
+
+
+def test_the_fit_mask_arm_is_fitted_with_the_masked_column() -> None:
+    """CS-42: the masked column is the FIT side's; the evaluated split keeps the real one."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    train_gold = np.asarray([[True, False], [False, True]])
+    eval_gold = np.asarray([[True, False]])
+    n_labels = len(LABELS)
+    real_train = np.zeros((2, n_labels), dtype=np.float64)
+    real_train[:, 0] = 1.0
+    real_train[:, 1] = 0.5
+    # the masked column: the masked label carries the floor, the others do not move
+    masked_train = real_train.copy()
+    masked_train[:, 0] = -1.0
+    real_eval = real_train[:1]
+    fitted: list[_RecordingCombiner] = []
+
+    def factory() -> _RecordingCombiner:
+        combiner = _RecordingCombiner()
+        fitted.append(combiner)
+        return combiner
+
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=train_gold,
+        eval_texts=["eval one"],
+        eval_gold=eval_gold,
+        extractor=extractor,
+        combiner_factory=factory,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=real_train,
+        corpus_map_eval=real_eval,
+        corpus_map_train_fit_mask=masked_train,
+    )
+    assert "learned_fit_mask" in result.scores
+    assert result.scores["learned_fit_mask"].shape == (1, n_labels)
+    assert result.meta["corpus_map"]["fit_mask"]["arm"] == "learned_fit_mask"
+    column = list(extractor.feature_names).index("cmap_score")
+    # the fits: the real arm first, then the masked arm
+    real_fit, masked_fit = fitted[0], fitted[1]
+    assert np.allclose(real_fit.fit_matrix[:, column], real_train.reshape(-1))
+    assert np.allclose(masked_fit.fit_matrix[:, column], masked_train.reshape(-1))
+    # the evaluated split is scored with the UNCHANGED column in both arms
+    assert np.allclose(real_fit.score_matrix[:, column], real_eval.reshape(-1))
+    assert np.allclose(masked_fit.score_matrix[:, column], real_eval.reshape(-1))
+
+
+def test_the_fit_mask_arm_is_absent_by_default() -> None:
+    """The mask's arm only exists when the knob is on (every earlier artifact keeps)."""
+    extractor = _extractor(groups=("embedding", "corpus_map"), corpus_map_available=True)
+    n_labels = len(LABELS)
+    scores = np.zeros((2, n_labels), dtype=np.float64)
+    result = score_upr_learned_arms(
+        train_texts=["train one", "train two"],
+        train_gold=np.asarray([[True, False], [False, True]]),
+        eval_texts=["eval one"],
+        eval_gold=np.asarray([[True, False]]),
+        extractor=extractor,
+        combiner_factory=_FixedCombiner,
+        decision=DECISION,
+        ks=(1,),
+        shortlist_ms=(1,),
+        permutation_resamples=0,
+        corpus_map_train=scores,
+        corpus_map_eval=scores[:1],
+    )
+    assert "learned_fit_mask" not in result.scores

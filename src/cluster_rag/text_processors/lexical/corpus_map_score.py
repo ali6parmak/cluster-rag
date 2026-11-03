@@ -48,6 +48,13 @@ not the classifier's: the harness rejects non-finite scores, so the
 cross-fit too: a label with no example in a fold's training texts abstains in
 that fold (the fold's map really does not know it).
 
+**CS-42 adds the fit-side mask**: a cross-fit call may **empty the tables** of a
+fixed set of **seen** labels (``mask_labels``) — the masked labels' cells carry
+the floor, exactly like a label with no train example, while their gold rows
+stay positive. The mask is the **fit side's** instrument: it breaks the
+coincidence CS-37 measured ("the channel is silent" ⇔ "the label is never
+positive") without touching the evaluation side, which keeps the full map.
+
 **The unit is the map's own**: a **distinct** content word, tokenized exactly
 as the map was built (``content_tokens`` — the lower-cased alphanumeric tokens
 without the stopwords). A word repeated in the text counts once, because the
@@ -209,6 +216,46 @@ def _allowed_pos_classes(restrict: Sequence[str] | None) -> frozenset[str] | Non
     return frozenset(names)
 
 
+def fit_mask_keep(
+    corpus_map: CorpusMap,
+    mask_labels: Sequence[str],
+) -> dict[str, frozenset[str]]:
+    """The **fit-side mask**'s keep mapping (CS-42): the named tables emptied.
+
+    The mask reuses the stability filter's ``keep`` channel: the masked labels
+    map to the empty set, so every one of their pairs is dropped and their
+    cells carry the row's floor — exactly like a label with no train example —
+    while the labels' gold rows are untouched (the caller keeps them). Every
+    other label keeps every word of **this** map's table, so the mask is the
+    only thing the mapping changes.
+
+    Args:
+        corpus_map: The map the fold's cells are scored against (on the fit
+            side, that is the fold's own map, never the full train map).
+        mask_labels: The labels whose tables are emptied — the seen labels a
+            run has decided to mask (CS-42's seed-chosen set).
+
+    Returns:
+        The label -> the surviving words mapping, with an empty set for every
+        masked label and for every label that already had no table.
+
+    Raises:
+        ValueError: On a label that is not in the map's label space.
+    """
+    masked = frozenset(mask_labels)
+    unknown = sorted(label for label in masked if label not in corpus_map.labels)
+    if unknown:
+        raise ValueError(
+            f"the fit-side mask names label(s) outside the map's label space: {unknown}"
+        )
+    survivors: dict[str, set[str]] = {}
+    for word, rows in corpus_map.per_word.items():
+        for pair in rows:
+            if pair.label not in masked:
+                survivors.setdefault(pair.label, set()).add(word)
+    return {label: frozenset(survivors.get(label, ())) for label in corpus_map.labels}
+
+
 def score_cells(
     texts: Sequence[str],
     corpus_map: CorpusMap,
@@ -329,6 +376,7 @@ def cross_fit_scores(
     stability_min: float | None = None,
     stability_resamples: int = 500,
     abstain: bool = False,
+    mask_labels: Sequence[str] | None = None,
     units: Callable[[str], Iterable[str]] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> dict[str, np.ndarray]:
@@ -369,6 +417,12 @@ def cross_fit_scores(
             fold's map carries ``NaN`` instead of the floor. The abstention
             rides into the cross-fit: a label with no example in a fold's
             training texts abstains in that fold.
+        mask_labels: The **fit-side mask** (CS-42): the labels whose tables are
+            emptied in **every fold's** map, so their cells carry the floor
+            while their gold rows stay positive. The mask is the fit side's
+            instrument only — the evaluation side keeps the full map. It
+            composes with ``keep`` / ``stability_min``: the mask empties the
+            named labels on top of whatever filter the fold already has.
         units: The map's **unit** (the default is the track's own content-word
             tokenizer; the **phrase table** (CS-39) passes the bigram
             tokenizer instead). It rides into the cross-fit: each fold's map is
@@ -381,8 +435,8 @@ def cross_fit_scores(
 
     Raises:
         ValueError: On fewer than two folds, on an unknown scoring function,
-            on an unknown class, or when the texts and the label sets have
-            different lengths.
+            on an unknown class, on a masked label outside the label space, or
+            when the texts and the label sets have different lengths.
     """
     if len(texts) != len(label_sets):
         raise ValueError(f"the corpus has {len(texts)} texts and {len(label_sets)} label sets")
@@ -393,6 +447,11 @@ def cross_fit_scores(
         raise ValueError(f"Unknown scoring function(s) {unknown}; expected {SCORING_FUNCTIONS}")
     _allowed_classes(restrict)
     _allowed_pos_classes(restrict_pos)
+    unknown_mask = [label for label in (mask_labels or ()) if label not in labels]
+    if unknown_mask:
+        raise ValueError(
+            f"the fit-side mask names label(s) outside the label space: {unknown_mask}"
+        )
     n_texts = len(texts)
     order = np.random.default_rng(seed).permutation(n_texts)
     chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
@@ -422,6 +481,17 @@ def cross_fit_scores(
                 stopwords=stopwords,
             )
             fold_keep = report.label_survivors(stability_min)
+        if mask_labels is not None:
+            # the fit-side mask (CS-42): the named labels' tables are emptied
+            # in THIS fold's own map, on top of whatever filter the fold has.
+            if fold_keep is None:
+                fold_keep = fit_mask_keep(corpus_map, mask_labels)
+            else:
+                masked = frozenset(mask_labels)
+                fold_keep = {
+                    label: frozenset() if label in masked else words
+                    for label, words in fold_keep.items()
+                }
         fold_texts = [texts[index] for index in chunk]
         for name in scorings:
             out[name][chunk] = score_cells(

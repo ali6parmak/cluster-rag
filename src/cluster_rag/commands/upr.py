@@ -3233,6 +3233,7 @@ def _upr_learned_arms(
     corpus_map_train_blind = corpus_map_eval_blind = None
     corpus_map_train_abstain = corpus_map_eval_abstain = None
     corpus_map_train_abstain_blind = corpus_map_eval_abstain_blind = None
+    corpus_map_train_fit_mask = None
     control_extractor = None
     if learned.corpus_map_feature.enabled:
         corpus_map_block_data = _upr_corpus_map_feature(config, setup, view, learned)
@@ -3244,6 +3245,7 @@ def _upr_learned_arms(
         corpus_map_eval_abstain = corpus_map_block_data["eval_abstain"]
         corpus_map_train_abstain_blind = corpus_map_block_data["train_abstain_blind"]
         corpus_map_eval_abstain_blind = corpus_map_block_data["eval_abstain_blind"]
+        corpus_map_train_fit_mask = corpus_map_block_data["train_fit_mask"]
         control_groups = tuple(group for group in learned.groups if group != "corpus_map")
         control_extractor = _pack(
             labels,
@@ -3346,6 +3348,7 @@ def _upr_learned_arms(
         corpus_map_eval_abstain=corpus_map_eval_abstain,
         corpus_map_train_abstain_blind=corpus_map_train_abstain_blind,
         corpus_map_eval_abstain_blind=corpus_map_eval_abstain_blind,
+        corpus_map_train_fit_mask=corpus_map_train_fit_mask,
         control_extractor=control_extractor,
         train_features=fit_cubes.get("train"),
         control_train_features=fit_cubes.get("control"),
@@ -3371,10 +3374,15 @@ def _upr_learned_arms(
             },
             chunker=chunker.slug,
             aggregation=None,
-            # The per-label distributions of the main arm only: they say which
-            # labels the arm finds (the unseen bucket's question), and the
-            # floors' per-label view would be noise.
-            per_label_distributions=name == result.meta["arm"],
+            # The per-label distributions of the main arm and of the fit-side
+            # mask's arm (CS-42): they say which labels each arm finds (the
+            # unseen bucket's question), and the floors' per-label view would
+            # be noise. The mask arm's block only exists when the knob is on,
+            # so every earlier run's artifact keeps its exact content.
+            per_label_distributions=(
+                name == result.meta["arm"]
+                or (result.meta.get("corpus_map", {}).get("fit_mask", {}).get("arm") == name)
+            ),
             paired=_upr_paired(config, view, scores, setup.scores),
         )
     meta = dict(result.meta)
@@ -3418,6 +3426,7 @@ def _upr_learned_arms(
         blind_arm = f"{arm}_label_blind"
         abstain_arm = f"{arm}_abstain"
         abstain_blind_arm = f"{arm}_abstain_label_blind"
+        fit_mask_arm = f"{arm}_fit_mask"
         real_scores = np.asarray(result.scores[arm], dtype=np.float64)
         corpus_map_meta: dict[str, Any] = {
             **dict(result.meta.get("corpus_map") or {}),
@@ -3472,6 +3481,26 @@ def _upr_learned_arms(
                     result.scores[abstain_blind_arm],
                     result.scores[control_arm],
                 )
+        if fit_mask_arm in result.scores:
+            # -- the fit-side mask (the track's CS-42) --
+            # The mask's own effect: the masked arm minus the real arm on the
+            # unseen bucket (the eight held-out labels) and on the seen view
+            # (the masked labels' own val numbers are the price of the mask).
+            corpus_map_meta["paired_fit_mask_vs_real"] = _upr_paired(
+                config, view, result.scores[fit_mask_arm], real_scores
+            )
+            corpus_map_meta["per_bucket_fit_mask_vs_real"] = _upr_paired_by_bucket(
+                config, view, result.scores[fit_mask_arm], real_scores
+            )
+            if control_arm in result.scores:
+                # What the masked arm buys over the plain pack: the registered
+                # conditions (i) the unseen bucket and (ii) the seen view.
+                corpus_map_meta["paired_fit_mask_vs_control"] = _upr_paired(
+                    config, view, result.scores[fit_mask_arm], result.scores[control_arm]
+                )
+                corpus_map_meta["per_bucket_fit_mask_vs_control"] = _upr_paired_by_bucket(
+                    config, view, result.scores[fit_mask_arm], result.scores[control_arm]
+                )
         meta["corpus_map"] = corpus_map_meta
     backoff_meta = _upr_backoff_arms(config, setup, view, learned, result, arms, labels)
     if backoff_meta:
@@ -3502,11 +3531,17 @@ def _upr_corpus_map_feature(
     ("no evidence") instead of the floor ("impossible"). It is a **separate
     matrix** (the main arm keeps the floor, so CS-32's numbers do not move).
 
+    The **fit-side mask** (the track's CS-42) rides along too: a fixed,
+    seed-chosen set of **seen** labels has its table emptied in the fit side's
+    cross-fit, so their cells carry the floor while their gold rows stay
+    positive. It is a **separate matrix** too, and it never touches the
+    evaluated split — the mask is a fit-side instrument.
+
     Returns:
-        The block: the four matrices (``train``/``eval`` for the real map and
-        for the label-blind one), the two abstaining matrices (when the knob is
-        on) and the provenance (the folds, the seed, the scoring function and
-        the map's own shape).
+        The block: the matrices (``train``/``eval`` for the real map and for the
+        label-blind one), the abstaining matrices (when the knob is on), the
+        masked fit-side matrix (when that knob is on) and the provenance (the
+        folds, the seed, the scoring function and the map's own shape).
     """
     feature = learned.corpus_map_feature
     train_texts = [record.text for record in setup.train_records]
@@ -3576,6 +3611,54 @@ def _upr_corpus_map_feature(
             abstain=True,
         )[feature.scoring]
 
+    # The fit-side mask (the track's CS-42): a fixed, seed-chosen set of SEEN
+    # labels has its table emptied in the fit side's cross-fit only -- the
+    # combiner then sees "positive with the channel at the floor" and cannot
+    # read the floor as "impossible". The evaluated split is untouched: it keeps
+    # the full train map's matrix (``eval_scores``).
+    fit_mask_train = None
+    fit_mask_meta: dict[str, Any] | None = None
+    if feature.fit_mask.enabled:
+        candidates = sorted(label for label in labels if corpus_map.label_counts.get(label))
+        if feature.fit_mask.n_labels > len(candidates):
+            raise ValueError(
+                f"the fit-side mask asks for {feature.fit_mask.n_labels} labels, but the "
+                f"train map has only {len(candidates)} labels with a table"
+            )
+        draw = np.random.default_rng(feature.fit_mask.seed).choice(
+            len(candidates), feature.fit_mask.n_labels, replace=False
+        )
+        masked = sorted(candidates[int(index)] for index in draw)
+        fit_mask_train = cross_fit_scores(
+            train_texts,
+            train_label_sets,
+            labels,
+            scorings=(feature.scoring,),
+            folds=feature.folds,
+            seed=seed,
+            mask_labels=masked,
+        )[feature.scoring]
+        fit_mask_meta = {
+            "enabled": True,
+            "arm": f"learned_{learned.combiner.name}_fit_mask",
+            "n_labels": int(feature.fit_mask.n_labels),
+            "seed": int(feature.fit_mask.seed),
+            "n_candidates": len(candidates),
+            "rule": (
+                "the train map's labels with a non-empty table, sorted by name; "
+                "np.random.default_rng(seed).choice(len(candidates), n_labels, "
+                "replace=False). No val number and no per-run choice enters the draw"
+            ),
+            "labels": masked,
+            "train_counts": {label: int(corpus_map.label_counts.get(label, 0)) for label in masked},
+            "note": (
+                "the mask empties the masked labels' tables in the FIT side's "
+                "cross-fit only (each fold's own map), so their fit cells carry the "
+                "floor while their gold rows stay positive; the evaluated split is "
+                "scored with the full train map, unchanged"
+            ),
+        }
+
     meta: dict[str, Any] = {
         "scoring": feature.scoring,
         "folds": int(feature.folds),
@@ -3623,6 +3706,11 @@ def _upr_corpus_map_feature(
                 "texts abstains in that fold"
             ),
         }
+    if fit_mask_meta is not None:
+        # the fit-side mask's provenance (the track's CS-42): the key is absent
+        # when the knob is off, so the earlier runs' artifacts keep their exact
+        # content.
+        meta["fit_mask"] = fit_mask_meta
     return {
         "train": train_scores,
         "eval": eval_scores,
@@ -3632,6 +3720,7 @@ def _upr_corpus_map_feature(
         "eval_abstain": abstain_eval,
         "train_abstain_blind": abstain_train_blind,
         "eval_abstain_blind": abstain_eval_blind,
+        "train_fit_mask": fit_mask_train,
         "meta": meta,
     }
 

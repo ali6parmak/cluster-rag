@@ -226,6 +226,7 @@ def score_upr_learned_arms(
     corpus_map_eval_abstain: np.ndarray | None = None,
     corpus_map_train_abstain_blind: np.ndarray | None = None,
     corpus_map_eval_abstain_blind: np.ndarray | None = None,
+    corpus_map_train_fit_mask: np.ndarray | None = None,
     control_extractor: UprFeatureExtractor | None = None,
     train_features: np.ndarray | None = None,
     control_train_features: np.ndarray | None = None,
@@ -287,6 +288,13 @@ def score_upr_learned_arms(
             **abstaining** fit-side score matrix.
         corpus_map_eval_abstain_blind: The label-blind counterpart's
             abstaining evaluated-split score matrix.
+        corpus_map_train_fit_mask: The **fit-side mask**'s fit-side score
+            matrix (the track's CS-42: a fixed, seed-chosen set of **seen**
+            labels has its table emptied in the cross-fit, so their cells carry
+            the floor while their gold rows stay positive). The **evaluated**
+            split is scored with the **unchanged** column
+            (``corpus_map_eval``): the mask is a fit-side instrument.
+            ``None`` (the default) computes no masked arm.
         control_extractor: The **control**'s extractor (the same pack without
             the ``corpus_map`` group). Fitted and scored in the same run, so
             the difference against the real arm is paired by construction.
@@ -440,6 +448,35 @@ def score_upr_learned_arms(
                 "tables too, so this arm gets the same recovery of the held-out "
                 "labels -- the recovery is the abstention's doing, not a "
                 "label-driven gain"
+            ),
+        }
+
+    # -- the fit-side mask (the track's CS-42) --
+    # The same pack, but the corpus map's column is built from a map whose
+    # tables were emptied for a fixed set of SEEN labels on the FIT SIDE ONLY:
+    # their gold rows carry the floor, so the combiner cannot learn that the
+    # floor means "impossible". The evaluated split keeps the real column.
+    if corpus_map_train_fit_mask is not None and corpus_map_eval is not None:
+        fit_mask_train = extractor.extract(
+            train_texts, decision_train, rerank_train, corpus_map_train_fit_mask
+        )
+        fit_mask_eval = extractor.extract(eval_texts, decision_eval, rerank_eval, corpus_map_eval)
+        fit_mask_rows, fit_mask_labels = _fit_rows(fit_mask_train, train_gold)
+        fit_mask_combiner = combiner_factory().fit(fit_mask_rows, fit_mask_labels, weights)
+        fit_mask_scores = np.asarray(
+            fit_mask_combiner.score(fit_mask_eval.reshape(-1, fit_mask_eval.shape[-1])),
+            dtype=np.float64,
+        ).reshape(fit_mask_eval.shape[0], fit_mask_eval.shape[1])
+        scores[f"{arm_name}_fit_mask"] = fit_mask_scores
+        corpus_map_meta["fit_mask"] = {
+            "arm": f"{arm_name}_fit_mask",
+            "note": (
+                "the same pack, but the corpus map's tables were emptied on the "
+                "FIT SIDE for a fixed, seed-chosen set of SEEN labels (CS-42): "
+                "their fit cells carry the floor while their gold rows stay "
+                "positive, so the combiner cannot read the floor as 'the label is "
+                "out of the question'. The evaluated split is scored with the "
+                "unchanged column"
             ),
         }
 

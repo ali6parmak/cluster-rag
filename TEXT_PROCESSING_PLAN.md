@@ -1501,108 +1501,21 @@ lexicon) → the bonus CS-46.
    carries the paired CI and the label-blind control (the track's own yardstick)
    beside it.
 
-- [ ] **CS-42 — the fit-side mask: teach the pack that the floor is not
-  "impossible".** The dictionary's tables are emptied for a fixed, seed-chosen
-  set of **seen** labels during the pack's fit pass only; their gold rows are
-  kept, and the evaluation is unchanged.
-
-  **The mechanism.** With the `corpus_map` group in the pack, the learned
-  combiner learns "the map's floor ⇒ this label is out of the question", because
-  on train every floored cell belongs to a label that is never positive. The
-  mask breaks that coincidence: during the fit pass, the tables of **8 randomly
-  chosen seen labels** are emptied (`keep[label] = ∅`), so their fit cells carry
-  the floor exactly like the eight held-out labels' cells, while their gold rows
-  stay positive. The combiner then sees "positive with the channel at the floor"
-  and cannot use the floor as a proxy for impossibility. The evaluation side is
-  untouched: the val split is scored with the full train map, exactly as CS-32
-  scores it. The mask is a *fit-side instrument* — it also gives the track a
-  "pretend unseen" control it does not have today.
-
-  **The selection rule, fixed before the call.** Candidates are the **train**
-  labels whose map table is non-empty (60 of the 68); sorted by name;
-  `np.random.default_rng(fit_mask.seed).choice(len(candidates), fit_mask.n_labels,
-  replace=False)` with `n_labels = 8`, `seed = 42`. The eight held-out labels are
-  ineligible by construction (no table), and no val number enters the draw. The
-  chosen names and their train counts are recorded in the artifact. Uniform,
-  unstratified: the draw may land on any frequency bucket, and that composition
-  is recorded, not corrected.
-
-  **Where the code lives.** The scorer
-  (`text_processors/lexical/corpus_map_score.py`): `cross_fit_scores` gains
-  `mask_labels`, which builds each fold's `keep` from **that fold's** map and
-  empties the masked labels' entries; `score_cells` is unchanged (it already
-  implements `keep`). The command
-  (`commands/upr.py::_upr_corpus_map_feature`) selects the labels, computes the
-  masked fit matrix and records the provenance; the driver
-  (`upr_learning.py::score_upr_learned_arms`) fits one more arm with the masked
-  fit column and the **unchanged** eval column. The config key is
-  `upr_analysis.learned.corpus_map_feature.fit_mask` (`enabled`, `n_labels`,
-  `seed`; **off** by default).
-
-  **The guard.** The fit side's map is cross-fit over 5 folds (CS-32's rule), and
-  the mask rides into it: each fold's mask empties the masked labels' tables in
-  that fold's own map. The eval matrix is the real arm's own eval matrix,
-  byte-identical by construction (a test asserts it).
-
-  **The run.** One: `upr-analyze-cmap-fitmask` — the `analyze-upr` command with
-  CS-32's configuration (groups `embedding + lexical + chunk_profile +
-  corpus_map`, `histgb`, atoms chunker, `chunk_profile`'s 3 units, `top_k` k=2,
-  val split) plus the knob. Sweep
-  `experiments_text_processing/upr_learned_cmap_fitmask_sweep.py`, label
-  `upr_learned_cmap_fitmask`; artifact
-  `results/upr-analyze-cmap-fitmask/analysis.json`. **Four arms in the one
-  artifact**: `learned_histgb` (the real map — CS-32's arm),
-  `learned_histgb_control` (the pack without the group),
-  `learned_histgb_label_blind` (the blind map) and `learned_histgb_fit_mask`
-  (**the new arm**). The pack's three floors ride along unchanged.
-
-  **The shape of the number.** The headline is one number from the artifact: the
-  fit-mask arm's **unseen-bucket micro-F1** (`per_bucket.unseen.f1.micro_f1`).
-  It is read beside the same run's real arm (0.0000), control (0.4469) and blind
-  arm (0.0066). The paired differences are text-resampled (2,000 resamples, seed
-  42, `tools/compare_upr_arms.py`'s own procedure): fit-mask − real on the unseen
-  bucket (the mask's own effect), fit-mask − control on the unseen bucket, on the
-  **seen view** (head+torso+tail pooled) and pooled, and blind − control on the
-  seen view (CS-32's yardstick). Secondary, reported without a bar: the eight
-  masked labels' own val numbers (the price of the mask), the per-label lines for
-  the unseen bucket, and the shortlist R@50.
-
-  **The falsification, registered in advance.**
-  1. **The recovery test.** The fit-mask arm's unseen micro-F1 must be **at least
-     0.45**, with the dictionary column still in the pack. The bar is the
-     control's own number (0.4469) rounded up: the mask must give the eight back
-     to at least the level the pack has *without* the column, not merely soften
-     the collapse. If the eight still collapse, the silence proxy is not the
-     binding cause and P1 is a null.
-  2. **The no-free-lunch test.** The seen buckets must keep their gain: the
-     paired **seen-view** difference (fit-mask − control) must exclude zero, its
-     point estimate must stay at or above **+0.10** (the unmasked arm's
-     seen-view number is **+0.1319 [+0.1087, +0.1554]** — three quarters of it),
-     and the fit-mask arm's **pooled** micro-F1 must stay at or above **0.5502**
-     (CS-32's pooled number). Without the seen-view floor, "the combiner simply
-     stops trusting the column" would pass for the wrong reason.
-  3. **The label-blind control.** The blind arm's Δ against the control on the
-     seen view must still buy nothing (CS-32: −0.0509 [−0.0678, −0.0340]), and
-     its unseen bucket must stay collapsed.
-
-  **The cost.** One run, about 2–3 minutes (cache hits, no model calls); the
-  change set about half a day including tests and docs; **no new dependency**.
-
-  **What is NOT registered.** The per-cell abstention (CS-37's deferred
-  variant); mask sizes other than 8 and seeds other than 42; choosing the masked
-  labels by any frequency or val statistic; masking the eval side; the
-  `corpus_map` predictor's path; the mask combined with the description channel
-  (CS-43's question); a second draw of the mask; the fit-mask arm's label-blind
-  counterpart (offered in review as an extra control, not taken).
-
-  **The exit criteria.** The artifact holds the four arms, the per-bucket
-  numbers and the mask's provenance (the eight names, their train counts, the
-  rule, the seed); the table row is auto-appended; the log section §CS-42 reads
-  the numbers out against the three conditions; the checkbox is ticked; the block
-  is moved verbatim to the archive; the gate is green (ruff, pytest,
-  `tools/verify_upr_baseline.py upr-analyze-cmap-fitmask`); and
-  `upr-analyze-cmap` reproduces its artifact field for field (the knob is off by
-  default); one commit.
+- **CS-42** (the fit-side mask: the dictionary's floor stops meaning
+  "impossible") → executed 2026-11-03 → the archive's §7.6 (the fit-side mask)
+  and the track log's §CS-42. **The mask is a lever, but not the whole lever**:
+  breaking the "floor ⇒ never positive" coincidence on the train side lifts the
+  eight held-out labels from **0.0000** to **0.2947** (five of the eight carry
+  real scores again), and it costs the seen buckets nothing — they **gain**
+  (the seen view **+0.1478 [+0.1236, +0.1710]** against the control; the pooled
+  number **0.5874**, the track's second-best pack number, above the champion's
+  0.5479) — but the registered bar was **0.45**, so the recovery condition
+  **fires**: the silence proxy is **part** of the cause, not all of it. The
+  three that stay down are the two catch-alls (*General*, *Other*) and the broad
+  *ESC rights - general* — the labels whose meaning is not in the texts' words.
+  The label-blind control buys nothing (the seen view −0.0032 [−0.0181,
+  +0.0119]; the unseen bucket 0.0066). The knob is off by default; CS-32's and
+  CS-37's artifacts keep their exact content.
 
 - [ ] **CS-43 — the dictionary + the catalog description in one pack.** Add
   CS-11's catalog channels to the same pack that carries the dictionary column.

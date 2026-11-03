@@ -20,6 +20,7 @@ from cluster_rag.text_processors.lexical.corpus_map_score import (
     FLOOR_GAP,
     SCORING_FUNCTIONS,
     cross_fit_scores,
+    fit_mask_keep,
     score_cells,
 )
 
@@ -195,3 +196,56 @@ def test_unsupported_and_invalid_parameters_fail_before_the_fit() -> None:
         build_predictor("corpus_map", {"fit_side_k": 0}, _context(), seed=0)
     with pytest.raises(ValueError, match="folds"):
         build_predictor("corpus_map", {"folds": 1}, _context(), seed=0)
+
+
+def test_the_fit_mask_empties_the_named_table_and_leaves_the_others_alone() -> None:
+    """CS-42: the masked label carries the floor; every other column is untouched."""
+    records = _records()
+    texts = [record.text for record in records]
+    label_sets = [record.labels for record in records]
+    plain = cross_fit_scores(texts, label_sets, LABELS, folds=2, seed=42)
+    masked = cross_fit_scores(texts, label_sets, LABELS, folds=2, seed=42, mask_labels=["A"])
+    counts_plain = plain["support_count"]
+    counts_masked = masked["support_count"]
+    # the masked label's cells are the floor -- the same floor the label with
+    # no table carries, so the two empty columns are indistinguishable
+    assert np.array_equal(counts_masked[:, 0], counts_masked[:, 2])
+    # masking only removes evidence: the masked label never gains
+    assert (counts_masked[:, 0] <= counts_plain[:, 0]).all()
+    # ... and at least one row loses the evidence it had (A has a table in at
+    # least one fold's map, and its texts carry A's words)
+    assert (counts_masked[:, 0] < counts_plain[:, 0]).any()
+    # B's column is not the mask's business: the same fold maps, the same words
+    assert np.array_equal(counts_masked[:, 1], counts_plain[:, 1])
+
+
+def test_the_fit_mask_on_a_tableless_label_is_a_no_op() -> None:
+    """Masking a label that already has no table changes nothing."""
+    records = _records()
+    texts = [record.text for record in records]
+    label_sets = [record.labels for record in records]
+    plain = cross_fit_scores(texts, label_sets, LABELS, folds=2, seed=42)
+    masked = cross_fit_scores(texts, label_sets, LABELS, folds=2, seed=42, mask_labels=["Z"])
+    for arm in SCORING_FUNCTIONS:
+        assert np.array_equal(masked[arm], plain[arm])
+
+
+def test_the_fit_mask_names_a_label_outside_the_space() -> None:
+    """A typo in the masked label fails before anything is computed."""
+    records = _records()
+    texts = [record.text for record in records]
+    label_sets = [record.labels for record in records]
+    with pytest.raises(ValueError, match="outside the label space"):
+        cross_fit_scores(texts, label_sets, LABELS, folds=2, mask_labels=["Q"])
+
+
+def test_fit_mask_keep_empty_the_masked_tables_only() -> None:
+    """The keep mapping: the masked label drops every pair, the rest keeps its own."""
+    corpus_map = _map()
+    keep = fit_mask_keep(corpus_map, ["A"])
+    assert keep["A"] == frozenset()
+    assert keep["Z"] == frozenset()
+    assert keep["B"] == frozenset(pair.word for pair in corpus_map.per_label["B"])
+    # the unmasked map's own tables are recovered exactly
+    unmasked = fit_mask_keep(corpus_map, [])
+    assert unmasked["A"] == frozenset(pair.word for pair in corpus_map.per_label["A"])
