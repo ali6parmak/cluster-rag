@@ -98,6 +98,7 @@ research record and are **not** indexed here.
 | [CS-43 — the dictionary and the catalog description](#cs-43--the-dictionary-and-the-catalog-description-the-description-cannot-outvote-the-floor-2026-11-03) | two `upr-analyze-cmap-catalog{,-desc}` runs (four arms each) | **the dictionary overrules the description**: with the description in the pack the eight still collapse (**0.0066** / **0.0000** against the same runs' controls' **0.4824** / **0.4690**), while the pooled numbers pass (**0.5608** / **0.5532**, both >= 0.55) — the two channels are complementary on the seen labels and not on the eight; the registered "unseen at 0.00" branch fires (cell 2 exactly; cell 1 at 0.7 % of its control) | `results/upr-analyze-cmap-catalog/analysis.json` · `results/upr-analyze-cmap-catalog-desc/analysis.json` |
 | [CS-44 — the borrowed words](#cs-44--the-borrowed-words-the-partners-vocabulary-is-not-the-thin-labels-2026-11-03) | one `upr-analyze-cmap-borrow` run (five arms + the pack's floors) | **not licensed**: lending the partner's words lifts the thin labels' scores (their predicted counts **69 → 118**; *CP rights - general* genuinely gains **0.0000 → 0.2308**) but on the registered cells view the five **fall** (**−0.0707 [−0.1356, −0.0035]**, 2 of 5 signs positive), the partner set's lower bound crosses the −0.02 floor (−0.0270), and the pair becomes confusable exactly as registered (co-predictions 0–5 → 6–21) — the thin labels' evidence is *shared* evidence, and sharing it more does not make it theirs | `results/upr-analyze-cmap-borrow/analysis.json` |
 | [CS-45 — the distinctive lexicon](#cs-45--the-distinctive-lexicon-the-register-was-the-signal-2026-11-03) | four runs (the filtered label artifact + its guard, the feature half, the query half) + the CS-35 re-run as the guard | **the bar is not met again — and the reading is that the register WAS the signal**: the filter halved the channel's gain over the control (seen **+0.0272** against CS-35's +0.0507; **+0.0339** against +0.0493) and took the column's AUC down to the description's own level (**0.7073** against CS-35's 0.8109 and the description's 0.7067); the head-to-head's seen view includes zero on both halves (0 of 3 buckets on the feature half; only the torso on the query half, with the head falling), so the channel does not become a catalog channel | `results/upr-analyze-learned-lexicon-distinctive{,-feat}/analysis.json` |
+| [CS-46 — the kNN union](#cs-46--the-knn-union-the-two-retrievers-see-the-same-labels-2026-11-03) | two `upr-eval-knn-union{,-blind}-val` runs (the **main** UPR table) | **the two retrievers see the same labels**: the per-row z-max union's recall@10 is **0.6943** against the decision model's union's 0.9120 (the breadth test fails by 0.22) and its recall@50 **0.9548** is *below* the embedding kNN's own 0.9576 — the union IS the embedding arm (+0.001 at 10, −0.003 at 50); the blind floor is 0.2313 / 0.8029, so the label-driven breadth is +0.46 / +0.15. The shortlist gap is the **fusion's ordering at depth 50** (its recall@10 is the best of all five), not the candidate sets' breadth: **the BM25 checkbox stays closed** | `results/upr-eval-knn-union-val/metrics.json` |
 
 ## Change sets
 
@@ -8408,3 +8409,90 @@ CS-35's verdict holds: the channel does not become a catalog channel.
   CS-35), and nothing about the other channels' combinations (CS-42's mask,
   CS-43's description, CS-44's borrowing).
 - Nothing that makes the channel a catalog channel: the bar is not met.
+
+## CS-46 — the kNN union: the two retrievers see the same labels (2026-11-03)
+
+**The question.** CS-41 left it open: the words alone retrieve nearly as well as
+the embedding (shortlist R@50 0.9437 against 0.9576), the champion's fusion is
+the *worse* candidate generator (0.7423, barely above the 0.7353 chance level),
+and the lexical route's shortlist floor is high — so the payoff must be read on
+the **union** of the two candidate sets. Do the two retrievers see **different**
+labels? If their union reaches the decision model's union (**0.9120** at
+k = 10, CS-14), the shortlist gap is a **breadth** gap and the deferred BM25
+decision gets its evidence.
+
+**The runs.** Two `evaluate` runs on UPR **val**, 0.3 s each (cache hits; the
+TF-IDF fitted on the train split; no model calls):
+`upr-eval-knn-union-val` and `upr-eval-knn-union-blind-val`. The union is the
+**per-row z-max** (CS-14's rule) of the two **existing** predictors' score
+matrices (the lexical kNN and the embedding kNN, both unmodified, both at
+k = 10 — the champion's own kNN k). The blind counterpart permutes the train
+records' label sets **once** and hands the same permuted labels to both halves.
+The rows land in the **main** UPR table (`## UPR — knn_union`), the sweep is
+`experiments/knn_union_sweep.py`.
+
+### The candidate generators (UPR **val**, 660 texts, k = 10)
+
+| the candidate generator | recall@10 | recall@50 | micro-F1 |
+|---|---|---|---|
+| the champion's fusion (the whole pipeline) | **0.7126** | 0.7423 | 0.5479 |
+| the lexical kNN (CS-41) | 0.6326 | 0.9437 | 0.4605 |
+| the embedding kNN | 0.6933 | 0.9576 | 0.5388 |
+| **the union (the per-row z-max)** | **0.6943** | **0.9548** | 0.5266 |
+| the union's **label-blind floor** | 0.2313 | 0.8029 | 0.0798 |
+| the decision model's union (CS-14) | **0.9120** | — | — |
+
+### The falsification, read out — **the shortlist gap is not a breadth gap**
+
+1. **The breadth test FAILS.** The union's recall@10 is **0.6943**, far under
+   the registered bar of **0.9120** (the decision model's union at the same k)
+   — by 0.22. The two retrievers together do **not** supply the breadth the
+   decision model's union supplies.
+2. **The breadth readout fails too.** The union's recall@50 is **0.9548**,
+   **below** the better arm's **0.9576** (the embedding kNN's own): the z-max
+   fusion does not add breadth, it dilutes it by 0.003.
+3. **The decomposition says why: the union is the embedding kNN, almost
+   exactly.** At k = 10 the union is **+0.0010** above the embedding arm
+   (0.6943 against 0.6933) and at k = 50 it is 0.003 below it; the lexical half
+   adds nothing the embedding half did not already see. **The two candidate
+   sets are nearly the same set** — the words and the embedding geometry fail on
+   the same labels.
+4. **The floor is high, as CS-41 warned.** The label-blind union reaches
+   **0.2313 / 0.8029**: the label frequencies alone put 23 % of the gold cells
+   in the top 10 and 80 % in the top 50. The union's label-driven breadth is
+   therefore **+0.46 at k = 10** and **+0.15 at k = 50** — real, but the absolute
+   shortlist numbers were flattered by the frequencies all along.
+
+### The reading: the gap is the fusion's ordering, not the candidate sets'
+
+- **The two retrievers are mutually redundant at the candidate level.** The
+  union of the words and the embedding geometry is the embedding geometry:
+  their top-10 and top-50 sets overlap almost completely (the union gains
+  +0.001 at 10 and loses 0.003 at 50). So adding a **third lexical channel**
+  (BM25) would not widen the candidate set — it would add a ranking that sees
+  the same labels. **The BM25 checkbox stays closed**, and the reason is not
+  that the lexical route is weak (CS-41 measured it strong): it is that the
+  route is **already covered**.
+- **The decision model's 0.9120 is not lexical breadth.** It is the decision
+  model's own ranking — a different kind of evidence (a text-label relevance
+  judgement), not a second view of the same words. Its union's advantage over
+  the kNN union is an **ordering** advantage of 0.22 at k = 10.
+- **And the fusion's shortlist gap is an ordering problem at depth 50, not a
+  breadth problem.** The fusion's **recall@10 is the best of all five**
+  (0.7126, above both retrievers and their union) while its **recall@50
+  collapses to 0.7423** — the merging *reorders* the deep tail, and that is
+  where its shortlist loses. A lexical term would not fix that; the fusion's
+  own deep ranking would.
+
+### What this change set does not say
+
+- Nothing about **test** (val only).
+- Nothing about a **k sweep** (k = 10, the champion's own) and nothing about
+  another **fusion rule** (only CS-14's per-row z-max).
+- Nothing about a **BM25 channel**, a **lexical term in the fusion** or a
+  **fourth fusion parameter**: the dependency and the wiring are the reviewer's,
+  and this measurement closes the *breadth* argument, not the *scoring* one.
+- Nothing about the union as a **component**: it is a measurement (CS-14's
+  shape), and its micro-F1 (0.5266) is reported, not claimed.
+- Nothing about the decision model's own union being re-measured: CS-14's
+  artifact is the reference, and its 0.9120 is read as it stands.

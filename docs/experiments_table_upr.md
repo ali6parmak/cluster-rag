@@ -412,3 +412,10 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | upr-labelembed-embeddinggemma-mined-distinctive | 2026-11-03 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 2.539 | 6 | 62 |
 | upr-eval-fusionc-embeddinggemma-k10-c1-mined-distinctive | 2026-11-03 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4988 | 0.5253 | 0.868 | 0.2742 | 0.7028 | 0.6683 | 0.7357 | 660 | 0.133 |
+
+## UPR — knn_union
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-eval-knn-union-val | 2026-11-03 | val | knn_union | embeddinggemma | top_k k=2 | 0.5266 | 0.4752 | 0.5096 | 0.868 | 0.2682 | 0.6943 | 0.6554 | 0.9548 | 660 | 0.276 |
+| upr-eval-knn-union-blind-val | 2026-11-03 | val | knn_union | embeddinggemma | top_k k=2 | 0.0798 | 0.0242 | 0.0759 | 0.765 | 0.0609 | 0.2313 | 0.1241 | 0.8029 | 660 | 0.261 |

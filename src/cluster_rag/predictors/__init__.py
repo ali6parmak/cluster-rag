@@ -16,7 +16,9 @@ second lexical instrument: the train split's own word↔label association turned
 into a scorer, with no embedding and no model call in the loop.
 ``lexical_knn`` (CS-41) is the retrieval side's lexical counterpart: the same
 TF-IDF, the same train split and the main pipeline's own kNN machinery, so the
-words alone are read as a **candidate generator**.
+words alone are read as a **candidate generator**. ``knn_union`` (CS-46) fuses
+that and the embedding kNN with the track's own per-row z-max — a
+**measurement** of the two retrievers' breadth together, not a component.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from cluster_rag.predictors.base import Predictor, PredictorContext
 from cluster_rag.predictors.corpus_map import CorpusMapPredictor
 from cluster_rag.predictors.fusion import FusionPredictor
 from cluster_rag.predictors.knn import KNNVotingPredictor
+from cluster_rag.predictors.knn_union import KNNUnionPredictor
 from cluster_rag.predictors.lexical_knn import LexicalKNNPredictor
 from cluster_rag.predictors.lexical_tfidf import LexicalTfidfPredictor
 from cluster_rag.predictors.maxsim import MaxSimPredictor
@@ -45,6 +48,7 @@ PREDICTORS: dict[str, type] = {
     "zeroshot": ZeroShotPredictor,
     "lexical_tfidf": LexicalTfidfPredictor,
     "lexical_knn": LexicalKNNPredictor,
+    "knn_union": KNNUnionPredictor,
     "corpus_map": CorpusMapPredictor,
 }
 
