@@ -142,9 +142,11 @@ class LabelTextsConfig(BaseModel):
     variant: Literal["name", "template", "description", "mined_words"] = "name"
     template: str | None = None
     # The mined-words variant's own knobs (CS-35): how many mined words a
-    # label keeps, and the expansion route's minimum shared prefix.
+    # label keeps, and the expansion route's minimum shared prefix; and the
+    # word-class filter (CS-45: the classes to keep, ``None`` = every class).
     top_k: int = Field(default=10, ge=1)
     expansion_min_prefix: int = Field(default=4, ge=1)
+    word_classes: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _template_matches_variant(self) -> LabelTextsConfig:
@@ -2094,6 +2096,11 @@ class UprLabelLexiconConfig(BaseModel):
         expansion_min_prefix: The expansion route's minimum shared prefix (in
             characters).
         folds: The cross-fit's number of folds (at least 2).
+        word_classes: The word classes the lexicon keeps (the track's CS-45:
+            CS-33's classes — ``distinctive``, ``shared``, ``generic``). ``None``
+            (the default) keeps every class, so every earlier artifact keeps
+            its exact content. The class is the map's own; an unknown class
+            fails at build time.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2102,6 +2109,7 @@ class UprLabelLexiconConfig(BaseModel):
     top_k: int = Field(default=10, ge=1)
     expansion_min_prefix: int = Field(default=4, ge=1)
     folds: int = Field(default=5, ge=2)
+    word_classes: tuple[str, ...] | None = None
 
 
 class UprBackoffConfig(BaseModel):

@@ -532,3 +532,18 @@ def test_the_corpus_map_borrow_defaults_off_and_validates() -> None:
         UprBorrowConfig(threshold=1.5)
     with pytest.raises(ValueError, match="Extra inputs"):
         UprBorrowConfig.model_validate({"nope": 1})
+
+
+def test_the_lexicon_word_classes_default_to_every_class() -> None:
+    """CS-45: the class filter is off by default on both knobs that carry it."""
+    from cluster_rag.config import LabelTextsConfig, UprLabelLexiconConfig
+
+    assert UprLabelLexiconConfig().word_classes is None
+    texts = LabelTextsConfig(variant="mined_words", template="about {label}.")
+    assert texts.word_classes is None
+    filtered = LabelTextsConfig(
+        variant="mined_words",
+        template="about {label}.",
+        word_classes=("distinctive", "shared"),
+    )
+    assert filtered.word_classes == ("distinctive", "shared")

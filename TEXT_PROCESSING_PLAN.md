@@ -1555,119 +1555,26 @@ lexicon) → the bonus CS-46.
   relation reproduces CS-38's five pairs and shares; the real/control/blind/
   random arms reproduce CS-32's numbers exactly.
 
-- [ ] **CS-45 — retry the mined lexicon with a distinctive filter.** CS-35's
-  label lexicon, but only the **distinctive/shared** words (CS-33's classes)
-  enter the label text.
-
-  **The mechanism.** CS-35's mined words are the label's top-10 PIFA words —
-  and they carry the corpus's **register** ("ensure", "right", "system") beside
-  its topic ("corruption", "asylum"). CS-33 measured what the classes are: a
-  **distinctive** word sits in one or two of the labelled tables, a **shared**
-  one in 3–14, a **generic** one in at least a quarter of them. The change: the
-  label-side representation is built **from the non-generic words only** — the
-  class is the map's own (a property of the word, not of a label), and the
-  filter applies to the candidate pool **before** the top-K cut, so a label
-  keeps up to K of its non-generic words (fewer when it has fewer) and the
-  registers is dropped rather than the topic.
-
-  **Why.** The mined coverage is the **best cell-level signal in the pack**
-  (AUC **0.8109**, against the description's 0.7067 and the cosine's 0.7818),
-  and the channel failed on **head-to-head redundancy** with the name and the
-  description, not on signal (CS-35: the seen view cleared on one half, one
-  bucket of three). The register words are exactly what the name overlap and the
-  description already carry; the distinctive words are what no other label-side
-  channel has.
-
-  **The rule, fixed before the call.** The classes kept: ``distinctive`` and
-  ``shared`` (CS-33's own definitions, the map's own thresholds); ``generic`` is
-  dropped. The filter applies to **both** routes: a mined label's pool loses its
-  generic words; an expansion label's matched words are filtered the same way,
-  and a label left with **no** word falls back to its **name** (the route's own
-  rule). K stays **10** (CS-35's), the expansion prefix **4**, the folds **5** —
-  nothing else is tuned.
-
-  **Where the code lives.** `text_processors/lexical/label_lexicon.py`:
-  `build_label_lexicon` gains ``word_classes`` (the filter, applied to the
-  candidate pool); the `LabelLexicon` records it. `config.py`:
-  `LabelTextsConfig` (the `mined_words` variant's label text) and
-  `UprLabelLexiconConfig` gain ``word_classes`` (``None`` = every class, the
-  default, so every earlier artifact keeps its exact content). The command
-  (`commands/upr.py::_upr_label_lexicon` and its per-fold cross-fit) passes it
-  through; `commands/embed.py::_label_lexicon_from_train` does the same for the
-  label artifact.
-
-  **The runs.** Four, in the sweep
-  `experiments_text_processing/upr_learned_lexicon_distinctive_sweep.py` (the
-  section `## UPR — upr_learned_lexicon_distinctive` in the track's table):
-
-  - `upr-labelembed-embeddinggemma-mined-distinctive` — the label artifact: the
-    68 label texts from the **filtered** lexicon;
-  - `upr-eval-fusionc-embeddinggemma-k10-c1-mined-distinctive` — the guard's
-    reference for the filtered label side (the champion with those vectors);
-  - **cell 1 (the primary — the feature half)**:
-    `upr-analyze-learned-lexicon-distinctive-feat` — the pack's
-    ``label_mined`` group, the champion's label side, the lexicon filtered
-    (guard: `upr-eval-fusionc-embeddinggemma-k10-c1`);
-  - **cell 2 (the query half)**: `upr-analyze-learned-lexicon-distinctive` —
-    the **filtered mined label side** (the query half), groups
-    `embedding + lexical + chunk_profile`, the lexicon filtered (guard: the
-    filtered label side's reference run).
-
-  **The comparison, fixed before the call.** The name+description channel's
-  numbers are CS-35's own artifacts — `upr-analyze-learned-lexicon-catfeat`
-  (the feature half) and `upr-analyze-learned-lexicon-desc` (the query half) —
-  read by the same instrument CS-35 used
-  (`tools/compare_upr_arms.py`, the per-text counts of the two runs, 2,000
-  resamples, seed 42; the "seen" view is the head, the torso and the tail
-  pooled). The **guard**: `upr-analyze-learned-lexicon-catfeat` is re-run and
-  must reproduce its artifact **field for field** (the wall clock aside), so the
-  head-to-head is against a contemporaneous artifact. The new channels' gains
-  over the **control** (`upr-analyze-learned-lexicon-control`) are reported
-  beside them (CS-35's own readout), and the filtered column's **AUC** over the
-  val grid is read from the artifact's feature diagnostics.
-
-  **The shape of the number.** The headline is the **head-to-head on the seen
-  view** (the filtered channel's arm minus the name+description arm, paired by
-  text), read per half; the three seen buckets get their own paired intervals.
-  The pooled and unseen numbers and the shortlist R@50 are reported beside it;
-  the unseen bucket is **not** a bar (the mined route has no words for the eight
-  and the filtered route less).
-
-  **The falsification, registered in advance.** The CS-35 bar, unchanged: the
-  head-to-head must be **positive with an interval excluding zero on the seen
-  view** and on **at least two of the three** seen buckets. The **verdict is
-  cell 1's** (the feature half — the half whose bar CS-35 came closest to);
-  cell 2 is read the same way and reported beside it. If neither clears it, the
-  channel stays out of the catalog (CS-35's verdict holds); if one clears it,
-  the channel is a candidate for the catalog and the reviewer's decision.
-
-  **The guard.** The pack is fitted on train and the words come from train, so
-  the fit side's label side is **cross-fit** over 5 folds (CS-35's rule), and
-  the filter rides into it: each fold's lexicon is built from **that fold's**
-  map, filtered by that map's own classes. The runs whose label side is not
-  train-derived are not cross-fitted (the feature half included: its label side
-  is the champion's).
-
-  **The cost.** Four runs, about 2–3 minutes each for the analyze ones (cache
-  hits: the filtered label vectors are the only new embeddings, 68 texts), plus
-  the catfeat re-run; **no model calls**, no new dependency; about half a day
-  including tests and docs.
-
-  **What is NOT registered.** K other than 10; a **class-combination sweep**
-  (only distinctive+shared; the distinctive-only and the generic-only variants
-  are unmeasured); the expansion route as a separate arm (it is filtered, not
-  re-designed); the combination with the mask/description/borrow channels (one
-  thing at a time); the **map classifier** as the instrument (the pack is, as in
-  CS-35); **test**.
-
-  **The exit criteria.** The four artifacts hold their arms; the filtered
-  lexicon's provenance (the classes kept, the per-label words, the labels that
-  fell back to their name) is in the label artifact and the lexicon block; the
-  catfeat re-run reproduces its artifact field for field; the table rows are
-  auto-appended; the log section §CS-45 reads the head-to-head out against the
-  bar; the checkbox is ticked; the block is moved verbatim to the archive; the
-  gate is green (ruff, pytest, `tools/verify_upr_baseline.py` on the analyze
-  runs); one commit.
+- **CS-45** (the distinctive lexicon: the register was the signal) → executed
+  2026-11-03 → the archive's §7.6 (the distinctive lexicon) and the track log's
+  §CS-45. **The bar is not met again — and the reading is that the register was
+  the signal**: keeping only the distinctive/shared words (60 mined, 4 expanded,
+  4 fallback — *ESC rights - general*, *Gender-based violence*, *General*,
+  *Other* have no non-generic word) **halved** the channel's gain over the
+  control (the seen view **+0.0272 [+0.0074, +0.0474]** and **+0.0339
+  [+0.0139, +0.0548]** against CS-35's +0.0507 and +0.0493) and took the column's
+  cell-level AUC down to the description's own level (**0.7073** against CS-35's
+  0.8109 and the description's 0.7067); the head-to-head against the
+  name+description channel does not clear the seen view on either half
+  (+0.0037 [−0.0186, +0.0252] and +0.0064 [−0.0155, +0.0272]), the feature half
+  clears **0 of 3** seen buckets and the query half only the torso (+0.0312
+  [+0.0000, +0.0644], with the head falling −0.0227). So CS-35's redundancy
+  reading is confirmed: the mined channel's advantage over the description was
+  the register — the part the name and the description already carry. The filter
+  does help the **torso and the tail** (the rare labels' signal) and costs the
+  **unseen** (the feature −0.0503; the query −0.0973 [−0.1450, −0.0529], the
+  filter having emptied four expansions). The CS-35 sweep re-ran and all seven
+  artifacts reproduce identically apart from the wall clock.
 
 ### 7.7 The candidate-set union (CS-46)
 

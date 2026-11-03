@@ -97,6 +97,7 @@ research record and are **not** indexed here.
 | [CS-42 — the fit-side mask](#cs-42--the-fit-side-mask-the-dictionarys-floor-stops-meaning-impossible-2026-11-03) | one `upr-analyze-cmap-fitmask` run (four arms + the pack's floors) | **the mask is a lever, but not the whole lever**: the eight recover **0.0000 → 0.2947** and five of them come back, but the registered bar was 0.45, so the recovery condition fires; the seen buckets **gain** (+0.1478 [+0.1236, +0.1710] against the control) and the pooled number reaches **0.5874** — the silence proxy is **part** of the cause; the three that stay down are the two catch-alls and the broad ESC category | `results/upr-analyze-cmap-fitmask/analysis.json` |
 | [CS-43 — the dictionary and the catalog description](#cs-43--the-dictionary-and-the-catalog-description-the-description-cannot-outvote-the-floor-2026-11-03) | two `upr-analyze-cmap-catalog{,-desc}` runs (four arms each) | **the dictionary overrules the description**: with the description in the pack the eight still collapse (**0.0066** / **0.0000** against the same runs' controls' **0.4824** / **0.4690**), while the pooled numbers pass (**0.5608** / **0.5532**, both >= 0.55) — the two channels are complementary on the seen labels and not on the eight; the registered "unseen at 0.00" branch fires (cell 2 exactly; cell 1 at 0.7 % of its control) | `results/upr-analyze-cmap-catalog/analysis.json` · `results/upr-analyze-cmap-catalog-desc/analysis.json` |
 | [CS-44 — the borrowed words](#cs-44--the-borrowed-words-the-partners-vocabulary-is-not-the-thin-labels-2026-11-03) | one `upr-analyze-cmap-borrow` run (five arms + the pack's floors) | **not licensed**: lending the partner's words lifts the thin labels' scores (their predicted counts **69 → 118**; *CP rights - general* genuinely gains **0.0000 → 0.2308**) but on the registered cells view the five **fall** (**−0.0707 [−0.1356, −0.0035]**, 2 of 5 signs positive), the partner set's lower bound crosses the −0.02 floor (−0.0270), and the pair becomes confusable exactly as registered (co-predictions 0–5 → 6–21) — the thin labels' evidence is *shared* evidence, and sharing it more does not make it theirs | `results/upr-analyze-cmap-borrow/analysis.json` |
+| [CS-45 — the distinctive lexicon](#cs-45--the-distinctive-lexicon-the-register-was-the-signal-2026-11-03) | four runs (the filtered label artifact + its guard, the feature half, the query half) + the CS-35 re-run as the guard | **the bar is not met again — and the reading is that the register WAS the signal**: the filter halved the channel's gain over the control (seen **+0.0272** against CS-35's +0.0507; **+0.0339** against +0.0493) and took the column's AUC down to the description's own level (**0.7073** against CS-35's 0.8109 and the description's 0.7067); the head-to-head's seen view includes zero on both halves (0 of 3 buckets on the feature half; only the torso on the query half, with the head falling), so the channel does not become a catalog channel | `results/upr-analyze-learned-lexicon-distinctive{,-feat}/analysis.json` |
 
 ## Change sets
 
@@ -8288,3 +8289,122 @@ lending creates.
   (one thing at a time), nor about the **mined lexicon** (CS-45).
 - Nothing about the **swap readout as a statistic**: it is described, not
   tested, and no verdict rests on it.
+
+## CS-45 — the distinctive lexicon: the register was the signal (2026-11-03)
+
+**The question.** CS-35's mined words are the label's top-10 PIFA words, and
+they carry the corpus's **register** ("ensure", "right", "system") beside its
+topic. CS-35's channel failed the head-to-head against the name+description
+channel, but the mined **coverage** was the best cell-level signal in the pack
+(AUC **0.8109**). Does keeping only the **distinctive/shared** words (CS-33's
+classes) — dropping the register — turn the best cell-level signal into a
+winning channel?
+
+**The runs.** Four, in
+`experiments_text_processing/upr_learned_lexicon_distinctive_sweep.py` (the
+section `## UPR — upr_learned_lexicon_distinctive` in the track's table):
+`upr-labelembed-embeddinggemma-mined-distinctive` (the 68 label texts from the
+filtered lexicon) and its guard `upr-eval-fusionc-embeddinggemma-k10-c1-mined-distinctive`;
+then the **feature half** (`upr-analyze-learned-lexicon-distinctive-feat` — the
+pack's `label_mined` group, the champion's label side) and the **query half**
+(`upr-analyze-learned-lexicon-distinctive` — the filtered mined label side). The
+analyze runs took 50.4 s and 90.1 s (cache hits, no model calls); the filtered
+label artifact is the only new embedding (68 texts).
+
+**The filtered lexicon, recorded.** 60 labels mined, **4 expanded**, **4
+fallback**: *ESC rights - general*, *Gender-based violence*, *General* and
+*Other* have no non-generic word at all (their names' words — "general",
+"rights", "violence", "based" — are all generic), so their text is their
+**name**. The mined words are topical now: *Access to justice* → "fair trial
+barriers governance reparation impartial aftermath backlogs choice choose"
+(CS-35's list was "justice access fair trial victims ensure system perpetrators
+right barriers").
+
+**The guard.** The CS-35 sweep was re-run in full: all **seven** artifacts
+reproduce **identically** apart from the wall clock, so the head-to-head is
+against contemporaneous artifacts. (The re-run also upserted the CS-35 rows'
+date and wall-clock cells in the main UPR table — the numbers are unchanged.)
+
+### The arms (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | head | torso | tail | unseen | shortlist R@50 |
+|---|---|---|---|---|---|---|---|
+| **cell 1 — the distinctive feature half** | **0.5023** | 0.5074 | 0.5571 | 0.4578 | 0.5104 | 0.4322 | 0.8557 |
+| **cell 2 — the distinctive query half** | **0.4985** | 0.4989 | 0.5722 | 0.4413 | 0.5461 | 0.3718 | 0.8842 |
+| the name+description features (CS-35's `catfeat`) | 0.5076 | 0.5077 | 0.5492 | 0.4559 | 0.5047 | 0.4824 | 0.8955 |
+| the name+description query (CS-35's `desc`) | 0.5084 | 0.4872 | 0.5949 | 0.4101 | 0.5121 | 0.4690 | 0.8864 |
+| the control (the plain pack) | 0.4818 | 0.4652 | 0.5505 | 0.4122 | 0.4531 | 0.4469 | 0.8909 |
+
+### The head-to-head — the bar, read out
+
+The comparison is the paired cross-run difference (the filtered arm minus the
+name+description arm, the same texts, the same operating point; the per-text
+counts of the two runs, 2,000 resamples, seed 42):
+
+| the scope | the **feature** half (distinctive-feat − catfeat) | the **query** half (distinctive − desc) |
+|---|---|---|
+| the **seen** view | +0.0037 [−0.0186, +0.0252] | +0.0064 [−0.0155, +0.0272] |
+| head | +0.0079 [−0.0223, +0.0365] | −0.0227 [−0.0514, +0.0074] |
+| torso | +0.0019 [−0.0348, +0.0387] | **+0.0312 [+0.0000, +0.0644]** |
+| tail | +0.0057 [−0.0504, +0.0608] | +0.0340 [−0.0353, +0.1031] |
+| unseen | −0.0503 [−0.1061, +0.0070] | −0.0973 [−0.1450, −0.0529] |
+| pooled | −0.0053 [−0.0250, +0.0146] | −0.0099 [−0.0296, +0.0091] |
+
+**The falsification — the bar is not met, again.**
+
+1. **The feature half (the primary) does not win.** The seen view's interval
+   **includes zero** (+0.0037), and **no** seen bucket clears: the head
+   (+0.0079), the torso (+0.0019) and the tail (+0.0057) all include zero. **0
+   of 3.**
+2. **The query half does not win either.** Its seen view also includes zero
+   (+0.0064); only the **torso** clears (+0.0312 [+0.0000, +0.0644], barely),
+   and the **head falls** (−0.0227 [−0.0514, +0.0074]). **1 of 3.**
+
+So the distinctive lexicon does **not** beat the name+description channel, and
+CS-35's verdict holds: the channel does not become a catalog channel.
+
+### The reading: the register **was** the signal
+
+- **The filter halved the channel's gain.** Against the control, the feature
+  half buys **+0.0272 [+0.0074, +0.0474]** on the seen view (CS-35's unfiltered
+  `minedfeat`: **+0.0507**) and the query half **+0.0339 [+0.0139, +0.0548]**
+  (CS-35's mined query: **+0.0493**). Dropping the register made the channel
+  *weaker*, not cleaner.
+- **The cell-level signal fell to the description's level.** The filtered
+  column's AUC over the val grid is **0.7073** (train 0.7871) — against CS-35's
+  unfiltered **0.8109** (train 0.8657) and the description's **0.7067**. So the
+  register words were doing the cell-level separation: they are frequent enough
+  to appear in many cells and their presence is enriched on the gold ones. The
+  distinctive words are topical but rare, and rare words cannot separate 44,880
+  cells — CS-33's readout ("the distinctive words are 100 % positive, +4.27;
+  the generic 81 %, +0.84") is about the *direction* of a word's association,
+  not about how well its **presence** covers the cells.
+- **Where the filter does help is the torso and the tail.** The query half's
+  torso **+0.0312 [+0.0000, +0.0644]** and tail +0.0340 (the latter's interval
+  includes zero), the feature half's tail +0.0057 — the distinctive words are
+  the **rare labels'** signal, exactly the labels whose topic words are rare.
+  But the head refuses to clear and **the head's loss is what kills the seen
+  view** (the query half's head −0.0227), because the head labels' texts are
+  full of the register the filter removed.
+- **So CS-35's redundancy reading is confirmed and sharpened.** The mined
+  channel's advantage over the description **was** the register — the part the
+  name and the description already carry. The distinctive words add a
+  tail/torso signal the description does not have, but it is too small to lift
+  the seen view over the bar. And the **unseen** bucket falls in both halves
+  (feature −0.0503; query **−0.0973 [−0.1450, −0.0529]**): the filter emptied
+  four expansions (*ESC rights - general*, *Gender-based violence*, *General*,
+  *Other*), and those labels' texts are now their bare names — while the
+  description channel keeps its own unseen advantage.
+
+### What this change set does not say
+
+- Nothing about **test** (val only).
+- Nothing about **K** other than 10, and nothing about a **class-combination
+  sweep**: only the distinctive+shared pair was kept; the distinctive-only, the
+  shared-only and the generic-only variants are unmeasured.
+- Nothing about the **expansion route** as a separate arm: it was filtered, not
+  re-designed — and the filter is what emptied four of its seven labels.
+- Nothing about the **map classifier** as the instrument (the pack is, as in
+  CS-35), and nothing about the other channels' combinations (CS-42's mask,
+  CS-43's description, CS-44's borrowing).
+- Nothing that makes the channel a catalog channel: the bar is not met.

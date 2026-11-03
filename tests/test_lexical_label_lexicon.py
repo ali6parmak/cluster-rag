@@ -156,3 +156,105 @@ def test_the_defaults_are_the_registered_ones() -> None:
     """K = 10 and a four-character prefix (the plan's numbers)."""
     assert DEFAULT_TOP_K == 10
     assert DEFAULT_EXPANSION_MIN_PREFIX == 4
+
+
+# --- CS-45: the word-class filter --------------------------------------------
+
+# Six labels with a table; "system" sits in every one of them (generic), each
+# label's own word sits in one (distinctive). The seventh label has no train
+# example, so its route is the expansion.
+WORD_CLASS_CORPUS = tuple(
+    (
+        f"{word} system statement",
+        (label,),
+    )
+    for label, word in (
+        ("Detention", "custody"),
+        ("Poverty", "deprivation"),
+        ("Corruption", "bribery"),
+        ("Trafficking", "smuggling"),
+        ("Housing", "tenancy"),
+        ("Assembly", "protest"),
+    )
+) + tuple(
+    (
+        f"{word} system declaration",
+        (label,),
+    )
+    for label, word in (
+        ("Detention", "custody"),
+        ("Poverty", "deprivation"),
+        ("Corruption", "bribery"),
+        ("Trafficking", "smuggling"),
+        ("Housing", "tenancy"),
+        ("Assembly", "protest"),
+    )
+)
+WORD_CLASS_LABELS = (
+    "Assembly",
+    "Corruption",
+    "Detention",
+    "Housing",
+    "Poverty",
+    "Systemic measures",
+    "Trafficking",
+)
+
+
+def _word_class_map():
+    """The tiny map whose classes the filter reads (generic + distinctive words)."""
+    texts = [text for text, _ in WORD_CLASS_CORPUS]
+    label_sets = [labels for _, labels in WORD_CLASS_CORPUS]
+    return build_corpus_map(texts, label_sets, WORD_CLASS_LABELS)
+
+
+def test_the_word_class_filter_reads_the_maps_own_classes() -> None:
+    """The fixture's premise: 'system' is generic, each label's own word distinctive."""
+    corpus_map = _word_class_map()
+    classes = corpus_map.word_class_index()
+    assert classes.class_of("system") == "generic"
+    for word in ("custody", "deprivation", "bribery", "smuggling", "tenancy", "protest"):
+        assert classes.class_of(word) == "distinctive"
+
+
+def test_the_filter_drops_the_generic_words_from_the_candidate_pool() -> None:
+    """CS-45: the label keeps its distinctive words; the register words are dropped."""
+    corpus_map = _word_class_map()
+    # with room for four words the register words are in the unfiltered list (a
+    # word that sits in every text has a zero weight, so it comes last)
+    plain = build_label_lexicon(corpus_map, top_k=4)
+    assert {"system", "statement"} <= set(plain.label_words("Detention"))
+    filtered = build_label_lexicon(corpus_map, top_k=4, word_classes=("distinctive", "shared"))
+    assert "system" not in filtered.label_words("Detention")
+    assert "custody" in filtered.label_words("Detention")
+    assert filtered.word_classes == ("distinctive", "shared")
+    block = label_lexicon_block(filtered)
+    assert block["word_classes"] == ["distinctive", "shared"]
+    assert "word_classes" not in label_lexicon_block(plain)
+
+
+def test_the_filter_applies_before_the_top_k_cut() -> None:
+    """With room for one word, the filtered build takes the distinctive one."""
+    corpus_map = _word_class_map()
+    filtered = build_label_lexicon(corpus_map, top_k=1, word_classes=("distinctive", "shared"))
+    assert filtered.label_words("Detention") == ("custody",)
+
+
+def test_the_filter_empties_an_expansion_label_and_it_falls_back_to_its_name() -> None:
+    """A name match whose words are all generic leaves the label with its name."""
+    corpus_map = _word_class_map()
+    plain = build_label_lexicon(corpus_map)
+    assert plain.route("Systemic measures") == ROUTE_EXPANDED
+    assert "system" in plain.label_words("Systemic measures")
+    filtered = build_label_lexicon(corpus_map, word_classes=("distinctive", "shared"))
+    assert filtered.route("Systemic measures") == ROUTE_FALLBACK
+    assert filtered.label_text("Systemic measures") == "Systemic measures"
+
+
+def test_the_filter_validates_its_classes() -> None:
+    """An unknown class and an empty restriction fail before the build."""
+    corpus_map = _word_class_map()
+    with pytest.raises(ValueError, match="Unknown word class"):
+        build_label_lexicon(corpus_map, word_classes=("nope",))
+    with pytest.raises(ValueError, match="at least one class"):
+        build_label_lexicon(corpus_map, word_classes=())

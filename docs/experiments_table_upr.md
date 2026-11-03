@@ -375,8 +375,8 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 
 | run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| upr-labelembed-embeddinggemma-mined | 2026-11-02 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.182 | 68 | 0 |
-| upr-eval-fusionc-embeddinggemma-k10-c1-mined | 2026-11-02 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4961 | 0.5262 | 0.868 | 0.2770 | 0.7085 | 0.6737 | 0.7375 | 660 | 0.139 |
+| upr-labelembed-embeddinggemma-mined | 2026-11-03 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 0.177 | 68 | 0 |
+| upr-eval-fusionc-embeddinggemma-k10-c1-mined | 2026-11-03 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4961 | 0.5262 | 0.868 | 0.2770 | 0.7085 | 0.6737 | 0.7375 | 660 | 0.137 |
 
 ## UPR — corpus_map_stability
 
@@ -405,3 +405,10 @@ Comparison tables keyed by run — auto-appended by the CLI commands (one file p
 | upr-eval-lexical-knn-k10-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.4605 | 0.4035 | 0.4434 | 0.868 | 0.2403 | 0.6326 | 0.5803 | 0.9437 | 660 | 0.146 |
 | upr-eval-lexical-knn-k20-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.4749 | 0.4392 | 0.4575 | 0.868 | 0.2488 | 0.6559 | 0.5987 | 0.9415 | 660 | 0.147 |
 | upr-eval-lexical-knn-k10-blind-val | 2026-11-03 | val | lexical_knn | n/a | top_k k=2 | 0.0707 | 0.0244 | 0.0659 | 0.838 | 0.0576 | 0.2097 | 0.1104 | 0.8111 | 660 | 0.148 |
+
+## UPR — upr_learned_lexicon_distinctive
+
+| run_id | date | split | predictor | embedding | f1 decision | micro-F1 | macro-F1 | sample-F1 | coverage | P@5 | R@10 | nDCG@5 | shortlist R@50 | n_texts | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| upr-labelembed-embeddinggemma-mined-distinctive | 2026-11-03 | ollama | embeddinggemma:latest | 82f094e4c0e1 | 768 | 2048 | label | raw | 68 | 2.539 | 6 | 62 |
+| upr-eval-fusionc-embeddinggemma-k10-c1-mined-distinctive | 2026-11-03 | val | fusion | embeddinggemma | top_k k=2 | 0.5464 | 0.4988 | 0.5253 | 0.868 | 0.2742 | 0.7028 | 0.6683 | 0.7357 | 660 | 0.133 |

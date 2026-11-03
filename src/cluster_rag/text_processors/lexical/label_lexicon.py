@@ -25,6 +25,15 @@ classifier).
   are involved**: the route reads the corpus's *words* and their document
   frequencies, never a label association.
 
+**The filter (CS-45).** The mined words carry the corpus's **register**
+("ensure", "right", "system") beside its topic. A build may keep only the words
+of the requested **classes** (CS-33's: ``distinctive`` = one or two labelled
+tables, ``shared`` = 3-14, ``generic`` = at least a quarter): the class is the
+map's own, the filter applies to the **candidate pool before the top-K cut**, and
+it applies to both routes — an expansion label left without a word falls back to
+its name. ``None`` (the default) keeps every class, so every earlier artifact
+keeps its exact content.
+
 **The routes are the label-holdout's answer.** The mined route needs train
 examples, so it exists for the sixty labels that have some and is empty for the
 eight that have none; the expansion route is the only lexical path to those
@@ -36,11 +45,12 @@ Pure core: the standard library only (no numpy, no model client, no I/O).
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from cluster_rag.text_processors.features.corpus_map import CorpusMap
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.word_class import WORD_CLASSES
 
 # The number of mined words per label (CS-35's K). It is fixed at 10 so the
 # mined-words label side has the same length as the catalog description's (6-11
@@ -116,6 +126,8 @@ class LabelLexicon:
         top_k: The K of the mined words.
         expansion_min_prefix: The expansion route's minimum shared prefix.
         n_texts: The corpus's size (``N``, the idf's denominator).
+        word_classes: The word classes the build kept (CS-45), or ``None`` when
+            it kept every class.
     """
 
     labels: tuple[str, ...]
@@ -125,6 +137,7 @@ class LabelLexicon:
     top_k: int = DEFAULT_TOP_K
     expansion_min_prefix: int = DEFAULT_EXPANSION_MIN_PREFIX
     n_texts: int = 0
+    word_classes: tuple[str, ...] | None = None
 
     def label_words(self, label: str) -> tuple[str, ...]:
         """One label's words (empty when the label has none)."""
@@ -253,6 +266,7 @@ def build_label_lexicon(
     *,
     top_k: int = DEFAULT_TOP_K,
     expansion_min_prefix: int = DEFAULT_EXPANSION_MIN_PREFIX,
+    word_classes: Sequence[str] | None = None,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
 ) -> LabelLexicon:
     """Build the label-side representation from the corpus map.
@@ -265,6 +279,12 @@ def build_label_lexicon(
         corpus_map: The corpus map (the train split's word↔label association).
         top_k: How many mined words a label keeps.
         expansion_min_prefix: The expansion route's minimum shared prefix.
+        word_classes: The word classes to **keep** (the track's CS-45): the
+            candidate pool loses the words of the other classes before the
+            top-K cut, and the expansion route is filtered the same way (a label
+            left with no word falls back to its name). ``None`` (the default)
+            keeps every class, so every earlier artifact keeps its exact
+            content.
         stopwords: The tokenizer's stopwords (the map's own, so the words
             match the tables).
 
@@ -272,10 +292,20 @@ def build_label_lexicon(
         The lexicon: every label's words, its route and its text.
 
     Raises:
-        ValueError: If ``top_k`` is not positive.
+        ValueError: If ``top_k`` is not positive, on an unknown class, or on an
+            empty restriction.
     """
     if top_k <= 0:
         raise ValueError(f"the lexicon needs at least one mined word per label, got {top_k}")
+    allowed = _allowed_classes(word_classes)
+    classes = corpus_map.word_class_index() if allowed is not None else None
+
+    def _kept(word: str) -> bool:
+        """Whether the word's class survives the filter (CS-45)."""
+        if classes is None or allowed is None:
+            return True
+        return classes.class_of(word) in allowed
+
     labels = tuple(corpus_map.labels)
     vocabulary = {word: rows[0].df for word, rows in corpus_map.per_word.items()}
     words: dict[str, tuple[LexiconWord, ...]] = {}
@@ -300,17 +330,22 @@ def build_label_lexicon(
                     z_score=pair.z_score,
                 )
                 for pair in rows
+                if _kept(pair.word)
             ]
             scored.sort(key=lambda entry: (-entry.weight, entry.word))
             chosen = tuple(scored[:top_k])
             routes[label] = ROUTE_MINED
         else:
-            expanded = expansion_words(
-                label,
-                vocabulary,
-                min_prefix=expansion_min_prefix,
-                stopwords=stopwords,
-            )
+            expanded = [
+                word
+                for word in expansion_words(
+                    label,
+                    vocabulary,
+                    min_prefix=expansion_min_prefix,
+                    stopwords=stopwords,
+                )
+                if _kept(word)
+            ]
             chosen = tuple(
                 LexiconWord(
                     word=word,
@@ -330,7 +365,25 @@ def build_label_lexicon(
         top_k=top_k,
         expansion_min_prefix=expansion_min_prefix,
         n_texts=corpus_map.n_texts,
+        word_classes=allowed,
     )
+
+
+def _allowed_classes(word_classes: Sequence[str] | None) -> tuple[str, ...] | None:
+    """The classes the build keeps (``None`` = every class).
+
+    Raises:
+        ValueError: On an unknown class or an empty restriction.
+    """
+    if word_classes is None:
+        return None
+    names = tuple(word_classes)
+    unknown = [name for name in names if name not in WORD_CLASSES]
+    if unknown:
+        raise ValueError(f"Unknown word class(es) {unknown}; expected some of {list(WORD_CLASSES)}")
+    if not names:
+        raise ValueError("a word-class restriction must keep at least one class")
+    return names
 
 
 def label_lexicon_block(lexicon: LabelLexicon) -> dict[str, object]:
@@ -346,7 +399,7 @@ def label_lexicon_block(lexicon: LabelLexicon) -> dict[str, object]:
     Returns:
         The block (JSON-friendly).
     """
-    return {
+    block: dict[str, object] = {
         "definitions": {
             "weight": (
                 "the mined route: tf(L,w) x idf(w), the TF-IDF centroid's coordinate "
@@ -387,3 +440,16 @@ def label_lexicon_block(lexicon: LabelLexicon) -> dict[str, object]:
             for label in lexicon.labels
         ],
     }
+    if lexicon.word_classes is not None:
+        # the class filter's provenance (the track's CS-45): the key is absent
+        # when the build kept every class, so every earlier artifact keeps its
+        # exact content.
+        block["word_classes"] = list(lexicon.word_classes)
+        block["definitions"]["word_classes"] = (
+            "the word classes the build kept (CS-33's classes: distinctive = the "
+            "word sits in one or two labelled tables, shared = 3-14, generic = at "
+            "least a quarter of them); the filter applies to the candidate pool "
+            "before the top-K cut and to both routes, and a label left with no "
+            "word falls back to its name"
+        )
+    return block

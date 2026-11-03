@@ -206,6 +206,7 @@ def _label_lexicon_from_train(
         corpus_map,
         top_k=config.label_texts.top_k if config.label_texts else 10,
         expansion_min_prefix=(config.label_texts.expansion_min_prefix if config.label_texts else 4),
+        word_classes=config.label_texts.word_classes if config.label_texts else None,
     )
     block = label_lexicon_block(lexicon)
     block["provenance"] = {
@@ -349,6 +350,13 @@ def _cmd_labelembed(config: AppConfig) -> int:
                 config.label_texts.expansion_min_prefix
                 if config.label_texts.variant == "mined_words"
                 else None
+            ),
+            **(
+                {"word_classes": list(config.label_texts.word_classes)}
+                if config.label_texts is not None
+                and config.label_texts.variant == "mined_words"
+                and config.label_texts.word_classes is not None
+                else {}
             ),
             "lexicon": lexicon_block,
         },

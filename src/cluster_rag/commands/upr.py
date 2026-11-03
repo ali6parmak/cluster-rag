@@ -3027,6 +3027,7 @@ def _upr_label_lexicon(
         corpus_map,
         top_k=lexicon_config.top_k,
         expansion_min_prefix=lexicon_config.expansion_min_prefix,
+        word_classes=lexicon_config.word_classes,
     )
     block = label_lexicon_block(lexicon)
     block["provenance"] = {
@@ -3278,6 +3279,7 @@ def _upr_learned_arms(
                 fold_map,
                 top_k=learned.label_lexicon.top_k,
                 expansion_min_prefix=learned.label_lexicon.expansion_min_prefix,
+                word_classes=learned.label_lexicon.word_classes,
             )
             sides: list[UprLabel] = []
             for base in labels:
