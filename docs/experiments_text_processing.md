@@ -95,6 +95,7 @@ research record and are **not** indexed here.
 | [CS-40 — the contrastive map](#cs-40--the-contrastive-map-why-a-and-not-b-2026-11-03) | no run (a **tool**): the viewer's contrastive block + the measurement tool | the block stays: the discriminating words are **not** the ones the topic-side and the text-side maps show (the vocabulary share **0.6100** against the bar 0.50) and for **80 %** of its rows the screen does not print **both** of the pair's log-odds — the reader could not have formed the difference; and **62.5 %** of the measured pairs have a word of **this** text that pulls the two labels in **opposite** directions | the CS-23 artifact (read, not re-measured) |
 | [CS-41 — the lexical kNN](#cs-41--the-lexical-knn-how-much-of-the-retrieval-is-words-alone-2026-11-03) | six `upr-eval-lexical-knn-k{1,3,5,10,20}-val` runs + the label-blind counterpart (the **main** UPR table) | **the lexical route is a viable candidate generator**: the words alone retrieve nearly as well as the embedding (the shortlist R@50 **0.9437** against the embedding kNN's **0.9576** at the same k, and above the embedding family's floor 0.8918) — so **PLAN.md's BM25 checkbox is LIVE**; and the **champion's fusion is the worse candidate generator** (0.7423, barely above the 0.7353 chance level) — the fusion dilutes the shortlist. The embedding's advantage is in the **ordering** (micro-F1 +0.0783), not in the **breadth** | `results/upr-eval-lexical-knn-k10-val/metrics.json` |
 | [CS-42 — the fit-side mask](#cs-42--the-fit-side-mask-the-dictionarys-floor-stops-meaning-impossible-2026-11-03) | one `upr-analyze-cmap-fitmask` run (four arms + the pack's floors) | **the mask is a lever, but not the whole lever**: the eight recover **0.0000 → 0.2947** and five of them come back, but the registered bar was 0.45, so the recovery condition fires; the seen buckets **gain** (+0.1478 [+0.1236, +0.1710] against the control) and the pooled number reaches **0.5874** — the silence proxy is **part** of the cause; the three that stay down are the two catch-alls and the broad ESC category | `results/upr-analyze-cmap-fitmask/analysis.json` |
+| [CS-43 — the dictionary and the catalog description](#cs-43--the-dictionary-and-the-catalog-description-the-description-cannot-outvote-the-floor-2026-11-03) | two `upr-analyze-cmap-catalog{,-desc}` runs (four arms each) | **the dictionary overrules the description**: with the description in the pack the eight still collapse (**0.0066** / **0.0000** against the same runs' controls' **0.4824** / **0.4690**), while the pooled numbers pass (**0.5608** / **0.5532**, both >= 0.55) — the two channels are complementary on the seen labels and not on the eight; the registered "unseen at 0.00" branch fires (cell 2 exactly; cell 1 at 0.7 % of its control) | `results/upr-analyze-cmap-catalog/analysis.json` · `results/upr-analyze-cmap-catalog-desc/analysis.json` |
 
 ## Change sets
 
@@ -8045,3 +8046,114 @@ candidates sorted by name — never chosen on val):
   same mask would also recover the eight is unmeasured.
 - Nothing about the **per-label F1** of the masked arm (the artifact carries the
   score distributions; the F1 is the round's recorded gap).
+
+## CS-43 — the dictionary and the catalog description: the description cannot outvote the floor (2026-11-03)
+
+**The question.** The dictionary's column is silent for the eight held-out
+labels, and CS-32/CS-37 measured what that costs: the learner reads the floor as
+"impossible" and the unseen bucket collapses to 0.0000. The catalog's
+description is the one channel that is **non-silent for all 68 labels** — alone
+it lifts the unseen bucket to 0.4690 (query half) and 0.4824 (feature half). Do
+the two channels rescue each other when they share a pack?
+
+**The run.** Two, as pre-registered. Cell 1 (**the primary**, the description's
+feature half): `upr-analyze-cmap-catalog` — CS-11's `CATALOG_PACK` (`embedding +
+lexical + chunk_profile + label_part + label_type`) plus the `corpus_map` group,
+the champion's label embeddings, the champion's reference eval run. Cell 2 (the
+registered robustness arm, the description's query half):
+`upr-analyze-cmap-catalog-desc` — CS-11's `FULL_PACK` plus `corpus_map`, the
+description's label embeddings (cached), the description label side's own
+reference eval run. Both carry CS-32's dictionary settings and CS-42's fit-side
+mask **off**. Artifacts `results/upr-analyze-cmap-catalog/analysis.json` (112.6 s)
+and `results/upr-analyze-cmap-catalog-desc/analysis.json` (144.4 s); the rows
+land in the **track's** UPR table under `## UPR — upr_learned_cmap_catalog`. No
+model calls.
+
+**The guard held exactly.** Each cell's **control** (the same catalog pack
+without the column) IS CS-11's pack, and it reproduces CS-11's arm field for
+field: cell 1's control **0.5076** pooled / **0.4824** unseen (CS-11's
+`upr-analyze-learned-cat-feat`) and cell 2's **0.5084** / **0.4690**
+(`-cat-desc`). The whole-text reference arms reproduce their own `evaluate` runs
+field by field. So the in-run pair "with the column / without it" is clean.
+
+### The arms, cell 1 — the description's feature half (UPR **val**, 660 texts, `top_k` k=2)
+
+| the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| the champion (the whole retrieval + decision pipeline) | 0.5479 | 0.5006 | 0.868 | 0.6953 | 0.5121 | 0.5287 | 0.0000 | 0.6725 | 0.7423 |
+| **the real arm (the description + the column)** | **0.5608** | **0.5268** | 0.897 | **0.7029** | **0.5226** | **0.5800** | **0.0066** | 0.6790 | 0.8095 |
+| the **control** (the same pack without the column) | 0.5076 | 0.5077 | 0.971 | 0.5492 | 0.4559 | 0.5047 | **0.4824** | 0.6643 | 0.8955 |
+| the blind map | 0.4597 | 0.4686 | 0.912 | 0.5682 | 0.4418 | 0.4956 | 0.0264 | 0.5834 | 0.7865 |
+| the pack's random-vector floor | 0.5395 | 0.4932 | 0.912 | 0.6710 | 0.5108 | 0.5256 | 0.0066 | 0.6619 | 0.7860 |
+
+### The arms, cell 2 — the description's query half
+
+| the arm | micro-F1 | macro-F1 | coverage | head | torso | tail | unseen | nDCG@5 | shortlist R@50 |
+|---|---|---|---|---|---|---|---|---|---|
+| the champion with the description label vectors | 0.5456 | 0.4959 | 0.868 | 0.6920 | 0.5040 | 0.5344 | 0.0000 | 0.6702 | 0.7352 |
+| **the real arm (the description + the column)** | **0.5532** | **0.5133** | 0.882 | 0.6851 | **0.5152** | **0.5831** | **0.0000** | 0.6717 | 0.8042 |
+| the **control** (the same pack without the column) | 0.5084 | 0.4872 | 0.985 | 0.5949 | 0.4101 | 0.5121 | **0.4690** | 0.6557 | 0.8864 |
+| the blind map | 0.4483 | 0.4315 | 0.912 | 0.5797 | 0.3917 | 0.5017 | 0.0263 | 0.5748 | 0.7726 |
+| the pack's random-vector floor | 0.5312 | 0.4809 | 0.897 | 0.6681 | 0.4854 | 0.5245 | 0.0000 | 0.6468 | 0.7836 |
+
+### The falsification, read out — **the dictionary overrules the description**
+
+1. **The recovery test FAILS in both cells.** The real arm's unseen micro-F1 is
+   **0.0066** (cell 1) and **0.0000** (cell 2), far under the registered bar of
+   0.45 — while the same runs' controls carry the eight at **0.4824** and
+   **0.4690**. The paired differences (real − control, unseen) are **−0.4758
+   [−0.5297, −0.4174]** and **−0.4690 [−0.5228, −0.4112]**: the column costs the
+   eight the whole of the description's gain, exactly as it did without it
+   (CS-32's −0.4867).
+2. **The pooled test PASSES.** The real arm's pooled micro-F1 is **0.5608**
+   (cell 1) and **0.5532** (cell 2), both at or above the registered 0.55. The
+   column's gain over the description pack is **+0.0532 [+0.0304, +0.0751]**
+   pooled and **+0.1199 [+0.0977, +0.1420]** on the seen view (cell 1);
+   **+0.0448 [+0.0190, +0.0688]** and **+0.1076 [+0.0834, +0.1310]** (cell 2).
+3. **The label-blind control PASSES.** On the seen view the blind arm's Δ
+   against the control is **+0.0036 [−0.0093, +0.0169]** (cell 1) and **−0.0131
+   [−0.0258, −0.0002]** (cell 2): it buys nothing, so the gain is label-driven.
+
+### The reading: the description cannot outvote the floor
+
+- **The two channels are complementary on the seen labels and not on the
+  eight.** The description raises the pack's floor (its own control is 0.5076 /
+  0.5084 against CS-32's 0.4818), and the dictionary then adds its usual
+  seen-labels gain on top (+0.0532 / +0.0448 pooled in the same run) — so the
+  combined pack is the third-best pack number the track has (0.5608, behind
+  CS-13's 0.5965 and CS-42's 0.5874; CS-32's dictionary-only pack is 0.5502 and
+  the champion 0.5479). But on the eight the description is outvoted: the
+  learner's floor-rule is inferred from the fit side, where **the dictionary's
+  silence is still a perfect proxy for "never positive"** whether or not another
+  channel is non-silent. A non-silent neighbour does not change what the silent
+  one teaches; it only gives the learner a second, weaker cue that it weighs
+  below the rule it has already learned.
+- **The registered branch fires.** The pre-registration said: if the unseen
+  stays at 0.00, the dictionary overrules the description and CS-42's fit-side
+  route is the only one left. Cell 2 is exactly 0.0000; cell 1 is **0.0066** —
+  0.7 % of the control's 0.4824, a collapse for any practical purpose, but
+  **not literally zero**, and recorded as such rather than smoothed. The
+  substance holds in both cells: the description does not rescue the eight.
+- **The blind arm's collapse is marginally less total with a non-silent channel**
+  (unseen 0.0264 / 0.0263 against CS-32's 0.0066) — the description gives even a
+  permuted map a faint cue for the eight — but it is still a collapse, and the
+  blind arm remains the track's yardstick for "buys nothing".
+- **So the route for the eight is CS-42's**, and even that one recovered only
+  two-thirds (0.2947). The two facts together are the round's shape: the floor
+  rule is learned from the fit side, so it can be broken there (partially) and
+  not outvoted at the label side.
+
+### What this change set does not say
+
+- Nothing about **test** (val only) and nothing about **CS-42's mask combined
+  with the description**: the mask was off in both cells (one thing at a time),
+  and the combination is the obvious next question — it is **not** registered
+  here.
+- Nothing about the **decision feature** (CS-13) or the **reranker's** (CS-16),
+  the catalog's **parent backoff** or the **mined lexicon** (CS-35/CS-45).
+- Nothing about the **two description halves in one arm**: each cell carries one
+  half, so "both halves + the dictionary" is unmeasured.
+- Nothing new about **CS-11's own artifacts**: they are untouched, and both
+  controls reproduce them field for field (the guard).
+- Nothing about a **per-label** view of the eight beyond the score
+  distributions the artifacts carry.
