@@ -1,9 +1,9 @@
 """The hit map's **terminal viewer** (the track's CS-20).
 
 One command, one text on screen: the text's words and **what each contributes**,
-**who the words say it is**, **what the model says** (live), **what is true**
-(the gold labels) and — behind a flag — **what happens if this word is removed**
-(the causal mode E, one word at a time).
+**who the words say it is**, **what the decision model says** (live), **what is
+true** (the gold labels) and — behind a flag — **what happens if this word is
+removed** (the causal mode E, one word at a time).
 
 The map exists as four modes (CS-18's topic-side map + causal ablation, CS-19's
 text-side map + surrogate attribution) and all four live in artifacts. This tool
@@ -11,9 +11,9 @@ is the **per-document view** over them: it reads the artifacts and the data, and
 it perturbs nothing unless it is asked to.
 
 CS-23 added a fifth block to the screen: the **corpus map** — the train
-split's own word↔label association (the data's own statistics, not the model's
-and not a feature's). It shows in two directions: the topic's own words by
-log-odds (the words that are **in this text** marked), and this text's words
+split's own word↔label association (the data's own statistics, not the decision
+model's and not a feature's). It shows in two directions: the topic's own words
+by log-odds (the words that are **in this text** marked), and this text's words
 with the labels they lean to.
 
 CS-47 added the **dictionary's own ranking** between the corpus map and the
@@ -26,10 +26,10 @@ The three modes and their costs:
 
 - **offline** (the default): the artifacts + the data + the split —
   **0 model calls**;
-- **live** (``--live``): the model, re-scored through the cached calls —
-  2 calls per text, and cache hits for the val texts;
+- **live** (``--live``): the decision model, re-scored through the cached
+  calls — 2 calls per text, and cache hits for the val texts;
 - **what-if** (``--what-if word``): one re-scored grid per word —
-  **2 real calls per word**, and the model is **not deterministic**.
+  **2 real calls per word**, and the decision model is **not deterministic**.
 
 Usage:
 
@@ -42,8 +42,8 @@ Usage:
 **The tool is a tool, not a number source.** The offline numbers are the
 artifacts' own (the map's exact per-word decomposition and the surrogate's
 stored coefficients), and the live and what-if numbers are printed as the
-tool's own readings, with the model and its digest named. Anything that becomes
-a claim lands in an artifact first (the track's own rule).
+tool's own readings, with the decision model and its digest named. Anything that
+becomes a claim lands in an artifact first (the track's own rule).
 
 **The attribution/causation distinction is visible in the output.** The lexical
 and the surrogate columns are *attributions* (a decomposition of a feature's own
@@ -126,9 +126,9 @@ CORPUS_WORD_LABELS = LEAN_LIMIT
 # tolerance is the rounding (plus a hair).
 VALUE_TOLERANCE = 1e-6
 
-# The model's own noise band (the CS-7a precedent: the same call re-run moves
-# the probability by ~0.001-0.003). A what-if delta inside the band is the
-# model twitching, not the model using the word.
+# The decision model's own noise band (the CS-7a precedent: the same call
+# re-run moves the probability by ~0.001-0.003). A what-if delta inside the
+# band is the decision model twitching, not it using the word.
 NOISE_BAND = 0.003
 
 # The ANSI palette (raw escape codes: no dependency). The 256-colour ramps
@@ -396,8 +396,8 @@ def surrogate_full_vector(surrogate: Mapping[str, Any]) -> dict[str, Any] | None
     """The artifact's **full** coefficient vector (CS-24), if it is there.
 
     The block carries a shared vocabulary and one row of numbers per topic, so
-    the words are stored once and every word of the model's vocabulary has a
-    coefficient. An artifact without the block (the CS-19 shape) gives
+    the words are stored once and every word of the decision model's vocabulary
+    has a coefficient. An artifact without the block (the CS-19 shape) gives
     ``None``: the viewer then reads the top-15 lists and says so.
     """
     vector = surrogate.get("full_vector")
@@ -422,9 +422,9 @@ def surrogate_coefficients(surrogate: Mapping[str, Any], topic: str) -> dict[str
     """One topic's stored coefficients.
 
     The **full** vector when the artifact carries it (CS-24: every word of the
-    model's vocabulary has a number), and the **top-15 lists** otherwise (the
-    CS-19 artifact's shape, where a word outside the lists has no stored
-    coefficient — never a coefficient of zero).
+    decision model's vocabulary has a number), and the **top-15 lists**
+    otherwise (the CS-19 artifact's shape, where a word outside the lists has no
+    stored coefficient — never a coefficient of zero).
     """
     vector = surrogate_full_vector(surrogate)
     if vector is not None:
@@ -702,7 +702,8 @@ def remove_word(text: str, word: str) -> tuple[str, int]:
     """The text without a word: every occurrence of it, and how many there were.
 
     The removal is the **causal** one: the word is taken out of the text and the
-    model is asked again, so the word's effect is read from a perturbed input.
+    decision model is asked again, so the word's effect is read from a perturbed
+    input.
 
     Raises:
         ValueError: If the word is not in the text.
@@ -720,13 +721,13 @@ def build_decider(
 ) -> tuple[Any, DecisionArm, str, dict[str, Any]]:
     """The decision model client, built from the **artifact's own** pinned config.
 
-    The viewer has no model of its own: it reads the very model the map used
-    (the id, the pinned digest, the prompt and the prompt version), so the live
-    mode is read against the same instrument as the map.
+    The viewer has no decision model of its own: it reads the very decision
+    model the map used (the id, the pinned digest, the prompt and the prompt
+    version), so the live mode is read against the same instrument as the map.
 
     Returns:
         The decider (the cache in front of the client), the arm, the arm's name
-        and the model's provenance block.
+        and the decision model's provenance block.
     """
     chosen, surrogate = surrogate_block(context.surrogate, arm_name)
     arms = context.surrogate.get("ablation_map", {}).get("arms", {})
@@ -735,7 +736,7 @@ def build_decider(
     model_dict = next((model for model in models if model.get("name") == chosen), None)
     if model_dict is None:
         if not models:
-            raise KeyError(f"the artifact {chosen!r} names no model to read")
+            raise KeyError(f"the artifact {chosen!r} names no decision model to read")
         model_dict = models[0]
     model_config = DecisionModelConfig(**model_dict)
     decision = UprDecisionConfig(
@@ -998,7 +999,7 @@ def render(
     add(
         paint(
             "  an attribution: the feature's own arithmetic (lex_text_coverage), never the "
-            "model's reading",
+            "decision model's reading",
             DIM,
             colour=colour,
         )
@@ -1032,19 +1033,19 @@ def render(
     )
     add("")
 
-    # -- the model's word habits: the surrogate ---------------------------------
+    # -- the decision model's word habits: the surrogate -----------------------
     add(
         paint(
-            "THE MODEL'S WORD HABITS — a learned question: does the model react to this "
-            "word for this topic?",
+            "THE DECISION MODEL'S WORD HABITS — a learned question: does the decision model "
+            "react to this word for this topic?",
             BOLD,
             colour=colour,
         )
     )
     add(
         paint(
-            "  an attribution of the model's own probability (a ridge surrogate), never a "
-            "causal claim",
+            "  an attribution of the decision model's own probability (a ridge surrogate), "
+            "never a causal claim",
             DIM,
             colour=colour,
         )
@@ -1066,9 +1067,9 @@ def render(
             cell = f"{shown:+.3f}"
             code = signed_ramp(shown, surrogate_max)
         elif vector is not None:
-            # the word is outside the model's vocabulary (CS-24): a different
-            # and more useful statement than "not stored"
-            cell = "not in the model's vocabulary"
+            # the word is outside the decision model's vocabulary (CS-24): a
+            # different and more useful statement than "not stored"
+            cell = "not in the decision model's vocabulary"
             code = DIM
         else:
             cell = "—"
@@ -1081,9 +1082,9 @@ def render(
     if vector is not None:
         add(
             paint(
-                "  the surrogate's coefficient is the model's own for every word of its "
-                "vocabulary (the train corpus's words with df ≥ 3); a word outside it reads "
-                "'not in the model's vocabulary' — never zero.",
+                "  the surrogate's coefficient is the decision model's own for every word of "
+                "its vocabulary (the train corpus's words with df ≥ 3); a word outside it "
+                "reads 'not in the decision model's vocabulary' — never zero.",
                 DIM,
                 colour=colour,
             )
@@ -1216,7 +1217,7 @@ def render(
         add(
             paint(
                 "  a description of the data (the train split's own counts), never the "
-                "model's reading",
+                "decision model's reading",
                 DIM,
                 colour=colour,
             )
@@ -1570,8 +1571,8 @@ def render(
             add(
                 paint(
                     "  a description of the data (the train split's own word counts), never "
-                    "the model's reading; the score is the sum of the positive z-scores of "
-                    "this text's words in the label's table (map_score)",
+                    "the decision model's reading; the score is the sum of the positive "
+                    "z-scores of this text's words in the label's table (map_score)",
                     DIM,
                     colour=colour,
                 )
@@ -1629,7 +1630,7 @@ def render(
             add(
                 paint(
                     "  a description of the data (the train split's own counts) read as a "
-                    "difference between two tables — never the model's reading",
+                    "difference between two tables — never the decision model's reading",
                     DIM,
                     colour=colour,
                 )
@@ -1777,8 +1778,8 @@ def render(
     if live is not None:
         add(
             paint(
-                "WHAT THE MODEL SAYS — the model's own reading: what does the model say "
-                "this text is about?",
+                "WHAT THE DECISION MODEL SAYS — the decision model's own reading: what does "
+                "the decision model say this text is about?",
                 BOLD,
                 colour=colour,
             )
@@ -1805,15 +1806,15 @@ def render(
 
     add(
         paint(
-            "THE THREE SIDE BY SIDE — the comparison: what the words say, what the model "
-            "says, what is true",
+            "THE THREE SIDE BY SIDE — the comparison: what the words say, what the decision "
+            "model says, what is true",
             BOLD,
             colour=colour,
         )
     )
     add(
         paint(
-            f"  {'topic':<38}{'the words say':>15}{'the model says':>16}{'the truth':>10}",
+            f"  {'topic':<38}{'the words say':>15}{'the decision model says':>24}{'the truth':>10}",
             DIM,
             colour=colour,
         )
@@ -1842,7 +1843,7 @@ def render(
             else "—",
             "gold" if label in gold_labels else "",
         ]
-        add(f"  {label_cell(label, 38)}{cells[0]:>15}{cells[1]:>16}{cells[2]:>10}")
+        add(f"  {label_cell(label, 38)}{cells[0]:>15}{cells[1]:>24}{cells[2]:>10}")
     add("")
 
     if what_if:
@@ -1855,8 +1856,8 @@ def render(
         )
         add(
             paint(
-                "  the model is asked again about the text without the word: this is the "
-                "causal read (the blocks above are not)",
+                "  the decision model is asked again about the text without the word: this is "
+                "the causal read (the blocks above are not)",
                 DIM,
                 colour=colour,
             )
@@ -1864,8 +1865,8 @@ def render(
         for word, _variant, count, scores, calls, word_cache in what_if:
             add(
                 paint(
-                    f'  the word "{word}" occurs {count} time(s); the model is asked about the '
-                    "text without it",
+                    f'  the word "{word}" occurs {count} time(s); the decision model is asked '
+                    "about the text without it",
                     DIM,
                     colour=colour,
                 )
@@ -1897,8 +1898,8 @@ def render(
                 )
             add(
                 paint(
-                    f"  a delta inside the model's noise band (±{NOISE_BAND:g}) is marked "
-                    '"noise": the model twitched, it did not use the word.',
+                    f"  a delta inside the decision model's noise band (±{NOISE_BAND:g}) is "
+                    'marked "noise": the decision model twitched, it did not use the word.',
                     DIM,
                     colour=colour,
                 )

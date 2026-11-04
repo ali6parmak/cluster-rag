@@ -289,7 +289,7 @@ def test_the_viewer_runs_offline_on_the_fixture(
     assert "UPR val" in out
     assert "WHAT IS TRUE" in out
     assert "THE FEATURE'S OWN SPLIT" in out
-    assert "THE MODEL'S WORD HABITS" in out
+    assert "THE DECISION MODEL'S WORD HABITS" in out
     assert "THE TOPIC'S OWN WORDS" in out
 
 
@@ -348,14 +348,14 @@ def test_the_live_mode_asks_the_model(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The live mode shows the model's own ranking (against the fake decider)."""
+    """The live mode shows the decision model's own ranking (against the fake decider)."""
     decider = FakeDecider()
     monkeypatch.setattr(viewer_module, "build_upr_decider", lambda model_config, config: decider)
     args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]), "--live")
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
-    assert "WHAT THE MODEL SAYS" in out
-    assert decider.calls, "the model was not asked"
+    assert "WHAT THE DECISION MODEL SAYS" in out
+    assert decider.calls, "the decision model was not asked"
     assert "the tool's own reading, not an artifact's number" in out
 
 
@@ -365,7 +365,7 @@ def test_the_what_if_mode_removes_the_word_and_re_asks(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The what-if mode perturbs the input: the model is asked about the ablated text."""
+    """The what-if mode perturbs the input: the decision model is asked about the ablated text."""
     decider = FakeDecider()
     monkeypatch.setattr(viewer_module, "build_upr_decider", lambda model_config, config: decider)
     record_id = str(fixture_artifacts["val_ids"][0])
@@ -384,7 +384,7 @@ def test_the_what_if_mode_removes_the_word_and_re_asks(
     out = capsys.readouterr().out
     assert "the causal one" in out
     assert "NOT deterministic" in out
-    # the model saw the intact text and the text without the word
+    # the decision model saw the intact text and the text without the word
     assert any(word.lower() in call for call in decider.calls)
     assert any(word.lower() not in call for call in decider.calls)
 
@@ -414,7 +414,7 @@ def test_the_output_separates_the_attributions_from_the_causal_column(
     out = capsys.readouterr().out
     # the attributions say what they are ...
     assert "an attribution: the feature's own arithmetic" in out
-    assert "an attribution of the model's own probability" in out
+    assert "an attribution of the decision model's own probability" in out
     assert "a description of the data" in out
     # ... and the causal one says so
     assert "WHAT IF THIS WORD IS REMOVED — the causal one, at word level" in out
@@ -617,7 +617,7 @@ def test_the_viewers_class_rows_are_the_artifacts_own(
 def test_the_surrogate_column_has_a_number_for_every_word(
     viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With the full vector, every word of the model's vocabulary has a number."""
+    """With the full vector, every word of the decision model's vocabulary has a number."""
     config = viewer_module.load_config(fixture_artifacts["config"])
     context = viewer_module.load_context(
         config,
@@ -633,24 +633,24 @@ def test_the_surrogate_column_has_a_number_for_every_word(
     topic = context.records[0].labels[0]
     coefficients = viewer_module.surrogate_coefficients(surrogate, topic)
     assert coefficients, "the topic has no coefficients"
-    # the vector's vocabulary is the model's vocabulary
+    # the vector's vocabulary is the decision model's vocabulary
     assert set(vector["vocabulary"]) == set(coefficients)
     text_words = {
         str(row["word"]) for row in viewer_module.word_rows(context.records[0].text, topic)
     }
     in_vocabulary = text_words & set(vector["vocabulary"])
-    assert in_vocabulary, "none of the text's words is in the model's vocabulary"
+    assert in_vocabulary, "none of the text's words is in the decision model's vocabulary"
     args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
     # the old fallback note is gone: the column is complete
     assert "—' means 'not stored'" not in out
-    assert "the model's own for every word of its vocabulary" in out
+    assert "the decision model's own for every word of its vocabulary" in out
     # a word the vocabulary holds shows its number
     sample = sorted(in_vocabulary)[0]
     assert f"{coefficients[sample]:+.3f}" in out
     # a word it does not hold says so (the fixture's val-only words)
-    assert "not in the model's vocabulary" in out
+    assert "not in the decision model's vocabulary" in out
 
 
 def test_a_word_outside_the_vocabulary_says_so(
@@ -658,7 +658,7 @@ def test_a_word_outside_the_vocabulary_says_so(
     fixture_artifacts: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A word the surrogate's vocabulary does not hold reads "not in the model's vocabulary"."""
+    """A word the surrogate's vocabulary does not hold reads the "not in" message."""
     source = fixture_artifacts["results"] / fixture_artifacts["surrogate_run"] / "hitmap.json"
     payload = json.loads(source.read_text("utf-8"))
     arm = next(iter(payload["ablation_map"]["arms"].values()))
@@ -685,7 +685,7 @@ def test_a_word_outside_the_vocabulary_says_so(
     ]
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
-    assert "not in the model's vocabulary" in out
+    assert "not in the decision model's vocabulary" in out
     assert "never zero" in out
 
 
@@ -765,7 +765,7 @@ def test_the_mode_letters_leave_the_headings(
     assert "THE FEATURE'S OWN SPLIT — a spelling question:" in out
     assert "THE TOPIC'S OWN WORDS — a spelling question:" in out
     assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC — a statistical question:" in out
-    assert "THE MODEL'S WORD HABITS — a learned question:" in out
+    assert "THE DECISION MODEL'S WORD HABITS — a learned question:" in out
 
 
 def test_the_noise_band_marks_the_deltas(
@@ -774,7 +774,7 @@ def test_the_noise_band_marks_the_deltas(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A delta inside the model's noise band is dim and marked "noise"."""
+    """A delta inside the decision model's noise band is dim and marked "noise"."""
     decider = FakeDecider()
     monkeypatch.setattr(viewer_module, "build_upr_decider", lambda model_config, config: decider)
     config = viewer_module.load_config(fixture_artifacts["config"])
@@ -1001,7 +1001,7 @@ def test_the_viewer_shows_the_contrastive_block(
     assert "the words of THIS text that separate them:" in out
     assert "the corpus's own words that separate them:" in out
     # the block says what it is (CS-25's rule): a description of the data
-    assert "never the model's reading" in out
+    assert "never the decision model's reading" in out
 
 
 def test_the_contrast_numbers_are_the_artifacts_own(
