@@ -60,6 +60,10 @@ VOCABULARY_BAR = 0.50
 RELEVANCE_BAR = 0.50
 NOVELTY_BAR = 0.50
 
+# How many contributing words a label's dictionary row shows at most (CS-47:
+# "the word that gave the points", never a whole table).
+DICTIONARY_TOP_WORDS = 2
+
 
 @dataclass(frozen=True)
 class ContrastRow:
@@ -119,6 +123,30 @@ class ContrastRow:
             "word_class": self.word_class,
             "is_name_word": self.is_name_word,
         }
+
+
+@dataclass(frozen=True)
+class DictionaryRow:
+    """One label of the **dictionary's own ranking** (the track's CS-47).
+
+    The map's classifier answers with the labels whose tables sum the largest
+    positive z-scores over the text's words (the track's
+    ``sum_zscore_positive``, CS-31's). This row is that answer for one label.
+
+    Attributes:
+        rank: The label's place in the ranking (1-based, over the labels whose
+            table is not empty).
+        label: The label.
+        score: The map's own score (``map_score``: the sum of the positive
+            z-scores of the text's words in the label's table).
+        words: The words that gave the points, strongest first (at most
+            ``DICTIONARY_TOP_WORDS`` are shown; this tuple may hold more).
+    """
+
+    rank: int
+    label: str
+    score: float
+    words: tuple[tuple[str, float], ...]
 
 
 def _row_by_word(rows: Sequence[Mapping[str, object]]) -> dict[str, Mapping[str, object]]:
@@ -268,6 +296,63 @@ def map_score(
         if z_score > 0:
             total += z_score
     return total
+
+
+def dictionary_ranking(
+    tables: Mapping[str, Sequence[Mapping[str, object]]],
+    text_words: Iterable[str],
+    *,
+    labels: Sequence[str] = (),
+) -> tuple[DictionaryRow, ...]:
+    """The **dictionary's own ranking** of the labels for one text (CS-47).
+
+    The classifier's answer, read from the artifact's own tables: a label whose
+    table is **not empty** scores ``map_score(rows, text_words)`` — the sum of
+    the positive z-scores of the text's words in its table — and the ranking is
+    that score, largest first. The **empty tables are omitted**, not printed at
+    the floor: a label with no train example carries no evidence, and printing
+    it at 0.0 would claim the map scored it. A label that scores **nothing**
+    (its table holds none of the text's positive-z words) is not a pick either
+    and is left out too, so every row on the screen has a word that gave the
+    points. The tie-break is the label space's own order, exactly as
+    :func:`default_contrast_label` breaks it.
+
+    Args:
+        tables: Every label's table (the artifact's own rows).
+        text_words: The text's own content words.
+        labels: The label space's own order (the tie-break).
+
+    Returns:
+        The labels with a table and a positive score, ranked; the contributing
+        words ride along.
+    """
+    wanted = set(text_words)
+    order = list(labels) if labels else sorted(tables)
+    order_index = {label: index for index, label in enumerate(order)}
+    scored: list[tuple[str, float, tuple[tuple[str, float], ...]]] = []
+    for label in order:
+        rows = tables.get(label) or ()
+        if not rows:
+            # no table, no evidence: the label is OMITTED from the ranking
+            continue
+        contributing = sorted(
+            (
+                (str(row.get("word")), float(row.get("z_score", 0.0)))
+                for row in rows
+                if str(row.get("word")) in wanted and float(row.get("z_score", 0.0)) > 0
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        score = map_score(rows, wanted)
+        if score <= 0.0:
+            # no word gave this label any points: it is not one of the picks
+            continue
+        scored.append((label, score, tuple(contributing)))
+    scored.sort(key=lambda item: (-item[1], order_index[item[0]]))
+    return tuple(
+        DictionaryRow(rank=index + 1, label=label, score=score, words=words)
+        for index, (label, score, words) in enumerate(scored)
+    )
 
 
 def default_contrast_label(

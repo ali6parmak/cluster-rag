@@ -25,6 +25,7 @@ import pytest
 
 from cluster_rag.cli import main
 from cluster_rag.decision.base import DecisionAnswer, DecisionInfo
+from cluster_rag.text_processors.lexical.contrastive import map_score
 
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
 
@@ -541,6 +542,7 @@ def test_the_viewer_runs_without_the_corpus_map(
     assert viewer_module.main(args) == 0
     out = capsys.readouterr().out
     assert "has not been made" in out
+    assert "no corpus map in this artifact" in out
     assert "THE CORPUS'S OWN WORDS FOR THIS TOPIC" not in out
 
 
@@ -1087,3 +1089,185 @@ def test_the_stale_artifact_guard_covers_the_contrast_label(
     out = capsys.readouterr().out
     assert "THE ARTIFACTS AND THE DATA DISAGREE" in out
     assert against in out
+
+
+# --- the dictionary's own ranking (CS-47) on the screen ---
+
+
+def _dictionary_expected(viewer_module: Any, context: Any, row: int) -> list[tuple[str, float]]:
+    """The block's ranking, recomputed from the artifact with ``map_score``.
+
+    The test's own arithmetic: the same table read and the same arm the block
+    uses, but written out here so a change to the block's rule cannot make the
+    test agree with it by construction.
+    """
+    record = context.records[row]
+    words = list(dict.fromkeys(viewer_module.content_tokens(record.text)))
+    tables = viewer_module.corpus_tables(context.corpus_map)
+    scored = [(label, map_score(rows, words)) for label, rows in tables.items() if rows]
+    scored = [(label, score) for label, score in scored if score > 0.0]
+    scored.sort(key=lambda item: (-item[1], item[0]))
+    return scored
+
+
+def _dictionary_block(out: str) -> str:
+    """The block's own lines (from its heading to the contrastive block's)."""
+    return out[out.index("THE DICTIONARY'S OWN RANKING") : out.index("WHY A AND NOT B")]
+
+
+def test_the_dictionary_scores_are_the_artifacts_own(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every row on the screen is the artifact's own map_score, word included."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    expected = _dictionary_expected(viewer_module, context, 0)
+    assert expected, "the fixture's text shares no word with the corpus map"
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    block = _dictionary_block(capsys.readouterr().out)
+    lines = block.splitlines()
+    tables = viewer_module.corpus_tables(context.corpus_map)
+    words = set(dict.fromkeys(viewer_module.content_tokens(context.records[0].text)))
+    for rank, (label, score) in enumerate(expected[: viewer_module.DEFAULT_DICT_TOP], start=1):
+        line = next(line for line in lines if re.match(rf"^\s+{rank}  ", line))
+        assert label in line
+        assert f"{score:>8.3f}" in line
+        contributors = sorted(
+            (
+                (str(row.get("word")), float(row.get("z_score", 0.0)))
+                for row in tables.get(label) or []
+                if str(row.get("word")) in words and float(row.get("z_score", 0.0)) > 0
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        for word, z_score in contributors[: viewer_module.DICTIONARY_TOP_WORDS]:
+            assert f"{word} {z_score:+.3f}" in line
+
+
+def test_the_dictionary_top_one_and_the_empty_table_footnote(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The top-1 label is the map's own, and the empty tables are omitted."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    expected = _dictionary_expected(viewer_module, context, 0)
+    assert expected
+    top_label, top_score = expected[0]
+    tables = viewer_module.corpus_tables(context.corpus_map)
+    no_table = [label for label in context.labels if not tables.get(label)]
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    block = _dictionary_block(capsys.readouterr().out)
+    first = next(line for line in block.splitlines() if re.match(r"^\s+1  ", line))
+    assert top_label in first
+    assert f"{top_score:>8.3f}" in first
+    assert f"{len(no_table)} labels have no table" in block
+    for label in no_table:
+        assert label not in block, f"the empty-table label {label!r} is printed at the floor"
+
+
+def test_the_dict_top_flag_limits_the_ranking(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--dict-top`` limits the rows, and its minimum is 1."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    expected = _dictionary_expected(viewer_module, context, 0)
+    assert len(expected) > 2
+    args = _view_args(
+        fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]), "--dict-top", "2"
+    )
+    assert viewer_module.main(args) == 0
+    block = _dictionary_block(capsys.readouterr().out)
+    rows = [line for line in block.splitlines() if re.match(r"^\s+\d+  ", line)]
+    assert len(rows) == 2
+    assert expected[2][0] not in block
+    with pytest.raises(SystemExit):
+        viewer_module.main(
+            _view_args(
+                fixture_artifacts,
+                "--text",
+                str(fixture_artifacts["val_ids"][0]),
+                "--dict-top",
+                "0",
+            )
+        )
+
+
+def test_the_contrast_pair_says_the_dictionarys_rank(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The contrast block's B carries its rank in the dictionary's ranking."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    _focus, against, _words = _contrast_pair(viewer_module, context, 0)
+    assert against
+    expected = _dictionary_expected(viewer_module, context, 0)
+    ranks = {label: rank for rank, (label, _score) in enumerate(expected, start=1)}
+    assert against in ranks, "the contrast's B is not in the dictionary's ranking"
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 0
+    out = capsys.readouterr().out
+    assert f"B: {against} (the dictionary's rank {ranks[against]} for this text)" in out
+
+
+def test_the_stale_guard_covers_the_dictionarys_top(
+    viewer_module: Any, fixture_artifacts: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stale table in the dictionary's own top rows is caught like the focus's."""
+    config = viewer_module.load_config(fixture_artifacts["config"])
+    context = viewer_module.load_context(
+        config,
+        split="val",
+        text_map_run=str(fixture_artifacts["text_run"]),
+        surrogate_run=str(fixture_artifacts["surrogate_run"]),
+        results=fixture_artifacts["results"],
+        corpus_map_run=str(fixture_artifacts["corpus_run"]),
+    )
+    expected = _dictionary_expected(viewer_module, context, 0)
+    focus, against, _words = _contrast_pair(viewer_module, context, 0)
+    label = next(
+        (label for label, _score in expected if label not in {focus, against}),
+        None,
+    )
+    if label is None:
+        pytest.skip("the fixture's dictionary top rows are all already guarded")
+    path = fixture_artifacts["results"] / fixture_artifacts["corpus_run"] / "hitmap.json"
+    payload = json.loads(path.read_text("utf-8"))
+    row = next(r for r in payload["corpus_map"]["per_label"] if r["label"] == label)
+    row["words"][0]["n_with"] = 999
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    args = _view_args(fixture_artifacts, "--text", str(fixture_artifacts["val_ids"][0]))
+    assert viewer_module.main(args) == 1
+    out = capsys.readouterr().out
+    assert "THE ARTIFACTS AND THE DATA DISAGREE" in out
+    assert label in out

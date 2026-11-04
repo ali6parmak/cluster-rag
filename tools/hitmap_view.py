@@ -16,6 +16,12 @@ and not a feature's). It shows in two directions: the topic's own words by
 log-odds (the words that are **in this text** marked), and this text's words
 with the labels they lean to.
 
+CS-47 added the **dictionary's own ranking** between the corpus map and the
+contrastive block: the map's classifier answer — every label scored by the
+positive z-scores of this text's words in its table, with the word that gave
+the points — and the contrast block's second label carries its rank, so the two
+blocks can never disagree.
+
 The three modes and their costs:
 
 - **offline** (the default): the artifacts + the data + the split —
@@ -29,6 +35,7 @@ Usage:
 
     uv run python tools/hitmap_view.py --sample --seed 7
     uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7
+    uv run python tools/hitmap_view.py --sample --seed 7 --dict-top 3
     uv run python tools/hitmap_view.py --sample --seed 7 --what-if ratification,migrant
     uv run python tools/hitmap_view.py --text 0000000000000047d5d150d7 --min-df 3
 
@@ -90,10 +97,12 @@ from cluster_rag.text_processors.features.pair_features import (
     content_tokens,
 )
 from cluster_rag.text_processors.lexical.contrastive import (
+    DICTIONARY_TOP_WORDS,
     DISPLAY_TOP_K,
     LEAN_LIMIT,
     corpus_contrast_rows,
     default_contrast_label,
+    dictionary_ranking,
     focus_label,
     text_contrast_rows,
 )
@@ -104,6 +113,7 @@ DEFAULT_CONFIG = Path("configs/base.yaml")
 DEFAULT_SPLIT = "val"
 DEFAULT_SEED = 42
 DEFAULT_TOP_K = DISPLAY_TOP_K
+DEFAULT_DICT_TOP = 10
 DEFAULT_MAX_QUESTIONS = 64
 TEXT_MAP_RUN = "upr-hitmap-text"
 SURROGATE_RUN = "upr-hitmap-surrogate"
@@ -880,6 +890,7 @@ def render(
     what_if_calls: int = 0,
     min_df: int = 0,
     contrast: str = "",
+    dict_top: int = DEFAULT_DICT_TOP,
     problems: Sequence[str] = (),
 ) -> str:
     """The whole screen, as text (the tool's own output).
@@ -1547,6 +1558,65 @@ def render(
             )
             add("")
 
+            # -- the dictionary's own ranking (CS-47): the classifier's answer ---
+            add(
+                paint(
+                    "THE DICTIONARY'S OWN RANKING — the classifier's answer: which labels "
+                    "does the corpus's word-counting pick, and which word gave the points?",
+                    BOLD,
+                    colour=colour,
+                )
+            )
+            add(
+                paint(
+                    "  a description of the data (the train split's own word counts), never "
+                    "the model's reading; the score is the sum of the positive z-scores of "
+                    "this text's words in the label's table (map_score)",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            tables = corpus_tables(context.corpus_map)
+            dictionary_rows = dictionary_ranking(tables, text_words, labels=labels)
+            dictionary_rank = {row.label: row.rank for row in dictionary_rows}
+            add(
+                paint(
+                    f"  {'rank':>4}  {'label':<38}{'score':>8}  the words that gave the points",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            for entry in dictionary_rows[:dict_top]:
+                contributors = ", ".join(
+                    f"{word} {z_score:+.3f}" for word, z_score in entry.words[:DICTIONARY_TOP_WORDS]
+                )
+                if len(entry.words) > DICTIONARY_TOP_WORDS:
+                    contributors += f", +{len(entry.words) - DICTIONARY_TOP_WORDS} more"
+                mark = " ★" if entry.label in gold_labels else "  "
+                add(
+                    f"   {entry.rank:>2}  {label_cell(entry.label, 38)}{entry.score:>8.3f}"
+                    f"  ({contributors or '—'}){mark}"
+                )
+            no_table = sum(1 for label in labels if not tables.get(label))
+            add(
+                paint(
+                    f"  {no_table} labels have no table (no train text carries them): they are "
+                    "OMITTED from the ranking, never printed at the floor; the ties break by "
+                    "the label space's own order.",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            add(
+                paint(
+                    "  a label that scores nothing (its table holds none of this text's "
+                    "positive-z words) is not a pick and is left out too.",
+                    DIM,
+                    colour=colour,
+                )
+            )
+            add("")
+
             # -- the contrastive map (CS-40): why A and not B ---------------------
             add(
                 paint(
@@ -1564,7 +1634,6 @@ def render(
                     colour=colour,
                 )
             )
-            tables = corpus_tables(context.corpus_map)
             against = contrast or default_contrast_label(
                 tables,
                 text_words,
@@ -1582,7 +1651,13 @@ def render(
                 )
                 add("")
             else:
-                add(f"  A: {label_cell(focus)}   B: {label_cell(against)}")
+                b_rank = dictionary_rank.get(against)
+                b_note = (
+                    f" (the dictionary's rank {b_rank} for this text)"
+                    if b_rank is not None
+                    else " (not in the dictionary's ranking for this text)"
+                )
+                add(f"  A: {label_cell(focus)}   B: {label_cell(against)}{b_note}")
                 if not contrast:
                     add(
                         paint(
@@ -1679,11 +1754,20 @@ def render(
                 )
                 add("")
 
-    elif context.corpus_map is None:
+    else:
+        if context.corpus_map is None:
+            add(
+                paint(
+                    f"THE CORPUS'S OWN WORDS — not shown: the run {context.corpus_map_run!r} "
+                    "has not been made (the map's block is in its hitmap.json)",
+                    DIM,
+                    colour=colour,
+                )
+            )
         add(
             paint(
-                f"THE CORPUS'S OWN WORDS — not shown: the run {context.corpus_map_run!r} "
-                "has not been made (the map's block is in its hitmap.json)",
+                "THE DICTIONARY'S OWN RANKING — no corpus map in this artifact (the block is "
+                "skipped)",
                 DIM,
                 colour=colour,
             )
@@ -1851,6 +1935,21 @@ def render(
     return "\n".join(lines)
 
 
+def _at_least_one(text: str) -> int:
+    """An argparse type for a count whose minimum is 1 (``--dict-top``).
+
+    Raises:
+        argparse.ArgumentTypeError: If the value is not an integer >= 1.
+    """
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected an integer, got {text!r}") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"expected an integer >= 1, got {value}")
+    return value
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """View one text of the split (the CLI's entry point)."""
     parser = argparse.ArgumentParser(
@@ -1882,6 +1981,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--top-k", type=int, default=DEFAULT_TOP_K, help="how many labels the rankings show"
+    )
+    parser.add_argument(
+        "--dict-top",
+        type=_at_least_one,
+        default=DEFAULT_DICT_TOP,
+        help=(
+            "how many labels the dictionary's own ranking shows (CS-47; default: "
+            f"{DEFAULT_DICT_TOP}; at least 1)"
+        ),
     )
     parser.add_argument(
         "--live", action="store_true", help="also show the decision model's own ranking"
@@ -1968,6 +2076,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 labels=context.labels,
             )
         extra = [contrast_label] if contrast_label and contrast_label != focus else []
+        # the dictionary block's own top rows (CS-47): their tables are guarded
+        # too, so a stale table is caught whichever block shows it
+        for entry in dictionary_ranking(tables, text_words, labels=context.labels)[: args.dict_top]:
+            if entry.label != focus and entry.label not in extra:
+                extra.append(entry.label)
         problems += corpus_cross_check(context, focus, text_words, extra_labels=extra)
     picked = f"--text {args.text}" if args.text else f"--sample --seed {args.seed}"
     live: np.ndarray | None = None
@@ -2046,6 +2159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 what_if_calls=what_if_calls,
                 min_df=args.min_df,
                 contrast=contrast_label,
+                dict_top=args.dict_top,
                 problems=problems,
             )
         )

@@ -1605,6 +1605,17 @@ and the kNN union (CS-46) closes the *breadth* argument on `PLAN.md`'s deferred
 BM25 checkbox — its *scoring* question (a lexical term in the fusion, a fourth
 fusion parameter) remains the reviewer's.
 
+### 7.8 The dictionary's own ranking (CS-47)
+
+- **CS-47** (the dictionary's own ranking: the classifier's answer) → executed
+  2026-11-04 → the archive's §7.8 (the dictionary's own ranking) and the track
+  log's §CS-47. A **tool** change: the viewer's block, the pure helper
+  (`text_processors/lexical/contrastive.py`'s `dictionary_ranking`) and the
+  tests; **no run**, **no table row**, **no artifact re-written**, **no new
+  dependency**. The block's scores are `map_score` over the artifact's own
+  rows, the empty tables are omitted (**8** on the UPR map), and the contrast
+  block's B carries the same ranking's rank.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized

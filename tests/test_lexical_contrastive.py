@@ -13,6 +13,7 @@ import pytest
 
 from cluster_rag.text_processors.lexical.contrastive import (
     CONTRAST_TOP_K,
+    DICTIONARY_TOP_WORDS,
     DISPLAY_TOP_K,
     NOVELTY_BAR,
     RELEVANCE_BAR,
@@ -20,6 +21,7 @@ from cluster_rag.text_processors.lexical.contrastive import (
     contrast_rows,
     corpus_contrast_rows,
     default_contrast_label,
+    dictionary_ranking,
     focus_label,
     map_score,
     novelty_share,
@@ -185,6 +187,58 @@ def test_the_runner_up_breaks_the_tie_by_the_label_spaces_own_order() -> None:
     }
     assert default_contrast_label(tables, ["shared"], labels=["C", "B"]) == "C"
     assert default_contrast_label(tables, ["shared"], labels=["B", "C"]) == "B"
+
+
+# --- the dictionary's own ranking (CS-47) ---
+
+
+def test_the_dictionary_ranking_is_the_map_score_ranked() -> None:
+    """Every row's score is map_score; a table with no points is not ranked."""
+    tables = {
+        "A": [row("a", 1.0, z_score=2.0), row("b", 1.0, z_score=-1.0)],
+        "B": [row("a", 1.0, z_score=3.0)],
+        "C": [],
+        "D": [row("x", 1.0, z_score=1.0)],
+    }
+    ranking = dictionary_ranking(tables, ["a", "b"], labels=list("ABCD"))
+    # C has no table and D has no word of the text: both are omitted, not floored
+    assert [(entry.rank, entry.label, entry.score) for entry in ranking] == [
+        (1, "B", pytest.approx(3.0)),
+        (2, "A", pytest.approx(2.0)),
+    ]
+    # the words that gave the points are the positive-z text words, best first
+    assert ranking[1].words == (("a", 2.0),)
+    assert DICTIONARY_TOP_WORDS == 2
+
+
+def test_the_dictionary_ranking_breaks_the_tie_by_the_label_spaces_order() -> None:
+    """Equal scores break by the label space's own order (the CS-40 rule)."""
+    tables = {
+        "B": [row("shared", 1.0, z_score=2.0)],
+        "A": [row("shared", 1.0, z_score=2.0)],
+    }
+    assert [entry.label for entry in dictionary_ranking(tables, ["shared"], labels=["A", "B"])] == [
+        "A",
+        "B",
+    ]
+    assert [entry.label for entry in dictionary_ranking(tables, ["shared"], labels=["B", "A"])] == [
+        "B",
+        "A",
+    ]
+
+
+def test_the_dictionary_rows_carry_at_most_the_top_words() -> None:
+    """The contributing words are ranked by z, and the block's cap is two."""
+    tables = {
+        "A": [
+            row("low", 1.0, z_score=1.0),
+            row("high", 1.0, z_score=3.0),
+            row("negative", 1.0, z_score=-2.0),
+        ]
+    }
+    ranking = dictionary_ranking(tables, ["low", "high", "negative"], labels=["A"])
+    assert ranking[0].words == (("high", 3.0), ("low", 1.0))
+    assert len(ranking[0].words[:DICTIONARY_TOP_WORDS]) == 2
 
 
 def test_the_focus_is_the_gold_label_the_text_carries_the_most() -> None:

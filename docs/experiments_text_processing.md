@@ -8496,3 +8496,107 @@ The rows land in the **main** UPR table (`## UPR — knn_union`), the sweep is
   shape), and its micro-F1 (0.5266) is reported, not claimed.
 - Nothing about the decision model's own union being re-measured: CS-14's
   artifact is the reference, and its 0.9120 is read as it stands.
+
+## CS-47 — the dictionary's own ranking: the classifier's answer (2026-11-04)
+
+**The question.** The viewer reads the corpus map's evidence block by block
+(CS-23's topic words, CS-33's word classes, CS-34's grammatical axis, CS-40's
+contrast), and the map's **classifier** — the arm that sums the positive
+z-scores of the text's words in each label's table and takes the top 2 (CS-31's
+`sum_zscore_positive`, micro-F1 **0.5243**) — was only implied: the contrast
+block's B is the best non-gold label of that classifier, but the ranking behind
+it was nowhere on the screen. This change set puts it there.
+
+**The mechanism.** A **viewer's** block between the corpus map and the
+contrastive block. Every label whose table is not empty scores
+`map_score(rows, text_words)` — the sum of the positive z-scores of the text's
+words in its table — read from the artifact's own `corpus_map.per_label` rows:
+**the map is not rebuilt and no second scoring rule is introduced**. The block
+shows the rank, the label, the score (3 decimals) and at most two contributing
+words with their z-scores, with a ★ for the text's gold labels. Empty tables are
+**omitted** (never printed at the floor), with their number in the footnote
+(**8** on the UPR map); a label that scores nothing is not a pick and is left
+out too. The ties break by the label space's own order, exactly as
+`default_contrast_label` breaks them. `--dict-top N` (default 10, minimum 1)
+sets the rows. The pure helper is
+`text_processors/lexical/contrastive.py`'s `dictionary_ranking`; the block is in
+`tools/hitmap_view.py`.
+
+**The block** (on the screen, after the corpus map, before the contrast):
+
+> **THE DICTIONARY'S OWN RANKING — the classifier's answer: which labels does
+> the corpus's word-counting pick, and which word gave the points?**
+> *a description of the data (the train split's own word counts), never the
+> model's reading; the score is the sum of the positive z-scores of this text's
+> words in the label's table (map_score)*
+
+**The seed-7 text** (`--sample --seed 7`, the record `5d8cf9f161cde0408225a428`,
+gold labels *ESC rights - general*, *Labour rights*, *Minority rights*, *Right
+to education*):
+
+| rank | label | score | the words that gave the points |
+|---|---|---|---|
+| 1 | **Right to education** ★ | **2.631** | education +2.631 |
+| 2 | **Minority rights** ★ | **2.464** | minorities +2.464 |
+| 3 | Right to development | 1.076 | socio +1.076 |
+| 4 | Extrajudicial executions | 0.622 | addition +0.622 |
+| 5 | Disability rights | 0.619 | aspects +0.619 |
+| 6 | Detention | 0.618 | addition +0.618 |
+| 7 | Rights of the Child | 0.603 | addition +0.603 |
+| 8 | Right to health | 0.430 | medical +0.430 |
+
+**8 labels have no table** (*Asylum-seekers - refugees*, *ESC rights -
+general*, *Freedom of association and peaceful assembly*, *Freedom of religion
+and belief*, *Gender-based violence*, *General*, *Other*, *Special
+procedures*): they are omitted from the ranking, never printed at the floor —
+the text's own gold label *ESC rights - general* is one of them, so the ★ list
+is the two gold labels that do have tables. The contrast block's B on the same
+text is *Right to development*, and its line now reads **"the dictionary's rank
+3 for this text"** — the same score the block's third row shows.
+
+### The consistency and the second text
+
+`--text 0000000000000047d5d150d7` (the text CS-40's log used): the block's top
+three are the text's three gold labels — *International instruments* **13.022**
+(convention +5.702, ratification +3.118, +6 more) ★, *Migrants* **8.599**
+(migrant +3.090, workers +1.934, +4 more) ★, *Labour rights* **7.139** (workers
++3.179, migrant +2.032, +3 more) ★ — and the contrast pair's B is *Right to
+land*, **"the dictionary's rank 4 for this text"** (0.622, lebanon +0.622),
+tied with *UPR process* and placed first by the label space's own order. The
+two blocks read the same `map_score`, so they cannot disagree.
+
+### The falsification, read out
+
+1. **The no-moved-number test HOLDS.** This is a **tool** change: no run, no
+   table row, no new dependency and **no artifact re-written**. No file under
+   `results/` changed — the tree holds the same **1,108** files before and
+   after, and the map's own artifact keeps its sha256 `ba2d7037…` ✓.
+2. **The scores equal the artifact's recomputation.** The unit test re-reads
+   `corpus_map.per_label` and recomputes every displayed row with `map_score`,
+   and the fixture tests pin the top-1 label, the empty-table footnote and the
+   tie-break ✓.
+3. **The strip-and-compare test HOLDS** — the coloured screen, stripped of its
+   codes, is the plain screen byte for byte ✓ — and the CS-25 heading rule and
+   the palette rules are kept ✓.
+4. **The guard covers the block's tables**: the dictionary's displayed top rows
+   are added to the viewer's stale-artifact cross-check, so a stale table is
+   caught whichever block shows it ✓.
+
+### The gate
+
+`pytest`: **912 passed**, 13 deselected. `ruff check` and `ruff format --check`
+clean over **191** files in `src`/`tests`/`tools`. The viewer's offline run is
+**1.2 s** (0 model calls; the stale-artifact guard's map rebuild dominates it).
+
+### What this change set does not say
+
+- Nothing about **test** (val only) and nothing about any **model**: the block
+  is a read of the data's own statistics, and the map's classifier is not
+  re-measured.
+- Nothing about the map's **quality**: the arm is CS-31's, read as it stands;
+  the block explains the pick, it does not license a new one.
+- Nothing about a **new scoring rule**: there is one, `map_score`, and both
+  blocks use it.
+- No artifact is written: the block is a view, and the tool's acceptance check
+  is a read of the real artifact (`--sample --seed 7`, `--text
+  0000000000000047d5d150d7`).

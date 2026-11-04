@@ -7398,3 +7398,127 @@ thread, and the evidence PLAN.md's deferred BM25 checkbox is waiting for.
     guard); one commit ✓.
 
 ---
+
+## The dictionary's own ranking (CS-47) — the pre-registration and the verdict
+
+*Added on 2026-11-04, when the change set was executed: the live plan's §7.8 block moved here **verbatim** (the archive's convention: an executed change set's pre-registration moves here and the live plan keeps one tombstone line). The verdict and the numbers are the track log's §CS-47.*
+
+### 7.8 The dictionary's own ranking (CS-47)
+
+**Why it is separate.** The viewer already reads the corpus map's evidence
+(CS-23's topic words, CS-33's word classes, CS-34's grammatical axis, CS-40's
+contrast), but it never shows the **map's classifier**: the arm that sums the
+positive z-scores of a text's words in each label's table and takes the top 2
+(CS-31's `sum_zscore_positive` — the classifier that reaches micro-F1 0.5243).
+The contrast block's B is that classifier's best non-gold label, but the reader
+cannot see the ranking behind it. This change set puts the ranking on the
+screen.
+
+- [x] **CS-47 — the dictionary's own ranking: the classifier's answer.**
+  The corpus map's classifier, on the screen.
+
+  **The mechanism.** A **viewer's** block between the corpus map and the
+  contrastive block: for the text on screen, every label whose table is not
+  empty scores `map_score(rows, text_words)` — the sum of the positive z-scores
+  of the text's words in its table (CS-31's arm, read from the artifact's own
+  `corpus_map.per_label` rows; **the map is not rebuilt** and **no second
+  scoring rule is introduced**) — and the ranking is that score, largest first.
+  Each row carries at most two contributing words with their z-scores, and a ★
+  for the text's gold labels. Empty tables are **omitted** from the ranking
+  (never printed at the floor), and the footnote counts them (8 on the UPR
+  map); a label that scores nothing is not a pick and is left out too. The ties
+  break by the label space's own order, exactly as `default_contrast_label`
+  breaks them. `--dict-top N` (default 10, minimum 1) sets how many rows the
+  block shows. The block **says what it is**: a description of the data, never
+  the model's reading. The **contrast block's B** gains its rank in this
+  ranking ("the dictionary's rank N for this text"), so the two blocks use one
+  score and cannot disagree.
+
+  **The falsification, registered in advance.** A tool change must move **no
+  number**: the block writes no artifact, re-writes no artifact, adds no
+  dependency and changes no existing number. The block's scores must equal the
+  artifact's recomputation (`map_score` over `corpus_map.per_label`), and the
+  existing **strip-and-compare** test (the coloured output stripped of its codes
+  equals the plain output, byte for byte) must still hold. If the block's
+  numbers are not the artifact's own, or if it prints an empty table at the
+  floor, it is **dropped**.
+
+  **The cost.** **0 model calls** (the offline mode: the artifact + the split);
+  the block itself is a table lookup (~0 s — the existing offline run is
+  ~1.2 s because its stale-artifact guard rebuilds the map); **no new
+  dependency**.
+
+  **The exit criteria.** The block is on the screen after the corpus map and
+  before the contrastive block; on the seed-7 text it prints the registered
+  order — *Right to education* **2.631** (education +2.631) ★, *Minority
+  rights* **2.464** (minorities +2.464) ★, *Right to development* **1.076**
+  (socio +1.076), *Extrajudicial executions* **0.622** (addition +0.622),
+  *Disability rights* **0.619** (aspects +0.619), *Detention* **0.618**
+  (addition +0.618) — and "8 labels have no table"; B carries the same
+  ranking's rank; `--dict-top` works and rejects 0; the tests are added (a
+  `map_score` recomputation of the block's scores, a fixture test for the top-1
+  label and the empty-table footnote, a `--dict-top` test, the guard still
+  covers the block's tables, and the strip-and-compare test holds); the plan
+  checkbox is ticked; the log section is appended; the pre-registration is moved
+  verbatim to the archive; the gate is green (pytest + ruff over
+  `src`/`tests`/`tools`). No run, no table row, no commit.
+
+  *(pre-registered 2026-11-04; executed 2026-11-04 — a **tool** change: the
+  viewer's dictionary block, the pure helper behind it
+  (`text_processors/lexical/contrastive.py`'s `dictionary_ranking`), and the
+  tests; **no run**, **no table row**, **no artifact re-written**, **no new
+  dependency**. The log section is `## CS-47 — the dictionary's own ranking:
+  the classifier's answer` in `docs/experiments_text_processing.md`, and the
+  numbers are below.)*
+
+  **The numbers, in one screen (UPR val: 660 texts, 68 labels, the train
+  split's 1,676 texts; no model call, no embedding; 1.2 s).**
+
+  - **The seed-7 text** (`--sample --seed 7`, the record
+    `5d8cf9f161cde0408225a428`, gold labels *ESC rights - general*, *Labour
+    rights*, *Minority rights*, *Right to education*): the block's top rows are
+    *Right to education* **2.631** (education +2.631) ★, *Minority rights*
+    **2.464** (minorities +2.464) ★, *Right to development* **1.076** (socio
+    +1.076), *Extrajudicial executions* **0.622** (addition +0.622),
+    *Disability rights* **0.619** (aspects +0.619), *Detention* **0.618**
+    (addition +0.618), *Rights of the Child* 0.603 (addition +0.603), *Right to
+    health* 0.430 (medical +0.430) — every score is `map_score` over the
+    artifact's rows; **8 labels have no table** (*Asylum-seekers - refugees*,
+    *ESC rights - general*, *Freedom of association and peaceful assembly*,
+    *Freedom of religion and belief*, *Gender-based violence*, *General*,
+    *Other*, *Special procedures*), and the text's other gold label, *ESC
+    rights - general*, is one of them (omitted, not floored).
+  - **The contrast pair** on the same text: A *Right to education*, B *Right to
+    development* — **"the dictionary's rank 3 for this text"** — the same score
+    the block's third row shows. On `--text 0000000000000047d5d150d7` the pair
+    is A *Migrants*, B *Right to land*, **rank 4**, and the block's top three
+    are the text's three gold labels.
+  - **The falsification, read out.**
+    1. **The no-moved-number test HOLDS**: no run, no table row, no new
+       dependency and **no artifact re-written**; no file under `results/`
+       changed (the tree holds the same 1,108 files before and after, and the
+       map's own artifact keeps its sha256 `ba2d7037…` ✓).
+    2. **The scores equal the artifact's recomputation** ✓: the test
+       (`test_the_dictionary_scores_are_the_artifacts_own`) re-reads
+       `corpus_map.per_label` and recomputes every displayed row with
+       `map_score`, and the fixture tests pin the top-1 label and the
+       empty-table footnote ✓.
+    3. **The strip-and-compare test HOLDS** ✓ (the coloured screen, stripped,
+       is the plain screen, byte for byte) ✓; the CS-25 heading rule and the
+       palette rules are kept ✓.
+  - **The reading.** The screen now shows the **classifier's own answer**, not
+    only its best non-gold label inside the contrast: the first two rows are its
+    top-2, and the word beside each row says which text word gave the points —
+    the map's own explanation of its pick. The empty tables stay off the
+    ranking rather than at the floor, so a label with no train example is never
+    presented as a score of 0; and because the contrast block's B is read from
+    the same ranking, the two blocks cannot disagree.
+  - **The exit criteria.** All met ✓: the block is on the screen in its
+    registered place ✓, the seed-7 order and "8 labels have no table" are
+    printed ✓, B carries its rank ✓, `--dict-top` works and rejects 0 ✓, the
+    tests are added ✓ (58 in the two test files), the plan checkbox is ticked ✓,
+    the log section is appended ✓, the pre-registration is moved to the
+    archive ✓, the gate is green ✓ (**912 passed**, 13 deselected; `ruff check`
+    and `ruff format --check` clean over 191 files in `src`/`tests`/`tools`).
+
+---
