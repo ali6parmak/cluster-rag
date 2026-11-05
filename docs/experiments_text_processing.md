@@ -99,6 +99,7 @@ research record and are **not** indexed here.
 | [CS-44 — the borrowed words](#cs-44--the-borrowed-words-the-partners-vocabulary-is-not-the-thin-labels-2026-11-03) | one `upr-analyze-cmap-borrow` run (five arms + the pack's floors) | **not licensed**: lending the partner's words lifts the thin labels' scores (their predicted counts **69 → 118**; *CP rights - general* genuinely gains **0.0000 → 0.2308**) but on the registered cells view the five **fall** (**−0.0707 [−0.1356, −0.0035]**, 2 of 5 signs positive), the partner set's lower bound crosses the −0.02 floor (−0.0270), and the pair becomes confusable exactly as registered (co-predictions 0–5 → 6–21) — the thin labels' evidence is *shared* evidence, and sharing it more does not make it theirs | `results/upr-analyze-cmap-borrow/analysis.json` |
 | [CS-45 — the distinctive lexicon](#cs-45--the-distinctive-lexicon-the-register-was-the-signal-2026-11-03) | four runs (the filtered label artifact + its guard, the feature half, the query half) + the CS-35 re-run as the guard | **the bar is not met again — and the reading is that the register WAS the signal**: the filter halved the channel's gain over the control (seen **+0.0272** against CS-35's +0.0507; **+0.0339** against +0.0493) and took the column's AUC down to the description's own level (**0.7073** against CS-35's 0.8109 and the description's 0.7067); the head-to-head's seen view includes zero on both halves (0 of 3 buckets on the feature half; only the torso on the query half, with the head falling), so the channel does not become a catalog channel | `results/upr-analyze-learned-lexicon-distinctive{,-feat}/analysis.json` |
 | [CS-46 — the kNN union](#cs-46--the-knn-union-the-two-retrievers-see-the-same-labels-2026-11-03) | two `upr-eval-knn-union{,-blind}-val` runs (the **main** UPR table) | **the two retrievers see the same labels**: the per-row z-max union's recall@10 is **0.6943** against the decision model's union's 0.9120 (the breadth test fails by 0.22) and its recall@50 **0.9548** is *below* the embedding kNN's own 0.9576 — the union IS the embedding arm (+0.001 at 10, −0.003 at 50); the blind floor is 0.2313 / 0.8029, so the label-driven breadth is +0.46 / +0.15. The shortlist gap is the **fusion's ordering at depth 50** (its recall@10 is the best of all five), not the candidate sets' breadth: **the BM25 checkbox stays closed** | `results/upr-eval-knn-union-val/metrics.json` |
+| [CS-48 — the question map on OMCT](#cs-48--the-question-map-on-omct-2026-11-05) | one `omct-analyze-dictmap` run (the reviewed pairs' own word↔question association; **no embedder**, 0 model calls, 0.5 s) | **the unit is thick only where a question has ≥ 4 positives**: 294 questions → **209 tables / 85 silent**, 27,979 (question, word) pairs; the lift-vs-log-odds separation **does not transfer** (47.4 % of the contrastable tables, UPR's 91.7 %); **101 of 209** tables hold a word shared by two positives (all **37** of the ≥ 4-positive ones, none of the 107 single-positive ones); the cross-fit availability is **65.9 %** of the 1,520 pairs (evidence 61.1 %), so **518 pairs carry the floor** | `results/omct-analyze-dictmap/analysis.json` |
 
 ## Change sets
 
@@ -8600,3 +8601,150 @@ clean over **191** files in `src`/`tests`/`tools`. The viewer's offline run is
 - No artifact is written: the block is a view, and the tool's acceptance check
   is a read of the real artifact (`--sample --seed 7`, `--text
   0000000000000047d5d150d7`).
+
+## CS-48 — the question map on OMCT (2026-11-05)
+
+**The run.** One: `omct-analyze-dictmap` — the **reviewed pairs' own
+word↔question association**, the OMCT twin of the UPR corpus map (CS-23).
+**0 model calls** (the run carries **no embedder**: the map is a description of
+the pairs, not a model), **0.5 s** of wall time, the artifact **5.4 MB**. The
+map block is the top-level `dictionary` of
+`results/omct-analyze-dictmap/analysis.json`; the sweep is
+`experiments_text_processing/omct_dictionary_sweep.py` (the label
+`omct_dictionary`, so the table's section is `## OMCT — omct_dictionary`); the
+config-schema change is the optional `analysis.dictionary` section (and the
+relaxation that lets `analysis.embedders` be empty when the run carries it).
+The **control set is still drawn** (the same seeded, proportional 4,000
+unjudged cells as every track run) and is recorded in the artifact; it **never
+enters the map**.
+
+**The unit, pinned and justified.** The row is the **reviewed pair**; the
+"text" is the pair's **paragraph** (the only text a pair has); the "label" is
+the pair's **question**; the word is *present in the pair's paragraph*. For
+question `q` and word `w` the 2×2 table is over `q`'s reviewed pairs:
+`a` = positive pairs whose paragraph contains `w`, `b` = negative pairs whose
+paragraph contains it, `c` = positive pairs whose paragraph does not, `d` =
+negative pairs whose paragraph does not; `n_q = a+b+c+d` is the question's
+reviewed-pair count and `df_q(w) = a+b` the word's frequency **among that
+question's pairs**. The three alternatives were rejected in the
+pre-registration: pooling the questions into one table loses the column and
+could not score a pair; keying the label by the question **number** adds
+nothing (294 numbers, 294 texts — the text is the semantic unit); and
+deduplicating paragraphs would drop each pair's own label. **CS-21's word-pair
+view** (paragraph word × question word) is a *different object* — it measures
+the match between the two sides, not the association of a word with the
+question's outcome — and is not this map.
+
+**The shape (OMCT: 1,520 reviewed pairs over 225 paragraphs in 3 documents).**
+
+| | |
+|---|---|
+| the reviewed pairs / the positive share | **1,520** (524 +, 996 −) |
+| the questions / the paragraphs | **294** / **225** |
+| the distinct words in some table | **2,082** |
+| the (question, word) pairs stored | **27,979** |
+| the questions with a table / empty tables | **209 / 85** (28.9 % silent) |
+| the per-question table size | min **0**, median **65** over the 294 questions (**119** over the 209 with a table), max **477** |
+| the questions with both classes (the contrastable set) | **114** (940 pairs, 61.8 %) |
+| the questions whose pairs are all positive / all negative | **95** (249 pairs) / **85** (331 pairs) |
+
+**The four readouts, and what they say about the transfer.**
+
+1. **The measures do NOT separate as they did on UPR — the registered
+   prediction held.** The lift and the log-odds pick a different head word for
+   **96 of the 209** tables (45.9 %) and **54 of the 114** contrastable ones
+   (47.4 %), against UPR's **55 of 60** (91.7 %). The reason is in the unit: a
+   word that occurs only in the positives has the **same** lift whatever it is
+   (the example below: 1.1875 for every such word), and the log-odds' head is
+   a **positives-only** word for **206 of 209** tables (98.6 %), a hapax
+   (`df = 1`) for **110 of 209** (52.6 %). On a per-question table with a
+   handful of pairs the two measures are nearly interchangeable; the UPR
+   reading ("the log-odds puts the topic's word at the head") is a reading of
+   *thickness*, and it does not transfer.
+2. **The thickness: the table is a memory of one paragraph for most
+   questions.** **101 of 209** tables (48.3 %) hold a word that occurs in two
+   or more of the question's positives — and **108** hold none, because the
+   question has exactly one positive (107 questions) or its positives share no
+   word (1). The **median** table has **0** shared words (19 among the 102
+   questions with ≥ 2 positives). The split is clean at the question level:
+   **all 37** tables with **≥ 4 positives** have a shared word (median size
+   281 words), and none of the 107 single-positive tables does.
+3. **The register exists, and it is the questionnaire's own vocabulary.**
+   **57** words sit in at least a quarter (≥ 74) of the 294 tables: *state*
+   (147 tables, df 845), *committee* (136), *information* (132), *violence*
+   (127), *human* (121), *rights* (117). On UPR the register was the genre's
+   ("rights" in all 60 labels' tables); here it is the GTI questionnaire's own
+   wording, and it is the class that appears everywhere while the topic words
+   appear in one table.
+4. **The cross-fit availability: the map can speak about 61 % of the reviewed
+   set.** At 5 folds over the pairs (seed 42, the track's scheme; fold sizes
+   304 × 5), **1,002 of 1,520** pairs (65.9 %) have a table for their question
+   in the other folds' map, and **928** (61.1 %) receive at least one word with
+   a positive log-odds — **518 pairs (34.1 %) carry the row's floor and can
+   never be ranked first**. The positives keep more of it (**409 / 524**,
+   78.1 % have a table; **373**, 71.2 % have evidence) than the negatives
+   (**593 / 996**, 59.5 %; **555**, 55.7 %). Per document (NU / CIDH / AI):
+   table **60.0 / 70.8 / 87.9 %**, evidence **56.2 / 65.5 / 76.8 %** — the AI
+   stratum (99 pairs) is the best covered and the NU stratum (845 pairs) the
+   least.
+
+**The falsification, read out one by one.**
+
+1. **The reproduction guard HOLDS.** Every pre-registered shape number
+   reproduces exactly: 294 questions, 2,082 words, 27,979 stored pairs, 209
+   tables / 85 silent, the table-size median 65, 114 contrastable questions /
+   940 pairs, 95 all-positive / 85 all-negative questions, 57 words in the
+   register's quarter. (The example's first four rows reproduce **digit for
+   digit**; see the disclosure below.)
+2. **The measure test: the prediction held — the UPR separation does NOT
+   transfer.** Predicted ≤ 60 % for the contrastable questions; measured
+   **47.4 %** (54/114; 45.9 % over all 209). The reading is the unit's, not a
+   defect: with a handful of pairs the table cannot separate topical from
+   boilerplate among the positives-only words. (The pre-registration's
+   "> 80 % would change the reading" branch does not fire.)
+3. **The thickness test HOLDS.** 48.3 % ≥ the registered 40 %, and all 37 of
+   the ≥ 4-positive tables hold a shared word (37 of 37). The direct port is
+   an estimator **only for those 37 questions**; for the other 172 tables it
+   is a description of the positives' vocabulary.
+4. **The availability test HOLDS — the branch does not fire.** 65.9 % ≥ 50 %
+   and 61.1 % ≥ 45 %. CS-49 may therefore proceed with the same fold scheme;
+   the third of the pairs that carry the floor is the cost it must report.
+5. **The register test HOLDS** (57 words ≥ 1).
+
+**One example table.** The question *"Have there been any of the following
+cases of serious attacks to HRDs in your country?"* has **19 reviewed pairs,
+16 positive, 477 table words**; its log-odds head is *threats* (n_with **10**,
+df **10**, lift **1.1875**, log-odds **+2.4255**), then *defenders* (9/9,
++2.1823), *journalists* and *leaders* (7/7, +1.7095), *afro* and *agreement*
+(6/6, +1.4663). Every positives-only word has the same lift (19/16 = 1.1875) —
+the lift's head on this table is the numeric token **"025"**, which is the
+UPR lesson ("the lift's head is a hapax") in a sharper form: on OMCT the lift
+cannot order the positive paragraph's vocabulary at all.
+
+*One disclosure (the run vs the pre-registration's read-only example).* The
+pre-registration listed the example's 5th and 6th rows as *women* and
+*indigenous*; the run's table has *afro* and *agreement* there. The counts,
+the lift and the log-odds are **identical** (+1.4663 for all of them) — the
+two pairs are **tied**, and only the order inside the tie differs: the
+read-only script sorted its tuples in reverse (so the lexicographically
+largest word came first) while the module's tie-break is the map's own
+(`-log_odds, word`), so the smallest word wins. The shape table is unaffected;
+the module's order is the one the artifact carries.
+
+**What this change set does not say.** Nothing about the map as a **scorer**
+(the AUC, the control role and the label-blind counterpart are CS-49's); nothing
+about the **estimator** (CS-50's z-score is not in this block); nothing about
+`test`/val (OMCT has no split: the reviewed set is the only labelled set and
+the cross-fit is the discipline); nothing about the **unjudged control's own
+positive rate** (unmeasured, and the control is not a label); nothing about the
+**embedding model** (the map never reads one); and nothing about the 85 silent
+questions' *topics* — the map says nothing about what they would associate
+with, because it has no positive to read.
+
+**The gate.** `pytest`: **964 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **232** files in `src`/`tests`/
+`experiments_text_processing`. The run was made twice and reproduces **field
+for field** (bar the clock fields). The baseline verify tool does not apply
+to this run (there is no full-text baseline arm to compare: the run carries no
+embedder); the Stage-0 artifacts are untouched, and the run writes the
+`dictionary` block only when a config carries it.

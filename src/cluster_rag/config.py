@@ -999,6 +999,32 @@ class DecisionConfig(BaseModel):
         return value
 
 
+class DictionaryConfig(BaseModel):
+    """The dictionary port's settings (CS-48): the question map on the reviewed pairs.
+
+    The map is a **description** of the reviewed set, so it needs no embedder
+    and no model: a run that carries only this section may leave
+    ``analysis.embedders`` empty. Its one structural knob is the **cross-fit**:
+    the folds are over the reviewed **pairs** (each fold's map is built from the
+    other folds), and the availability readout reads every pair against a map
+    that never saw it.
+
+    - ``include_map``: whether the run builds the map and writes the
+      ``dictionary`` block (the CS-48 change set). The switch stays so a later
+      dictionary change set can carry its own block without the map.
+    - ``folds``: how many folds the cross-fit splits the reviewed pairs into
+      (at least 2; the same scheme as the UPR cross-fit).
+    - ``seed``: the fold split's seed. ``None`` (the default) uses the run's
+      seed, so a re-run of the same config reproduces the same folds.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    include_map: bool = True
+    folds: int = Field(default=5, ge=2)
+    seed: int | None = None
+
+
 class AnalysisConfig(BaseModel):
     """The text-processing track's Stage-0 analysis settings.
 
@@ -1069,6 +1095,11 @@ class AnalysisConfig(BaseModel):
       arms (the model, the pinned digest, the state's shape and the prompt),
       the scope and the synthetic competence control. ``None`` (the default)
       means the run does not touch a decision model.
+    - ``dictionary``: the settings of the **question map** (CS-48): the map of
+      the reviewed pairs' own word↔question association and its cross-fit
+      availability. ``None`` (the default) means the run writes no dictionary
+      block; a run that carries it may have **no embedders** (the map is a
+      description of the data, not a model).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1091,6 +1122,7 @@ class AnalysisConfig(BaseModel):
     bootstrap: PairedBootstrapConfig = Field(default_factory=PairedBootstrapConfig)
     stage3: Stage3Config | None = None
     decision: DecisionConfig | None = None
+    dictionary: DictionaryConfig | None = None
 
     @field_validator("aggregations")
     @classmethod

@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
+
+import numpy as np
 
 from cluster_rag.commands._common import (
     _append_command_rows,
@@ -34,6 +36,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_ARMS_COLUMNS,
     ANALYZE_OMCT_ARMS_KEY_COLUMNS,
     ANALYZE_OMCT_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
@@ -81,6 +85,11 @@ from cluster_rag.text_processors.features import (
     FeatureEmbedders,
     PairFeatureExtractor,
     ProfileUnits,
+)
+from cluster_rag.text_processors.features.question_map import (
+    build_question_map,
+    cross_fit_availability,
+    question_map_block,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,6 +320,118 @@ def _analyze_omct_row(
         "seconds": seconds,
     }
     return row
+
+
+def _dictionary_seed(analysis: AnalysisConfig, run_seed: int) -> int:
+    """The dictionary cross-fit's seed (the config's own, else the run's)."""
+    if analysis.dictionary is not None and analysis.dictionary.seed is not None:
+        return analysis.dictionary.seed
+    return run_seed
+
+
+def _dictionary_block(
+    records: Sequence[Any],
+    folds: int,
+    seed: int,
+    view: Any,
+) -> dict[str, Any]:
+    """Build the artifact's `dictionary` block (CS-48): the map + its availability.
+
+    The map is built from the **reviewed pairs only** (`records` is the loaded
+    pair file, i.e. subset A); the control cells (subset B) live in the view
+    and are never handed to the map. The cross-fit is the track's scheme: a
+    seeded permutation of the pairs split into contiguous chunks, each fold's
+    map from the other folds.
+
+    Args:
+        records: The reviewed pairs (the map's corpus).
+        folds: The cross-fit's fold count.
+        seed: The fold split's seed.
+        view: The dataset view (the paragraph count and the document count).
+
+    Returns:
+        The block :func:`question_map_block` assembles.
+    """
+    paragraphs = [record.paragraph_text for record in records]
+    questions = [record.question_text for record in records]
+    labels = [record.label for record in records]
+    n_pairs = len(records)
+    order = np.random.default_rng(seed).permutation(n_pairs)
+    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
+    fold_ids = np.empty(n_pairs, dtype=np.int64)
+    for fold, chunk in enumerate(chunks):
+        fold_ids[chunk] = fold
+
+    question_map = build_question_map(paragraphs, questions, labels)
+    availability = cross_fit_availability(
+        paragraphs,
+        questions,
+        labels,
+        fold_ids,
+        documents=[record.document for record in records],
+        pair_ids=[record.pair_id for record in records],
+    )
+    return question_map_block(
+        question_map,
+        availability,
+        folds=folds,
+        seed=seed,
+        n_paragraphs=len(view.paragraphs),
+        n_documents=view.pooled["n_documents"],
+    )
+
+
+def _dictionary_row(
+    block: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+    documents_by_code: Mapping[str, str],
+) -> dict[str, Any]:
+    """One table row of the dictionary section (CS-48's map readout).
+
+    The availability columns carry the cross-fit's usability numbers, pooled
+    and per document; the document codes (NU / CIDH / AI) are resolved to the
+    artifact's full document names through the view's own code mapping.
+    """
+    corpus = block["corpus"]
+    shape = block["map"]
+    readout = block["readout"]
+    availability = block.get("availability") or {}
+    by_document = availability.get("by_document") or {}
+    overall = availability.get("overall") or {}
+
+    def _document_share(code: str, key: str) -> Any:
+        document = documents_by_code.get(code, "")
+        return (by_document.get(document) or {}).get(key)
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "model": "n/a",  # the map is model-independent
+        "arm": "dictionary_map",
+        "unit": "pair/paragraph/question",
+        "n_questions": corpus["n_questions"],
+        "tables": shape["n_questions_with_table"],
+        "empty_tables": shape["n_questions_empty"],
+        "contrastable": shape["n_contrastable_questions"],
+        "n_words": shape["n_words"],
+        "stored_pairs": shape["n_stored_pairs"],
+        "table_median": _fmt(shape["table_size"]["median"], 1),
+        "shared_word_tables": readout["thickness"]["n_tables_with_shared_word"],
+        "head_diff_contrastable": readout["head_agreement"]["n_differ_contrastable"],
+        "avail_table": _fmt(overall.get("with_table_share"), 4),
+        "avail_evidence": _fmt(overall.get("with_evidence_share"), 4),
+        "avail_table_nu": _fmt(_document_share("NU", "with_table_share"), 4),
+        "avail_table_cidh": _fmt(_document_share("CIDH", "with_table_share"), 4),
+        "avail_table_ai": _fmt(_document_share("AI", "with_table_share"), 4),
+        "n_pairs": corpus["n_reviewed_pairs"],
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
 
 
 def _chunker_with_embedder(
@@ -810,8 +931,12 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         )
     if config.paths.data_external is None:
         raise ValueError("paths.data_external must be set in the config to run analyze-omct")
-    if not config.analysis.embedders:
-        raise ValueError("analysis.embedders must name at least one model to score with")
+    if not config.analysis.embedders and config.analysis.dictionary is None:
+        raise ValueError(
+            "analysis.embedders must name at least one model to score with (a run "
+            "that carries only the dictionary block — CS-48's question map — needs "
+            "no embedder and may leave the list empty)"
+        )
 
     analysis = config.analysis
     pair_report = load_pairs(config.paths.data_external)
@@ -828,6 +953,15 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         seed=config.seed,
         sampling_rule=analysis.sampling_rule,
     )
+
+    dictionary_block = None
+    if analysis.dictionary is not None and analysis.dictionary.include_map:
+        dictionary_block = _dictionary_block(
+            pair_report.records,
+            analysis.dictionary.folds,
+            _dictionary_seed(analysis, config.seed),
+            view,
+        )
 
     models: list[dict[str, Any]] = []
     for entry in analysis.embedders:
@@ -1155,6 +1289,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             }
         ),
         baseline_chunker_name=baseline_chunker.name,
+        dictionary=dictionary_block,
         n_valid_pairs=pair_report.n_valid,
         n_malformed_pairs=pair_report.n_invalid,
         total_seconds=time.perf_counter() - started,
@@ -1247,7 +1382,25 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             )
     has_arms = any(model.get("arms") for model in models)
     has_reporting = any((model.get("stage3") or {}).get("reporting") for model in models)
-    if has_stage3:
+    has_dictionary = dictionary_block is not None
+    if has_dictionary:
+        # The dictionary's own section (CS-48): the map is a description and
+        # its rows are not arms, so the section and its columns are its own.
+        # A dictionary-only run has no model rows; a later change set that
+        # scores an arm brings its own row shape and section.
+        table_rows = [
+            _dictionary_row(
+                dictionary_block,
+                run_id=omct_run_id,
+                n_control=view.control.n_cells,
+                n_docs=view.pooled["n_documents"],
+                seconds=payload["total_seconds"],
+                documents_by_code={report["code"]: report["document"] for report in view.documents},
+            )
+        ]
+        columns = ANALYZE_OMCT_DICTIONARY_COLUMNS
+        key_columns = ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS
+    elif has_stage3:
         columns = (
             ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS if has_reporting else ANALYZE_OMCT_STAGE3_COLUMNS
         )
@@ -1281,6 +1434,16 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             f"{document} {quota}" for document, quota in sorted(view.control.quotas.items())
         )
     )
+    if dictionary_block is not None:
+        shape = dictionary_block["map"]
+        overall_availability = (dictionary_block.get("availability") or {}).get("overall") or {}
+        print(
+            f"  dictionary map (CS-48): {shape['n_questions']} questions, "
+            f"{shape['n_words']} words, {shape['n_stored_pairs']} (question, word) pairs; "
+            f"{shape['n_questions_with_table']} tables, {shape['n_questions_empty']} silent; "
+            f"cross-fit availability {_fmt(overall_availability.get('with_table_share'), 4)} "
+            f"(evidence {_fmt(overall_availability.get('with_evidence_share'), 4)})"
+        )
     for model in models:
         if model.get("kind") == "decision":
             # The decision arm (CS-7b): its own entry, printed on its own lines.

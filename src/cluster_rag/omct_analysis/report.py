@@ -46,6 +46,7 @@ def build_analysis_report(
     question_transforms: Sequence[str] = (),
     bootstrap: Mapping[str, Any] | None = None,
     stage3: Mapping[str, Any] | None = None,
+    dictionary: Mapping[str, Any] | None = None,
     baseline_chunker_name: str = BASELINE_ARM,
     n_valid_pairs: int,
     n_malformed_pairs: int,
@@ -61,7 +62,7 @@ def build_analysis_report(
         }
         for cell in view.judged_cells
     ]
-    return {
+    payload = {
         "run_id": run_id,
         "command": "analyze-omct",
         "source": source,
@@ -134,3 +135,9 @@ def build_analysis_report(
         "models": list(models),
         "total_seconds": round(total_seconds, 3),
     }
+    if dictionary is not None:
+        # The dictionary block (CS-48) is added only by a run that carries it:
+        # every earlier run's artifact keeps its exact shape (the track's
+        # convention for a new block — nothing in the old numbers moves).
+        payload["dictionary"] = dict(dictionary)
+    return payload

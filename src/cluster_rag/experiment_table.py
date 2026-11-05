@@ -412,6 +412,40 @@ ANALYZE_OMCT_STAGE3_REPORTING_COLUMNS: tuple[str, ...] = (
     "rule_floor_harm",
 )
 
+# The dictionary port's table (CS-48): one row per dictionary run. The map is
+# a **description** of the reviewed pairs, so this section's columns are the
+# map's shape and its four pre-registered readouts — no AUC (the map as a
+# scorer is a later change set, with its own section). The availability
+# columns are the cross-fit's usability numbers: the share of the 1,520 pairs
+# whose question has an out-of-fold table, and the share that receives at
+# least one positive word (a pair below that carries the floor).
+ANALYZE_OMCT_DICTIONARY_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "model",
+    "arm",
+    "unit",
+    "n_questions",
+    "tables",
+    "empty_tables",
+    "contrastable",
+    "n_words",
+    "stored_pairs",
+    "table_median",
+    "shared_word_tables",
+    "head_diff_contrastable",
+    "avail_table",
+    "avail_evidence",
+    "avail_table_nu",
+    "avail_table_cidh",
+    "avail_table_ai",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS: tuple[str, ...] = ("run_id", "arm")
+
 # The decision probe's table (the `decide-omct` command, Stage 3.5): one row
 # per arm of a run. The headline is the **within-document** AUC (the pooled
 # number sits beside it, never alone); the **calibration** columns sit next to

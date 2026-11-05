@@ -31,6 +31,7 @@ from cluster_rag.commands import omct as omct_commands
 from cluster_rag.config import (
     AnalysisConfig,
     AnalysisEmbedderConfig,
+    DictionaryConfig,
     EmbedderConfig,
     PreprocessConfig,
 )
@@ -107,6 +108,30 @@ analysis:
   bootstrap:
     resamples: 50
     seed: 7
+"""
+
+# CS-48: the dictionary section needs no embedder (the map is a description).
+DICTIONARY_CONFIG_EXTRA = """
+analysis:
+  embedders: []
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    seed: null
+"""
+
+# The empty embedder list alone is not enough (the guard's message names it).
+ANALYSIS_CONFIG_NO_EMBEDDERS_EXTRA = """
+analysis:
+  embedders: []
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
 """
 
 
@@ -671,6 +696,93 @@ def test_analyze_omct_requires_the_analysis_section(sample_pairs, write_config, 
     with caplog.at_level(logging.ERROR):
         assert main(["analyze-omct", "--config", str(config_file)]) == 1
     assert any("analysis: section" in record.message for record in caplog.records)
+
+
+def test_analyze_omct_dictionary_run_is_model_free(
+    sample_pairs, write_config, tmp_path, capsys
+) -> None:
+    """CS-48: the question map is a description — no embedder is built."""
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    results_dir = tmp_path / "results" / "omct-dict-test"
+    payload = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    # the run carries no model: the map is model-independent
+    assert payload["models"] == []
+    block = payload["dictionary"]
+    assert block is not None
+    assert block["corpus"] == {
+        "n_reviewed_pairs": 6,
+        "n_positive": 3,
+        "n_negative": 3,
+        "n_questions": 4,
+        "n_paragraphs": 6,
+        "n_documents": 3,
+    }
+    shape = block["map"]
+    assert shape["n_questions_with_table"] == 3
+    assert shape["n_questions_empty"] == 1
+    assert shape["n_contrastable_questions"] == 2
+    assert any("media freedom" in question for question in shape["empty_questions"])
+    # the map's tables carry the positive pair's words with their counts
+    defenders = next(q for q in block["tables"] if "defenders detained" in q)
+    rows = {row["word"]: row for row in block["tables"][defenders]}
+    assert rows["defenders"]["n_with"] == 1
+    assert rows["defenders"]["df"] == 1
+    # the availability readout reads every pair against the other folds
+    availability = block["availability"]
+    assert availability["folds"] == 5
+    assert availability["overall"]["n_pairs"] == 6
+    assert len(availability["per_pair"]) == 6
+    assert 0.0 <= (availability["overall"]["with_table_share"] or 0.0) <= 1.0
+    # the map is deterministic: a re-run reproduces the same folds
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+    again = json.loads((results_dir / "analysis.json").read_text("utf-8"))
+    assert again["dictionary"]["availability"]["per_pair"] == availability["per_pair"]
+
+    out = capsys.readouterr().out
+    assert "dictionary map (CS-48): 4 questions" in out
+    # the row lands in the dictionary section's shape
+    text = table.read_text("utf-8")
+    assert "## OMCT — analyze-omct" in text
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-test"))
+    assert "dictionary_map" in row
+    assert "| 4 | 3 | 1 | 2 |" in row  # questions, tables, empty, contrastable
+
+
+def test_analyze_omct_without_embedders_needs_the_dictionary_section(
+    sample_pairs, write_config, caplog
+) -> None:
+    """An empty embedder list is only allowed for a dictionary-only run."""
+    config_file = write_config(
+        sample_pairs,
+        run_id="no-embedders",
+        data_external=sample_pairs,
+        extra=ANALYSIS_CONFIG_NO_EMBEDDERS_EXTRA,
+    )
+    with caplog.at_level(logging.ERROR):
+        assert main(["analyze-omct", "--config", str(config_file)]) == 1
+    assert any("analysis.embedders" in record.message for record in caplog.records)
+
+
+def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
+    """The CS-48 knobs: five folds, the run's seed, the map on."""
+    config = AnalysisConfig(embedders=(), dictionary=DictionaryConfig())
+    assert config.dictionary is not None
+    assert config.dictionary.include_map is True
+    assert config.dictionary.folds == 5
+    assert config.dictionary.seed is None
+    with pytest.raises(ValueError):
+        DictionaryConfig(folds=1)
+    with pytest.raises(ValueError):
+        DictionaryConfig(unknown=True)
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

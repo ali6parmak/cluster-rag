@@ -380,3 +380,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | omct-analyze-final-voyage-4-nano | 2026-10-27 | ollama | tev1:latest | 7954dce22bc6 | n/a | n/a | n/a | n/a | n/a | 0.7701 | 0.2463 | [+0.2104, +0.2813] | 0.7688 | 0.2684 | [+0.2391, +0.2999] | 0.8014 | n/a | n/a | 0.0608 | 0.5115 | 0.0092 | 0.0507 | 0.2963 | 0.3530 | 0.1317 | 0.1050 | 1520 | 4000 | 3 | 23.811 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 0.9789 | 0.6050 | 0.8035 |
 | omct-analyze-final-arctic2 | 2026-10-27 | ollama | snowflake-arctic-embed2:latest | 30685f516da4 | 1024 | 8192 | embedding+lexical+question_part+question_type | 15 | logistic | 0.6472 | 0.1452 | [+0.1143, +0.1797] | 0.5419 | 0.0740 | [+0.0443, +0.1033] | 0.6705 | 0.4968 | 0.5569 | 0.1408 | 0.4977 | -0.0044 | 0.1414 | 0.3779 | 1.6685 | 0.0859 | 0.1050 | 1520 | 4000 | 3 | 13.931 | 0.1875 | 0.3488 | 0.2226 | 0.2650 | floor_gap | 0.3159 | 0.2767 | 0.5550 | 0.1927 | 0.1638 |
 | omct-analyze-final-arctic2 | 2026-10-27 | ollama | tev1:latest | 7954dce22bc6 | n/a | n/a | n/a | n/a | n/a | 0.7701 | 0.2681 | [+0.2296, +0.3077] | 0.7688 | 0.3008 | [+0.2688, +0.3354] | 0.8014 | n/a | n/a | 0.0608 | 0.5115 | 0.0095 | 0.0507 | 0.2963 | 0.3530 | 0.1317 | 0.1050 | 1520 | 4000 | 3 | 13.931 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 0.9789 | 0.6050 | 0.8035 |
+
+## OMCT — omct_dictionary
+
+| run_id | date | model | arm | unit | n_questions | tables | empty_tables | contrastable | n_words | stored_pairs | table_median | shared_word_tables | head_diff_contrastable | avail_table | avail_evidence | avail_table_nu | avail_table_cidh | avail_table_ai | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-dictmap | 2026-11-05 | n/a | dictionary_map | pair/paragraph/question | 294 | 209 | 85 | 114 | 2082 | 27979 | 65.0 | 101 | 54 | 0.6592 | 0.6105 | 0.6000 | 0.7083 | 0.8788 | 1520 | 4000 | 3 | 0.458 |
