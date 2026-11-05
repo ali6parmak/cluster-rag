@@ -27,6 +27,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -36,7 +37,7 @@ CSS_PATH = TOOLS / "error_app.css"
 sys.path.insert(0, str(TOOLS))
 import error_view as ev  # noqa: E402
 
-VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Export")
+VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Compare hitmaps", "Export")
 
 
 def _env(name: str, default: str) -> str:
@@ -994,6 +995,180 @@ def compare_view(
         )
 
 
+def _text_select(context: ev.Context, key: str) -> str:
+    """A searchable text picker, shared by the one-text views."""
+    lookup = _text_lookup(context)
+    ids = list(lookup)
+    selected = st.session_state.get("selected_text", ids[0])
+    if selected not in lookup:
+        selected = ids[0]
+    picked = st.selectbox(
+        "text",
+        ids,
+        index=ids.index(selected),
+        format_func=lambda text_id: f"{text_id} — {_snippet(lookup[text_id], 90)}",
+        key=key,
+    )
+    st.session_state["selected_text"] = picked
+    return picked
+
+
+def _hitmap_columns(
+    context: ev.Context,
+    tables: ev.Tables,
+    record: Any,
+    extra: int,
+) -> list[tuple[str, str, float, int, bool]]:
+    """The hitmap's columns: gold, false positives, then the strongest alternatives.
+
+    The false positives are every predicted non-gold label (all of them, not a
+    sample); the ``extra`` slider adds the strongest non-gold labels that were
+    **not** predicted, so a text with no false positive still has a comparison.
+    Empty tables are left out of the alternatives (they carry no evidence).
+    """
+    text_id = str(record.id)
+    cells = {row.label: row for row in tables.cells if row.text_id == text_id}
+    gold = list(record.labels)
+    gold_set = set(gold)
+    labels = list(context.labels)
+    false_positives = [
+        label for label in labels if cells[label].predicted and label not in gold_set
+    ]
+    false_positives.sort(key=lambda label: (-cells[label].score, labels.index(label)))
+    alternatives = [
+        label
+        for label in labels
+        if label not in gold_set and label not in false_positives and cells[label].has_table
+    ]
+    alternatives.sort(key=lambda label: (-cells[label].score, labels.index(label)))
+    columns: list[tuple[str, str, float, int, bool]] = []
+    for label in [*gold, *false_positives, *alternatives[:extra]]:
+        kind = "gold" if label in gold_set else ("fp" if label in false_positives else "alt")
+        cell = cells[label]
+        columns.append((label, kind, cell.score, cell.rank, cell.has_table))
+    return columns
+
+
+def _hitmap_header(
+    label: str,
+    kind: str,
+    score: float,
+    rank: int,
+    has_table: bool,
+) -> str:
+    """One hitmap column header: the kind tag, the label and its score/rank."""
+    tag = {"gold": "★ gold", "fp": "fp", "alt": "alt"}[kind]
+    tag_class = {"gold": "ev-h-gold", "fp": "ev-h-fp", "alt": "ev-h-alt"}[kind]
+    meta = "no table" if not has_table else f"score {score:.3f} · rank {rank}"
+    return (
+        '<th style="text-align:left">'
+        f'<span class="ev-h-label"><span class="ev-h-tag {tag_class}">{tag}</span>'
+        f"{_esc(label)}</span>"
+        f'<span class="ev-h-meta">{_esc(meta)}</span></th>'
+    )
+
+
+def _z_cell(value: float | None, maximum: float) -> str:
+    """One matrix cell: a tinted z-score; ``None`` is the map's silence."""
+    if value is None:
+        return '<span class="ev-z ev-z-none">·</span>'
+    if value == 0.0:
+        return '<span class="ev-z ev-z-zero">0.000</span>'
+    ratio = min(abs(value) / maximum, 1.0) if maximum > 0.0 else 0.0
+    tone = "pos" if value > 0.0 else "neg"
+    return (
+        f'<span class="ev-z ev-z-{tone}" style="--alpha: {0.08 + 0.50 * ratio:.3f}">'
+        f"{value:+.3f}</span>"
+    )
+
+
+def _hitmap_table(
+    columns: list[tuple[str, str, float, int, bool]],
+    rows: Sequence[ev.HitmapRow],
+) -> str:
+    """The word x label matrix, with the header pinned by the shared CSS."""
+    maximum = max(
+        (abs(z) for row in rows for z in row.z_scores if z is not None),
+        default=1.0,
+    )
+    header = [
+        '<th style="text-align:left">word</th>',
+        '<th style="text-align:right">n</th>',
+        *[_hitmap_header(*column) for column in columns],
+    ]
+    body = []
+    for row in rows:
+        cells = [
+            f'<td style="text-align:left"><span class="ev-word">{_esc(row.word)}</span></td>',
+            f'<td style="text-align:right"><span class="ev-muted">{row.n_occurrences}</span></td>',
+            *[f'<td style="text-align:right">{_z_cell(z, maximum)}</td>' for z in row.z_scores],
+        ]
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    if not body:
+        body.append(
+            f'<tr><td class="ev-empty" colspan="{2 + len(columns)}">no content words</td></tr>'
+        )
+    keys = "|".join(["word", "n", *(column[0] for column in columns)])
+    return (
+        f'<div class="ev-table-wrap" data-columns="{_esc(keys)}">'
+        f'<table class="ev-table ev-hitmap"><thead><tr>{"".join(header)}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def hitmap_compare_view(tables: ev.Tables, context: ev.Context) -> None:
+    """The z-score matrix: this text's words against gold, FP and alternative labels."""
+    st.subheader("Compare hitmaps — the z-scores behind this text, label by label")
+    picked = _text_select(context, "hitmap_text_pick")
+    record = next(record for record in context.records if str(record.id) == picked)
+    text_row = next(row for row in tables.texts if row.text_id == picked)
+    controls = st.columns(2)
+    extra = controls[0].slider(
+        "extra labels (k)",
+        0,
+        8,
+        3,
+        key="hitmap_extra",
+        help=(
+            "Gold labels and all of the classifier's false positives are always shown; "
+            "this adds the k strongest non-gold labels that were not predicted (alt)."
+        ),
+    )
+    sort_signal = controls[1].checkbox(
+        "sort words by strongest |z|",
+        value=False,
+        key="hitmap_sort",
+        help="Off = the text's own word order; on = the strongest word first.",
+    )
+    columns = _hitmap_columns(context, tables, record, int(extra))
+    labels = [column[0] for column in columns]
+    rows = ev.hitmap_rows(context.tables, record.text, labels)
+    if sort_signal:
+        rows = tuple(
+            sorted(
+                rows,
+                key=lambda row: (
+                    -max((abs(z) for z in row.z_scores if z is not None), default=0.0),
+                    row.word,
+                ),
+            )
+        )
+    st.write(record.text)
+    st.caption(
+        f"gold: {' · '.join(record.labels)} — the classifier's pick: "
+        f"{' · '.join(text_row.predicted_labels) or '(none)'}"
+    )
+    st.caption(
+        "Rows are this text's content words; columns are the gold labels (★ gold), the "
+        "classifier's false positives (fp), and the k strongest alternatives (alt). "
+        "A cell is the stored corpus-map z-score: green pulls the label up, red pushes it "
+        "down; · means the word is not in that label's table (it contributes 0)."
+    )
+    st.markdown(_hitmap_table(columns, rows), unsafe_allow_html=True)
+    n_alt = sum(1 for column in columns if column[1] == "alt")
+    st.caption(f"{len(rows)} content words × {len(columns)} labels ({n_alt} alternatives).")
+
+
 def export_view(
     tables: ev.Tables,
     context: ev.Context,
@@ -1202,6 +1377,8 @@ def main() -> None:
         aggregates_view(tables, context)
     elif view == "Compare runs":
         compare_view(tables, context, catalog)
+    elif view == "Compare hitmaps":
+        hitmap_compare_view(tables, context)
     else:
         export_view(tables, context, report, catalog)
 

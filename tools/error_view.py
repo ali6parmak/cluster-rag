@@ -1420,6 +1420,62 @@ def contrast_label(
     )
 
 
+@dataclass(frozen=True)
+class HitmapRow:
+    """One content word of a text and its stored z-score in each label's table.
+
+    A ``None`` cell means the label's table does **not** hold the word: the map
+    is silent about that pair, and the scorer counts it as 0.0. It is kept
+    distinct from a stored 0.0 so the viewer never claims a measured zero.
+    """
+
+    word: str
+    n_occurrences: int
+    z_scores: tuple[float | None, ...]
+
+
+def hitmap_rows(
+    tables: Mapping[str, Sequence[Mapping[str, Any]]],
+    text: str,
+    labels: Sequence[str],
+) -> tuple[HitmapRow, ...]:
+    """The text's content words (deduplicated, text order), one row each.
+
+    Every word gets a cell per label: the stored ``z_score`` when the label's
+    table holds the pair, and ``None`` when it does not (the map's silence
+    convention — the scorer contributes 0.0, but the viewer says so instead of
+    printing a zero). Words absent from every table are rows too, so "every
+    word of the text" is on the screen.
+
+    Args:
+        tables: Every label's table (the artifact's own rows).
+        text: The text on screen.
+        labels: The labels to read, in the display's order.
+
+    Returns:
+        One :class:`HitmapRow` per distinct content word, in the text's order.
+    """
+    tokens = list(content_tokens(text, DEFAULT_STOPWORDS))
+    counts = Counter(tokens)
+    by_label = {
+        label: {str(row.get("word")): row for row in (tables.get(label) or ())} for label in labels
+    }
+    rows: list[HitmapRow] = []
+    for word in dict.fromkeys(tokens):
+        values = []
+        for label in labels:
+            entry = by_label[label].get(word)
+            values.append(None if entry is None else float(entry.get("z_score", 0.0)))
+        rows.append(
+            HitmapRow(
+                word=word,
+                n_occurrences=counts[word],
+                z_scores=tuple(values),
+            )
+        )
+    return tuple(rows)
+
+
 # --- export -----------------------------------------------------------------
 
 

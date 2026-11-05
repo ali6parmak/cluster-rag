@@ -86,3 +86,18 @@ a { color: var(--ctp-blue); }
 .ev-pill-fill { position: absolute; inset: 0 auto 0 0; background: rgba(166, 227, 161, 0.26); }
 .ev-pill-text { position: relative; }
 .ev-pill b { color: var(--ctp-green); font-weight: 600; margin-left: 0.18rem; }
+
+/* Compare hitmaps: the word x label z-score matrix */
+.ev-hitmap thead th { vertical-align: bottom; }
+.ev-h-label { display: block; color: var(--ctp-text); font-weight: 600; font-size: 0.72rem; line-height: 1.25; white-space: normal; max-width: 10rem; margin-left: auto; }
+.ev-h-meta { display: block; color: var(--ctp-overlay0); font-weight: 400; font-size: 0.64rem; margin-top: 0.15rem; white-space: nowrap; }
+.ev-h-tag { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.03em; margin-right: 0.25rem; }
+.ev-h-gold { color: var(--ctp-yellow); }
+.ev-h-fp { color: var(--ctp-red); }
+.ev-h-alt { color: var(--ctp-blue); }
+.ev-word { color: var(--ctp-text); font-weight: 500; }
+.ev-z { display: inline-block; min-width: 3.2rem; text-align: right; padding: 0.06rem 0.35rem; border-radius: 0.3rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+.ev-z-pos { color: var(--ctp-green); background: rgba(166, 227, 161, var(--alpha)); }
+.ev-z-neg { color: var(--ctp-red); background: rgba(243, 139, 168, var(--alpha)); }
+.ev-z-zero { color: var(--ctp-overlay0); }
+.ev-z-none { color: var(--ctp-overlay0); opacity: 0.45; }

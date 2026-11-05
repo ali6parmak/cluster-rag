@@ -23,7 +23,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
 TESTS = Path(__file__).resolve().parent
-VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Export")
+VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Compare hitmaps", "Export")
 
 
 def _fixture_module() -> Any:
@@ -130,6 +130,20 @@ def test_the_compare_view_pairs_the_two_synthetic_runs(
         'data-columns="text|delta_f1|f1_a|f1_b|direction|delta_tp|delta_fp|delta_fn|text_id"'
     ) in shown
     assert "ev-badge-improved" in shown
+
+
+def test_the_compare_hitmaps_view(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hitmap view: one row per word, gold + FP + alternative label columns."""
+    app = _app(fixture, monkeypatch)
+    app.run()
+    app.get_by_key("view").set_value("Compare hitmaps").run()
+    assert not app.exception
+    shown = " ".join(str(element.value) for element in app.markdown)
+    # val-1 is gold A, predicted A + B; D is the strongest alternative with a table
+    assert 'data-columns="word|n|A|B|D"' in shown
+    assert "ev-h-gold" in shown and "ev-h-fp" in shown and "ev-h-alt" in shown
+    assert "ev-z-pos" in shown and "ev-z-none" in shown
+    assert "alpha" in shown and "beta" in shown
 
 
 def test_the_aggregates_tables_are_styled(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,3 +267,5 @@ def test_the_stylesheet_carries_the_table_look() -> None:
     assert "max-height: 72vh" in css
     assert "position: sticky" in css
     assert "z-index: 2" in css
+    assert ".ev-z-pos" in css
+    assert ".ev-h-gold" in css

@@ -289,3 +289,24 @@ screenshot shows the whole table. The colour scheme is Catppuccin Mocha
 Hovering a text expands it in place — the first row, expanded:
 
 ![The Errors view, one text expanded](error_viewer_errors_hover.png)
+
+## Compare hitmaps (V1.1, 2026-11-05)
+
+A sixth view, between **Compare runs** and **Export**. Pick one text; the view
+shows one row per content word (deduplicated, text order) and one column per
+label:
+
+- every **gold** label of the text (`★ gold`);
+- every **false positive** the classifier predicted (`fp`);
+- the **k strongest other labels** (`alt`, a control; `k=0` shows only gold and
+  FPs). Empty tables are not offered as alternatives because they carry no
+  evidence.
+
+A cell is the corpus map's **stored z-score** for that (word, label) pair:
+green pulls the label up, red pushes it down. `·` means the word is **not in
+that label's table** — the map is silent, and the scorer contributes 0, so the
+cell is never printed as a measured zero. The column header carries the label's
+map score and classifier rank, or `no table` for the held-out labels. The shared
+table frame keeps the header pinned while the rows scroll.
+
+![Compare hitmaps](error_viewer_hitmaps.png)

@@ -679,3 +679,16 @@ def test_the_data_layer_has_no_model_or_ui_imports(ev: Any) -> None:
     for forbidden in ("streamlit", "torch", "sentence_transformers", "httpx", "sqlite3"):
         assert forbidden not in imported
     assert "streamlit" in (TOOLS / "error_app.py").read_text(encoding="utf-8")
+
+
+def test_the_hitmap_rows_are_the_stored_z_scores(ev: Any, fixture: Fixture) -> None:
+    """The matrix helper: text order, occurrence counts, and the silence as None."""
+    context = ev.load_context(ev.resolve_sources(fixture.config))
+    rows = ev.hitmap_rows(context.tables, "alpha beta beta", ("A", "B"))
+    assert [(row.word, row.n_occurrences, row.z_scores) for row in rows] == [
+        ("alpha", 1, (2.0, None)),
+        ("beta", 2, (1.0, 3.0)),
+    ]
+    # a word absent from every table is still a row; the cells are silence, not 0.0
+    rows = ev.hitmap_rows(context.tables, "omega", ("A", "B"))
+    assert [(row.word, row.z_scores) for row in rows] == [("omega", (None, None))]
