@@ -278,9 +278,13 @@ pipeline. If a real discrepancy appears, it is reported, not fixed.
 ## V1 screenshot
 
 The Errors view, rendered from the app's own HTML (UPR val, `k=2`). The text
-cell truncates and its full recommendation is the hover tooltip; the error
+cell truncates and **expands in place** when hovered (no tooltip); the error
 badges, score/gap chips, boolean dots and contributing-word pills are
 read-only. The colour scheme is Catppuccin Mocha (`.streamlit/config.toml` and
 `tools/error_app.css`).
 
 ![The Errors view](error_viewer_errors.png)
+
+Hovering a text expands it in place — the first row, expanded:
+
+![The Errors view, one text expanded](error_viewer_errors_hover.png)

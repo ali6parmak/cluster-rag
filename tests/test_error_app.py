@@ -92,7 +92,8 @@ def test_the_errors_view_lists_a_mistake(fixture: Any, monkeypatch: pytest.Monke
         'has_evidence|length_bucket|top_words|text_id"'
     ) in shown
     # the cells are the read-only diagnostics, not plain text
-    assert 'title="alpha beta"' in shown  # the full text is the tooltip
+    assert "ev-text" in shown  # the text expands in place on hover
+    assert "title=" not in shown  # no tooltip attribute
     assert "ev-pill" in shown  # the contributing words
     assert "ev-dot" in shown  # the booleans
 
@@ -216,10 +217,12 @@ def test_the_signed_value_colours_are_catppuccin() -> None:
 def test_the_cells_are_read_only_diagnostics() -> None:
     """The cells carry HTML, not checkbox-looking booleans or plain text."""
     module = _app_module()
-    tooltip = module._tooltip_text("A long recommendation " * 20)
-    assert tooltip.startswith('<span class="ev-text"')
-    assert 'title="A long recommendation' in tooltip
-    assert "…" in tooltip
+    text = module._expandable_text("A long recommendation " * 20)
+    assert text.startswith('<span class="ev-text"')
+    assert "title=" not in text
+    # the full text is in the cell: the CSS clips it, and hover expands it
+    assert "A long recommendation A long recommendation" in text
+    assert "…" not in text
     assert "★" in module._gold_dot(True)
     assert "ev-dot-off" in module._gold_dot(False)
     assert "○" in module._evidence_dot(False)
@@ -242,3 +245,5 @@ def test_the_stylesheet_carries_the_table_look() -> None:
     assert ".ev-pill" in css
     assert ".ev-chip" in css
     assert ".ev-dot" in css
+    assert ".ev-text:hover" in css
+    assert "white-space: normal" in css

@@ -39,7 +39,9 @@ a { color: var(--ctp-blue); }
 .ev-table tbody tr:hover { background: rgba(49, 50, 68, 0.55); }
 .ev-table tbody tr:last-child td { border-bottom: 0; }
 .ev-empty { color: var(--ctp-overlay0); text-align: center; padding: 0.8rem; }
-.ev-text { display: inline-block; max-width: 30rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; cursor: help; border-bottom: 1px dotted var(--ctp-overlay0); }
+.ev-text { display: inline-block; max-width: 30rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; cursor: zoom-in; border-bottom: 1px dotted var(--ctp-overlay0); }
+.ev-text:hover { max-width: 44rem; overflow: visible; text-overflow: clip; white-space: normal; cursor: zoom-out; }
+.ev-table tbody tr:hover .ev-text { border-bottom-color: var(--ctp-blue); }
 .ev-id { color: var(--ctp-overlay0); font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.72rem; }
 .ev-muted { color: var(--ctp-overlay0); }
 .ev-rank { color: var(--ctp-subtext0); font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 0.74rem; }

@@ -148,52 +148,32 @@ def _esc(value: object) -> str:
     return html_lib.escape(str(value), quote=True)
 
 
-def _tooltip_text(text: str, limit: int = 130) -> str:
-    """The text as a truncated, hoverable cell (the full text is the tooltip)."""
-    cleaned = " ".join(text.split())
-    shown = cleaned if len(cleaned) <= limit else cleaned[: limit - 1].rstrip() + "…"
-    return f'<span class="ev-text" title="{_esc(cleaned)}">{_esc(shown)}</span>'
+def _expandable_text(text: str) -> str:
+    """The full text in a cell clipped by CSS; hovering it expands it in place."""
+    return f'<span class="ev-text">{_esc(" ".join(text.split()))}</span>'
 
 
-def _dot(active: bool, tone: str, *, on: str = "●", off: str = "·", title: str = "") -> str:
+def _dot(active: bool, tone: str, *, on: str = "●", off: str = "·") -> str:
     """A boolean as a coloured dot (a read-only indicator, never a checkbox)."""
     css = f"ev-dot ev-dot-{tone}" if active else "ev-dot ev-dot-off"
-    return f'<span class="{css}" title="{_esc(title)}">{on if active else off}</span>'
+    return f'<span class="{css}">{on if active else off}</span>'
 
 
 def _gold_dot(active: bool) -> str:
     """The gold flag: a gold star, or a dim dot."""
-    return _dot(
-        active,
-        "gold",
-        on="★",
-        off="·",
-        title="gold label" if active else "not a gold label",
-    )
+    return _dot(active, "gold", on="★", off="·")
 
 
 def _predicted_dot(active: bool) -> str:
     """The prediction flag: a mauve dot, or a dim dot."""
-    return _dot(
-        active,
-        "mauve",
-        on="●",
-        off="·",
-        title="the classifier's pick" if active else "not predicted",
-    )
+    return _dot(active, "mauve", on="●", off="·")
 
 
 def _evidence_dot(active: bool) -> str:
     """The evidence flag: a green dot, or the amber empty-slot ring."""
     if active:
-        return (
-            '<span class="ev-dot ev-dot-green" '
-            'title="a word of this text gave the label points">●</span>'
-        )
-    return (
-        '<span class="ev-dot ev-dot-amber" '
-        'title="empty slot: the score is 0, the pick is a tie-break">○</span>'
-    )
+        return '<span class="ev-dot ev-dot-green">●</span>'
+    return '<span class="ev-dot ev-dot-amber">○</span>'
 
 
 def _error_badge(error: str) -> str:
@@ -264,7 +244,7 @@ def _word_pills(entries: list[tuple[str, float]], maximum: float) -> str:
     for word, z_score in entries:
         ratio = min(abs(z_score) / maximum, 1.0) if maximum > 0.0 else 0.0
         pills.append(
-            f'<span class="ev-pill" title="{_esc(word)} z={z_score:+.3f}">'
+            f'<span class="ev-pill">'
             f'<span class="ev-pill-fill" style="width: {ratio * 100:.1f}%"></span>'
             f'<span class="ev-pill-text">{_esc(word)} <b>{z_score:+.3f}</b></span></span>'
         )
@@ -409,7 +389,7 @@ def errors_view(
         max_word = max((z for _, z in entries), default=1.0)
         rows.append(
             [
-                _tooltip_text(lookup.get(record["text_id"], record["text"])),
+                _expandable_text(lookup.get(record["text_id"], record["text"])),
                 _error_badge(str(record["error"])),
                 _esc(record["label"]),
                 _meter(float(record["score"]), max_score, tone="score"),
@@ -472,8 +452,8 @@ def errors_view(
         unsafe_allow_html=True,
     )
     st.caption(
-        "Hover a text for the full recommendation; hover a dot or a pill for its meaning. "
-        "★ gold · ● predicted · evidence: ● a word gave points, ○ empty slot."
+        "Hover a text to expand it in place. ★ gold · ● predicted · "
+        "evidence: ● a word gave points, ○ empty slot."
     )
     if not frame.empty:
         choices = list(dict.fromkeys(frame["text_id"]))
@@ -938,7 +918,7 @@ def compare_view(
     for record in records:
         table_rows.append(
             [
-                _tooltip_text(lookup.get(record["text_id"], "")),
+                _expandable_text(lookup.get(record["text_id"], "")),
                 _meter(float(record["delta_f1"]), max_delta, signed=True),
                 _chip(float(record["f1_a"]), 1.0, tone="neutral"),
                 _chip(float(record["f1_b"]), 1.0, tone="neutral"),
