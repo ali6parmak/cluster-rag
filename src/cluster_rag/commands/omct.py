@@ -45,6 +45,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_LEXICON_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_LEXICON_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_COLUMNS,
@@ -108,6 +110,13 @@ from cluster_rag.text_processors.features.question_map import (
     build_question_map,
     cross_fit_availability,
     question_map_block,
+)
+from cluster_rag.text_processors.lexical.question_lexicon import (
+    LEXICON_ARMS,
+    build_question_lexicon,
+    lexicon_grid,
+    lexicon_pair_scores,
+    lexicon_readout,
 )
 from cluster_rag.text_processors.lexical.question_map_score import (
     PRIMARY_SCORING,
@@ -731,6 +740,64 @@ def _dictionary_stability_row(
         "head_retention": _fmt(heads.get("share"), 4),
         "n_links": readout_block.get("n_links"),
         "n_pairs": full.get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_lexicon_row(
+    model: dict[str, Any],
+    block: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **lexicon** section (CS-55)."""
+    readout = (model.get("readout") or {}).get("question_lexicon") or {}
+    arms = readout.get("arms") or {}
+    primary = readout.get("primary") or "all"
+    vs_map = readout.get("vs_map") or {}
+    register_test = readout.get("register_test") or {}
+    blind = readout.get("blind") or {}
+    profile = (block or {}).get("question_lexicon") or {}
+    classes = profile.get("classes") or {}
+    sizes = profile.get("vocabulary_size") or {}
+
+    def _arm(name: str, key: str) -> Any:
+        return (arms.get(name) or {}).get(key)
+
+    def _ci(low: Any, high: Any) -> str | None:
+        if low is None or high is None:
+            return None
+        return f"[{low:+.4f}, {high:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": primary,
+        "all_within_auc": _fmt(_arm(primary, "within_auc"), 4),
+        "all_delta_cosine": _fmt(_arm(primary, "delta_vs_cosine"), 4),
+        "all_ci": _ci(_arm(primary, "ci_low"), _arm(primary, "ci_high")),
+        "idf_within_auc": _fmt(_arm("idf", "within_auc"), 4),
+        "topic_within_auc": _fmt(_arm("topic", "within_auc"), 4),
+        "topic_delta_vs_all": _fmt(register_test.get("delta"), 4),
+        "topic_ci": _ci(register_test.get("ci_low"), register_test.get("ci_high")),
+        "register_within_auc": _fmt(_arm("register", "within_auc"), 4),
+        "map_within_auc": _fmt(vs_map.get("map_within_auc"), 4),
+        "all_delta_vs_map": _fmt(vs_map.get("delta"), 4),
+        "all_ci_vs_map": _ci(vs_map.get("ci_low"), vs_map.get("ci_high")),
+        "blind_within_auc": _fmt(blind.get("within_auc"), 4),
+        "blind_gap": _fmt(blind.get("gap"), 4),
+        "label_words": profile.get("n_words"),
+        "register_words": (classes.get("generic") or {}).get("words"),
+        "topic_words": (classes.get("distinctive") or {}).get("words"),
+        "vocabulary_median": _fmt(sizes.get("median"), 1),
+        "zero_overlap_share": _fmt((profile.get("paragraph_overlap") or {}).get("zero_share"), 4),
+        "n_pairs": (_arm(primary, "pooled_auc") is not None)
+        and model["readout"]["scorings"][model["readout"]["primary"]]["n_pairs"],
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1670,6 +1737,41 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             stability_readout["thresholds"] = [f"{threshold:.2f}" for threshold in thresholds]
             if dictionary_block is not None:
                 dictionary_block["stability"] = dict(stability_readout)
+        question_lexicon = None
+        if analysis.dictionary.question_lexicon:
+            # CS-55: the label side's own words — the question text's
+            # vocabulary, read against the paragraphs. No pair label, no map
+            # and no embedding enters the channel.
+            lexicon = build_question_lexicon(questions)
+            lexicon_matrices = {
+                arm: lexicon_grid(
+                    tuple(view.paragraphs),
+                    tuple(view.questions),
+                    lexicon.vocabularies,
+                    lexicon.classes,
+                    arm=arm,
+                    idf=lexicon.idf,
+                )
+                for arm in LEXICON_ARMS
+            }
+            permutation = blind_question_permutation(len(records), dictionary_seed)
+            blind_scores = lexicon_pair_scores(
+                paragraphs,
+                [questions[int(index)] for index in permutation],
+                lexicon.vocabularies,
+                lexicon.classes,
+                idf=lexicon.idf,
+            )
+            question_lexicon = {
+                "matrices": lexicon_matrices,
+                "blind_scores": blind_scores,
+            }
+            if dictionary_block is not None:
+                dictionary_block["question_lexicon"] = lexicon_readout(
+                    lexicon,
+                    pair_paragraphs=paragraphs,
+                    pair_questions=questions,
+                )
         models.append(
             build_dictionary_model(
                 view,
@@ -1689,6 +1791,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 union=union,
                 stability_grids=stability_grids,
                 stability_readout=stability_readout,
+                question_lexicon=question_lexicon,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -1893,7 +1996,18 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("stability_arms"):
+            if (model.get("readout") or {}).get("question_lexicon"):
+                table_rows.append(
+                    _dictionary_lexicon_row(
+                        model,
+                        dictionary_block,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("stability_arms"):
                 table_rows.append(
                     _dictionary_stability_row(
                         model,
@@ -2045,12 +2159,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
+        has_question_lexicon = any(
+            (model.get("readout") or {}).get("question_lexicon")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_stability = any(
             (model.get("readout") or {}).get("stability_arms")
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_stability:
+        if has_question_lexicon:
+            columns = ANALYZE_OMCT_DICTIONARY_LEXICON_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_LEXICON_KEY_COLUMNS
+        elif has_stability:
             columns = ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS
         elif has_union:
@@ -2159,6 +2281,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
                 f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
             )
+            label_side = readout.get("question_lexicon")
+            if label_side:
+                label_arms = label_side["arms"]
+                print(
+                    f"      [label side] the question's own words: all "
+                    f"{_fmt(label_arms['all']['within_auc'], 4)}, idf "
+                    f"{_fmt(label_arms['idf']['within_auc'], 4)}, topic-only "
+                    f"{_fmt(label_arms['topic']['within_auc'], 4)}, register-only "
+                    f"{_fmt(label_arms['register']['within_auc'], 4)}; against the map "
+                    f"{_fmt(label_side['vs_map']['delta'], 4)} "
+                    f"[{_fmt(label_side['vs_map']['ci_low'], 4)}, "
+                    f"{_fmt(label_side['vs_map']['ci_high'], 4)}]; the blind gap "
+                    f"{_fmt(label_side['blind']['gap'], 4)}"
+                )
             stability_arms = readout.get("stability_arms")
             if stability_arms:
                 # CS-54: the filtered arms against the full z arm (CS-36's test).

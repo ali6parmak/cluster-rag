@@ -1055,6 +1055,10 @@ class DictionaryConfig(BaseModel):
       on their fold's training pairs only).
     - ``stability_thresholds``: the survival thresholds the filtered arms are
       built at (CS-54 registers 0.75; 0.90 is reported beside it).
+    - ``question_lexicon``: whether the run also measures the **label side's
+      own words** (CS-55): the question text's vocabulary as a channel, the
+      register split and the blind counterpart. It needs one reference
+      embedder (the cosine comparison) and reads no pair label.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1073,6 +1077,7 @@ class DictionaryConfig(BaseModel):
     stability_resamples: int = Field(default=500, ge=1)
     stability_fold_resamples: int = Field(default=100, ge=1)
     stability_thresholds: tuple[float, ...] = (0.75, 0.90)
+    question_lexicon: bool = False
 
     @field_validator("stability_thresholds")
     @classmethod
@@ -1118,6 +1123,11 @@ class DictionaryConfig(BaseModel):
                     f"{UNIT_PHRASES!r}: the union is the word map's score plus the "
                     "phrase map's own, so the run's map must be the phrase table"
                 )
+        if self.question_lexicon and not self.scorings:
+            raise ValueError(
+                "analysis.dictionary.question_lexicon needs analysis.dictionary.scorings: "
+                "the channel is compared with the map's primary arm"
+            )
         if self.stability and not self.scorings:
             raise ValueError(
                 "analysis.dictionary.stability needs analysis.dictionary.scorings: "

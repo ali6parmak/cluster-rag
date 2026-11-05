@@ -600,6 +600,38 @@ ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The label side's own words (CS-55): the question's vocabulary as a channel.
+# The arms against the cosine, the map bar (the label side against the map),
+# the register test (topic-only against the full channel) and the blind gap.
+ANALYZE_OMCT_DICTIONARY_LEXICON_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "all_within_auc",
+    "all_delta_cosine",
+    "all_ci",
+    "idf_within_auc",
+    "topic_within_auc",
+    "topic_delta_vs_all",
+    "topic_ci",
+    "register_within_auc",
+    "map_within_auc",
+    "all_delta_vs_map",
+    "all_ci_vs_map",
+    "blind_within_auc",
+    "blind_gap",
+    "label_words",
+    "register_words",
+    "topic_words",
+    "vocabulary_median",
+    "zero_overlap_share",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_LEXICON_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

@@ -193,6 +193,33 @@ analysis:
     resamples: 200
 """
 
+# CS-55: the label side's own words (the question text's vocabulary).
+DICTIONARY_LEXICON_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings: [sum_zscore_positive]
+    primary: sum_zscore_positive
+    blind: false
+    question_lexicon: true
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-54: the stability readout and the stability-filtered arms.
 DICTIONARY_STABILITY_CONFIG_EXTRA = """
 analysis:
@@ -1141,6 +1168,49 @@ def test_analyze_omct_dictionary_stability_end_to_end(
     assert "sum_zscore_positive" in row
 
 
+def test_analyze_omct_dictionary_lexicon_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-55: the label side's channel, its register test and the blind gap."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-lexicon-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_LEXICON_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-lexicon-test" / "analysis.json").read_text("utf-8")
+    )
+    profile = payload["dictionary"]["question_lexicon"]
+    assert profile["n_questions"] == 4
+    assert profile["n_words"] >= 1
+    assert set(profile["classes"]) == {"distinctive", "shared", "generic"}
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    block = entry["readout"]["question_lexicon"]
+    assert block["primary"] == "all"
+    assert set(block["arms"]) == {"all", "idf", "topic", "register"}
+    for arm in block["arms"].values():
+        assert arm["within_auc"] is None or 0.0 <= arm["within_auc"] <= 1.0
+        assert arm["delta_vs_cosine"] is not None
+        assert arm["ci_low"] <= arm["ci_high"]
+    assert block["vs_map"]["map_within_auc"] is not None
+    assert block["register_test"]["topic_within_auc"] is not None
+    assert block["blind"]["gap"] is not None
+
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-lexicon-test"))
+    assert "all" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -1217,6 +1287,14 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
         DictionaryConfig(stability_thresholds=(1.5,))
     with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
         DictionaryConfig(stability=True)
+    # CS-55: the label-side channel and its guard
+    assert DictionaryConfig().question_lexicon is False
+    assert (
+        DictionaryConfig(question_lexicon=True, scorings=("sum_zscore_positive",)).question_lexicon
+        is True
+    )
+    with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
+        DictionaryConfig(question_lexicon=True)
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

@@ -28,6 +28,10 @@ from cluster_rag.omct_analysis.arms import compare_arms, measure_arm, score_arm
 from cluster_rag.omct_analysis.helpers import _auc_decomposition, _macro, _safe_auc
 from cluster_rag.omct_analysis.view import DatasetView, SideEncoding
 from cluster_rag.text_processors.features.question_map import UNIT_PHRASES
+from cluster_rag.text_processors.lexical.question_lexicon import (
+    LEXICON_BAR,
+    PRIMARY_LEXICON_ARM,
+)
 from cluster_rag.text_processors.lexical.question_map_score import (
     PRIMARY_SCORING,
     UNION_SCORING,
@@ -270,6 +274,128 @@ def class_arms_block(
     return block
 
 
+def question_lexicon_block(
+    view: DatasetView,
+    matrices: Mapping[str, np.ndarray],
+    blind_scores: np.ndarray,
+    *,
+    reference_similarities: np.ndarray,
+    map_similarities: np.ndarray,
+    reference_name: str,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The label side's own words (CS-55): the arms, the map bar and the blind gap.
+
+    Each arm is read as the run reads every arm (the within-document AUC, the
+    paired difference against the run's cosine); the primary arm is also
+    compared with the **map's z arm** (the bar) and the topic-only arm with the
+    full channel (the register test, CS-45's port).
+
+    Args:
+        view: The dataset view.
+        matrices: The channel's grids, keyed by arm.
+        blind_scores: The blind channel's score per reviewed pair (the
+            questions permuted across the pairs).
+        reference_similarities: The run's full-text cosine.
+        map_similarities: The map's primary z arm's grid (the bar).
+        reference_name: The reference model's name.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+
+    Returns:
+        The readout block: the arms against the cosine, the map bar, the
+        register test, the blind gap and the notes.
+    """
+    arms: dict[str, Any] = {}
+    for name, matrix in matrices.items():
+        measured = measure_arm(view, matrix)
+        stats = _arm_stats(view, measured)
+        comparison = compare_arms(
+            view,
+            arm_name=f"question_lexicon_{name}",
+            reference_similarities=reference_similarities,
+            arm_similarities=matrix,
+            resamples=resamples,
+            seed=seed,
+        )
+        paired = comparison["auc_decomposition"]["within_group_paired"]
+        arms[name] = {
+            "within_auc": stats["within_auc"],
+            "pooled_auc": stats["pooled_auc"],
+            "by_document": stats["by_document"],
+            "delta_vs_cosine": paired["delta_auc"],
+            "ci_low": paired["ci_low"],
+            "ci_high": paired["ci_high"],
+            "p_delta_positive": paired["p_delta_positive"],
+        }
+    primary = PRIMARY_LEXICON_ARM
+    vs_map = compare_arms(
+        view,
+        arm_name=f"question_lexicon_{primary}_vs_map",
+        reference_similarities=map_similarities,
+        arm_similarities=matrices[primary],
+        resamples=resamples,
+        seed=seed,
+    )
+    paired_map = vs_map["auc_decomposition"]["within_group_paired"]
+    register = compare_arms(
+        view,
+        arm_name="question_lexicon_topic_vs_all",
+        reference_similarities=matrices[primary],
+        arm_similarities=matrices["topic"],
+        resamples=resamples,
+        seed=seed,
+    )
+    paired_register = register["auc_decomposition"]["within_group_paired"]
+    measured = measure_arm(view, matrices[primary])
+    blind_auc = _auc_decomposition(measured.labels, blind_scores, measured.documents).get(
+        "within_group_auc"
+    )
+    primary_auc = arms[primary]["within_auc"]
+    return {
+        "primary": primary,
+        "bar": LEXICON_BAR,
+        "arms": arms,
+        "vs_map": {
+            "arm": "the map's primary z arm",
+            "map_within_auc": paired_map["auc_reference"],
+            "delta": paired_map["delta_auc"],
+            "ci_low": paired_map["ci_low"],
+            "ci_high": paired_map["ci_high"],
+            "p_delta_positive": paired_map["p_delta_positive"],
+        },
+        "register_test": {
+            "topic_within_auc": paired_register["auc_arm"],
+            "all_within_auc": paired_register["auc_reference"],
+            "delta": paired_register["delta_auc"],
+            "ci_low": paired_register["ci_low"],
+            "ci_high": paired_register["ci_high"],
+            "p_delta_positive": paired_register["p_delta_positive"],
+            "bar": LEXICON_BAR,
+        },
+        "blind": {
+            "within_auc": blind_auc,
+            "gap": (primary_auc - blind_auc)
+            if primary_auc is not None and blind_auc is not None
+            else None,
+            "bar": LEXICON_BAR,
+        },
+        "reference": {"model": reference_name},
+        "notes": [
+            "the channel reads the question texts and the paragraph texts only: no "
+            "pair label, no map and no embedding enters its score.",
+            "the primary arm is the whole question text (the 'name' analog: OMCT has "
+            "no catalog, so the label's name and description are the same object).",
+            "the register test is CS-45's port on the LABEL side: the topic-only arm "
+            "drops the questionnaire's shared words (in >= a quarter of the "
+            "questions' texts), and the prediction is that dropping them loses.",
+            "the blind counterpart permutes the questions across the pairs (the same "
+            "seeded permutation CS-49 uses), the per-question counts preserved.",
+        ],
+    }
+
+
 def stability_arms_block(
     view: DatasetView,
     stability_grids: Mapping[str, Mapping[str, Any]],
@@ -479,6 +605,7 @@ def build_dictionary_model(
     unit_name: str | None = None,
     stability_grids: Mapping[str, Mapping[str, Any]] | None = None,
     stability_readout: Mapping[str, Any] | None = None,
+    question_lexicon: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -508,6 +635,8 @@ def build_dictionary_model(
             threshold's name; ``None`` runs none.
         stability_readout: The map's stability readout (CS-54), carried beside
             the arms.
+        question_lexicon: The label side's channel (CS-55): its grids and the
+            blind channel's per-pair scores; ``None`` runs none.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -601,6 +730,17 @@ def build_dictionary_model(
             view,
             union,
             reference_similarities=reference_similarities,
+            reference_name=reference_name,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
+    if question_lexicon is not None:
+        readout["question_lexicon"] = question_lexicon_block(
+            view,
+            question_lexicon["matrices"],
+            question_lexicon["blind_scores"],
+            reference_similarities=reference_similarities,
+            map_similarities=matrix,
             reference_name=reference_name,
             resamples=resamples,
             seed=bootstrap_seed,

@@ -106,6 +106,7 @@ research record and are **not** indexed here.
 | [CS-52 — the grammatical axis on OMCT](#cs-52--the-grammatical-axis-on-omct-a-null-that-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-pos` run (CS-34's POS classes, the two POS-restricted z arms; **0 model calls**, 18.6 s) | **a null that reproduces**: the noun-only arm −0.0041 [−0.0097, +0.0016] (a free-ish filter, not a lever) and the verb-only −0.0723 [−0.0878, −0.0571]; the classes' z means are within 0.016 of each other (the noun−verb difference −0.0148 against the 0.5 bar) — the register is in the words, not their part of speech | `results/omct-analyze-voyage-dict-pos/analysis.json` |
 | [CS-53 — the phrases on OMCT](#cs-53--the-phrases-on-omct-the-upr-null-reproduces-for-the-other-reason-2026-11-05) | one `omct-analyze-voyage-dict-phrases` run (the phrase table, the word z arm reproduced inside the run, and the union = the two z arms summed; **0 model calls**, 15.2 s) | **a null that reproduces for the other reason**: the union is **−0.0043 [−0.0074, −0.0012]** against the word z arm (0.6976 vs 0.7020 — inside the registered ±0.02 band at the point estimate, the interval excluding zero: a small, detectable cost), and the phrase arm alone (**0.6840**) sits below the word arm; the phrase table is **not** rare on the pair unit (14.8 % hapax against CS-39's 82.8 %; the median question's table holds 120 rows against the word table's 65), so the UPR null's **premise** does not transfer — the phrases are **redundant** with their own words, not rare; the CS-39 readout's direction does (the generic-class row share 14.3 % against the word table's 30.3 %) | `results/omct-analyze-voyage-dict-phrases/analysis.json` |
 | [CS-54 — the stability of the pair unit](#cs-54--the-stability-of-the-pair-unit-the-null-becomes-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-stability` run (CS-36's bootstrap over the 1,520 reviewed pairs, 500 resamples; the two filtered z arms; **0 model calls**, 136 s) | **the UPR null becomes a cost**: the τ = 0.75 filtered arm is **0.6399** against the full z arm's 0.7020 (**−0.0621 [−0.0859, −0.0395]**) and τ = 0.90 is −0.1094, with the floor rising to **61.97 %** / 74.9 % — the map's bulk is sampling noise (the presence cliff **63.3 %**, the 1 − e⁻¹ prediction; the sign cliff **54.1 %**, so **not one** single-pair link clears 0.75; the heads keep their place in **65.0 %**), and the registered survival magnitude (10–15 %) **misses** at 6.79 % | `results/omct-analyze-voyage-dict-stability/analysis.json` |
+| [CS-55 — the label side's own words](#cs-55--the-label-sides-own-words-the-register-was-the-noise-2026-11-06) | one `omct-analyze-voyage-dict-lexicon` run (the question text's vocabulary as a label-side channel; the four arms, the map bar and the blind counterpart; **0 model calls**, **0 pair labels read**, 13.5 s) | **the register was the noise**: the raw count **0.4602** against the cosine's 0.5238 (**−0.0636 [−0.1008, −0.0269]**), the idf and topic-only arms at the cosine (nulls), the map bar held (**−0.2417 [−0.2887, −0.1949]**) — and the registered **falsifier FIRED**: topic-only beats the full channel by **+0.0821 [+0.0448, +0.1185]**, so CS-45's "the register was the signal" does not transfer (the label-side register is the questionnaire's boilerplate, identical across questions); the blind gap is **−0.0078**, so the raw count reads the questionnaire's shape, not the relation | `results/omct-analyze-voyage-dict-lexicon/analysis.json` |
 
 ## Change sets
 
@@ -9300,4 +9301,95 @@ the phrase map's stability; nothing about UPR.
 
 **The gate.** `pytest`: **991 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **243** files. Two consecutive runs are
+bit-identical (bar the clock field).
+
+## CS-55 — the label side's own words: the register was the noise (2026-11-06)
+
+**The run.** One: `omct-analyze-voyage-dict-lexicon` — the question text's own
+vocabulary as a label-side channel (no pair label, no map, no embedding), read
+on the four arms (`all`, `idf`, `topic`-only, `register`-only) against the
+cosine, the primary against the map's z arm, and the blind counterpart (the
+questions permuted across the pairs). **0 model calls**, **0 pair labels
+read**, **13.5 s**, the artifact **15.1 MB**, **no new dependency**; the map's
+z arm reproduces **0.7020**. The sweep is
+`experiments_text_processing/omct_dictionary_lexicon_sweep.py` (the label
+`omct_dictionary_lexicon`, the table's section
+`## OMCT — omct_dictionary_lexicon`).
+
+**The channel test (the primary): the label side carries no signal as a raw
+count — and it anti-predicts.** The `all` arm reaches **0.4602** against the
+cosine's **0.5238** — a paired **−0.0636 [−0.1008, −0.0269]**, below chance.
+The registered first branch fires: the question's plain vocabulary is **not** a
+channel on this unit; it is a length/boilerplate proxy. The **idf** arm — which
+weights the boilerplate toward zero (`log(294 / the number of questions holding
+the word)`) — reaches **0.5474** (+0.0236 [−0.0125, +0.0611]) and the
+**topic-only** arm **0.5423** (+0.0185 [−0.0215, +0.0575]): both at the cosine,
+nulls. The **register-only** arm reaches **0.3754** (−0.1484): the
+questionnaire's shared words **alone** anti-predict.
+
+**The map bar holds: the corpus side wins.** The `all` arm against the map's z
+arm is **−0.2417 [−0.2887, −0.1949]** — the label side loses to the map by 24
+points, far past the 0.05 bar in the registered direction (CS-35's lesson:
+the corpus's mined words beat the label's own text).
+
+**The register test: the registered falsifier FIRES — CS-45's reading does not
+transfer.** The topic-only arm is **+0.0821 [+0.0448, +0.1185]** above the full
+channel: dropping the questionnaire's register **helps**, well past the
+registered ≥ +0.05 tower case. On UPR the register was the signal; on the label
+side here it is the **noise**. The reason is in the readout: the label-side
+register is the questionnaire's own boilerplate — *question* (294 questions),
+*choices* and *answer* (281 each), *data* (265), *applicable* (107), *state*
+(83), *following* and *select* (82), *please* (76), and the questionnaire's own
+subject word *torture* (118). These are the **same words in every question**,
+so they cannot tell two questions apart; in a raw count they add the same
+offset to many cells and turn the score into a statement about the questionnaire
+and the paragraph's length.
+
+**The label-driven check fails.** The blind channel (the questions permuted
+across the pairs) reads **0.4680**, *above* the real channel: the gap is
+**−0.0078**, not the ≥ 0.05 a label-driven channel needs. So the raw count is
+not reading the question-to-paragraph relation at all — it is reading the
+questionnaire's shape, and slightly better when the question is the *wrong* one.
+
+**The readout (the shape reproduces).** 294 questions, **2,445** label-side
+words: **1,567** distinctive (1–2 questions), **868** shared, **10** generic
+(≥ 74); the per-question vocabulary min **9** / median **31.5** / max **100**;
+the reviewed pairs whose paragraph shares no label-side word **3.6 %**; the mean
+label-side words found per pair's paragraph **4.44** (median 4). (The
+pre-registration's "median 32" is the upper median; `numpy`'s median is 31.5 —
+the same readout, a convention difference.)
+
+**The falsification, read out one by one.**
+
+1. **The channel test: the first branch FIRES** — below the cosine with the
+   interval excluding zero: the label side is not a channel (a raw count is a
+   length/boilerplate proxy; the idf and topic arms are nulls).
+2. **The map bar: holds** — the map wins by 0.2417 (the registered direction).
+3. **The register test: the falsifier FIRES** — topic-only beats the full
+   channel by +0.0821 (≥ +0.05, the interval excluding zero): CS-45's "the
+   register was the signal" **does not transfer** to the label side; here the
+   register is the noise.
+4. **The label-driven check: fails** — the blind gap is −0.0078, so the raw
+   count reads the questionnaire's shape rather than the relation.
+
+**The reading.** The port turns CS-45 on its head, and the reason is the
+register's **side**. On UPR the register was the **corpus's** habit (the words
+in many labels' map tables): it was everywhere in the corpus's texts and it
+carried the mined channel's edge. Here the register is the **questionnaire's**
+habit (the words in many questions' texts): it is everywhere in the *label
+side*, identical across questions, so it carries nothing question-specific and
+costs the raw count 0.08. The label side's **topic** words are the only part
+with any relation to the paragraph, and they reach the cosine and no further
+(0.5423, a null). So the label side's own words are **not a channel** on the
+pair unit, and the CS-55 question ("the question's own words as the label side
+beat the baseline") is answered **no**.
+
+**What this change set does not say.** Nothing about **abstention** (CS-56) or
+**question pairs** (CS-57); nothing about a **weighted** channel beyond the two
+weightings tried (idf is the label side's own rarity prior, and it is the one
+that recovers chance); nothing about a **label-side text beyond the question**
+(there is none on OMCT); nothing about UPR.
+
+**The gate.** `pytest`: **996 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **245** files. Two consecutive runs are
 bit-identical (bar the clock field).

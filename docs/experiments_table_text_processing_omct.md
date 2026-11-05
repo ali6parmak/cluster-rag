@@ -422,3 +422,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | arm | full_within_auc | full_nonfloor_auc | stable75_within_auc | stable75_delta | stable75_ci | stable75_floor_pairs | stable75_floor_share | stable75_nonfloor_auc | stable90_within_auc | stable90_delta | stable90_ci | stable90_floor_pairs | stable90_floor_share | stable90_nonfloor_auc | survival75_share | survival90_share | single_pair_survival | median_question_stability75 | head_retention | n_links | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-stability | 2026-11-06 | sum_zscore_positive | 0.7020 | 0.8158 | 0.6399 | -0.0621 | [-0.0859, -0.0395] | 942 | 0.6197 | 0.7659 | 0.5926 | -0.1094 | [-0.1384, -0.0828] | 1139 | 0.7493 | 0.6647 | 0.0679 | 0.0102 | 0.5412 | 0.0000 | 0.6502 | 27979 | 1520 | 4000 | 3 | 135.765 |
+
+## OMCT — omct_dictionary_lexicon
+
+| run_id | date | arm | all_within_auc | all_delta_cosine | all_ci | idf_within_auc | topic_within_auc | topic_delta_vs_all | topic_ci | register_within_auc | map_within_auc | all_delta_vs_map | all_ci_vs_map | blind_within_auc | blind_gap | label_words | register_words | topic_words | vocabulary_median | zero_overlap_share | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-lexicon | 2026-11-06 | all | 0.4602 | -0.0636 | [-0.1008, -0.0269] | 0.5474 | 0.5423 | 0.0821 | [+0.0448, +0.1185] | 0.3754 | 0.7020 | -0.2417 | [-0.2887, -0.1949] | 0.4680 | -0.0078 | 2445 | 10 | 1567 | 31.5 | 0.0355 | 1520 | 4000 | 3 | 13.298 |
