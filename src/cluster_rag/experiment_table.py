@@ -565,6 +565,41 @@ ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The dictionary **stability** (CS-54): the map's bootstrap readout and the
+# stability-filtered arms against the full z arm (CS-36's model test, the
+# reference now the arm that works). The two registered thresholds' arms, the
+# survival readouts the filter is read off, and the floor each arm carries.
+ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "full_within_auc",
+    "full_nonfloor_auc",
+    "stable75_within_auc",
+    "stable75_delta",
+    "stable75_ci",
+    "stable75_floor_pairs",
+    "stable75_floor_share",
+    "stable75_nonfloor_auc",
+    "stable90_within_auc",
+    "stable90_delta",
+    "stable90_ci",
+    "stable90_floor_pairs",
+    "stable90_floor_share",
+    "stable90_nonfloor_auc",
+    "survival75_share",
+    "survival90_share",
+    "single_pair_survival",
+    "median_question_stability75",
+    "head_retention",
+    "n_links",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

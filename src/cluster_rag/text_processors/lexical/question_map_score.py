@@ -150,14 +150,23 @@ def _table_is_empty(
     question: str,
     allowed: frozenset[str] | None,
     allowed_pos: frozenset[str] | None = None,
+    keep: Mapping[str, frozenset[str]] | None = None,
 ) -> bool:
-    """Whether a question's table has no row the restriction(s) keep."""
+    """Whether a question's table has no row the restriction(s) keep.
+
+    ``keep`` is the **stability filter** (CS-54): the question -> surviving
+    units mapping. A link outside it is as if it had never been in the table,
+    so a question whose every link is dropped has an empty table (the floor).
+    """
     rows = question_map.per_question.get(question) or ()
     if not rows:
         return True
-    if allowed is None and allowed_pos is None:
+    if allowed is None and allowed_pos is None and keep is None:
         return False
+    surviving = keep.get(question, frozenset()) if keep is not None else None
     for row in rows:
+        if surviving is not None and row.word not in surviving:
+            continue
         if allowed is not None and question_map.word_classes.get(row.word) not in allowed:
             continue
         if allowed_pos is not None and question_map.pos_classes.get(row.word) not in allowed_pos:
@@ -181,6 +190,7 @@ def score_grid(
     units: object = None,
     restrict: Sequence[str] | None = None,
     restrict_pos: Sequence[str] | None = None,
+    keep: Mapping[str, frozenset[str]] | None = None,
 ) -> np.ndarray:
     """Score every (paragraph, question) cell from the map's own weights.
 
@@ -199,11 +209,15 @@ def score_grid(
             kept classes only contribute (``None`` keeps every class).
         restrict_pos: The **POS restriction** (CS-52): the same rule on the
             grammatical axis (``None`` keeps every grammatical class).
+        keep: The **stability filter** (CS-54): the question -> surviving units
+            mapping. A link outside it contributes nothing, and a question
+            whose every link is dropped carries the floor. ``None`` keeps
+            every link.
 
     Returns:
         A ``(n_paragraphs, n_questions)`` float64 matrix, higher = more
-        likely. A question with an **empty** table (under the restriction, if
-        one is given) carries the row's floor
+        likely. A question with an **empty** table (under the restriction(s),
+        if any are given) carries the row's floor
         (the row's smallest seen score minus one), so it can never be ranked
         above a question the map speaks about.
 
@@ -233,6 +247,8 @@ def score_grid(
         if allowed_pos is not None and question_map.pos_classes.get(word) not in allowed_pos:
             continue
         for pair in question_map.per_word[word]:
+            if keep is not None and word not in keep.get(pair.question, frozenset()):
+                continue
             column = column_of.get(pair.question)
             if column is None:
                 continue
@@ -266,7 +282,7 @@ def score_grid(
     empty_columns = [
         column
         for column, question in enumerate(columns)
-        if _table_is_empty(question_map, question, allowed, allowed_pos)
+        if _table_is_empty(question_map, question, allowed, allowed_pos, keep)
     ]
     if empty_columns:
         seen = np.delete(grid, empty_columns, axis=1)
@@ -291,6 +307,8 @@ def cross_fit_grids(
     probe_cells: Sequence[tuple[int, int]] | None = None,
     restrict: Sequence[str] | None = None,
     restrict_pos: Sequence[str] | None = None,
+    keep: Mapping[str, frozenset[str]] | None = None,
+    keep_by_fold: Mapping[int, Mapping[str, frozenset[str]]] | None = None,
     word_pos: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """The out-of-fold score grids: every judged cell from a map that never saw it.
@@ -319,6 +337,12 @@ def cross_fit_grids(
         restrict_pos: The **POS restriction** (CS-52), the same rule on the
             grammatical axis. It needs ``word_pos`` (the fold maps are rebuilt
             here, so the classes must ride along or every table would empty).
+        keep: The **stability filter** (CS-54) for the **full** map's grid (the
+            unjudged cells' side): the question -> surviving units mapping of
+            the full reviewed-set estimate.
+        keep_by_fold: The **per-fold** stability filters (CS-54), keyed by the
+            fold id: each judged pair is scored by the filter estimated on its
+            own fold's training pairs, never by the full one.
         word_pos: The words' grammatical classes (CS-52), when the paragraphs
             were tagged; passed to the full map and to every fold's map.
 
@@ -364,11 +388,11 @@ def cross_fit_grids(
     )
     fold_maps: dict[int, QuestionMap] = {}
     for fold in fold_values:
-        keep = [index for index in range(len(labels_list)) if int(fold_ids[index]) != fold]
+        training = [index for index in range(len(labels_list)) if int(fold_ids[index]) != fold]
         fold_maps[fold] = build_question_map(
-            [paragraph_texts[index] for index in keep],
-            [question_texts[index] for index in keep],
-            [labels_list[index] for index in keep],
+            [paragraph_texts[index] for index in training],
+            [question_texts[index] for index in training],
+            [labels_list[index] for index in training],
             stopwords=stopwords,
             units=units,
             word_pos=word_pos,
@@ -376,6 +400,7 @@ def cross_fit_grids(
 
     allowed = _allowed_classes(restrict)
     allowed_pos = _allowed_pos(restrict_pos)
+    fold_keeps = dict(keep_by_fold or {})
     floor = np.asarray(
         [
             _table_is_empty(
@@ -383,6 +408,7 @@ def cross_fit_grids(
                 question_texts[index],
                 allowed,
                 allowed_pos,
+                fold_keeps.get(int(fold_ids[index])),
             )
             for index in range(len(labels_list))
         ],
@@ -400,6 +426,7 @@ def cross_fit_grids(
             units=units,
             restrict=restrict,
             restrict_pos=restrict_pos,
+            keep=keep,
         )
         fold_grids = {
             fold: score_grid(
@@ -411,6 +438,7 @@ def cross_fit_grids(
                 units=units,
                 restrict=restrict,
                 restrict_pos=restrict_pos,
+                keep=fold_keeps.get(fold),
             )
             for fold in fold_values
         }

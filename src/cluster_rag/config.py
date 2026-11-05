@@ -1044,6 +1044,17 @@ class DictionaryConfig(BaseModel):
       behind the same folds (CS-39's composition, ported). It needs
       ``units: phrases`` (the union sums the two halves) and one reference
       embedder.
+    - ``stability``: whether the run estimates the map's **stability** (CS-54
+      — the bootstrap over the reviewed pairs, every link's `sign_stability`)
+      and scores the stability-filtered arms against the full arm. The readout
+      rides in the `dictionary` block's `stability` sub-block.
+    - ``stability_resamples``: the bootstrap's resamples for the readout (and
+      the unjudged cells' filter).
+    - ``stability_fold_resamples``: the bootstrap's resamples for **each
+      fold's** own filter (the judged cells are scored by the filter estimated
+      on their fold's training pairs only).
+    - ``stability_thresholds``: the survival thresholds the filtered arms are
+      built at (CS-54 registers 0.75; 0.90 is reported beside it).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1058,6 +1069,28 @@ class DictionaryConfig(BaseModel):
     pos_restrictions: tuple[str, ...] = ()
     units: str = "words"
     union: bool = False
+    stability: bool = False
+    stability_resamples: int = Field(default=500, ge=1)
+    stability_fold_resamples: int = Field(default=100, ge=1)
+    stability_thresholds: tuple[float, ...] = (0.75, 0.90)
+
+    @field_validator("stability_thresholds")
+    @classmethod
+    def _thresholds_are_valid(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        """The survival thresholds are shares in (0, 1], distinct and sorted."""
+        if not value:
+            raise ValueError("analysis.dictionary.stability_thresholds must not be empty")
+        if any(not (0.0 < threshold <= 1.0) for threshold in value):
+            raise ValueError(
+                "analysis.dictionary.stability_thresholds must be shares in (0, 1], "
+                f"got {list(value)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(
+                "analysis.dictionary.stability_thresholds must not repeat a "
+                f"threshold: {list(value)}"
+            )
+        return tuple(sorted(value))
 
     @field_validator("units")
     @classmethod
@@ -1085,6 +1118,11 @@ class DictionaryConfig(BaseModel):
                     f"{UNIT_PHRASES!r}: the union is the word map's score plus the "
                     "phrase map's own, so the run's map must be the phrase table"
                 )
+        if self.stability and not self.scorings:
+            raise ValueError(
+                "analysis.dictionary.stability needs analysis.dictionary.scorings: "
+                "the filtered arms are measured against the full primary arm"
+            )
         return self
 
     @field_validator("scorings")

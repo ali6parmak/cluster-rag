@@ -49,6 +49,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
@@ -112,6 +114,14 @@ from cluster_rag.text_processors.lexical.question_map_score import (
     blind_question_permutation,
     cross_fit_grids,
     union_grids,
+)
+from cluster_rag.text_processors.lexical.question_map_stability import (
+    estimate_question_map_stability,
+    kept_share,
+    stability_filter,
+)
+from cluster_rag.text_processors.lexical.question_map_stability import (
+    stability_block as question_map_stability_block,
 )
 
 logger = logging.getLogger(__name__)
@@ -646,6 +656,81 @@ def _dictionary_phrases_row(
         "floor_pairs": union["floor"]["n_floor_pairs"],
         "floor_share": _fmt(union["floor"]["floor_share"], 4),
         "n_pairs": (readout["scorings"].get(primary) or {}).get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_stability_row(
+    model: dict[str, Any],
+    block: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **stability** section (CS-54)."""
+    readout = model["readout"]
+    arms = readout.get("stability_arms") or {}
+    thresholds = readout.get("stability_thresholds") or []
+    full = readout["scorings"][readout["primary"]]
+    readout_block = model.get("stability_readout") or {}
+    kept = readout_block.get("kept_share") or {}
+    single = readout_block.get("single_pair") or {}
+    heads = readout_block.get("head_retention") or {}
+    per_question = readout_block.get("per_question") or []
+
+    def _shares() -> list[float]:
+        return [
+            row["share_surviving_075"]
+            for row in per_question
+            if row.get("share_surviving_075") is not None and (row.get("table_words") or 0) > 0
+        ]
+
+    def _arm(threshold: str, key: str) -> Any:
+        return (arms.get(threshold) or {}).get(key)
+
+    def _ci(threshold: str) -> str | None:
+        block_arm = arms.get(threshold) or {}
+        if block_arm.get("ci_low") is None:
+            return None
+        return f"[{block_arm['ci_low']:+.4f}, {block_arm['ci_high']:+.4f}]"
+
+    def _threshold(index: int) -> str:
+        return thresholds[index] if len(thresholds) > index else ""
+
+    medium = _shares()
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": readout["primary"],
+        "full_within_auc": _fmt(full.get("within_auc"), 4),
+        "full_nonfloor_auc": _fmt((readout.get("secondary_non_floor") or {}).get("within_auc"), 4),
+        "stable75_within_auc": _fmt(_arm(_threshold(0), "within_auc"), 4),
+        "stable75_delta": _fmt(_arm(_threshold(0), "delta_vs_full"), 4),
+        "stable75_ci": _ci(_threshold(0)),
+        "stable75_floor_pairs": _arm(_threshold(0), "floor_pairs"),
+        "stable75_floor_share": _fmt(_arm(_threshold(0), "floor_share"), 4),
+        "stable75_nonfloor_auc": _fmt(
+            (_arm(_threshold(0), "non_floor") or {}).get("within_auc"), 4
+        ),
+        "stable90_within_auc": _fmt(_arm(_threshold(1), "within_auc"), 4),
+        "stable90_delta": _fmt(_arm(_threshold(1), "delta_vs_full"), 4),
+        "stable90_ci": _ci(_threshold(1)),
+        "stable90_floor_pairs": _arm(_threshold(1), "floor_pairs"),
+        "stable90_floor_share": _fmt(_arm(_threshold(1), "floor_share"), 4),
+        "stable90_nonfloor_auc": _fmt(
+            (_arm(_threshold(1), "non_floor") or {}).get("within_auc"), 4
+        ),
+        "survival75_share": _fmt(kept.get("0.75"), 4),
+        "survival90_share": _fmt(kept.get("0.90"), 4),
+        "single_pair_survival": _fmt(single.get("mean_sign_stability"), 4),
+        "median_question_stability75": _fmt(float(np.median(medium)) if medium else None, 4),
+        "head_retention": _fmt(heads.get("share"), 4),
+        "n_links": readout_block.get("n_links"),
+        "n_pairs": full.get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1521,6 +1606,70 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 units=dictionary_units,
             )
             union = union_grids(word_grids, phrase_grids, scoring=primary)
+        stability_grids: dict[str, Any] = {}
+        stability_readout = None
+        if analysis.dictionary.stability:
+            # CS-54: the bootstrap over the reviewed pairs (the readout) and
+            # the stability-filtered arms against the full z arm. Each fold's
+            # filter is estimated on that fold's OWN training pairs, so a
+            # judged pair is scored by a filter that never saw it.
+            thresholds = analysis.dictionary.stability_thresholds
+            report = estimate_question_map_stability(
+                paragraphs,
+                questions,
+                labels,
+                dictionary_map,
+                resamples=analysis.dictionary.stability_resamples,
+                seed=dictionary_seed,
+                units=dictionary_units,
+            )
+            stability_readout = question_map_stability_block(report)
+            stability_readout["kept_share"] = {
+                f"{threshold:.2f}": kept_share(report, threshold) for threshold in thresholds
+            }
+            keep_by_fold_all: dict[str, dict[int, dict[str, frozenset[str]]]] = {
+                f"{threshold:.2f}": {} for threshold in thresholds
+            }
+            for fold in sorted({int(value) for value in dictionary_fold_ids}):
+                keep = [
+                    index for index in range(len(labels)) if int(dictionary_fold_ids[index]) != fold
+                ]
+                fold_map = build_question_map(
+                    [paragraphs[index] for index in keep],
+                    [questions[index] for index in keep],
+                    [labels[index] for index in keep],
+                    units=dictionary_units,
+                )
+                fold_report = estimate_question_map_stability(
+                    [paragraphs[index] for index in keep],
+                    [questions[index] for index in keep],
+                    [labels[index] for index in keep],
+                    fold_map,
+                    resamples=analysis.dictionary.stability_fold_resamples,
+                    seed=dictionary_seed,
+                    units=dictionary_units,
+                )
+                for threshold in thresholds:
+                    keep_by_fold_all[f"{threshold:.2f}"][fold] = stability_filter(
+                        fold_report, threshold
+                    )
+            for threshold in thresholds:
+                name = f"{threshold:.2f}"
+                stability_grids[name] = cross_fit_grids(
+                    paragraphs,
+                    questions,
+                    labels,
+                    dictionary_fold_ids,
+                    paragraphs=tuple(view.paragraphs),
+                    questions=tuple(view.questions),
+                    scorings=(primary, "support_count"),
+                    units=dictionary_units,
+                    keep=stability_filter(report, threshold),
+                    keep_by_fold=keep_by_fold_all[name],
+                )
+            stability_readout["thresholds"] = [f"{threshold:.2f}" for threshold in thresholds]
+            if dictionary_block is not None:
+                dictionary_block["stability"] = dict(stability_readout)
         models.append(
             build_dictionary_model(
                 view,
@@ -1538,6 +1687,8 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 bootstrap_seed=bootstrap_seed,
                 primary=primary,
                 union=union,
+                stability_grids=stability_grids,
+                stability_readout=stability_readout,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -1742,7 +1893,18 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("union"):
+            if (model.get("readout") or {}).get("stability_arms"):
+                table_rows.append(
+                    _dictionary_stability_row(
+                        model,
+                        dictionary_block,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("union"):
                 table_rows.append(
                     _dictionary_phrases_row(
                         model,
@@ -1883,7 +2045,15 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_union:
+        has_stability = any(
+            (model.get("readout") or {}).get("stability_arms")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
+        if has_stability:
+            columns = ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS
+        elif has_union:
             columns = ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS
         elif has_pos_arms:
@@ -1989,6 +2159,18 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
                 f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
             )
+            stability_arms = readout.get("stability_arms")
+            if stability_arms:
+                # CS-54: the filtered arms against the full z arm (CS-36's test).
+                for name, arm in stability_arms.items():
+                    print(
+                        f"      [stable {name}] the filtered z arm "
+                        f"{_fmt(arm.get('within_auc'), 4)} against the full arm "
+                        f"{_fmt(readout['scorings'][readout['primary']]['within_auc'], 4)} "
+                        f"(delta {_fmt(arm.get('delta_vs_full'), 4)}, 95% CI "
+                        f"[{_fmt(arm.get('ci_low'), 4)}, {_fmt(arm.get('ci_high'), 4)}]); "
+                        f"the floor {arm.get('floor_pairs')} pairs"
+                    )
             union = readout.get("union")
             if union is not None:
                 # CS-53: the union arm and its registered increment.

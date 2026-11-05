@@ -105,6 +105,7 @@ research record and are **not** indexed here.
 | [CS-51 — the word classes on OMCT](#cs-51--the-word-classes-on-omct-the-soft-prior-already-does-it-2026-11-05) | one `omct-analyze-voyage-dict-classes` run (the two class-restricted z arms against the full z arm; **0 model calls**, 18.7 s) | **a null for the hard filter**: `nogeneric` −0.0123 [−0.0221, −0.0024] (a small, detectable **cost**) and `distinctive` −0.0758 [−0.1052, −0.0472] with its floor jumping to 71.6 % — the **soft prior already does the class filter's work**; the class readout is the finding: the z-score separates the classes (distinctive +0.3782 / generic +0.0234) while the **raw log-odds reverse CS-33's order** (distinctive −0.2317 / generic +0.9081) | `results/omct-analyze-voyage-dict-classes/analysis.json` |
 | [CS-52 — the grammatical axis on OMCT](#cs-52--the-grammatical-axis-on-omct-a-null-that-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-pos` run (CS-34's POS classes, the two POS-restricted z arms; **0 model calls**, 18.6 s) | **a null that reproduces**: the noun-only arm −0.0041 [−0.0097, +0.0016] (a free-ish filter, not a lever) and the verb-only −0.0723 [−0.0878, −0.0571]; the classes' z means are within 0.016 of each other (the noun−verb difference −0.0148 against the 0.5 bar) — the register is in the words, not their part of speech | `results/omct-analyze-voyage-dict-pos/analysis.json` |
 | [CS-53 — the phrases on OMCT](#cs-53--the-phrases-on-omct-the-upr-null-reproduces-for-the-other-reason-2026-11-05) | one `omct-analyze-voyage-dict-phrases` run (the phrase table, the word z arm reproduced inside the run, and the union = the two z arms summed; **0 model calls**, 15.2 s) | **a null that reproduces for the other reason**: the union is **−0.0043 [−0.0074, −0.0012]** against the word z arm (0.6976 vs 0.7020 — inside the registered ±0.02 band at the point estimate, the interval excluding zero: a small, detectable cost), and the phrase arm alone (**0.6840**) sits below the word arm; the phrase table is **not** rare on the pair unit (14.8 % hapax against CS-39's 82.8 %; the median question's table holds 120 rows against the word table's 65), so the UPR null's **premise** does not transfer — the phrases are **redundant** with their own words, not rare; the CS-39 readout's direction does (the generic-class row share 14.3 % against the word table's 30.3 %) | `results/omct-analyze-voyage-dict-phrases/analysis.json` |
+| [CS-54 — the stability of the pair unit](#cs-54--the-stability-of-the-pair-unit-the-null-becomes-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-stability` run (CS-36's bootstrap over the 1,520 reviewed pairs, 500 resamples; the two filtered z arms; **0 model calls**, 136 s) | **the UPR null becomes a cost**: the τ = 0.75 filtered arm is **0.6399** against the full z arm's 0.7020 (**−0.0621 [−0.0859, −0.0395]**) and τ = 0.90 is −0.1094, with the floor rising to **61.97 %** / 74.9 % — the map's bulk is sampling noise (the presence cliff **63.3 %**, the 1 − e⁻¹ prediction; the sign cliff **54.1 %**, so **not one** single-pair link clears 0.75; the heads keep their place in **65.0 %**), and the registered survival magnitude (10–15 %) **misses** at 6.79 % | `results/omct-analyze-voyage-dict-stability/analysis.json` |
 
 ## Change sets
 
@@ -9211,4 +9212,92 @@ about UPR; and nothing about `test` (OMCT has none).
 
 **The gate.** `pytest`: **986 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **240** files. Two consecutive runs are
+bit-identical (bar the clock field).
+
+## CS-54 — the stability of the pair unit: the null becomes a cost (2026-11-06)
+
+**The run.** One: `omct-analyze-voyage-dict-stability` — CS-36's bootstrap over
+the **reviewed pairs** (500 resamples, seed 42), every (question, word) link's
+`present_share` / `sign_stability` / `head_stability`, and the two
+stability-filtered **z arms** (τ = 0.75 and 0.90) against the full z arm. Each
+fold's filter is estimated on that fold's **own** training pairs (100
+resamples), so a judged pair is scored by a map and a filter that both never
+saw it. **0 model calls**, **136 s**, the artifact **60.7 MB** (the per-link
+table), **no new dependency**; the full z arm reproduces **0.7020** (non-floor
+0.8158, count 0.6360, floor 518). The sweep is
+`experiments_text_processing/omct_dictionary_stability_sweep.py` (the label
+`omct_dictionary_stability`, the table's section
+`## OMCT — omct_dictionary_stability`; the run finished after midnight, hence
+the table's 2026-11-06).
+
+**The model test (the primary): the filter is a cost, and a bigger one than
+UPR's null.** The τ = 0.75 filtered z arm reaches **0.6399** against the full
+arm's **0.7020** — a paired **−0.0621 [−0.0859, −0.0395]** (P(Δ>0) 0.000) —
+and τ = 0.90 reaches **0.5926**, **−0.1094 [−0.1384, −0.0828]**. The
+registered prediction was a cost (CS-36's verdict, at a thinner unit): it
+holds, and the ≥ +0.05 "lever" bar is far away. The floor is the mechanism:
+**942 pairs (61.97 %)** at τ = 0.75 and **1,139 (74.9 %)** at τ = 0.90, against
+the full arm's 518 (34.1 %) — the registered "≥ 50 %" prediction holds. The
+filtered arm still discriminates where it speaks (non-floor **0.7659** at
+0.75), but it speaks about a minority.
+
+**The readout (the deliverable): the map's bulk is sampling noise.** The
+survival curve has CS-36's shape — a **cliff between 0.60 and 0.70**: 77.0 % of
+the links survive at 0.50, 55.4 % at 0.60, **19.6 % at 0.65**, 7.4 % at 0.70,
+**6.79 %** at the registered 0.75, **1.02 %** at 0.90, and 0.01 % at 1.00. The
+by-support readout is the reason:
+
+| the link's support | links | mean `present_share` | mean `sign_stability` | share surviving 0.75 |
+|---|---|---|---|---|
+| 1 reviewed pair | 24,942 (89.1 %) | **63.3 %** | **54.1 %** | **0.0 %** |
+| 2 pairs | 2,278 (8.1 %) | 86.4 % | 72.6 % | 61.6 % |
+| 3 pairs | 463 | 94.9 % | 80.5 % | 67.4 % |
+| 4 pairs | 142 | 98.0 % | 74.9 % | 64.1 % |
+
+The **presence** cliff is exactly CS-36's: a single-pair link is drawn 63.3 %
+of the time (the 1 − e⁻¹ prediction, 63.2 %) — the registered cliff test holds.
+But the **sign** cliff sits at **54.1 %**: a link seen once is present 63 % of
+the time and keeps its sign only 86 % of *those* times, because the sign is
+read against a table that is itself being rebuilt. So **not one** single-pair
+link clears τ = 0.75, and the map's own **heads** are where the survivors are:
+of the **2,087** head links, **1,357 (65.0 %)** keep their place in ≥ 50 % of
+the resamples (UPR: 50 %). The **median question's table keeps none of its
+links at τ = 0.75** (the median table's links are single-pair), which is the
+pair unit's own statement of CS-48's thinness.
+
+**The falsification, read out one by one.**
+
+1. **The model test (the primary): holds** — the filter is a cost, and larger
+   at the higher threshold (−0.0621 / −0.1094, both intervals excluding zero);
+   CS-36's "not a lever" reproduces in kind, at a bigger size.
+2. **The floor test: holds** — 61.97 % (predicted ≥ 50 %), and 74.9 % at 0.90.
+3. **The survival test: the registered magnitude MISSES** — **6.79 %** against
+   the predicted 10–15 % (below the band, above the 5 % falsifier: the
+   prediction was too generous by ~4 points). The direction (very little
+   survives) holds; the number is reported as a partial refutation.
+4. **The cliff test: holds on the presence statistic** (63.3 % against
+   63 % ± 10), **and the sign statistic adds a cliff the registration did not
+   state** (54.1 %): the filter's statistic is a two-step event on this unit.
+5. **The count check: holds** — the filtered count arm is 0.6195 against the
+   filtered z arm's 0.6399 (a 0.020 gap), and 0.5841 against 0.5926 at 0.90.
+
+**The reading.** CS-36's null was a ~0.007 loss on a map with 1,676 texts; on
+the pair unit the same filter costs **0.062** at τ = 0.75, because the unit is
+thinner by construction: 89.1 % of the links rest on one reviewed pair, the
+filter drops **all** of them, and the coverage the z arm reads collapses with
+them. **The UPR verdict reproduces in kind** (the filter is not a lever, the
+readout is the deliverable) **and not in size** (a null there, a clear cost
+here). The readout is the deliverable: the survival curve, the two cliffs
+(presence 63 %, sign 54 %), the head retention (65 %) and the per-question
+stability (a median of zero).
+
+**What this change set does not say.** Nothing about the **lexicon** (CS-55),
+**abstention** (CS-56) or **question pairs** (CS-57); nothing about a
+**different resampling unit** (paragraphs or documents were not resampled —
+the registered unit is the pair, the map's row); nothing about a **softer
+filter** (τ = 0.5 was read off the curve, not scored as an arm); nothing about
+the phrase map's stability; nothing about UPR.
+
+**The gate.** `pytest`: **991 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **243** files. Two consecutive runs are
 bit-identical (bar the clock field).

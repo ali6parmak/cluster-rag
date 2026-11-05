@@ -416,3 +416,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | reference_model | arm | word_within_auc | word_nonfloor_auc | word_count_auc | phrase_within_auc | phrase_nonfloor_auc | phrase_count_auc | union_within_auc | union_delta_vs_word | union_ci | union_p_delta | union_nonfloor_auc | union_delta_vs_cosine | union_ci_vs_cosine | union_pooled_auc | union_pooled_d_auc | union_deshifted_auc | phrase_units | phrase_rows | phrase_generic_row_share | phrase_hapax_share | floor_pairs | floor_share | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-phrases | 2026-11-05 | voyage-4-nano | sum_zscore_positive_phrase | 0.7020 | 0.8158 | 0.6360 | 0.6840 | 0.7740 | 0.6217 | 0.6976 | -0.0043 | [-0.0074, -0.0012] | 0.004 | 0.8057 | 0.1738 | [+0.1264, +0.2222] | 0.7421 | 0.2418 | 0.7272 | 7360 | 58769 | 0.1432 | 0.1484 | 518 | 0.3408 | 1520 | 4000 | 3 | 15.004 |
+
+## OMCT — omct_dictionary_stability
+
+| run_id | date | arm | full_within_auc | full_nonfloor_auc | stable75_within_auc | stable75_delta | stable75_ci | stable75_floor_pairs | stable75_floor_share | stable75_nonfloor_auc | stable90_within_auc | stable90_delta | stable90_ci | stable90_floor_pairs | stable90_floor_share | stable90_nonfloor_auc | survival75_share | survival90_share | single_pair_survival | median_question_stability75 | head_retention | n_links | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-stability | 2026-11-06 | sum_zscore_positive | 0.7020 | 0.8158 | 0.6399 | -0.0621 | [-0.0859, -0.0395] | 942 | 0.6197 | 0.7659 | 0.5926 | -0.1094 | [-0.1384, -0.0828] | 1139 | 0.7493 | 0.6647 | 0.0679 | 0.0102 | 0.5412 | 0.0000 | 0.6502 | 27979 | 1520 | 4000 | 3 | 135.765 |

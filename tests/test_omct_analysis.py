@@ -193,6 +193,36 @@ analysis:
     resamples: 200
 """
 
+# CS-54: the stability readout and the stability-filtered arms.
+DICTIONARY_STABILITY_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings: [sum_zscore_positive, support_count]
+    primary: sum_zscore_positive
+    blind: false
+    stability: true
+    stability_resamples: 5
+    stability_fold_resamples: 3
+    stability_thresholds: [0.75, 0.9]
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-53: the phrase table and the union arm (the word z arm + the phrase z arm).
 DICTIONARY_PHRASES_CONFIG_EXTRA = """
 analysis:
@@ -1065,6 +1095,52 @@ def test_analyze_omct_dictionary_phrases_end_to_end(
     assert "sum_zscore_positive_phrase" in row
 
 
+def test_analyze_omct_dictionary_stability_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-54: the bootstrap readout, the filtered arms and their own section row."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-stability-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_STABILITY_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-stability-test" / "analysis.json").read_text("utf-8")
+    )
+    block = payload["dictionary"]["stability"]
+    assert block["resamples"] == 5
+    assert block["n_pairs"] == 6
+    assert block["n_links"] == payload["dictionary"]["map"]["n_stored_pairs"]
+    assert len(block["survival_curve"]) == 21
+    assert block["single_pair"]["n_with"] == 1
+    assert block["kept_share"]["0.75"] is not None
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    readout = entry["readout"]
+    assert readout["stability_thresholds"] == ["0.75", "0.90"]
+    assert set(readout["stability_arms"]) == {"0.75", "0.90"}
+    for arm in readout["stability_arms"].values():
+        assert arm["within_auc"] is None or 0.0 <= arm["within_auc"] <= 1.0
+        assert arm["delta_vs_full"] is not None
+        assert arm["ci_low"] <= arm["ci_high"]
+        assert arm["floor_pairs"] >= 0
+        assert arm["reference_arm"] == "sum_zscore_positive"
+    assert entry["stability_readout"]["resamples"] == 5
+
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-stability-test"))
+    assert "sum_zscore_positive" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -1129,6 +1205,18 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     # the union needs the phrase unit (it sums the word and the phrase halves)
     with pytest.raises(ValueError, match="needs analysis.dictionary.units"):
         DictionaryConfig(union=True)
+    # CS-54: the stability knobs and the filtered-arm guard
+    assert DictionaryConfig().stability is False
+    assert DictionaryConfig().stability_resamples == 500
+    assert DictionaryConfig().stability_fold_resamples == 100
+    assert DictionaryConfig(stability=True, scorings=("sum_zscore_positive",)).stability is True
+    assert DictionaryConfig(stability_thresholds=(0.9, 0.75)).stability_thresholds == (0.75, 0.9)
+    with pytest.raises(ValueError, match="must not be empty"):
+        DictionaryConfig(stability_thresholds=())
+    with pytest.raises(ValueError, match="shares in"):
+        DictionaryConfig(stability_thresholds=(1.5,))
+    with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
+        DictionaryConfig(stability=True)
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

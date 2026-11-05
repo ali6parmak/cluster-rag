@@ -270,6 +270,57 @@ def class_arms_block(
     return block
 
 
+def stability_arms_block(
+    view: DatasetView,
+    stability_grids: Mapping[str, Mapping[str, Any]],
+    *,
+    primary: str,
+    full_matrix: np.ndarray,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The stability-filtered arms (CS-54), each against the **full** arm.
+
+    CS-36's model test, ported: the filtered map is the same scoring code
+    reading a reduced map (the links below the threshold are gone), scored
+    behind the same folds and compared with the full primary arm on the same
+    pairs. Each threshold's block also carries the filtered map's
+    **measure-free count** arm (CS-49's instrument, kept).
+
+    Args:
+        view: The dataset view.
+        stability_grids: The filtered grids, keyed by the threshold's name.
+        primary: The base arm the filter is applied to.
+        full_matrix: The full primary arm's grid.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+
+    Returns:
+        The readout block: per threshold, its AUC, the paired difference
+        against the full arm, its floor and its count arm.
+    """
+    block = class_arms_block(
+        view,
+        stability_grids,
+        primary=primary,
+        full_matrix=full_matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    for name, grids in stability_grids.items():
+        counted_matrix = grids["scorings"].get("support_count")
+        if counted_matrix is None:
+            block[name]["count_within_auc"] = None
+            block[name]["count_non_floor_auc"] = None
+            continue
+        counted = np.asarray(counted_matrix, dtype=np.float64)
+        measured = measure_arm(view, counted)
+        floor = np.asarray(grids["floor"], dtype=bool)
+        block[name]["count_within_auc"] = _arm_stats(view, measured)["within_auc"]
+        block[name]["count_non_floor_auc"] = _non_floor_stats(view, measured, ~floor)["within_auc"]
+    return block
+
+
 def union_arm_block(
     view: DatasetView,
     union: Mapping[str, Any],
@@ -426,6 +477,8 @@ def build_dictionary_model(
     pos_readout: Mapping[str, Any] | None = None,
     union: Mapping[str, Any] | None = None,
     unit_name: str | None = None,
+    stability_grids: Mapping[str, Mapping[str, Any]] | None = None,
+    stability_readout: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -451,6 +504,10 @@ def build_dictionary_model(
             ``None`` runs none.
         unit_name: The map's unit (CS-53), recorded on the entry so a phrase
             run's artifact is never read as a word run's.
+        stability_grids: The stability-filtered grids (CS-54), keyed by the
+            threshold's name; ``None`` runs none.
+        stability_readout: The map's stability readout (CS-54), carried beside
+            the arms.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -548,6 +605,18 @@ def build_dictionary_model(
             resamples=resamples,
             seed=bootstrap_seed,
         )
+    if stability_grids:
+        # CS-54: the filtered arms against the FULL primary arm on the same
+        # pairs (CS-36's model test, ported), threshold by threshold.
+        readout["stability_thresholds"] = list(stability_grids)
+        readout["stability_arms"] = stability_arms_block(
+            view,
+            stability_grids,
+            primary=primary,
+            full_matrix=matrix,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
     return {
         "name": DICTIONARY_ARM,
         "kind": "dictionary",
@@ -567,4 +636,5 @@ def build_dictionary_model(
         "readout": readout,
         "class_readout": None if class_readout is None else dict(class_readout),
         "pos_readout": None if pos_readout is None else dict(pos_readout),
+        "stability_readout": None if stability_readout is None else dict(stability_readout),
     }
