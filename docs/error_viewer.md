@@ -274,3 +274,13 @@ dependency enters `src/`.
 No pack/LLM predictions (V2), no per-word causal what-if (V3), no static HTML,
 no new run, no artifact rewrite, no log or table edit, no change to the
 pipeline. If a real discrepancy appears, it is reported, not fixed.
+
+## V1 screenshot
+
+The Errors view, rendered from the app's own HTML (UPR val, `k=2`). The text
+cell truncates and its full recommendation is the hover tooltip; the error
+badges, score/gap chips, boolean dots and contributing-word pills are
+read-only. The colour scheme is Catppuccin Mocha (`.streamlit/config.toml` and
+`tools/error_app.css`).
+
+![The Errors view](error_viewer_errors.png)

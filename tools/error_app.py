@@ -21,55 +21,22 @@ environment variables, which the tests use).
 
 from __future__ import annotations
 
+import html as html_lib
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+TOOLS = Path(__file__).resolve().parent
+CSS_PATH = TOOLS / "error_app.css"
+sys.path.insert(0, str(TOOLS))
 import error_view as ev  # noqa: E402
 
 VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Export")
-
-# Catppuccin Mocha (the upstream palette). The theme file sets the widget
-# colours; these few rules cover the metric cards, the sidebar edge and the
-# tabular figures that Streamlit's theme does not reach.
-CATPPUCCIN_MOCHA = """
-<style>
-:root {
-  --ctp-base: #1e1e2e;
-  --ctp-mantle: #181825;
-  --ctp-crust: #11111b;
-  --ctp-surface0: #313244;
-  --ctp-overlay0: #6c7086;
-  --ctp-subtext0: #a6adc8;
-  --ctp-text: #cdd6f4;
-  --ctp-mauve: #cba6f7;
-  --ctp-green: #a6e3a1;
-  --ctp-red: #f38ba8;
-  --ctp-blue: #89b4fa;
-}
-[data-testid="stSidebar"] {
-  background: var(--ctp-mantle);
-  border-right: 1px solid var(--ctp-surface0);
-}
-[data-testid="stMetric"] {
-  background: var(--ctp-mantle);
-  border: 1px solid var(--ctp-surface0);
-  border-radius: 0.6rem;
-  padding: 0.55rem 0.75rem;
-}
-[data-testid="stMetricLabel"] { color: var(--ctp-subtext0); }
-[data-testid="stMetricValue"] { color: var(--ctp-text); }
-[data-testid="stCaptionContainer"] { color: var(--ctp-subtext0); }
-h1, h2 { color: var(--ctp-mauve); }
-a { color: var(--ctp-blue); }
-[data-testid="stDataFrame"] { font-variant-numeric: tabular-nums; }
-</style>
-"""
 
 
 def _env(name: str, default: str) -> str:
@@ -127,15 +94,15 @@ def _words_frame(tables: ev.Tables) -> pd.DataFrame:
     return pd.DataFrame([asdict(row) for row in tables.words])
 
 
-def _top_words(tables: ev.Tables) -> dict[tuple[str, str], str]:
-    """Each cell's two strongest contributing words, as one display string."""
+def _top_words(tables: ev.Tables) -> dict[tuple[str, str], list[tuple[str, float]]]:
+    """Each cell's three strongest contributing words, strongest first."""
     grouped: dict[tuple[str, str], list[tuple[str, float]]] = {}
     for row in tables.words:
         grouped.setdefault((row.text_id, row.label), []).append((row.word, row.z_score))
-    out: dict[tuple[str, str], str] = {}
+    out: dict[tuple[str, str], list[tuple[str, float]]] = {}
     for key, entries in grouped.items():
         entries.sort(key=lambda item: (-item[1], item[0]))
-        out[key] = ", ".join(f"{word} {z:+.3f}" for word, z in entries[:2])
+        out[key] = entries[:3]
     return out
 
 
@@ -168,6 +135,189 @@ def _sign_colour(value: object) -> str:
     return "color: #6c7086"
 
 
+# --- the read-only HTML table -------------------------------------------------
+#
+# The table cells carry the diagnostics in place: a native tooltip on the text,
+# coloured badges for the error type, dots for the booleans (never checkboxes),
+# and chips with a small intensity bar for the scores. Everything is escaped;
+# the helpers return HTML fragments for :func:`_html_table`.
+
+
+def _esc(value: object) -> str:
+    """The value as escaped HTML text."""
+    return html_lib.escape(str(value), quote=True)
+
+
+def _tooltip_text(text: str, limit: int = 130) -> str:
+    """The text as a truncated, hoverable cell (the full text is the tooltip)."""
+    cleaned = " ".join(text.split())
+    shown = cleaned if len(cleaned) <= limit else cleaned[: limit - 1].rstrip() + "…"
+    return f'<span class="ev-text" title="{_esc(cleaned)}">{_esc(shown)}</span>'
+
+
+def _dot(active: bool, tone: str, *, on: str = "●", off: str = "·", title: str = "") -> str:
+    """A boolean as a coloured dot (a read-only indicator, never a checkbox)."""
+    css = f"ev-dot ev-dot-{tone}" if active else "ev-dot ev-dot-off"
+    return f'<span class="{css}" title="{_esc(title)}">{on if active else off}</span>'
+
+
+def _gold_dot(active: bool) -> str:
+    """The gold flag: a gold star, or a dim dot."""
+    return _dot(
+        active,
+        "gold",
+        on="★",
+        off="·",
+        title="gold label" if active else "not a gold label",
+    )
+
+
+def _predicted_dot(active: bool) -> str:
+    """The prediction flag: a mauve dot, or a dim dot."""
+    return _dot(
+        active,
+        "mauve",
+        on="●",
+        off="·",
+        title="the classifier's pick" if active else "not predicted",
+    )
+
+
+def _evidence_dot(active: bool) -> str:
+    """The evidence flag: a green dot, or the amber empty-slot ring."""
+    if active:
+        return (
+            '<span class="ev-dot ev-dot-green" '
+            'title="a word of this text gave the label points">●</span>'
+        )
+    return (
+        '<span class="ev-dot ev-dot-amber" '
+        'title="empty slot: the score is 0, the pick is a tie-break">○</span>'
+    )
+
+
+def _error_badge(error: str) -> str:
+    """The error type as a coloured badge (fp red, near-miss amber, tp green)."""
+    tone = {"tp": "green", "fp": "red", "fn": "red", "near_miss": "amber", "ok": "muted"}.get(
+        error, "muted"
+    )
+    return f'<span class="ev-badge ev-badge-{tone}">{_esc(error)}</span>'
+
+
+def _direction_badge(direction: str) -> str:
+    """The compare direction as a coloured badge."""
+    tone = {"improved": "improved", "worsened": "worsened", "same": "same"}.get(direction, "same")
+    return f'<span class="ev-badge ev-badge-{tone}">{_esc(direction)}</span>'
+
+
+def _chip(
+    value: float | int | None,
+    maximum: float,
+    *,
+    signed: bool = False,
+    tone: str = "auto",
+    digits: int = 3,
+) -> str:
+    """A number as a coloured chip; the tint is the value's size on its scale."""
+    if value is None or pd.isna(value):
+        return '<span class="ev-muted">—</span>'
+    number = float(value)
+    ratio = min(abs(number) / maximum, 1.0) if maximum > 0.0 else 0.0
+    css_tone = ("pos" if number >= 0.0 else "neg") if tone == "auto" else tone
+    text = f"{number:+.{digits}f}" if signed and number else f"{number:.{digits}f}"
+    alpha = 0.10 + 0.45 * ratio
+    return (
+        f'<span class="ev-chip ev-chip-{css_tone}" style="--alpha: {alpha:.3f}">{_esc(text)}</span>'
+    )
+
+
+def _meter(
+    value: float | int | None,
+    maximum: float,
+    *,
+    signed: bool = False,
+    tone: str = "auto",
+    digits: int = 3,
+) -> str:
+    """A chip plus a small intensity bar (the value's share of the scale)."""
+    if value is None or pd.isna(value):
+        return '<span class="ev-muted">—</span>'
+    number = float(value)
+    ratio = min(abs(number) / maximum, 1.0) if maximum > 0.0 else 0.0
+    bar_tone = (
+        tone
+        if tone in {"score", "neutral", "good", "warn", "danger"}
+        else ("pos" if number >= 0.0 else "neg")
+    )
+    return (
+        f'<span class="ev-meter">{_chip(number, maximum, signed=signed, tone=tone, digits=digits)}'
+        f'<span class="ev-bar"><span class="ev-bar-fill ev-bar-{bar_tone}" '
+        f'style="width: {ratio * 100:.1f}%"></span></span></span>'
+    )
+
+
+def _word_pills(entries: list[tuple[str, float]], maximum: float) -> str:
+    """The contributing words as pills, each with its weight as an inline bar."""
+    if not entries:
+        return '<span class="ev-muted">no contributing word</span>'
+    pills = []
+    for word, z_score in entries:
+        ratio = min(abs(z_score) / maximum, 1.0) if maximum > 0.0 else 0.0
+        pills.append(
+            f'<span class="ev-pill" title="{_esc(word)} z={z_score:+.3f}">'
+            f'<span class="ev-pill-fill" style="width: {ratio * 100:.1f}%"></span>'
+            f'<span class="ev-pill-text">{_esc(word)} <b>{z_score:+.3f}</b></span></span>'
+        )
+    return '<span class="ev-pills">' + "".join(pills) + "</span>"
+
+
+def _name_pills(names: Sequence[str]) -> str:
+    """A list of names as plain pills (the coverage holes, the gold labels)."""
+    if not names:
+        return '<span class="ev-muted">—</span>'
+    return (
+        '<span class="ev-pills">'
+        + "".join(
+            f'<span class="ev-pill"><span class="ev-pill-text">{_esc(name)}</span></span>'
+            for name in names
+        )
+        + "</span>"
+    )
+
+
+def _html_table(
+    headers: list[str],
+    rows: list[list[str]],
+    aligns: list[str] | None = None,
+    *,
+    columns: list[str] | None = None,
+) -> str:
+    """A read-only table: zebra rows, a sticky header and escaped headers.
+
+    The cells are HTML fragments (built by the helpers above); the header
+    labels and the ``data-columns`` hook are escaped. The hook is what the
+    tests pin the column order with.
+    """
+    align = list(aligns or ["left"] * len(headers))
+    keys = list(columns or headers)
+    head = "".join(
+        f'<th style="text-align:{a}">{_esc(h)}</th>' for h, a in zip(headers, align, strict=True)
+    )
+    body = []
+    for row in rows:
+        cells = "".join(
+            f'<td style="text-align:{a}">{cell}</td>' for cell, a in zip(row, align, strict=True)
+        )
+        body.append(f"<tr>{cells}</tr>")
+    if not body:
+        body.append(f'<tr><td class="ev-empty" colspan="{len(headers)}">no rows</td></tr>')
+    return (
+        f'<div class="ev-table-wrap" data-columns="{_esc("|".join(keys))}">'
+        f'<table class="ev-table"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
 def _render_guard(report: ev.GuardReport, *, compact: bool = False) -> None:
     """The guard's own checks (and the provenance), in the sidebar/top."""
     if compact:
@@ -182,17 +332,13 @@ def errors_view(
     tables: ev.Tables,
     context: ev.Context,
     *,
-    top_words: dict[tuple[str, str], str],
+    top_words: dict[tuple[str, str], list[tuple[str, float]]],
 ) -> None:
     """The mistakes, filterable and sorted by how confident they were."""
     cells = _cells_frame(tables)
     lookup = _text_lookup(context)
     texts = _texts_frame(tables)[["text_id", "length_bucket", "text"]]
     cells = cells.merge(texts, on="text_id", how="left")
-    cells["top_words"] = [
-        top_words.get((text_id, label), "")
-        for text_id, label in zip(cells.text_id, cells.label, strict=False)
-    ]
     labels = list(context.labels)
     st.subheader("Errors — what the dictionary classifier got wrong")
     st.caption(
@@ -254,26 +400,81 @@ def errors_view(
         f"{len(frame)} mistake cells; showing the top {min(limit, len(frame))} by confidence "
         "(the score that made the pick; for an FN, the score that fell short)."
     )
-    display = frame.head(limit)[
-        [
-            "text",
-            "error",
-            "label",
-            "score",
-            "rank",
-            "gap_to_cut",
-            "has_evidence",
-            "gold",
-            "predicted",
-            "length_bucket",
-            "top_words",
-            "text_id",
-        ]
-    ].copy()
-    display["text"] = display["text"].map(_snippet)
-    display["score"] = display["score"].map(lambda value: f"{value:.3f}")
-    display["gap_to_cut"] = display["gap_to_cut"].map(lambda value: f"{value:+.3f}")
-    st.dataframe(display, hide_index=True, width="stretch")
+    records = frame.head(limit).to_dict("records")
+    max_score = max((float(record["score"]) for record in records), default=1.0)
+    max_gap = max((abs(float(record["gap_to_cut"])) for record in records), default=1.0)
+    rows = []
+    for record in records:
+        entries = top_words.get((record["text_id"], record["label"]), [])
+        max_word = max((z for _, z in entries), default=1.0)
+        rows.append(
+            [
+                _tooltip_text(lookup.get(record["text_id"], record["text"])),
+                _error_badge(str(record["error"])),
+                _esc(record["label"]),
+                _meter(float(record["score"]), max_score, tone="score"),
+                f'<span class="ev-rank">{int(record["rank"])}</span>',
+                _meter(float(record["gap_to_cut"]), max_gap, signed=True),
+                _gold_dot(bool(record["gold"])),
+                _predicted_dot(bool(record["predicted"])),
+                _evidence_dot(bool(record["has_evidence"])),
+                f'<span class="ev-muted">{_esc(record["length_bucket"])}</span>',
+                _word_pills(entries, max_word),
+                f'<span class="ev-id">{_esc(record["text_id"])}</span>',
+            ]
+        )
+    st.markdown(
+        _html_table(
+            [
+                "text",
+                "error",
+                "label",
+                "score",
+                "rank",
+                "gap to cut",
+                "gold",
+                "pred",
+                "evidence",
+                "length",
+                "top words",
+                "text id",
+            ],
+            rows,
+            [
+                "left",
+                "center",
+                "left",
+                "right",
+                "right",
+                "right",
+                "center",
+                "center",
+                "center",
+                "left",
+                "left",
+                "left",
+            ],
+            columns=[
+                "text",
+                "error",
+                "label",
+                "score",
+                "rank",
+                "gap_to_cut",
+                "gold",
+                "predicted",
+                "has_evidence",
+                "length_bucket",
+                "top_words",
+                "text_id",
+            ],
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Hover a text for the full recommendation; hover a dot or a pill for its meaning. "
+        "★ gold · ● predicted · evidence: ● a word gave points, ○ empty slot."
+    )
     if not frame.empty:
         choices = list(dict.fromkeys(frame["text_id"]))
         picked = st.selectbox(
@@ -342,28 +543,42 @@ def one_text_view(tables: ev.Tables, context: ev.Context) -> None:
     gold_set = set(record.labels)
     extra = [row for row in by_rank if row.label in gold_set and row not in shown]
     rows = shown + extra
-    frame = pd.DataFrame(
-        [
-            {
-                "rank": row.rank,
-                "label": row.label,
-                "score": row.score,
-                "gold": row.gold,
-                "predicted": row.predicted,
-                "error": row.error,
-                "has_evidence": row.has_evidence,
-                "gap_to_cut": row.gap_to_cut,
-                "has_table": row.has_table,
-            }
-            for row in rows
-        ]
-    )
-    st.dataframe(
-        frame.style.format({"score": "{:.3f}", "gap_to_cut": "{:+.3f}"}, na_rep="—").map(
-            _sign_colour, subset=["score", "gap_to_cut"]
+    max_score = max((row.score for row in rows), default=1.0)
+    max_gap = max((abs(row.gap_to_cut) for row in rows), default=1.0)
+    table_rows = []
+    for row in rows:
+        label = _esc(row.label)
+        if not row.has_table:
+            label += ' <span class="ev-badge ev-badge-muted">no table</span>'
+        table_rows.append(
+            [
+                f'<span class="ev-rank">{row.rank}</span>',
+                label,
+                _meter(row.score, max_score, tone="score"),
+                _gold_dot(row.gold),
+                _predicted_dot(row.predicted),
+                _error_badge(row.error),
+                _evidence_dot(row.has_evidence),
+                _meter(row.gap_to_cut, max_gap, signed=True),
+            ]
+        )
+    st.markdown(
+        _html_table(
+            ["rank", "label", "score", "gold", "pred", "error", "evidence", "gap to cut"],
+            table_rows,
+            ["right", "left", "right", "center", "center", "center", "center", "right"],
+            columns=[
+                "rank",
+                "label",
+                "score",
+                "gold",
+                "predicted",
+                "error",
+                "has_evidence",
+                "gap_to_cut",
+            ],
         ),
-        hide_index=True,
-        width="stretch",
+        unsafe_allow_html=True,
     )
 
     st.markdown("**The words x labels matrix — the dictionary and the model**")
@@ -419,20 +634,27 @@ def one_text_view(tables: ev.Tables, context: ev.Context) -> None:
             "zero-score tie-break picks."
         )
         ranking = ev.evidence_ranking(context.tables, record.text, context.labels)
-        st.dataframe(
-            pd.DataFrame(
+        top = ranking[:15]
+        max_evidence = max((row.score for row in top), default=1.0)
+        evidence_rows = []
+        for row in top:
+            entries = list(row.words[:2])
+            evidence_rows.append(
                 [
-                    {
-                        "rank": row.rank,
-                        "label": row.label,
-                        "score": f"{row.score:.3f}",
-                        "words": ", ".join(f"{word} {score:+.3f}" for word, score in row.words[:2]),
-                    }
-                    for row in ranking[:15]
+                    f'<span class="ev-rank">{row.rank}</span>',
+                    _esc(row.label),
+                    _meter(row.score, max_evidence, tone="score"),
+                    _word_pills(entries, max((z for _, z in entries), default=1.0)),
                 ]
+            )
+        st.markdown(
+            _html_table(
+                ["rank", "label", "score", "words"],
+                evidence_rows,
+                ["right", "left", "right", "left"],
+                columns=["rank", "label", "score", "words"],
             ),
-            hide_index=True,
-            width="stretch",
+            unsafe_allow_html=True,
         )
 
 
@@ -462,52 +684,125 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
             "gold A -> predicted B, over the cells the classifier predicted: which labels "
             "does it swap? (A and B differ; the support is A's gold cells.)"
         )
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "gold": row.gold_label,
-                        "predicted": row.predicted_label,
-                        "n": row.n,
-                        "support": row.support,
-                        "share of A": f"{row.share:.3f}",
-                    }
-                    for row in confusion[:40]
-                ]
+        top = confusion[:40]
+        confusion_rows = [
+            [
+                _esc(row.gold_label),
+                _esc(row.predicted_label),
+                f'<span class="ev-rank">{row.n}</span>',
+                f'<span class="ev-muted">{row.support}</span>',
+                _meter(row.share, 1.0, tone="neutral"),
+            ]
+            for row in top
+        ]
+        st.markdown(
+            _html_table(
+                ["gold", "predicted", "n", "support", "share of A"],
+                confusion_rows,
+                ["left", "left", "right", "right", "right"],
+                columns=["gold_label", "predicted_label", "n", "support", "share"],
             ),
-            hide_index=True,
-            width="stretch",
+            unsafe_allow_html=True,
         )
     with tabs[1]:
         st.caption(
             "Per label: precision, recall, the miss rate (fn + near_miss over gold) and the "
             "FP rate (fp over the non-gold cells)."
         )
-        frame = pd.DataFrame([asdict(row) for row in rates])
-        frame = frame.sort_values(["miss_rate", "fp_rate"], ascending=False)
-        st.dataframe(
-            frame.style.format(
-                {
-                    "precision": "{:.3f}",
-                    "recall": "{:.3f}",
-                    "miss_rate": "{:.3f}",
-                    "fp_rate": "{:.4f}",
-                }
+        ordered = sorted(rates, key=lambda row: (-row.miss_rate, -row.fp_rate, row.label))
+        rate_rows = []
+        for row in ordered:
+            rate_rows.append(
+                [
+                    _esc(row.label),
+                    f'<span class="ev-muted">{_esc(row.bucket)}</span>',
+                    str(row.n_gold),
+                    str(row.n_pred),
+                    str(row.tp),
+                    str(row.fp),
+                    str(row.fn),
+                    str(row.near_miss),
+                    _chip(row.precision, 1.0, tone="good"),
+                    _chip(row.recall, 1.0, tone="good"),
+                    _meter(row.miss_rate, 1.0, tone="danger"),
+                    _meter(row.fp_rate, 1.0, tone="danger"),
+                ]
+            )
+        st.markdown(
+            _html_table(
+                [
+                    "label",
+                    "bucket",
+                    "gold",
+                    "pred",
+                    "tp",
+                    "fp",
+                    "fn",
+                    "near",
+                    "precision",
+                    "recall",
+                    "miss rate",
+                    "fp rate",
+                ],
+                rate_rows,
+                [
+                    "left",
+                    "left",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                ],
+                columns=[
+                    "label",
+                    "bucket",
+                    "n_gold",
+                    "n_pred",
+                    "tp",
+                    "fp",
+                    "fn",
+                    "near_miss",
+                    "precision",
+                    "recall",
+                    "miss_rate",
+                    "fp_rate",
+                ],
             ),
-            hide_index=True,
-            width="stretch",
+            unsafe_allow_html=True,
         )
     with tabs[2]:
         st.caption(
             "The words whose contributions sit in predicted cells: n_cells counts the "
             "predicted cells a word contributed to, split into hits and false positives."
         )
-        st.dataframe(
-            pd.DataFrame([asdict(row) for row in words[:50]]).style.format(
-                {"mean_z": "{:+.3f}", "precision": "{:.3f}"}
+        top = words[:50]
+        max_z = max((abs(row.mean_z) for row in top), default=1.0)
+        max_cells = max((row.n_cells for row in top), default=1)
+        word_rows = [
+            [
+                _word_pills([(row.word, row.mean_z)], max_z),
+                _chip(row.n_cells, max_cells, tone="neutral", digits=0),
+                str(row.n_tp),
+                _chip(row.n_fp, max_cells, tone="danger", digits=0),
+                _chip(row.mean_z, max_z, signed=True),
+                _meter(row.precision, 1.0, tone="good"),
+            ]
+            for row in top
+        ]
+        st.markdown(
+            _html_table(
+                ["word", "cells", "hits", "FPs", "mean z", "precision"],
+                word_rows,
+                ["left", "right", "right", "right", "right", "right"],
+                columns=["word", "n_cells", "n_tp", "n_fp", "mean_z", "precision"],
             ),
-            hide_index=True,
-            width="stretch",
+            unsafe_allow_html=True,
         )
     with tabs[3]:
         st.caption(
@@ -518,18 +813,43 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
         columns[0].metric("never predicted", len(holes.never_predicted))
         columns[1].metric("never with evidence", len(holes.never_predicted_with_evidence))
         columns[2].metric("no train table", len(holes.no_table))
-        st.write("**Never predicted:** " + (", ".join(holes.never_predicted) or "—"))
-        st.write(
-            "**Never predicted with evidence:** "
-            + (", ".join(holes.never_predicted_with_evidence) or "—")
-        )
-        st.write("**No train table (held out):** " + (", ".join(holes.no_table) or "—"))
+        st.markdown("**Never predicted:**", unsafe_allow_html=True)
+        st.markdown(_name_pills(holes.never_predicted), unsafe_allow_html=True)
+        st.markdown("**Never predicted with evidence:**", unsafe_allow_html=True)
+        st.markdown(_name_pills(holes.never_predicted_with_evidence), unsafe_allow_html=True)
+        st.markdown("**No train table (held out):**", unsafe_allow_html=True)
+        st.markdown(_name_pills(holes.no_table), unsafe_allow_html=True)
     with tabs[4]:
-        frame = pd.DataFrame([asdict(row) for row in buckets])
-        st.dataframe(
-            frame.style.format({"micro_f1": "{:.3f}"}),
-            hide_index=True,
-            width="stretch",
+        bucket_rows = [
+            [
+                f'<span class="ev-muted">{_esc(row.kind)}</span>',
+                _esc(row.bucket),
+                str(row.n_cells),
+                str(row.tp),
+                str(row.fp),
+                str(row.fn),
+                str(row.near_miss),
+                _meter(row.micro_f1, 1.0, tone="good"),
+            ]
+            for row in buckets
+        ]
+        st.markdown(
+            _html_table(
+                ["kind", "bucket", "cells", "tp", "fp", "fn", "near", "micro-F1"],
+                bucket_rows,
+                ["left", "left", "right", "right", "right", "right", "right", "right"],
+                columns=[
+                    "kind",
+                    "bucket",
+                    "n_cells",
+                    "tp",
+                    "fp",
+                    "fn",
+                    "near_miss",
+                    "micro_f1",
+                ],
+            ),
+            unsafe_allow_html=True,
         )
 
 
@@ -604,9 +924,37 @@ def compare_view(
     )
     show_all = st.checkbox("show every changed text", key="cmp_all")
     shown = frame if show_all else frame.head(50)
-    st.dataframe(
-        shown[
+    records = shown.to_dict("records")
+    max_delta = max((abs(float(record["delta_f1"])) for record in records), default=1.0)
+    max_count = max(
+        (
+            abs(int(record[field]))
+            for record in records
+            for field in ("delta_tp", "delta_fp", "delta_fn")
+        ),
+        default=1,
+    )
+    table_rows = []
+    for record in records:
+        table_rows.append(
             [
+                _tooltip_text(lookup.get(record["text_id"], "")),
+                _meter(float(record["delta_f1"]), max_delta, signed=True),
+                _chip(float(record["f1_a"]), 1.0, tone="neutral"),
+                _chip(float(record["f1_b"]), 1.0, tone="neutral"),
+                _direction_badge(str(record["direction"])),
+                _chip(int(record["delta_tp"]), max_count, signed=True, digits=0),
+                _chip(int(record["delta_fp"]), max_count, signed=True, digits=0),
+                _chip(int(record["delta_fn"]), max_count, signed=True, digits=0),
+                f'<span class="ev-id">{_esc(record["text_id"])}</span>',
+            ]
+        )
+    st.markdown(
+        _html_table(
+            ["text", "ΔF1", "F1 A", "F1 B", "direction", "Δtp", "Δfp", "Δfn", "text id"],
+            table_rows,
+            ["left", "right", "right", "right", "center", "right", "right", "right", "left"],
+            columns=[
                 "text",
                 "delta_f1",
                 "f1_a",
@@ -616,10 +964,9 @@ def compare_view(
                 "delta_fp",
                 "delta_fn",
                 "text_id",
-            ]
-        ].style.format({"delta_f1": "{:+.3f}", "f1_a": "{:.3f}", "f1_b": "{:.3f}"}),
-        hide_index=True,
-        width="stretch",
+            ],
+        ),
+        unsafe_allow_html=True,
     )
     dictionary_side = [item for item in (a, b) if item.arm == "dictionary (recomputed)"]
     if dictionary_side and not shown.empty:
@@ -629,24 +976,30 @@ def compare_view(
             key="cmp_text",
         )
         cells = [row for row in tables.cells if row.text_id == text_id]
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "rank": row.rank,
-                        "label": row.label,
-                        "gold": row.gold,
-                        "predicted": row.predicted,
-                        "score": f"{row.score:.3f}",
-                        "error": row.error,
-                        "has_evidence": row.has_evidence,
-                    }
-                    for row in sorted(cells, key=lambda item: item.rank)
-                    if row.gold or row.predicted
-                ]
+        detail = [
+            row for row in sorted(cells, key=lambda item: item.rank) if row.gold or row.predicted
+        ]
+        max_cell_score = max((row.score for row in detail), default=1.0)
+        detail_rows = [
+            [
+                f'<span class="ev-rank">{row.rank}</span>',
+                _esc(row.label),
+                _gold_dot(row.gold),
+                _predicted_dot(row.predicted),
+                _meter(row.score, max_cell_score, tone="score"),
+                _error_badge(row.error),
+                _evidence_dot(row.has_evidence),
+            ]
+            for row in detail
+        ]
+        st.markdown(
+            _html_table(
+                ["rank", "label", "gold", "pred", "score", "error", "evidence"],
+                detail_rows,
+                ["right", "left", "center", "center", "right", "center", "center"],
+                columns=["rank", "label", "gold", "predicted", "score", "error", "has_evidence"],
             ),
-            hide_index=True,
-            width="stretch",
+            unsafe_allow_html=True,
         )
         dictionary_text = next(row for row in tables.texts if row.text_id == text_id)
         st.caption(
@@ -792,7 +1145,7 @@ def export_view(
 def main() -> None:
     """The app's entry point: sources, the guard, then the five views."""
     st.set_page_config(page_title="Error viewer — UPR val", page_icon="🪻", layout="wide")
-    st.markdown(CATPPUCCIN_MOCHA, unsafe_allow_html=True)
+    st.markdown(f"<style>{CSS_PATH.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
     st.title("Error viewer — UPR val")
     st.caption(
         "The dictionary classifier's mistakes, recomputed from the train corpus map. "

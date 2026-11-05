@@ -84,11 +84,17 @@ def test_the_errors_view_lists_a_mistake(fixture: Any, monkeypatch: pytest.Monke
     app = _app(fixture, monkeypatch)
     app.run()
     assert not app.exception
-    assert app.dataframe, "the Errors view printed no table"
-    assert any("val-2" in str(element.value) for element in app.dataframe)
-    columns = list(app.dataframe[0].value.columns)
-    assert columns[0] == "text"
-    assert columns[-1] == "text_id"
+    shown = " ".join(str(element.value) for element in app.markdown)
+    assert "ev-table" in shown, "the Errors view printed no table"
+    assert "val-2" in shown
+    assert (
+        'data-columns="text|error|label|score|rank|gap_to_cut|gold|predicted|'
+        'has_evidence|length_bucket|top_words|text_id"'
+    ) in shown
+    # the cells are the read-only diagnostics, not plain text
+    assert 'title="alpha beta"' in shown  # the full text is the tooltip
+    assert "ev-pill" in shown  # the contributing words
+    assert "ev-dot" in shown  # the booleans
 
 
 def test_the_one_text_view_shows_the_matrix(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,10 +103,11 @@ def test_the_one_text_view_shows_the_matrix(fixture: Any, monkeypatch: pytest.Mo
     app.run()
     app.get_by_key("view").set_value("One text").run()
     assert not app.exception
-    assert len(app.dataframe) >= 2
+    assert len(app.dataframe) >= 1  # the word x label matrix
     shown = " ".join(str(element.value) for element in (*app.markdown, *app.caption))
     assert "words x labels matrix" in shown
     assert "contrast B:" in shown
+    assert ('data-columns="rank|label|score|gold|predicted|error|has_evidence|gap_to_cut"') in shown
 
 
 def test_the_compare_view_pairs_the_two_synthetic_runs(
@@ -115,10 +122,27 @@ def test_the_compare_view_pairs_the_two_synthetic_runs(
     assert "Δ micro-F1" in metric_labels
     values = " ".join(str(element.value) for element in app.metric)
     assert "+0.6667" in values
-    columns = list(app.dataframe[0].value.columns)
-    assert columns[:4] == ["text", "delta_f1", "f1_a", "f1_b"]
-    assert columns[4] == "direction"
-    assert columns[-1] == "text_id"
+    shown = " ".join(str(element.value) for element in app.markdown)
+    assert (
+        'data-columns="text|delta_f1|f1_a|f1_b|direction|delta_tp|delta_fp|delta_fn|text_id"'
+    ) in shown
+    assert "ev-badge-improved" in shown
+
+
+def test_the_aggregates_tables_are_styled(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The aggregate tables carry the same HTML diagnostics as the Errors view."""
+    app = _app(fixture, monkeypatch)
+    app.run()
+    app.get_by_key("view").set_value("Aggregates").run()
+    assert not app.exception
+    shown = " ".join(str(element.value) for element in app.markdown)
+    assert (
+        'data-columns="label|bucket|n_gold|n_pred|tp|fp|fn|near_miss|'
+        'precision|recall|miss_rate|fp_rate"'
+    ) in shown
+    assert 'data-columns="kind|bucket|n_cells|tp|fp|fn|near_miss|micro_f1"' in shown
+    assert "ev-chip" in shown
+    assert "ev-meter" in shown
 
 
 def test_the_export_view_offers_the_csv(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,14 +191,54 @@ def test_the_catppuccin_mocha_theme_is_configured() -> None:
     assert "sans-serif" in theme["font"]
 
 
-def test_the_signed_value_colours_are_catppuccin() -> None:
-    """The table's sign colours are Mocha's green, red and overlay0."""
-    spec = importlib.util.spec_from_file_location("error_app_under_test", TOOLS / "error_app.py")
+def _app_module() -> Any:
+    """The app module (for the pure HTML-cell helpers)."""
+    name = "error_app_under_test"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, TOOLS / "error_app.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    sys.modules["error_app_under_test"] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def test_the_signed_value_colours_are_catppuccin() -> None:
+    """The table's sign colours are Mocha's green, red and overlay0."""
+    module = _app_module()
     assert module._sign_colour(1.0) == "color: #a6e3a1"
     assert module._sign_colour(-1.0) == "color: #f38ba8"
     assert module._sign_colour(0.0) == "color: #6c7086"
     assert module._sign_colour(float("nan")) == "color: #6c7086"
+
+
+def test_the_cells_are_read_only_diagnostics() -> None:
+    """The cells carry HTML, not checkbox-looking booleans or plain text."""
+    module = _app_module()
+    tooltip = module._tooltip_text("A long recommendation " * 20)
+    assert tooltip.startswith('<span class="ev-text"')
+    assert 'title="A long recommendation' in tooltip
+    assert "…" in tooltip
+    assert "★" in module._gold_dot(True)
+    assert "ev-dot-off" in module._gold_dot(False)
+    assert "○" in module._evidence_dot(False)
+    assert "ev-badge-red" in module._error_badge("fp")
+    assert "ev-badge-amber" in module._error_badge("near_miss")
+    assert "ev-badge-green" in module._error_badge("tp")
+    assert "ev-pill" in module._word_pills([("alpha", 2.0)], 2.0)
+    assert "ev-chip" in module._chip(2.0, 4.0, tone="score")
+    assert "ev-bar" in module._meter(2.0, 4.0)
+    table = module._html_table(["text", "delta_f1"], [["x", "y"]], columns=["text", "delta_f1"])
+    assert 'data-columns="text|delta_f1"' in table
+    assert "ev-table" in table
+
+
+def test_the_stylesheet_carries_the_table_look() -> None:
+    """The CSS file is the Catppuccin Mocha palette and the table's own classes."""
+    css = (TOOLS / "error_app.css").read_text(encoding="utf-8")
+    assert "--ctp-base: #1e1e2e" in css
+    assert ".ev-table" in css
+    assert ".ev-pill" in css
+    assert ".ev-chip" in css
+    assert ".ev-dot" in css
