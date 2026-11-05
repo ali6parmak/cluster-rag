@@ -1018,7 +1018,7 @@ def _hitmap_columns(
     tables: ev.Tables,
     record: Any,
     extra: int,
-) -> list[tuple[str, str, float, int, bool]]:
+) -> list[tuple[str, str, float, int, bool, bool]]:
     """The hitmap's columns: gold, false positives, then the strongest alternatives.
 
     The false positives are every predicted non-gold label (all of them, not a
@@ -1041,11 +1041,11 @@ def _hitmap_columns(
         if label not in gold_set and label not in false_positives and cells[label].has_table
     ]
     alternatives.sort(key=lambda label: (-cells[label].score, labels.index(label)))
-    columns: list[tuple[str, str, float, int, bool]] = []
+    columns: list[tuple[str, str, float, int, bool, bool]] = []
     for label in [*gold, *false_positives, *alternatives[:extra]]:
         kind = "gold" if label in gold_set else ("fp" if label in false_positives else "alt")
         cell = cells[label]
-        columns.append((label, kind, cell.score, cell.rank, cell.has_table))
+        columns.append((label, kind, cell.score, cell.rank, cell.has_table, cell.predicted))
     return columns
 
 
@@ -1055,16 +1055,18 @@ def _hitmap_header(
     score: float,
     rank: int,
     has_table: bool,
+    predicted: bool,
 ) -> str:
-    """One hitmap column header: the kind tag, the label and its score/rank."""
+    """One hitmap column header: the kind, the label, its score/rank and the pick."""
     tag = {"gold": "★ gold", "fp": "fp", "alt": "alt"}[kind]
     tag_class = {"gold": "ev-h-gold", "fp": "ev-h-fp", "alt": "ev-h-alt"}[kind]
     meta = "no table" if not has_table else f"score {score:.3f} · rank {rank}"
+    picked = '<span class="ev-pick">classifier\'s pick</span>' if predicted else ""
     return (
         '<th style="text-align:left">'
         f'<span class="ev-h-label"><span class="ev-h-tag {tag_class}">{tag}</span>'
         f"{_esc(label)}</span>"
-        f'<span class="ev-h-meta">{_esc(meta)}</span></th>'
+        f'<span class="ev-h-meta">{_esc(meta)}</span>{picked}</th>'
     )
 
 
@@ -1083,7 +1085,7 @@ def _z_cell(value: float | None, maximum: float) -> str:
 
 
 def _hitmap_table(
-    columns: list[tuple[str, str, float, int, bool]],
+    columns: list[tuple[str, str, float, int, bool, bool]],
     rows: Sequence[ev.HitmapRow],
 ) -> str:
     """The word x label matrix, with the header pinned by the shared CSS."""

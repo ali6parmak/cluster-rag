@@ -143,6 +143,9 @@ def test_the_compare_hitmaps_view(fixture: Any, monkeypatch: pytest.MonkeyPatch)
     assert 'data-columns="word|n|A|B|D"' in shown
     assert "ev-h-gold" in shown and "ev-h-fp" in shown and "ev-h-alt" in shown
     assert "ev-z-pos" in shown and "ev-z-none" in shown
+    # val-1's picks are A (gold, predicted) and B (fp): two header badges
+    assert shown.count('<span class="ev-pick">') == 2
+    assert "classifier's pick" in shown
     assert "alpha" in shown and "beta" in shown
 
 
@@ -269,3 +272,4 @@ def test_the_stylesheet_carries_the_table_look() -> None:
     assert "z-index: 2" in css
     assert ".ev-z-pos" in css
     assert ".ev-h-gold" in css
+    assert ".ev-pick" in css

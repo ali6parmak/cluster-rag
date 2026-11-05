@@ -306,7 +306,8 @@ A cell is the corpus map's **stored z-score** for that (word, label) pair:
 green pulls the label up, red pushes it down. `·` means the word is **not in
 that label's table** — the map is silent, and the scorer contributes 0, so the
 cell is never printed as a measured zero. The column header carries the label's
-map score and classifier rank, or `no table` for the held-out labels. The shared
-table frame keeps the header pinned while the rows scroll.
+map score and classifier rank, or `no table` for the held-out labels. Columns
+the classifier actually picked carry a **classifier's pick** badge next to their
+rank. The shared table frame keeps the header pinned while the rows scroll.
 
 ![Compare hitmaps](error_viewer_hitmaps.png)
