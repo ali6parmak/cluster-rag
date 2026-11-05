@@ -67,7 +67,7 @@ def test_the_four_arms_are_hand_computable() -> None:
     assert count[0, 0] == pytest.approx(2.0)
     assert count[1, 0] == 0.0
     with pytest.raises(ValueError, match="Unknown scoring function"):
-        score_grid(paragraphs, questions, question_map, scoring="sum_zscore")
+        score_grid(paragraphs, questions, question_map, scoring="sum_g2")
 
 
 def test_the_empty_table_sits_below_every_seen_column() -> None:
@@ -126,3 +126,19 @@ def test_the_blind_permutation_preserves_the_question_counts() -> None:
     assert permuted.count(EMPTY) == 2
     # deterministic, and independent of the cross-fit's own permutation
     assert np.array_equal(permutation, blind_question_permutation(len(questions), seed=42))
+
+
+def test_the_z_scored_arms_use_the_z_score() -> None:
+    """CS-50: the z arms sum the z-scores (the prior over the standard error)."""
+    question_map, paragraphs, questions = _tiny()
+    rows = {row.word: row for row in question_map.table_rows(QUESTION)}
+    expected = sum(max(row.z_score, 0.0) for row in rows.values())
+
+    positive = score_grid(paragraphs, questions, question_map, scoring="sum_zscore_positive")
+    # row 0 is the positive paragraph: every table word is in it
+    assert positive[0, 0] == pytest.approx(expected)
+    # the signed arm differs from the restricted one whenever a z is negative
+    signed = score_grid(paragraphs, questions, question_map, scoring="sum_zscore")
+    assert set(np.sign(signed[:, 0])).issubset({-1.0, 0.0, 1.0})
+    with pytest.raises(ValueError, match="Unknown scoring function"):
+        score_grid(paragraphs, questions, question_map, scoring="sum_g2")

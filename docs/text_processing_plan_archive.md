@@ -7989,3 +7989,167 @@ tombstone line). The verdict and the numbers are the track log's §CS-49.*
     pre-registration named `omct-analyze-voyage-4-nano-dict` (the cell's label
     is `analyze-voyage-dict`). The same single-model run; no number differs.
 
+---
+
+## The estimator on OMCT (CS-50) — the pre-registration and the verdict
+
+*Added on 2026-11-05, when the round's third change set was executed: the live
+plan's §7.9 block moved here **verbatim** (the archive's convention: an
+executed change set's pre-registration moves here and the live plan keeps one
+tombstone line). The verdict and the numbers are the track log's §CS-50.*
+
+### 7.9 The estimator (CS-50)
+
+- [x] **CS-50 — the estimator: does the informative prior/z-score rescue the
+  weights?** CS-31's measures on the pair unit (the informative-prior log-odds,
+  the standard error, the z-score, G², the conditional smoothing), the two
+  z-scored arms, and the decisive test CS-49's reading opened: **does the
+  z-score make the weights rankable across questions, or is it a per-question
+  rescaling that cannot?**
+
+  **The decision taken here (the CS-49 finding re-scoped the change set, and
+  the reviewer's "use what you think is best" covers it).** CS-49's reading is
+  that the log-odds' magnitude is a **per-question scale**: each question's
+  table has its own `n_q` (1–51, median 3), so a summed log-odds compares
+  incommensurable magnitudes across questions, and the count — scale-free — is
+  the only arm that beat the cosine (0.6360; the weighted arms' non-floor
+  readings were 0.34–0.44, at or below chance). The estimator is therefore
+  ported **as the pre-registered null test it now is**: the z-score is computed
+  **within** a question's own table (the prior is the word's global df, the
+  standard error is the same table's), so it can shrink a question's noisy
+  weights but **cannot** make two questions' weights comparable. The
+  pre-registration says so, and registers what would refute it.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-31 (executed
+  2026-11-01) was **a gain**: the z-scored arm moved the classifier from
+  0.4924 to **0.5243** (a paired interval excluding zero), and the plan's
+  head-word null did not fire (13 of 60 heads changed). The reason: the
+  informative prior shrinks the **common** words (the register: "rights" is in
+  all 60 tables) and the standard error the **rare** ones — a **model** gain,
+  not only a description, because every label's table lived on the **same**
+  corpus (1,676 texts) and the corpora were the same corpus.
+
+  **The mechanism.** The six measures, the same formulas as CS-31, on the
+  (question, word) table: `n_texts = n_q`, `n_label = n_pos(q)`,
+  `df = df_q(w)` (the question's own frequency), with the **prior's** df the
+  word's **global** df over the reviewed set (the map's `word_df`) and
+  `α₀ = Σ_w (df_global(w) + 0.01)` — the map-level constant the reference
+  implementation uses. The two arms are CS-31's: `sum_zscore_positive` (the
+  "evidence for" score, **the pre-registered primary** — the UPR CS-31
+  fit-side selection, ported as the prior) and `sum_zscore` (the signed sum,
+  the control that collapsed to 0.1011 on UPR). The five CS-30 arms stay in
+  the readout as the spread, CS-49's numbers reproduced exactly.
+
+  **The falsification conditions, registered — read out one by one.**
+
+  1. **The model test (the flip, and it is registered as a NULL).** The z-arm's
+     within-document AUC and its **non-floor** reading (1,002 pairs) must be
+     **above chance** for the estimator to transfer; the registered prediction
+     is **≤ 0.50 on the non-floor reading** and **within CS-49's weighted
+     spread (0.49–0.56)** on the within-document number, i.e. the z-score
+     rescales within a question and does not fix the across-question scale.
+     **If the non-floor reading is above 0.55 or the within-document AUC
+     exceeds the count's 0.6360, the reading is refuted** and the estimator
+     becomes the finding.
+  2. **The head-word test.** The z-scored head must **differ** from the
+     log-odds' for fewer than **50 %** of the tables (the prediction: the
+     global-df prior swamps a 1–3-pair table, so the z-head is essentially the
+     most frequent word and the table's order barely moves). UPR's number was
+     13 of 60 (21.7 %). If the run finds **> 70 %**, the prior is not swamping
+     the counts on this unit and the reading changes.
+  3. **The count's persistence (CS-49's finding, re-read in this run).** The
+     measure-free count must stay **the best arm** (its within-document AUC
+     above every weighted arm's, as in CS-49); if a z-arm beats it, the
+     estimator does what CS-49 said it could not.
+  4. **The label-driven and control-role checks** (CS-49's 2 and 3, ported):
+     the z-arm's blind gap ≥ 0.05 and its de-shifted AUC above the cosine's
+     (0.5238) — reported, with the same interpretation.
+  5. **The floor check** (CS-49's 4): the floor share within 3 points of
+     34.1 %.
+
+  **The cost.** **0 new model calls** (the voyage embeddings are the Stage-0
+  cache hits); the six measures are computed inside the map build (27,979
+  pairs, seconds), the two extra arms add two grid scorings (~2 s), and the
+  spread comparisons are the same four plus two. No new dependency; the map
+  block grows by the new measures (the CS-48 numbers stay in the same rows,
+  beside them — CS-31's convention).
+
+  **Leakage.** Unchanged from CS-48/CS-49: the map is built on the reviewed
+  pairs only, the control (B) never enters any fit, the judged cells are
+  scored out-of-fold, the blind arm permutes the questions only, and no UPR
+  data is touched.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-z`** (the same reference
+  cosine as CS-49, voyage-4-nano's own), the artifact
+  **`results/omct-analyze-voyage-dict-z/analysis.json`** (the `dictionary`
+  block with the six measures and the estimator readout, plus the
+  `kind: dictionary` model entry with the six arms and their comparisons); the
+  sweep cell in a **new** sweep file
+  `experiments_text_processing/omct_dictionary_estimator_sweep.py` (the sweep
+  label `omct_dictionary_estimator`, so the table's section is
+  `## OMCT — omct_dictionary_estimator`); the config additions are
+  `analysis.dictionary.scorings` (the two z arms, validated against the six
+  known arms) and `analysis.dictionary.primary` (the pre-registered primary
+  arm, so CS-49's config keeps its own default); and the log section
+  **`## CS-50 — the estimator on OMCT`** in
+  `docs/experiments_text_processing.md`.
+
+  **The exit criteria.** The measures pinned by a **hand-computed unit test**
+  (the informative log-odds with a separate prior df, σ, the z-score, G² and
+  the conditional smoothing on a 4-cell table); a test that the prior's df and
+  the table's df are read separately; a test that the z arm's scores use the
+  z-score (not the log-odds); the fixture run and the real run; `ruff check` /
+  `ruff format` clean over `src`/`tests`/`experiments_text_processing`; the
+  full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; **executed 2026-11-05** — the run is
+  `omct-analyze-voyage-dict-z` (the artifact
+  `results/omct-analyze-voyage-dict-z/analysis.json`, the `kind: dictionary`
+  model entry), the log section is `## CS-50 — the estimator on OMCT: the UPR
+  gain reproduces` in `docs/experiments_text_processing.md`, and the numbers
+  are below.)*
+
+  **The round's numbers, in one screen (OMCT: the same 1,520 reviewed pairs,
+  4,000 control cells and 5-fold cross-fit as CS-49; the reference is
+  voyage-4-nano's own full-text cosine).**
+
+  - **The cost.** **0 model calls**, **14.5 s**, the artifact **15.1 MB** (the
+    six measures on 27,979 rows), **no new dependency**.
+  - **The registered null is REFUTED — the estimator transfers.** The primary
+    `sum_zscore_positive`: within-document AUC **0.7020** against the cosine's
+    **0.5238**, a paired **+0.1782 [+0.1303, +0.2272]** (P(Δ>0) 1.000); the
+    **non-floor** reading (1,002 pairs) **0.8158**; the pooled **0.7485**
+    (+0.2481); the de-shifted AUC **0.7334**; the per-document deltas
+    **+0.1192 / +0.1816 / +0.2766** (all three above the cosine; the AI stratum
+    that collapsed in CS-49 is now the best); the blind gap **+0.2340** (the
+    blind map 0.4679); the floor **34.08 %**.
+  - **The signed arm catches up**: `sum_zscore` **0.7023** (+0.1785
+    [+0.1297, +0.2282], non-floor 0.8150, blind 0.5713, gap +0.1309) — **92.2 %**
+    of the z-scores are positive (min −0.6378, median +0.0661, max +0.8102), so
+    the signed and the restricted sums nearly coincide (on UPR the signed arm
+    collapsed to 0.1011).
+  - **The head-word test is refuted in the other direction**: the z head
+    differs from the log-odds' for **177 of 209** tables (**84.7 %**), the
+    informative head for **188** (90.0 %), the conditional for **1** (0.5 %);
+    `α₀ = 97,460.14`. The pre-registration predicted **< 50 %** (the prior would
+    swamp a small table); the "> 70 %" falsifier fired — the prior **reorders**
+    the table, and the reordering is the gain.
+  - **The reading that replaces CS-49's**: both δ denominators carry `α₀`, so δ
+    reduces to a **per-word** ratio at the word's own frequency scale and σ is
+    the same word's; every term is indexed by the **word**, not by the
+    question's `n_q`, so the table's size drops out and the summed weights become
+    **comparable across questions**. The common words get `α_w ≫ a, b`, hence
+    `δ ≈ 0` and `z ≈ 0` (coverage, not direction); the rare topical words carry
+    the z — a **soft** version of CS-33's class restriction, which the hard
+    version failed on UPR by throwing the coverage away.
+  - **The falsification, read out.** 1 **refuted** (the registered null: the
+    non-floor 0.8158 > 0.55 and the within-document 0.7020 > the count's
+    0.6360); 2 **refuted** (the head prediction: 84.7 % > 70 %); 3 **fails**
+    (the z arms beat the count on the same pairs); 4 holds (blind gap +0.2340,
+    de-shifted 0.7334 > 0.5238); 5 holds (34.08 %).
+  - **What it does not fix**: the positives' hit@1 is **0.0744** against the
+    cosine's 0.1050 — the pair ranking improves, the paragraph's best single
+    candidate does not.
+  - **The gate.** **974** tests, ruff clean over 237 files, two consecutive runs
+    bit-identical.
+

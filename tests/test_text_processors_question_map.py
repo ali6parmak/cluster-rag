@@ -21,9 +21,11 @@ from cluster_rag.text_processors.features.question_map import (
     REGISTER_QUARTER,
     build_question_map,
     cross_fit_availability,
+    estimator_block,
     question_map_block,
     readout_block,
 )
+from cluster_rag.text_processors.lexical.lexicon import pair_measures
 
 QUESTION = "Were the cases documented?"
 
@@ -196,3 +198,53 @@ def test_an_unjudged_cell_cannot_enter_the_map() -> None:
     """Subset B has no label: the builder accepts 0/1 only (the leakage guard)."""
     with pytest.raises(ValueError, match="0/1"):
         build_question_map(["a b"], ["q"], [-1])  # -1 is "unjudged", never a label
+
+
+# The hand-computed estimator (CS-50) on the tiny map: six distinct words over
+# four pairs, alpha in both positives.
+ALPHA0 = 8.06  # sum of the words' global df (2+1+1+2+1+1) + 6 x 0.01
+ALPHA_PRIOR = 2.01  # alpha's global df (2) + 0.01
+ALPHA_DELTA = math.log((2.0 + ALPHA_PRIOR) / (2.0 + ALPHA0 - 2.0 - ALPHA_PRIOR)) - math.log(
+    (0.0 + ALPHA_PRIOR) / (2.0 + ALPHA0 - 0.0 - ALPHA_PRIOR)
+)
+ALPHA_SIGMA = math.sqrt(1.0 / (2.0 + ALPHA_PRIOR) + 1.0 / (0.0 + ALPHA_PRIOR))
+
+
+def test_the_estimator_measures_are_hand_computable() -> None:
+    """The informative log-odds, the standard error, the z-score, G²."""
+    paragraphs, questions, labels = _pairs()
+    question_map = build_question_map(paragraphs, questions, labels)
+    assert question_map.alpha0 == pytest.approx(ALPHA0)
+    rows = {row.word: row for row in question_map.table_rows(QUESTION)}
+
+    alpha = rows["alpha"]
+    assert alpha.log_odds_informative == pytest.approx(ALPHA_DELTA)
+    assert alpha.standard_error == pytest.approx(ALPHA_SIGMA)
+    assert alpha.z_score == pytest.approx(ALPHA_DELTA / ALPHA_SIGMA)
+    # the 2x2 table (2,0 | 0,2): every cell expects 1 -> G² = 2 (2 ln 2 + 2 ln 2)
+    assert alpha.g2 == pytest.approx(8.0 * math.log(2.0))
+    assert alpha.p_value == pytest.approx(math.erfc(math.sqrt(alpha.g2 / 2.0)))
+    # the conditional smoothing adds the 0.5 only to the empty cells:
+    # log(2/0.5) + log(2/0.5), against the 0.5-smoothing's log(2.5/0.5)^2
+    assert alpha.log_odds_conditional == pytest.approx(2.0 * math.log(4.0))
+
+
+def test_the_prior_df_and_the_table_df_are_read_separately() -> None:
+    """A global-df prior on a small table gives a different z than the table's df."""
+    same = pair_measures(1, 1, 1, 2, alpha0=10.0, prior_df=1)
+    other = pair_measures(1, 1, 1, 2, alpha0=10.0, prior_df=9)
+    assert same.z_score != other.z_score
+    assert same.log_odds_informative != other.log_odds_informative
+
+
+def test_the_estimator_readout_carries_the_heads_and_the_prior() -> None:
+    """The z head's agreement with the log-odds head, and the prior's total."""
+    paragraphs, questions, labels = _pairs()
+    question_map = build_question_map(paragraphs, questions, labels)
+    block = estimator_block(question_map)
+    assert block["n_tables"] == 1
+    assert block["n_stored_pairs"] == 3
+    assert block["prior_total"] == pytest.approx(ALPHA0)
+    assert block["head_difference"]["z"] in (0, 1)
+    assert 0.0 <= block["conditional_sign_flip"]["share"] <= 1.0
+    assert block["z_score"]["share_positive"] is not None

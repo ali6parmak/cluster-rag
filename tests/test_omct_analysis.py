@@ -862,7 +862,7 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     with pytest.raises(ValueError):
         DictionaryConfig(unknown=True)
     with pytest.raises(ValueError, match="unknown arm"):
-        DictionaryConfig(scorings=("sum_zscore",))
+        DictionaryConfig(scorings=("sum_g2",))
     with pytest.raises(ValueError, match="must not repeat"):
         DictionaryConfig(scorings=("sum_positive", "sum_positive"))
     # the arm needs exactly one reference embedder
@@ -871,6 +871,11 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
             embedders=(),
             dictionary=DictionaryConfig(scorings=("sum_positive",)),
         )
+    # CS-50: the pre-registered primary arm is a config value, its name validated
+    assert DictionaryConfig(primary="sum_zscore_positive").primary == "sum_zscore_positive"
+    assert DictionaryConfig().primary is None
+    with pytest.raises(ValueError, match="not a known arm"):
+        DictionaryConfig(primary="sum_g2")
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

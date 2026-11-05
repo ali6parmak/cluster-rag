@@ -39,6 +39,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
@@ -503,6 +505,8 @@ def _dictionary_arm_row(
         "auc_sum_positive": _arm_auc("sum_positive"),
         "auc_max_logodds": _arm_auc("max_logodds"),
         "auc_support_count": _arm_auc("support_count"),
+        "auc_sum_zscore": _arm_auc("sum_zscore"),
+        "auc_sum_zscore_positive": _arm_auc("sum_zscore_positive"),
         "auc_sum_positive_nonfloor": _fmt(
             (readout.get("secondary_non_floor") or {}).get("within_auc"), 4
         ),
@@ -1254,8 +1258,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 seed=dictionary_seed,
                 resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
-                primary=PRIMARY_SCORING,
-                probe=(grids.get("probe") or {}).get(PRIMARY_SCORING),
+                primary=analysis.dictionary.primary or PRIMARY_SCORING,
+                probe=(grids.get("probe") or {}).get(
+                    analysis.dictionary.primary or PRIMARY_SCORING
+                ),
             )
         )
 
@@ -1550,9 +1556,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     has_dictionary_arm = any(model.get("kind") == "dictionary" for model in models)
     if has_dictionary_arm:
         # The arm's own section (CS-49): its row shape carries the AUCs and
-        # the comparison, so it is not the map's section (CS-48's).
-        columns = ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS
-        key_columns = ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS
+        # the comparison, so it is not the map's section (CS-48's). The
+        # estimator's run (CS-50) adds the two z-scored arms' columns.
+        has_estimator_arms = any(
+            (model.get("readout") or {}).get("scorings", {}).keys()
+            & {"sum_zscore", "sum_zscore_positive"}
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
+        if has_estimator_arms:
+            columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS
+        else:
+            columns = ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS
     elif has_dictionary:
         # The dictionary's own section (CS-48): the map is a description and
         # its rows are not arms, so the section and its columns are its own.

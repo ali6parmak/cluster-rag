@@ -1726,6 +1726,18 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   change set, or whether a **per-question-normalized weight / the count**
   becomes CS-50's pre-registration instead.
 
+- **CS-50** (the estimator) → executed 2026-11-05 → the archive's §7.9 (the
+  estimator) and the track log's §CS-50. **The registered null was refuted**:
+  the primary `sum_zscore_positive` reaches **0.7020** within-document against
+  the cosine's 0.5238 (**+0.1782 [+0.1303, +0.2272]**, P 1.000), its
+  **non-floor** reading **0.8158**, the blind gap **+0.2340** and **all three**
+  documents above the cosine — the estimator **transfers**, and the reason (the
+  prior's per-word normalization makes the weights comparable across questions,
+  which the raw log-odds never were) corrects CS-49's reading. The head-word
+  prediction was refuted too (84.7 % of the tables change their z head).
+  **The next change set is CS-51** (word classes): it now has to say which
+  increment the class restriction adds **on top of** the soft prior.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized

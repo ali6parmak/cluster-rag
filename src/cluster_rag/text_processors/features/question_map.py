@@ -64,6 +64,7 @@ from typing import Any
 
 from cluster_rag.text_processors.features.corpus_map import log_odds
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
+from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
 
 # The unit, as the artifact records it (the descriptions are the block's own
 # words: a reader must be able to tell what the "text" and the "label" are).
@@ -94,6 +95,16 @@ class QuestionPair:
             all (positives and negatives).
         lift: ``P(positive | word present) / P(positive)`` within the question.
         log_odds: The 0.5-smoothed signed log-odds over the 2×2 table.
+        log_odds_informative: The informative-prior log-odds (CS-50): the same
+            table with the word's **global** document frequency as the
+            pseudo-count (Monroe et al. 2008's Dirichlet prior, adapted to the
+            pair unit).
+        standard_error: The standard error of that log-odds.
+        z_score: The informative log-odds over the standard error.
+        g2: The likelihood-ratio G² statistic on the same 2×2 table (1 df).
+        p_value: The G² statistic's p-value.
+        log_odds_conditional: The log-odds with the 0.5 added only where a cell
+            is actually zero.
     """
 
     question: str
@@ -102,6 +113,12 @@ class QuestionPair:
     df: int
     lift: float
     log_odds: float
+    log_odds_informative: float = 0.0
+    standard_error: float = 0.0
+    z_score: float = 0.0
+    g2: float = 0.0
+    p_value: float = 1.0
+    log_odds_conditional: float = 0.0
 
     def to_row(self) -> dict[str, object]:
         """The pair as a JSON-friendly row (the artifact's own shape)."""
@@ -111,6 +128,12 @@ class QuestionPair:
             "df": self.df,
             "lift": round(self.lift, 6),
             "log_odds": round(self.log_odds, 6),
+            "log_odds_informative": round(self.log_odds_informative, 6),
+            "standard_error": round(self.standard_error, 6),
+            "z_score": round(self.z_score, 6),
+            "g2": round(self.g2, 6),
+            "p_value": round(self.p_value, 8),
+            "log_odds_conditional": round(self.log_odds_conditional, 6),
         }
 
 
@@ -132,6 +155,8 @@ class QuestionMap:
             same data read the other way).
         word_df: Each word's frequency over the whole reviewed set (the
             informative prior's input in CS-50).
+        alpha0: The estimator's prior total (CS-50): Σ over the vocabulary of
+            the words' global document frequencies plus the floor.
     """
 
     n_reviewed_pairs: int
@@ -143,6 +168,7 @@ class QuestionMap:
     per_question: Mapping[str, tuple[QuestionPair, ...]]
     per_word: Mapping[str, tuple[QuestionPair, ...]]
     word_df: Mapping[str, int]
+    alpha0: float = 0.0
 
     @property
     def n_questions(self) -> int:
@@ -253,6 +279,9 @@ def build_question_map(
         if label == 1:
             positive_words[question].update(words)
 
+    # The estimator's prior total (CS-50): the reviewed set's own (pair, word)
+    # incidences plus the floor's contribution — the map-level constant.
+    alpha0 = prior_total(word_df.values())
     per_question: dict[str, tuple[QuestionPair, ...]] = {}
     per_word: dict[str, list[QuestionPair]] = {}
     for question in question_counts:
@@ -268,6 +297,16 @@ def build_question_map(
             df = question_df[question].get(word, 0)
             if not df:
                 continue
+            measures = pair_measures(
+                n_with,
+                df,
+                n_positive,
+                n_pairs,
+                alpha0=alpha0,
+                # the prior's df is the word's GLOBAL frequency (the reviewed
+                # set), the table's df is the question's own (CS-50's unit)
+                prior_df=word_df.get(word, df),
+            )
             rows.append(
                 QuestionPair(
                     question=question,
@@ -276,6 +315,12 @@ def build_question_map(
                     df=df,
                     lift=(n_with / df) / positive_share,
                     log_odds=log_odds(n_with=n_with, df=df, n_label=n_positive, n_texts=n_pairs),
+                    log_odds_informative=measures.log_odds_informative,
+                    standard_error=measures.standard_error,
+                    z_score=measures.z_score,
+                    g2=measures.g2,
+                    p_value=measures.p_value,
+                    log_odds_conditional=measures.log_odds_conditional,
                 )
             )
         rows.sort(key=lambda row: (-row.log_odds, row.word))
@@ -296,6 +341,7 @@ def build_question_map(
         per_question=per_question,
         per_word=frozen_per_word,
         word_df=dict(word_df),
+        alpha0=alpha0,
     )
 
 
@@ -580,6 +626,98 @@ def readout_block(question_map: QuestionMap) -> dict[str, Any]:
     }
 
 
+def estimator_block(question_map: QuestionMap) -> dict[str, Any]:
+    """The estimator's readout (CS-50): what the prior and the z-score do.
+
+    The three readings the change set is pre-registered against: the head word
+    under each measure (the log-odds, the informative-prior log-odds, the
+    z-score, the conditional smoothing) and how often each differs from the
+    log-odds' own; the conditional smoothing's sign-flip share; and the
+    z-scores' distribution (a prior that swamps a small table gives tiny,
+    nearly equal z-scores — the reason the unit is expected to null the
+    estimator).
+
+    Args:
+        question_map: The map.
+
+    Returns:
+        A JSON-serializable readout block.
+    """
+    heads: list[dict[str, Any]] = []
+    n_tables = 0
+    n_stored_pairs = 0
+    n_differ_informative = 0
+    n_differ_z = 0
+    n_differ_conditional = 0
+    sign_flips = 0
+    z_values: list[float] = []
+    for question in question_map.questions:
+        rows = question_map.table_rows(question)
+        if not rows:
+            continue
+        n_tables += 1
+        head_log_odds = _head(rows, "log_odds")
+        head_informative = _head(rows, "log_odds_informative")
+        head_z = _head(rows, "z_score")
+        head_conditional = _head(rows, "log_odds_conditional")
+        n_differ_informative += head_log_odds != head_informative
+        n_differ_z += head_log_odds != head_z
+        n_differ_conditional += head_log_odds != head_conditional
+        for row in rows:
+            n_stored_pairs += 1
+            z_values.append(row.z_score)
+            if (row.log_odds > 0.0) != (row.log_odds_conditional > 0.0):
+                sign_flips += 1
+        heads.append(
+            {
+                "question": question,
+                "n_pairs": question_map.question_counts.get(question, 0),
+                "n_positive": question_map.question_positive_counts.get(question, 0),
+                "head_log_odds": head_log_odds,
+                "head_informative": head_informative,
+                "head_z": head_z,
+                "head_conditional": head_conditional,
+                "z_differs": head_log_odds != head_z,
+            }
+        )
+    z_positive = sum(1 for value in z_values if value > 0.0)
+    return {
+        "prior_total": question_map.alpha0,
+        "prior": (
+            "alpha_w = the word's global df over the reviewed pairs + 0.01; "
+            "alpha0 = the sum over the vocabulary (the reference implementation, "
+            "Monroe et al. 2008, adapted to the pair unit)"
+        ),
+        "n_tables": n_tables,
+        "n_stored_pairs": n_stored_pairs,
+        "head_difference": {
+            "informative": n_differ_informative,
+            "informative_share": (n_differ_informative / n_tables) if n_tables else None,
+            "z": n_differ_z,
+            "z_share": (n_differ_z / n_tables) if n_tables else None,
+            "conditional": n_differ_conditional,
+            "conditional_share": (n_differ_conditional / n_tables) if n_tables else None,
+        },
+        "conditional_sign_flip": {
+            "n_pairs": sign_flips,
+            "share": (sign_flips / n_stored_pairs) if n_stored_pairs else None,
+        },
+        "z_score": {
+            "min": min(z_values) if z_values else None,
+            "median": _median(z_values),
+            "max": max(z_values) if z_values else None,
+            "share_positive": (z_positive / len(z_values)) if z_values else None,
+        },
+        "per_question": heads,
+        "note": (
+            "the informative prior's df is the word's GLOBAL frequency while the "
+            "table's df is the question's own: on a 1-3-pair table the prior "
+            "dominates, so the z-scores are tiny and nearly equal — the reason "
+            "the estimator cannot make two questions' weights comparable"
+        ),
+    }
+
+
 def question_map_block(
     question_map: QuestionMap,
     availability: Mapping[str, Any] | None,
@@ -645,6 +783,7 @@ def question_map_block(
             "n_contrastable_pairs": sum(question_map.question_counts[q] for q in contrastable),
         },
         "readout": readout_block(question_map),
+        "estimator": estimator_block(question_map),
         "cross_fit": {
             "folds": int(folds),
             "seed": int(seed),

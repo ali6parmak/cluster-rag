@@ -101,6 +101,7 @@ research record and are **not** indexed here.
 | [CS-46 — the kNN union](#cs-46--the-knn-union-the-two-retrievers-see-the-same-labels-2026-11-03) | two `upr-eval-knn-union{,-blind}-val` runs (the **main** UPR table) | **the two retrievers see the same labels**: the per-row z-max union's recall@10 is **0.6943** against the decision model's union's 0.9120 (the breadth test fails by 0.22) and its recall@50 **0.9548** is *below* the embedding kNN's own 0.9576 — the union IS the embedding arm (+0.001 at 10, −0.003 at 50); the blind floor is 0.2313 / 0.8029, so the label-driven breadth is +0.46 / +0.15. The shortlist gap is the **fusion's ordering at depth 50** (its recall@10 is the best of all five), not the candidate sets' breadth: **the BM25 checkbox stays closed** | `results/upr-eval-knn-union-val/metrics.json` |
 | [CS-48 — the question map on OMCT](#cs-48--the-question-map-on-omct-2026-11-05) | one `omct-analyze-dictmap` run (the reviewed pairs' own word↔question association; **no embedder**, 0 model calls, 0.5 s) | **the unit is thick only where a question has ≥ 4 positives**: 294 questions → **209 tables / 85 silent**, 27,979 (question, word) pairs; the lift-vs-log-odds separation **does not transfer** (47.4 % of the contrastable tables, UPR's 91.7 %); **101 of 209** tables hold a word shared by two positives (all **37** of the ≥ 4-positive ones, none of the 107 single-positive ones); the cross-fit availability is **65.9 %** of the 1,520 pairs (evidence 61.1 %), so **518 pairs carry the floor** | `results/omct-analyze-dictmap/analysis.json` |
 | [CS-49 — the map as a pair scorer on OMCT](#cs-49--the-map-as-a-pair-scorer-on-omct-2026-11-05) | one `omct-analyze-voyage-dict` run (the map as a pair scorer; **0 model calls**, 10.8 s) | **a null that matches the cosine**: the primary arm 0.5419 against the cosine's 0.5238 (+0.0181 [−0.0267, +0.0630]); the floor (518 pairs, 34.08 %, 77.8 % of them negative) carries the edge (the non-floor reading is 0.4439, below chance); and the **measure-free count** is the only arm that beats the cosine (**0.6360**, +0.1122 [+0.0672, +0.1584], non-floor 0.6645) — the UPR's measure lever **inverts** on the pair unit | `results/omct-analyze-voyage-dict/analysis.json` |
+| [CS-50 — the estimator on OMCT](#cs-50--the-estimator-on-omct-the-upr-gain-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-z` run (CS-31's six measures on the pair unit; the two z arms; **0 model calls**, 14.5 s) | **the registered null is REFUTED — the estimator transfers and is the chain's first win**: `sum_zscore_positive` **0.7020** against the cosine's 0.5238 (**+0.1782 [+0.1303, +0.2272]**, P 1.000), the non-floor reading **0.8158**, the blind gap **+0.2340**, all three documents above the cosine; the z head changes 177 of 209 tables (84.7 %, the prediction was < 50 %) — the prior's per-word normalization makes the weights comparable across questions | `results/omct-analyze-voyage-dict-z/analysis.json` |
 
 ## Change sets
 
@@ -8851,3 +8852,105 @@ two consecutive runs are bit-identical. The baseline verify tool does not apply
 (the run carries a baseline arm, but the arm under test is not an embedding
 arm; the run's own baseline reproduces the Stage-0 numbers: pair AUC 0.5004,
 control mean 0.235).
+
+## CS-50 — the estimator on OMCT: the UPR gain reproduces (2026-11-05)
+
+**The run.** One: `omct-analyze-voyage-dict-z` — CS-31's six measures on the
+pair unit (the informative-prior log-odds, the standard error, the z-score, G²,
+the conditional smoothing), the two z-scored arms, and the same 1,520 reviewed
+pairs, 4,000 control cells and 5-fold cross-fit as CS-49, against
+voyage-4-nano's own plain full-text cosine. **0 model calls** (the Stage-0
+cache), **14.5 s**, the artifact **15.1 MB** (the six measures on 27,979 rows;
+the CS-48 map block is reproduced: 2,082 words, 27,979 pairs, 209 tables / 85
+silent), **no new dependency**. The sweep is
+`experiments_text_processing/omct_dictionary_estimator_sweep.py` (the label
+`omct_dictionary_estimator`, the table's section
+`## OMCT — omct_dictionary_estimator`); the pre-registered primary is
+`sum_zscore_positive` (the UPR CS-31 fit-side selection, ported as the prior),
+set by the new `analysis.dictionary.primary`.
+
+**The registered prediction was REFUTED — the estimator transfers, and it is
+the chain's first real win on OMCT.** CS-49's reading ("the log-odds' magnitude
+is a per-question scale, so a within-question estimator cannot make the weights
+comparable") predicted a null. The run says otherwise: the primary arm's
+within-document AUC is **0.7020** against the cosine's **0.5238** — a paired
+**+0.1782 [+0.1303, +0.2272]** (2,000 resamples, the pairs the unit, P(Δ>0)
+**1.000**) — and its **non-floor** reading (the 1,002 pairs with a table) is
+**0.8158**, so the edge is **real evidence**, not the floor's prior (CS-49's
+primary read 0.4439 there). The pooled comparison reads **0.7485** against
+0.5004 (+0.2481), the de-shifted AUC **0.7334**, and the per-document deltas are
+**+0.1192 / +0.1816 / +0.2766** — above the cosine in **all three** documents
+(the AI stratum that collapsed in CS-49 is now the best: +0.2766). The
+label-driven gap is **+0.2340** (the blind map's within-document AUC 0.4679),
+far above the 0.05 bar; the floor share is **34.08 %** (CS-49's 34.1 %, the
+registered check).
+
+**The signed arm catches up too.** `sum_zscore` reaches **0.7023** (+0.1785
+[+0.1297, +0.2282], non-floor 0.8150, blind 0.5713, gap +0.1309) — on UPR the
+signed z-arm collapsed to 0.1011 and the "evidence-for" restriction was what
+made the z-weights usable. Here the two coincide because **92.2 % of the
+z-scores are positive** (min −0.6378, median +0.0661, max +0.8102): the prior
+keeps almost every word's evidence on the positive side, so the signed sum and
+the restricted sum are nearly the same statistic.
+
+**Why it works — the reading this run replaces CS-49's.** The z-score is
+δ over σ with the word's **global** frequency as the prior (`α_w = df_global +
+0.01`, `α₀ = 97,460.14` over the vocabulary). Both δ's denominators carry α₀,
+so δ reduces to a **per-word ratio** at the word's own frequency scale:
+`log((a+α_w)/(b+α_w))` up to the priors, and σ is `sqrt(1/(a+α_w) +
+1/(b+α_w))`. Every term is indexed by the **word**, not by the question's
+`n_q` — so the question's own table size drops out of the weight, and the
+summed weights **become comparable across questions**, which the raw log-odds
+never were. The common register words get `α_w ≫ a, b`, so their δ ≈ 0 and
+their z ≈ 0 (they contribute coverage, not direction); the rare topical words
+carry the z. That is a **soft** version of CS-33's class restriction — the hard
+version (the distinctive-only map) failed on UPR because it threw the coverage
+away, and here the soft version keeps the coverage in the sum while removing
+the register's pull. The z-score is the prior's per-word normalization doing
+the work the measure's magnitude could not.
+
+**The head-word test also refuted the prediction — in the other direction.**
+The z-scored head differs from the log-odds' for **177 of 209** tables
+(**84.7 %**), the informative log-odds' head for **188** (90.0 %), while the
+conditional smoothing's head differs for **1** (0.5 %, its sign flips 5.7 % of
+the pairs). The pre-registration predicted **fewer than 50 %** changes (the
+prior would swamp a 1–3-pair table and leave the order alone); the "> 70 %"
+falsifier fired instead. So the prior does not swamp the table — it
+**reorders** it, and the reordering is the gain. (UPR's number was 13 of 60,
+21.7 %: the estimator is *more* disruptive on the pair unit than on the
+label unit.)
+
+**What it costs and what it does not fix.** The arm is a worse **candidate
+picker** than the cosine: the positives' hit@1 is **0.0744** against 0.1050,
+so the pair ranking improves while the paragraph's best single candidate does
+not. The control's rank position barely moves (p50 Δ **+0.0075**, top-fifth
+Δ −0.0045), so the arm is not re-scaling the ordinary cells.
+
+**The falsification, read out one by one.**
+
+1. **The model test: the registered null is REFUTED** — the primary arm's
+   non-floor reading 0.8158 (> 0.55) and its within-document AUC 0.7020
+   (> the count's 0.6360) both fire the pre-registration's own refutation
+   clause. The estimator transfers; the CS-49 reading is corrected.
+2. **The head-word test: the prediction is REFUTED** — 84.7 % of the tables
+   change their z head (> the 70 % falsifier).
+3. **The count's persistence test FAILS** — the z arms beat the count
+   (0.7020 / 0.7023 against 0.6360, all three with intervals excluding zero on
+   the same pairs).
+4. **The label-driven and control-role checks hold** — blind gap +0.2340
+   ≥ 0.05; de-shifted AUC 0.7334 > 0.5238.
+5. **The floor check holds** — 34.08 % within 3 points of CS-49's 34.1 %.
+
+**What this change set does not say.** Nothing about the **class restriction**
+(CS-51 now has a different bar: the soft prior already does part of what the
+hard restriction promised, so CS-51 must say which increment the restriction
+adds); nothing about **POS** (CS-52), **phrases** (CS-53), **stability**
+(CS-54), **the lexicon** (CS-55) or **abstention** (CS-56) — the estimator's
+gain does not transfer to them by assumption; nothing about UPR; nothing about
+`test` (OMCT has none); and nothing about a **per-question normalization** —
+the reading says one is not needed, which is itself a result the later change
+sets may lean on.
+
+**The gate.** `pytest`: **974 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **237** files. Two consecutive runs are
+bit-identical (bar the clock fields).

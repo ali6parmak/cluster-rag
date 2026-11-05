@@ -56,19 +56,25 @@ SCORING_FUNCTIONS: tuple[str, ...] = (
     "sum_positive",
     "max_logodds",
     "support_count",
+    # CS-50's estimator arms: the z-scored weights (the informative prior
+    # over the standard error), the signed sum and the "evidence for" sum.
+    "sum_zscore",
+    "sum_zscore_positive",
 )
 
 # The arm the UPR fit side selected in CS-30 (the "evidence for" score): the
 # pre-registered primary arm of CS-49.
 PRIMARY_SCORING = "sum_positive"
 
-# What each arm does: the aggregation and whether it keeps only the words
-# whose value is **positive**.
-_ARMS: dict[str, tuple[str, bool]] = {
-    "sum_logodds": ("sum", False),
-    "sum_positive": ("sum", True),
-    "max_logodds": ("max", False),
-    "support_count": ("count", False),
+# What each arm does: the aggregation, the measure it reads and whether it
+# keeps only the words whose value is **positive**.
+_ARMS: dict[str, tuple[str, str, bool]] = {
+    "sum_logodds": ("sum", "log_odds", False),
+    "sum_positive": ("sum", "log_odds", True),
+    "max_logodds": ("max", "log_odds", False),
+    "support_count": ("count", "", False),
+    "sum_zscore": ("sum", "z_score", False),
+    "sum_zscore_positive": ("sum", "z_score", True),
 }
 
 # The gap between the empty tables' floor and the row's smallest seen score
@@ -117,7 +123,7 @@ def score_grid(
         raise ValueError(
             f"Unknown scoring function {scoring!r}; expected one of {SCORING_FUNCTIONS}"
         )
-    aggregation, positive_only = _ARMS[scoring]
+    aggregation, measure, positive_only = _ARMS[scoring]
     units_of = units or (lambda text: content_tokens(text, stopwords))
 
     columns = tuple(questions)
@@ -134,7 +140,12 @@ def score_grid(
             if column is None:
                 continue
             present[word_index, column] = True
-            weights[word_index, column] = pair.log_odds if scoring != "support_count" else 1.0
+            if scoring == "support_count":
+                weights[word_index, column] = 1.0
+            elif measure == "z_score":
+                weights[word_index, column] = pair.z_score
+            else:
+                weights[word_index, column] = pair.log_odds
 
     grid = np.zeros((n_paragraphs, n_questions), dtype=np.float64)
     for row, text in enumerate(paragraph_texts):

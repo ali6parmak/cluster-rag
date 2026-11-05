@@ -167,16 +167,22 @@ def pair_measures(
     *,
     alpha0: float,
     alpha: float = ALPHA,
+    prior_df: int | None = None,
 ) -> PairMeasures:
     """Every new measure for one (label, word) pair, from the same 2×2 table.
 
     Args:
         n_with: The corpus's texts that have both the word and the label.
-        df: The corpus's texts that have the word at all.
+        df: The corpus's texts that have the word at all (the table's column).
         n_label: The corpus's texts that carry the label.
         n_texts: The corpus's size.
         alpha0: The map's prior total (see :func:`prior_total`).
         alpha: The pseudo-count's floor.
+        prior_df: The **prior's** document frequency of the word when it differs
+            from the table's ``df`` — the OMCT pair unit (CS-50): the table is
+            the question's own pairs, while the prior is the word's global
+            frequency over the reviewed set. ``None`` (the default) uses ``df``,
+            the UPR corpus's one-corpus case.
 
     Returns:
         The pair's measures.
@@ -186,7 +192,7 @@ def pair_measures(
     """
     a, b, c, d = _table(n_with, df, n_label, n_texts)
     n_other = n_texts - n_label
-    prior = df + alpha
+    prior = (df if prior_df is None else prior_df) + alpha
     delta_label = math.log((a + prior) / (n_label + alpha0 - a - prior))
     delta_other = math.log((b + prior) / (n_other + alpha0 - b - prior))
     delta = delta_label - delta_other

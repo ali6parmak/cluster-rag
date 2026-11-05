@@ -487,6 +487,44 @@ ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The dictionary **estimator** (CS-50): the same row as the arm's, with the two
+# z-scored arms' within-document AUCs added. The section is its own (the sweep
+# label names it), so the CS-49 section keeps its columns.
+ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "reference_model",
+    "arm",
+    "within_auc",
+    "within_d_auc",
+    "within_d_auc_ci",
+    "ref_within_auc",
+    "pooled_auc",
+    "pooled_d_auc",
+    "deshifted_auc",
+    "auc_sum_logodds",
+    "auc_sum_positive",
+    "auc_max_logodds",
+    "auc_support_count",
+    "auc_sum_zscore",
+    "auc_sum_zscore_positive",
+    "auc_sum_positive_nonfloor",
+    "blind_within_auc",
+    "blind_gap",
+    "floor_pairs",
+    "floor_share",
+    "ctrl_mean_delta",
+    "ctrl_rank_p50_delta",
+    "floor_gap_delta",
+    "hit1_pos",
+    "hit1_pos_ref",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The decision probe's table (the `decide-omct` command, Stage 3.5): one row
 # per arm of a run. The headline is the **within-document** AUC (the pooled
 # number sits beside it, never alone); the **calibration** columns sit next to

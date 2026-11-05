@@ -1023,6 +1023,10 @@ class DictionaryConfig(BaseModel):
     - ``blind``: whether the run also scores the **label-blind counterpart**
       (the questions permuted across the reviewed pairs), the arm's
       label-driven check (CS-49's registered condition 2).
+    - ``primary``: the **pre-registered primary arm** (CS-49's ``sum_positive``
+      by default; CS-50 fixes ``sum_zscore_positive``). It is the arm whose
+      comparison with the cosine is the registered test; the other arms are the
+      spread.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1032,6 +1036,7 @@ class DictionaryConfig(BaseModel):
     seed: int | None = None
     scorings: tuple[str, ...] = ()
     blind: bool = True
+    primary: str | None = None
 
     @field_validator("scorings")
     @classmethod
@@ -1049,6 +1054,21 @@ class DictionaryConfig(BaseModel):
             )
         if len(set(value)) != len(value):
             raise ValueError(f"analysis.dictionary.scorings must not repeat an arm: {list(value)}")
+        return value
+
+    @field_validator("primary")
+    @classmethod
+    def _primary_is_known(cls, value: str | None) -> str | None:
+        """Reject an unknown primary arm at config time."""
+        if value is None:
+            return value
+        from cluster_rag.text_processors.lexical.question_map_score import SCORING_FUNCTIONS
+
+        if value not in SCORING_FUNCTIONS:
+            raise ValueError(
+                f"analysis.dictionary.primary is not a known arm: {value!r} "
+                f"(expected one of {list(SCORING_FUNCTIONS)})"
+            )
         return value
 
 
