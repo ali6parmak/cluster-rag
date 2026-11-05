@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,9 @@ def test_the_errors_view_lists_a_mistake(fixture: Any, monkeypatch: pytest.Monke
     assert not app.exception
     assert app.dataframe, "the Errors view printed no table"
     assert any("val-2" in str(element.value) for element in app.dataframe)
+    columns = list(app.dataframe[0].value.columns)
+    assert columns[0] == "text"
+    assert columns[-1] == "text_id"
 
 
 def test_the_one_text_view_shows_the_matrix(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,6 +115,10 @@ def test_the_compare_view_pairs_the_two_synthetic_runs(
     assert "Δ micro-F1" in metric_labels
     values = " ".join(str(element.value) for element in app.metric)
     assert "+0.6667" in values
+    columns = list(app.dataframe[0].value.columns)
+    assert columns[:4] == ["text", "delta_f1", "f1_a", "f1_b"]
+    assert columns[4] == "direction"
+    assert columns[-1] == "text_id"
 
 
 def test_the_export_view_offers_the_csv(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,3 +149,32 @@ def test_a_failed_guard_blocks_the_app(fixture: Any, monkeypatch: pytest.MonkeyP
     assert app.error
     assert "DISAGREE" in app.error[0].value
     assert not app.dataframe
+
+
+def test_the_catppuccin_mocha_theme_is_configured() -> None:
+    """The app's Streamlit theme is the Catppuccin Mocha palette."""
+    theme = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / ".streamlit" / "config.toml").read_text(
+            encoding="utf-8"
+        )
+    )["theme"]
+    assert theme["base"] == "dark"
+    assert theme["backgroundColor"] == "#1e1e2e"  # base
+    assert theme["secondaryBackgroundColor"] == "#181825"  # mantle
+    assert theme["textColor"] == "#cdd6f4"  # text
+    assert theme["primaryColor"] == "#cba6f7"  # mauve
+    assert theme["baseFontSize"] == 15
+    assert "sans-serif" in theme["font"]
+
+
+def test_the_signed_value_colours_are_catppuccin() -> None:
+    """The table's sign colours are Mocha's green, red and overlay0."""
+    spec = importlib.util.spec_from_file_location("error_app_under_test", TOOLS / "error_app.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["error_app_under_test"] = module
+    spec.loader.exec_module(module)
+    assert module._sign_colour(1.0) == "color: #a6e3a1"
+    assert module._sign_colour(-1.0) == "color: #f38ba8"
+    assert module._sign_colour(0.0) == "color: #6c7086"
+    assert module._sign_colour(float("nan")) == "color: #6c7086"

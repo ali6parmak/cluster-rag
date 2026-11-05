@@ -1,0 +1,40 @@
+# The project's Streamlit theme: Catppuccin Mocha (the error viewer's app).
+#
+# The palette is the upstream "Mocha" flavour: base/mantle for the surfaces,
+# text/subtext for the text, mauve for the accent, and the macchiato pastels
+# for the semantic colours. The fonts are a system-first stack (Inter when it
+# is installed, then the platform's UI font) so the app stays legible without a
+# network font download; the data tables use tabular figures through the app's
+# own CSS.
+[theme]
+base = "dark"
+primaryColor = "#cba6f7"          # mauve
+backgroundColor = "#1e1e2e"       # base
+secondaryBackgroundColor = "#181825"  # mantle
+textColor = "#cdd6f4"             # text
+font = "Inter, Segoe UI, system-ui, sans-serif"
+headingFont = "Inter, Segoe UI, system-ui, sans-serif"
+codeFont = "JetBrains Mono, Fira Code, SFMono-Regular, Consolas, monospace"
+baseFontSize = 15
+baseFontWeight = 400
+headingFontSizes = ["2.15rem", "1.7rem", "1.35rem", "1.2rem", "1.1rem", "1rem"]
+headingFontWeights = [650, 600, 600, 600, 600, 600]
+metricValueFontSize = "1.9rem"
+metricValueFontWeight = 600
+linkColor = "#89b4fa"             # blue
+linkUnderline = true
+codeTextColor = "#a6e3a1"         # green
+codeBackgroundColor = "#11111b"   # crust
+redColor = "#f38ba8"
+orangeColor = "#fab387"
+yellowColor = "#f9e2af"
+greenColor = "#a6e3a1"
+blueColor = "#89b4fa"
+violetColor = "#cba6f7"
+grayColor = "#6c7086"             # overlay0
+
+[theme.sidebar]
+backgroundColor = "#181825"       # mantle
+secondaryBackgroundColor = "#11111b"  # crust
+textColor = "#cdd6f4"
+primaryColor = "#cba6f7"

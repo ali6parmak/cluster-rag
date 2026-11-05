@@ -34,6 +34,43 @@ import error_view as ev  # noqa: E402
 
 VIEWS = ("Errors", "One text", "Aggregates", "Compare runs", "Export")
 
+# Catppuccin Mocha (the upstream palette). The theme file sets the widget
+# colours; these few rules cover the metric cards, the sidebar edge and the
+# tabular figures that Streamlit's theme does not reach.
+CATPPUCCIN_MOCHA = """
+<style>
+:root {
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+  --ctp-surface0: #313244;
+  --ctp-overlay0: #6c7086;
+  --ctp-subtext0: #a6adc8;
+  --ctp-text: #cdd6f4;
+  --ctp-mauve: #cba6f7;
+  --ctp-green: #a6e3a1;
+  --ctp-red: #f38ba8;
+  --ctp-blue: #89b4fa;
+}
+[data-testid="stSidebar"] {
+  background: var(--ctp-mantle);
+  border-right: 1px solid var(--ctp-surface0);
+}
+[data-testid="stMetric"] {
+  background: var(--ctp-mantle);
+  border: 1px solid var(--ctp-surface0);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.75rem;
+}
+[data-testid="stMetricLabel"] { color: var(--ctp-subtext0); }
+[data-testid="stMetricValue"] { color: var(--ctp-text); }
+[data-testid="stCaptionContainer"] { color: var(--ctp-subtext0); }
+h1, h2 { color: var(--ctp-mauve); }
+a { color: var(--ctp-blue); }
+[data-testid="stDataFrame"] { font-variant-numeric: tabular-nums; }
+</style>
+"""
+
 
 def _env(name: str, default: str) -> str:
     """One source path: the environment variable, else the default."""
@@ -122,13 +159,13 @@ def _snippet(text: str, limit: int = 140) -> str:
 def _sign_colour(value: object) -> str:
     """A CSS colour for a signed number (green up, red down, grey nothing)."""
     if value is None or pd.isna(value):
-        return "color: #8b949e"
+        return "color: #6c7086"  # Catppuccin overlay0
     number = float(value)  # type: ignore[arg-type]
     if number > 0.0:
-        return "color: #1a7f37"
+        return "color: #a6e3a1"  # Catppuccin green
     if number < 0.0:
-        return "color: #cf222e"
-    return "color: #8b949e"
+        return "color: #f38ba8"  # Catppuccin red
+    return "color: #6c7086"
 
 
 def _render_guard(report: ev.GuardReport, *, compact: bool = False) -> None:
@@ -219,7 +256,7 @@ def errors_view(
     )
     display = frame.head(limit)[
         [
-            "text_id",
+            "text",
             "error",
             "label",
             "score",
@@ -230,7 +267,7 @@ def errors_view(
             "predicted",
             "length_bucket",
             "top_words",
-            "text",
+            "text_id",
         ]
     ].copy()
     display["text"] = display["text"].map(_snippet)
@@ -570,15 +607,15 @@ def compare_view(
     st.dataframe(
         shown[
             [
-                "text_id",
-                "direction",
+                "text",
                 "delta_f1",
+                "f1_a",
+                "f1_b",
+                "direction",
                 "delta_tp",
                 "delta_fp",
                 "delta_fn",
-                "f1_a",
-                "f1_b",
-                "text",
+                "text_id",
             ]
         ].style.format({"delta_f1": "{:+.3f}", "f1_a": "{:.3f}", "f1_b": "{:.3f}"}),
         hide_index=True,
@@ -639,6 +676,7 @@ def export_view(
         key="export_table",
     )
     provenance = report.provenance.lines()
+    lookup = _text_lookup(context)
     rows: list[object]
     if table_name.startswith("errors"):
         error_types = st.multiselect(
@@ -647,9 +685,13 @@ def export_view(
             default=["fp", "near_miss", "fn"],
             key="export_errors",
         )
-        rows = [row for row in tables.cells if row.error in error_types]
+        rows = [
+            {**asdict(row), "text": lookup.get(row.text_id, "")}
+            for row in tables.cells
+            if row.error in error_types
+        ]
         fields = (
-            "text_id",
+            "text",
             "label",
             "gold",
             "predicted",
@@ -658,11 +700,11 @@ def export_view(
             "error",
             "has_evidence",
             "gap_to_cut",
+            "text_id",
         )
     elif table_name == "texts":
         rows = list(tables.texts)
         fields = (
-            "text_id",
             "text",
             "n_chars",
             "length_bucket",
@@ -673,11 +715,12 @@ def export_view(
             "fn",
             "text_f1",
             "margin",
+            "text_id",
         )
     elif table_name == "cells (all)":
-        rows = list(tables.cells)
+        rows = [{**asdict(row), "text": lookup.get(row.text_id, "")} for row in tables.cells]
         fields = (
-            "text_id",
+            "text",
             "label",
             "gold",
             "predicted",
@@ -686,11 +729,12 @@ def export_view(
             "error",
             "has_evidence",
             "gap_to_cut",
+            "text_id",
         )
     elif table_name == "words":
-        rows = list(tables.words)
+        rows = [{**asdict(row), "text": lookup.get(row.text_id, "")} for row in tables.words]
         fields = (
-            "text_id",
+            "text",
             "label",
             "word",
             "z_score",
@@ -700,6 +744,7 @@ def export_view(
             "word_class",
             "is_name_word",
             "surrogate_coefficient",
+            "text_id",
         )
     else:
         series, labels, preferred_a, preferred_b = _series_choices(catalog, context, tables)
@@ -712,16 +757,18 @@ def export_view(
         except ValueError as exc:
             st.error(str(exc))
             return
+        rows = [{**asdict(row), "text": lookup.get(row.text_id, "")} for row in rows]
         fields = (
-            "text_id",
+            "text",
+            "delta_f1",
             "f1_a",
             "f1_b",
-            "delta_f1",
             "delta_tp",
             "delta_fp",
             "delta_fn",
             "improved",
             "worsened",
+            "text_id",
         )
     payload = ev.to_csv(rows, fields, provenance=provenance)
     st.caption(f"{len(rows)} rows; the provenance block is at the top as # comments.")
@@ -744,7 +791,8 @@ def export_view(
 
 def main() -> None:
     """The app's entry point: sources, the guard, then the five views."""
-    st.set_page_config(page_title="Error viewer — UPR val", layout="wide")
+    st.set_page_config(page_title="Error viewer — UPR val", page_icon="🪻", layout="wide")
+    st.markdown(CATPPUCCIN_MOCHA, unsafe_allow_html=True)
     st.title("Error viewer — UPR val")
     st.caption(
         "The dictionary classifier's mistakes, recomputed from the train corpus map. "
