@@ -1016,6 +1016,13 @@ class DictionaryConfig(BaseModel):
       (at least 2; the same scheme as the UPR cross-fit).
     - ``seed``: the fold split's seed. ``None`` (the default) uses the run's
       seed, so a re-run of the same config reproduces the same folds.
+    - ``scorings``: the arms of the **pair scorer** (the CS-49 change set) —
+      CS-30's four scoring functions, in the UPR report's order. Empty (the
+      default) means the run writes no arm; the arm needs exactly one
+      reference embedder (the run's own full-text cosine).
+    - ``blind``: whether the run also scores the **label-blind counterpart**
+      (the questions permuted across the reviewed pairs), the arm's
+      label-driven check (CS-49's registered condition 2).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1023,6 +1030,26 @@ class DictionaryConfig(BaseModel):
     include_map: bool = True
     folds: int = Field(default=5, ge=2)
     seed: int | None = None
+    scorings: tuple[str, ...] = ()
+    blind: bool = True
+
+    @field_validator("scorings")
+    @classmethod
+    def _scorings_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown arm at config time (fail before any run)."""
+        if not value:
+            return value
+        from cluster_rag.text_processors.lexical.question_map_score import SCORING_FUNCTIONS
+
+        unknown = [name for name in value if name not in SCORING_FUNCTIONS]
+        if unknown:
+            raise ValueError(
+                f"analysis.dictionary.scorings has unknown arm(s) {unknown}; "
+                f"expected some of {list(SCORING_FUNCTIONS)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(f"analysis.dictionary.scorings must not repeat an arm: {list(value)}")
+        return value
 
 
 class AnalysisConfig(BaseModel):
@@ -1201,6 +1228,13 @@ class AnalysisConfig(BaseModel):
             raise ValueError(
                 "analysis.semantic_thresholds only applies to the 'semantic' "
                 f"chunker, but the chunker is {self.chunker.name!r}"
+            )
+        # The dictionary arm (CS-49) is scored against the run's own full-text
+        # cosine, so the run needs exactly one reference model.
+        if self.dictionary is not None and self.dictionary.scorings and len(self.embedders) != 1:
+            raise ValueError(
+                "analysis.dictionary.scorings needs exactly one reference embedder "
+                f"(the arm is compared with that model's cosine), got {len(self.embedders)}"
             )
         return self
 

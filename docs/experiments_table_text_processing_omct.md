@@ -386,3 +386,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | model | arm | unit | n_questions | tables | empty_tables | contrastable | n_words | stored_pairs | table_median | shared_word_tables | head_diff_contrastable | avail_table | avail_evidence | avail_table_nu | avail_table_cidh | avail_table_ai | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-dictmap | 2026-11-05 | n/a | dictionary_map | pair/paragraph/question | 294 | 209 | 85 | 114 | 2082 | 27979 | 65.0 | 101 | 54 | 0.6592 | 0.6105 | 0.6000 | 0.7083 | 0.8788 | 1520 | 4000 | 3 | 0.458 |
+
+## OMCT — omct_dictionary_arm
+
+| run_id | date | reference_model | arm | within_auc | within_d_auc | within_d_auc_ci | ref_within_auc | pooled_auc | pooled_d_auc | deshifted_auc | auc_sum_logodds | auc_sum_positive | auc_max_logodds | auc_support_count | auc_sum_positive_nonfloor | blind_within_auc | blind_gap | floor_pairs | floor_share | ctrl_mean_delta | ctrl_rank_p50_delta | floor_gap_delta | hit1_pos | hit1_pos_ref | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict | 2026-11-05 | voyage-4-nano | sum_positive | 0.5419 | 0.0181 | [-0.0267, +0.0630] | 0.5238 | 0.5370 | 0.0366 | 0.5429 | 0.5131 | 0.5419 | 0.4967 | 0.6360 | 0.4439 | 0.4540 | 0.0879 | 518 | 0.3408 | 3.9191 | 0.0046 | 5.5590 | 0.0076 | 0.1050 | 1520 | 4000 | 3 | 10.841 |

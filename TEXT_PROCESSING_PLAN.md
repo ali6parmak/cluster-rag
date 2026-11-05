@@ -1713,6 +1713,19 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   CS-49** (the map as a pair scorer): it is pre-registered before its run and
   starts only on the reviewer's word.
 
+- **CS-49** (the map as a pair scorer) → executed 2026-11-05 → the archive's
+  §7.9 (the map as a pair scorer) and the track log's §CS-49. The pre-registered
+  primary arm (`sum_positive`) **matches the cosine** (0.5419 against 0.5238,
+  +0.0181 [−0.0267, +0.0630]) — a null — and its all-pairs edge is the
+  **floor's** (the non-floor reading is 0.4439); the spread shows the
+  **measure-free count** as the only arm that beats the cosine (0.6360,
+  +0.1122 [+0.0672, +0.1584], non-floor 0.6645). **The reading re-scopes
+  CS-50**: the log-odds' magnitude is a per-question scale on the pair unit, so
+  a within-question estimator cannot make the weights comparable across
+  questions — the reviewer decides whether the estimator is still worth a
+  change set, or whether a **per-question-normalized weight / the count**
+  becomes CS-50's pre-registration instead.
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized

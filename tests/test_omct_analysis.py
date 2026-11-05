@@ -134,6 +134,31 @@ analysis:
   chunker: full_text
 """
 
+# CS-49: the dictionary arm needs exactly one reference model (its cosine).
+DICTIONARY_ARM_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings: [sum_logodds, sum_positive, max_logodds, support_count]
+    blind: true
+  bootstrap:
+    resamples: 200
+"""
+
 
 ANALYSIS_LADDER_CONFIG_EXTRA = """
 analysis:
@@ -757,6 +782,59 @@ def test_analyze_omct_dictionary_run_is_model_free(
     assert "| 4 | 3 | 1 | 2 |" in row  # questions, tables, empty, contrastable
 
 
+def test_analyze_omct_dictionary_arm_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path, capsys
+) -> None:
+    """CS-49: the map as a pair scorer — the arm, the comparison and the row."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-arm-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_ARM_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-arm-test" / "analysis.json").read_text("utf-8")
+    )
+    assert [model.get("kind") for model in payload["models"]] == [None, "dictionary"]
+    entry = payload["models"][1]
+    assert entry["name"] == "dictionary"
+    assert entry["model"]["reference_model"] == "fake-model"
+    assert entry["model"]["primary_scoring"] == "sum_positive"
+    readout = entry["readout"]
+    assert set(readout["scorings"]) == {
+        "sum_logodds",
+        "sum_positive",
+        "max_logodds",
+        "support_count",
+    }
+    assert readout["primary"] == "sum_positive"
+    assert readout["blind"] is not None
+    assert set(readout["blind_gap_by_arm"]) == set(readout["scorings"])
+    assert set(readout["spread_comparisons"]) == set(readout["scorings"])
+    # the arm's comparison is against the run's baseline, paired
+    comparison = entry["comparisons"]["dictionary"]
+    assert comparison["reference_arm"] == "full_text"
+    assert "within_group_paired" in comparison["auc_decomposition"]
+    assert readout["floor"]["n_floor_pairs"] >= 0
+    # the map block is still written beside the arm (CS-48's block)
+    assert payload["dictionary"]["map"]["n_questions"] == 4
+
+    out = capsys.readouterr().out
+    assert "[dictionary] the question map (sum_positive)" in out
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-arm-test"))
+    assert "sum_positive" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -783,6 +861,16 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
         DictionaryConfig(folds=1)
     with pytest.raises(ValueError):
         DictionaryConfig(unknown=True)
+    with pytest.raises(ValueError, match="unknown arm"):
+        DictionaryConfig(scorings=("sum_zscore",))
+    with pytest.raises(ValueError, match="must not repeat"):
+        DictionaryConfig(scorings=("sum_positive", "sum_positive"))
+    # the arm needs exactly one reference embedder
+    with pytest.raises(ValueError, match="exactly one reference embedder"):
+        AnalysisConfig(
+            embedders=(),
+            dictionary=DictionaryConfig(scorings=("sum_positive",)),
+        )
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

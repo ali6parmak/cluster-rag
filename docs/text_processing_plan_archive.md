@@ -7779,3 +7779,213 @@ tombstone line). The verdict and the numbers are the track log's §CS-48.*
     reproducible field for field; the baseline verify tool does not apply (a
     model-free run has no baseline arm).
 
+---
+
+## The map as a pair scorer on OMCT (CS-49) — the pre-registration and the verdict
+
+*Added on 2026-11-05, when the round's second change set was executed: the live
+plan's §7.9 block moved here **verbatim** (the archive's convention: an
+executed change set's pre-registration moves here and the live plan keeps one
+tombstone line). The verdict and the numbers are the track log's §CS-49.*
+
+### 7.9 The map as a pair scorer (CS-49)
+
+- [x] **CS-49 — the map as a pair scorer: does the dictionary beat the plain
+  cosine on the reviewed set?** Score every reviewed pair by summing the
+  question's map weights over the paragraph's words, behind the same cross-fit
+  as CS-48, and read the **within-document AUC** against the plain full-text
+  cosine of the same run — the pooled AUC beside it, the **control role**
+  beside that, and the **label-blind counterpart** as the label-driven check.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-30 (executed
+  2026-11-01) was **not a null**: the corpus map as a classifier reached
+  micro-F1 **0.5243** (CS-31's z-scored arm; CS-30's own **0.4924**), 90 % of
+  the champion's 0.5479, with **no embedding and no model call**. The reason it
+  worked was the map's **measure work** — the log-odds weighting bought
+  **+0.2226** of micro-F1 over a plain word count (0.2698 → 0.4924) — and the
+  **cross-fit** was the instrument that showed it (the in-fold number would
+  have said the measure work was worth 0.0227; the out-of-fold one said
+  0.2780). On OMCT the same object is **thin** (CS-48: 209 tables / 85 silent,
+  47.4 % of the contrastable tables where the lift and the log-odds disagree,
+  101 of 209 tables with a word shared by two positives), so the honest prior
+  is a *weak* scorer, not a copy of the UPR number.
+
+  **The mechanism.** For a cell (paragraph `p`, question `q`) the score is a
+  sum over the words of `p` that appear in `q`'s table:
+
+  - `sum_positive` (the **primary** arm, pre-registered **a priori**): the sum
+    of the **positive** log-odds of `p`'s words in `q`'s table — the "evidence
+    for" reading, the arm the UPR fit side selected in CS-30. It is fixed here
+    by the UPR prior, **not** selected on this run's numbers (the four-arm
+    spread is the ablation beside it);
+  - `sum_logodds`, `max_logodds`, `support_count`: CS-30's other three arms,
+    reported as the spread, never as the headline.
+
+  The map is built on the reviewed pairs with the **same 5-fold cross-fit and
+  the same seed as CS-48** (folds over the pairs; each fold's map from the
+  other folds), so the judged pairs are scored by a map that never saw them.
+  A judged pair whose question has **no table** in its fold's map carries the
+  row's floor (the row's smallest seen score minus one) and can never be
+  ranked first — CS-48's availability (65.9 % of the pairs with a table,
+  61.1 % with evidence, 518 pairs on the floor) is the cost, and every number
+  below is reported over **all 1,520 pairs** (the track's convention), with a
+  **secondary reading over the 986 pairs that have a table** beside it.
+
+  **The reference.** The **plain full-text cosine of the same run** — the
+  Stage-0 baseline arm, `voyage-4-nano` (the only Stage-0 model whose backend
+  is HF, since no Ollama server is available here; the map's own numbers do
+  not depend on the model). Its within-document AUC on these 1,520 pairs is
+  **0.5238** (the pooled 0.5004; `results/omct-analyze-voyage-4-nano-stage35-grid`).
+  The comparison is paired by construction: the same pairs, the same labels,
+  the same documents, a paired bootstrap over the pairs.
+
+  **The metric (the headline and its companions).**
+
+  1. **Within-document AUC**, the primary arm against the cosine: the paired
+     bootstrap's 95 % interval of the difference (the bootstrap resamples the
+     **pairs**; the within-document AUC is the pair-count-weighted mean of the
+     three documents' own AUCs).
+  2. **The pooled AUC** beside it (the pooled number is never reported alone).
+  3. **The control role**: the control cells' score level and rank-position
+     shift (a method that only re-scales shows up here), the **floor gap** (the
+     verified positives' mean minus the control's mean) and the **de-shifted
+     AUC** (the control's per-document mean shift subtracted — the
+     discrimination must survive it). The control cells never entered any map;
+     they are scored by the **full reviewed-set map**, while the judged pairs
+     are scored out-of-fold — a vintage difference (5/5 vs 4/5 of A) stated in
+     the artifact, with the per-fold control-mean spread recorded so the reader
+     can see its size.
+  4. **The label-blind counterpart**: the same pipeline with the **questions
+     permuted across the pairs** (one seeded permutation, the per-question
+     counts preserved — the UPR "blind map" analog). The arm's within-document
+     AUC minus the blind map's is the label-driven part.
+  5. **Per document** (NU / CIDH / AI) as well as pooled; the AI stratum is
+     small (99 pairs).
+  6. **The floor**: the number and share of pairs on the floor (the primary
+     arm's fold maps), beside the secondary reading on the pairs that have a
+     table.
+
+  **The falsification conditions, registered — read out one by one.**
+
+  1. **The flip (the primary test).** "It works" = the primary arm's
+     within-document AUC is **above the plain cosine's** with the paired 95 %
+     interval **excluding zero**. If the interval includes zero → **a null that
+     matches the cosine** (the dictionary does not beat the plain full-text
+     geometry on this unit; reported as a null, not as a failure). If it is
+     below with the interval excluding zero → the map is **worse**; reported
+     with its number and its reason.
+  2. **The label-driven test.** The primary arm's within-document AUC minus the
+     **blind** map's must be ≥ **0.05**; below that the gain is not certifiably
+     label-driven and no claim is made on it.
+  3. **The control-role test.** The de-shifted AUC must be **above the cosine's
+     within-document AUC** too — otherwise the raw difference is a scale shift,
+     not a ranking gain.
+  4. **The cross-fit test.** The arm's fold maps must not be starved beyond
+     CS-48's readout: the floor share must be **within 3 points** of CS-48's
+     34.1 % (a larger share means the arm's implementation reads a different
+     map than the one CS-48 measured).
+  5. **The per-document test.** The flip must not be one document's: the
+     within-document AUC must be above the cosine's in **at least two of the
+     three** documents (the per-document intervals are reported, not
+     required to exclude zero — the AI stratum is 99 pairs).
+
+  **The nulls this change set can produce.** (i) The primary arm matching the
+  cosine (condition 1's middle branch) — the most likely outcome given CS-48's
+  thickness. (ii) The blind gap below 0.05 (condition 2) — the scorer would
+  then be a re-scaling of the question's vocabulary, not label information.
+  (iii) The de-shifted AUC at the cosine (condition 3). All three are reported
+  as results of the transfer test.
+
+  **The cost.** **0 new model calls** (the cosine baseline is an embedding-cache
+  hit on the Stage-0 voyage run's 225 paragraphs + 294 questions; at worst 519
+  re-encodes on the HF backend), a few seconds of grid scoring (6 maps × 4
+  scorings, a vectorized sum per paragraph), and the label-blind counterpart
+  doubles the grid work. No new dependency; the artifact grows by the four
+  arms' readouts and the comparison blocks (not by a matrix: only the arm
+  blocks and the per-pair summary rows are stored).
+
+  **Leakage.** The map is built on the reviewed pairs only, the same as CS-48;
+  the control (B) never enters any fit; the blind arm's permutation is seeded
+  and applied to the **questions only** (the paragraphs and labels stay in
+  place); no UPR data and no UPR artifact is touched; the map's arms are
+  scored by the out-of-fold map, so no pair's own label is in its table; the
+  baseline cosine is the same run's own arm, not a stored artifact.
+
+  **The runs.** One: **`omct-analyze-voyage-4-nano-dict`** (the analyze
+  command adds the `omct-` prefix; the reference is voyage-4-nano's own
+  full-text cosine), the artifact
+  **`results/omct-analyze-voyage-4-nano-dict/analysis.json`** (the `dictionary`
+  block of CS-48, reproduced, plus a `kind: dictionary` model entry with the
+  four arms, their comparisons and a `dictionary_arm` readout block); the
+  sweep cell in a **new** sweep file
+  `experiments_text_processing/omct_dictionary_arm_sweep.py` (the sweep label
+  `omct_dictionary_arm`, so the table's section is
+  `## OMCT — omct_dictionary_arm` — the map's own section keeps its columns);
+  the config schema change is `analysis.dictionary.scorings` (the four arms)
+  and `analysis.dictionary.blind` (the counterpart, on); and the log section
+  **`## CS-49 — the map as a pair scorer`** in
+  `docs/experiments_text_processing.md`.
+
+  **The exit criteria.** The scoring matrix pinned by a **hand-computed unit
+  test** (a 2×2 cell grid whose sums, max and count are worked out by hand;
+  the empty table's floor below every seen column); a test that the cross-fit
+  reads the folds it is given (a pair's own fold's map never scores it); a
+  test that the blind permutation preserves the per-question counts; the
+  fixture run and the real run; `ruff check` / `ruff format` clean over
+  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; **executed 2026-11-05** — the run is
+  `omct-analyze-voyage-dict` (the artifact
+  `results/omct-analyze-voyage-dict/analysis.json`, the `kind: dictionary`
+  model entry; the pre-registration named the run
+  `omct-analyze-voyage-4-nano-dict`, the cell label is `analyze-voyage-dict`
+  — the same single-model run, no number differs), the log section is
+  `## CS-49 — the map as a pair scorer on OMCT` in
+  `docs/experiments_text_processing.md`, and the numbers are below.)*
+
+  **The round's numbers, in one screen (OMCT: the 1,520 reviewed pairs; the map
+  is built on subset A only and the unjudged control (B) never enters it; the
+  reference is voyage-4-nano's own plain full-text cosine).**
+
+  - **The cost.** **0 model calls**, **10.8 s**, the artifact **9.0 MB** (the
+    CS-48 map block is reproduced inside it), **no new dependency**.
+  - **The pre-registered test (the primary arm `sum_positive`): a null that
+    matches the cosine.** Within-document AUC **0.5419** against the cosine's
+    **0.5238**, a paired **+0.0181 [−0.0267, +0.0630]** (P(Δ>0) 0.795); the
+    pooled **0.5370** against **0.5004** (+0.0366); the de-shifted AUC
+    **0.5429**; the control's rank p50 Δ **+0.0046** (not a re-scaling).
+  - **The label-driven check holds**: the blind map's within-document AUC
+    **0.4540**, the gap **+0.0879** ≥ 0.05 (per document +0.0685 / +0.0772 /
+    +0.1204).
+  - **The floor carries the edge**: **518 pairs (34.08 %)** — 403 of the 996
+    negatives against 115 of the 524 positives (77.8 % negative) — and the
+    **non-floor** reading (1,002 pairs) is **0.4439**, below chance. The
+    positives' hit@1 is **0.0076** against the cosine's 0.1050.
+  - **The per-document read**: above the cosine in **2 of 3** — NU +0.0194,
+    CIDH +0.0206, AI **−0.2259** (the 99-pair stratum collapses: 0.3905 against
+    0.6165).
+  - **The spread (observations, measured in the artifact, not registered
+    tests)**: `support_count` **0.6360** (+0.1122 [+0.0672, +0.1584], blind gap
+    +0.2328, non-floor **0.6645**) — the only arm that beats the cosine;
+    `sum_logodds` 0.5131 (−0.0107 [−0.0567, +0.0328], non-floor 0.4029);
+    `max_logodds` 0.4967 (−0.0271 [−0.0705, +0.0168], non-floor 0.3389).
+  - **The reading**: on UPR all 68 labels shared one corpus, so the log-odds
+    lived on one scale and the weighted sum could rank labels (the measure work
+    was worth +0.2226; the count was the floor at 0.2698). On OMCT each question
+    has its own corpus (`n_q` 1–51, median 3), so the log-odds' magnitude is a
+    **per-question scale** and the pooled ranking compares incommensurable
+    magnitudes; the **count** is scale-free and is the arm that carries the
+    signal. The UPR's measure lever **inverts**.
+  - **The falsification, read out.** 1 (the flip) **fails** — a null that
+    matches the cosine; 2 (label-driven) **holds** (+0.0879 ≥ 0.05); 3 (the
+    de-shifted AUC above the cosine) **holds** (0.5429 > 0.5238); 4 (the floor
+    within 3 points of CS-48's 34.1 %) **holds** (34.08 %); 5 (≥ 2 of 3
+    documents) **holds**, with the AI stratum's collapse reported.
+  - **The gate.** **970** tests, ruff clean over 236 files, two consecutive runs
+    bit-identical (a set-iteration float-order bug was fixed: the token sum now
+    runs over a sorted order); the baseline verify tool does not apply to a
+    non-embedding arm.
+  - **The deviation.** The run id is `omct-analyze-voyage-dict`; the
+    pre-registration named `omct-analyze-voyage-4-nano-dict` (the cell's label
+    is `analyze-voyage-dict`). The same single-model run; no number differs.
+

@@ -100,6 +100,7 @@ research record and are **not** indexed here.
 | [CS-45 — the distinctive lexicon](#cs-45--the-distinctive-lexicon-the-register-was-the-signal-2026-11-03) | four runs (the filtered label artifact + its guard, the feature half, the query half) + the CS-35 re-run as the guard | **the bar is not met again — and the reading is that the register WAS the signal**: the filter halved the channel's gain over the control (seen **+0.0272** against CS-35's +0.0507; **+0.0339** against +0.0493) and took the column's AUC down to the description's own level (**0.7073** against CS-35's 0.8109 and the description's 0.7067); the head-to-head's seen view includes zero on both halves (0 of 3 buckets on the feature half; only the torso on the query half, with the head falling), so the channel does not become a catalog channel | `results/upr-analyze-learned-lexicon-distinctive{,-feat}/analysis.json` |
 | [CS-46 — the kNN union](#cs-46--the-knn-union-the-two-retrievers-see-the-same-labels-2026-11-03) | two `upr-eval-knn-union{,-blind}-val` runs (the **main** UPR table) | **the two retrievers see the same labels**: the per-row z-max union's recall@10 is **0.6943** against the decision model's union's 0.9120 (the breadth test fails by 0.22) and its recall@50 **0.9548** is *below* the embedding kNN's own 0.9576 — the union IS the embedding arm (+0.001 at 10, −0.003 at 50); the blind floor is 0.2313 / 0.8029, so the label-driven breadth is +0.46 / +0.15. The shortlist gap is the **fusion's ordering at depth 50** (its recall@10 is the best of all five), not the candidate sets' breadth: **the BM25 checkbox stays closed** | `results/upr-eval-knn-union-val/metrics.json` |
 | [CS-48 — the question map on OMCT](#cs-48--the-question-map-on-omct-2026-11-05) | one `omct-analyze-dictmap` run (the reviewed pairs' own word↔question association; **no embedder**, 0 model calls, 0.5 s) | **the unit is thick only where a question has ≥ 4 positives**: 294 questions → **209 tables / 85 silent**, 27,979 (question, word) pairs; the lift-vs-log-odds separation **does not transfer** (47.4 % of the contrastable tables, UPR's 91.7 %); **101 of 209** tables hold a word shared by two positives (all **37** of the ≥ 4-positive ones, none of the 107 single-positive ones); the cross-fit availability is **65.9 %** of the 1,520 pairs (evidence 61.1 %), so **518 pairs carry the floor** | `results/omct-analyze-dictmap/analysis.json` |
+| [CS-49 — the map as a pair scorer on OMCT](#cs-49--the-map-as-a-pair-scorer-on-omct-2026-11-05) | one `omct-analyze-voyage-dict` run (the map as a pair scorer; **0 model calls**, 10.8 s) | **a null that matches the cosine**: the primary arm 0.5419 against the cosine's 0.5238 (+0.0181 [−0.0267, +0.0630]); the floor (518 pairs, 34.08 %, 77.8 % of them negative) carries the edge (the non-floor reading is 0.4439, below chance); and the **measure-free count** is the only arm that beats the cosine (**0.6360**, +0.1122 [+0.0672, +0.1584], non-floor 0.6645) — the UPR's measure lever **inverts** on the pair unit | `results/omct-analyze-voyage-dict/analysis.json` |
 
 ## Change sets
 
@@ -8748,3 +8749,105 @@ for field** (bar the clock fields). The baseline verify tool does not apply
 to this run (there is no full-text baseline arm to compare: the run carries no
 embedder); the Stage-0 artifacts are untouched, and the run writes the
 `dictionary` block only when a config carries it.
+
+## CS-49 — the map as a pair scorer on OMCT (2026-11-05)
+
+**The run.** One: `omct-analyze-voyage-dict` — the question map (CS-48) used as
+a **pair scorer**: every reviewed pair scored by the sum of its question's map
+weights over the paragraph's words, behind the same 5-fold cross-fit, and
+compared with the run's own **plain full-text cosine** (`voyage-4-nano` — the
+Stage-0 model whose backend is HF, so the run needs no Ollama server; its
+embeddings are the Stage-0 cache hits). **0 model calls**, **10.8 s**, the
+artifact **9.0 MB** (it also carries the CS-48 map block, reproduced exactly),
+**no new dependency**. The arm is the artifact's `kind: dictionary` entry
+(`models[1]`), with the four CS-30 arms, their paired comparisons against the
+cosine and a readout block; the sweep is
+`experiments_text_processing/omct_dictionary_arm_sweep.py` (the label
+`omct_dictionary_arm`, the table's section `## OMCT — omct_dictionary_arm`).
+
+**The pre-registered test (the primary arm `sum_positive`, fixed a priori by
+the UPR prior): a NULL that matches the cosine.** The within-document AUC is
+**0.5419** against the cosine's **0.5238** — a paired difference of **+0.0181
+[−0.0267, +0.0630]** over the 1,520 pairs (2,000 resamples, the pairs the unit;
+P(Δ>0) 0.795). The interval **includes zero**, so the dictionary does not beat
+the plain full-text geometry on this unit; the pooled comparison reads +0.0366
+(0.5370 against 0.5004). The de-shifted AUC (**0.5429**) is above the cosine's,
+and the control's **rank** position barely moves (the control's rank p50
+Δ **+0.0046**, its top-fifth share Δ −0.0040), so the arm is not only
+re-scaling — but that does not lift the interval off zero. The **levels** of
+the dictionary's scores (control mean Δ +3.92, floor-gap Δ +5.56) are on the
+dictionary's own scale and are not comparable numbers; the artifact carries the
+**control vintage** beside them (the full map's control mean 4.154 against the
+fold maps' 3.24–3.60), so the 4/5-vs-5/5 difference is visible.
+
+**The label-driven check holds.** The **blind** map (the questions permuted
+across the pairs, the counts preserved) has a within-document AUC of **0.4540**,
+so the arm's label-driven part is **+0.0879** — above the registered 0.05 bar —
+and its per-document gaps are +0.0685 / +0.0772 / +0.1204.
+
+**The floor is the whole edge — and the secondary reading says so.** The floor
+carries **518 pairs (34.08 %)** — within a point of CS-48's 34.1 %, the
+registered cross-fit check — and **403 of the 996 negatives** are on it against
+**115 of the 524 positives** (77.8 % of the floor carriers are negative). Over
+the **1,002 pairs that have a table**, the primary arm's within-document AUC is
+**0.4439** — **below chance**. The all-pairs edge is therefore the **silence's
+prior** (a question with no positive is likelier to be a negative), not the
+word evidence. The same reading holds for every weighted arm (non-floor
+0.34–0.44). And the arm is a poor candidate picker: the positives' hit@1 is
+**0.0076** against the cosine's **0.1050**.
+
+**The per-document read.** Above the cosine in **2 of the 3** documents
+(the registered bar): NU **+0.0194**, CIDH **+0.0206**, and **AI −0.2259** —
+the 99-pair stratum collapses (0.3905 against the cosine's 0.6165).
+
+**The spread — measured, and the finding of the change set (observations, not
+registered tests).** The four CS-30 arms, each paired against the same cosine
+and each with its own non-floor reading:
+
+| the arm | within-doc AUC | Δ vs the cosine [95 % CI] | blind | blind gap | non-floor AUC |
+|---|---|---|---|---|---|
+| `sum_logodds` | 0.5131 | −0.0107 [−0.0567, +0.0328] | 0.4869 | +0.0263 | 0.4029 |
+| **`sum_positive`** (the primary) | **0.5419** | +0.0181 [−0.0267, +0.0630] | 0.4540 | +0.0879 | 0.4439 |
+| `max_logodds` | 0.4967 | −0.0271 [−0.0705, +0.0168] | 0.4631 | +0.0337 | 0.3389 |
+| **`support_count`** | **0.6360** | **+0.1122 [+0.0672, +0.1584]** | 0.4032 | **+0.2328** | **0.6645** |
+
+**The measure-free control is the only arm that beats the cosine**, and its
+edge is **not** the floor's: over the 1,002 non-floor pairs it reaches
+**0.6645** (the weighted arms are at or below chance there). Its blind gap is
++0.2328 on the same cells, so the signal is label-driven. This arm was **not**
+the pre-registered test (the UPR prior fixed `sum_positive`), so it is reported
+as an observation of the spread, with its paired interval measured in the
+artifact — a claim about it would need its own pre-registration.
+
+**The reading: the UPR's measure lever inverts here, and the reason is the
+unit's scale.** On UPR every label shared **one** corpus (the 1,676 train
+texts), so a word's log-odds lived on one scale across all 68 labels and the
+weighted sum could rank labels; the measure work was worth +0.2226 of micro-F1
+and the plain count was the floor (0.2698). On OMCT each question has **its
+own** corpus (`n_q` from 1 to 51, median 3), so the log-odds' **magnitude is a
+per-question scale**: a positive pair of a small-table question sums to a small
+number while a negative pair of a large-table question sums to a large one, and
+the pooled ranking across questions compares incommensurable magnitudes. The
+**count** is scale-free — how much of the question's positive vocabulary the
+paragraph matches — and it is the arm that carries the signal. So the UPR's
+"the measure work is the model" becomes, on the pair unit, "the measure work is
+the scale" — and the count, the UPR's control, is the model.
+
+**What this change set does not say.** Nothing that makes `support_count` a
+registered result (the pre-registered test was the primary arm; the count's
+interval is measured but post-hoc); nothing about a **per-question normalization
+of the weights** (dividing by the question's table size, or a rank-normalized
+weight, was not registered — it is the obvious follow-up the reading suggests);
+nothing about UPR; nothing about the unjudged control's positive rate; and
+nothing about the AI stratum beyond its 99 pairs.
+
+**The gate.** `pytest`: **970 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **236** files. The run reproduces **field for
+field** — after one fix the change set needed: the grid summed over a `set` of
+tokens, and Python's per-process string-hash randomization changed the
+floating-point summation order (and the last digit, and a few rank percentiles
+with it) between runs; the summation is now over a **sorted** token order, and
+two consecutive runs are bit-identical. The baseline verify tool does not apply
+(the run carries a baseline arm, but the arm under test is not an embedding
+arm; the run's own baseline reproduces the Stage-0 numbers: pair AUC 0.5004,
+control mean 0.235).

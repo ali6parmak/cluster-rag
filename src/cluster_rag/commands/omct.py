@@ -36,6 +36,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_ARMS_COLUMNS,
     ANALYZE_OMCT_ARMS_KEY_COLUMNS,
     ANALYZE_OMCT_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
@@ -54,12 +56,14 @@ from cluster_rag.omct_analysis import (
     BASELINE_CHUNKER,
     DECISION_ARM,
     DECISION_RULE_FIXED_CUT,
+    DICTIONARY_ARM,
     BaselineArm,
     ChunkedSide,
     LateSide,
     ReportingSpec,
     build_analysis_report,
     build_dataset_view,
+    build_dictionary_model,
     build_stage3_grid,
     compare_arms,
     decision_rule_block,
@@ -90,6 +94,11 @@ from cluster_rag.text_processors.features.question_map import (
     build_question_map,
     cross_fit_availability,
     question_map_block,
+)
+from cluster_rag.text_processors.lexical.question_map_score import (
+    PRIMARY_SCORING,
+    blind_question_permutation,
+    cross_fit_grids,
 )
 
 logger = logging.getLogger(__name__)
@@ -329,11 +338,29 @@ def _dictionary_seed(analysis: AnalysisConfig, run_seed: int) -> int:
     return run_seed
 
 
+def _dictionary_fold_ids(n_pairs: int, folds: int, seed: int) -> np.ndarray:
+    """The cross-fit's fold assignment (the track's scheme: a seeded permutation).
+
+    The same scheme as the UPR cross-fit: ``default_rng(seed).permutation(n)``
+    split into contiguous chunks. The assignment is computed once per run and
+    shared by the map's availability readout (CS-48) and the scorer's grids
+    (CS-49), so the two read the same folds.
+    """
+    order = np.random.default_rng(seed).permutation(n_pairs)
+    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
+    fold_ids = np.empty(n_pairs, dtype=np.int64)
+    for fold, chunk in enumerate(chunks):
+        fold_ids[chunk] = fold
+    return fold_ids
+
+
 def _dictionary_block(
     records: Sequence[Any],
     folds: int,
     seed: int,
     view: Any,
+    question_map: Any,
+    fold_ids: np.ndarray,
 ) -> dict[str, Any]:
     """Build the artifact's `dictionary` block (CS-48): the map + its availability.
 
@@ -348,6 +375,8 @@ def _dictionary_block(
         folds: The cross-fit's fold count.
         seed: The fold split's seed.
         view: The dataset view (the paragraph count and the document count).
+        question_map: The map built from the same pairs (shared with the arm).
+        fold_ids: The cross-fit's fold assignment (shared with the arm).
 
     Returns:
         The block :func:`question_map_block` assembles.
@@ -355,14 +384,6 @@ def _dictionary_block(
     paragraphs = [record.paragraph_text for record in records]
     questions = [record.question_text for record in records]
     labels = [record.label for record in records]
-    n_pairs = len(records)
-    order = np.random.default_rng(seed).permutation(n_pairs)
-    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
-    fold_ids = np.empty(n_pairs, dtype=np.int64)
-    for fold, chunk in enumerate(chunks):
-        fold_ids[chunk] = fold
-
-    question_map = build_question_map(paragraphs, questions, labels)
     availability = cross_fit_availability(
         paragraphs,
         questions,
@@ -428,6 +449,78 @@ def _dictionary_row(
         "avail_table_cidh": _fmt(_document_share("CIDH", "with_table_share"), 4),
         "avail_table_ai": _fmt(_document_share("AI", "with_table_share"), 4),
         "n_pairs": corpus["n_reviewed_pairs"],
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_arm_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **arm** section (CS-49's scorer readout).
+
+    The headline is the primary arm's within-document AUC and its paired
+    difference against the run's plain full-text cosine; the four arms' own
+    within-document AUCs are beside it, and the label-blind counterpart's gap
+    and the floor's share close the row.
+    """
+    readout = model["readout"]
+    comparison = model["comparisons"][DICTIONARY_ARM]
+    arm = model["arms"][DICTIONARY_ARM]
+    primary = readout["primary"]
+    within = comparison["auc_decomposition"]["within_group_paired"]
+    scorings = readout["scorings"]
+    blind = readout.get("blind") or {}
+    blind_gap = readout.get("blind_gap") or {}
+
+    def _arm_auc(name: str) -> Any:
+        block = scorings.get(name) or {}
+        return _fmt(block.get("within_auc"), 4)
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "reference_model": model["model"].get("reference_model"),
+        "arm": primary,
+        "within_auc": _fmt(within.get("auc_arm"), 4),
+        "within_d_auc": _fmt(within.get("delta_auc"), 4),
+        "within_d_auc_ci": (
+            f"[{within['ci_low']:+.4f}, {within['ci_high']:+.4f}]"
+            if within.get("ci_low") is not None
+            else None
+        ),
+        "ref_within_auc": _fmt(within.get("auc_reference"), 4),
+        "pooled_auc": _fmt(arm["pair_auc"]["overall"], 4),
+        "pooled_d_auc": _fmt(comparison["paired_auc"]["delta_auc"], 4),
+        "deshifted_auc": _fmt(comparison["deshifted_auc"]["overall"], 4),
+        "auc_sum_logodds": _arm_auc("sum_logodds"),
+        "auc_sum_positive": _arm_auc("sum_positive"),
+        "auc_max_logodds": _arm_auc("max_logodds"),
+        "auc_support_count": _arm_auc("support_count"),
+        "auc_sum_positive_nonfloor": _fmt(
+            (readout.get("secondary_non_floor") or {}).get("within_auc"), 4
+        ),
+        "blind_within_auc": _fmt((blind.get(primary) or {}).get("within_auc"), 4),
+        "blind_gap": _fmt(blind_gap.get("primary"), 4),
+        "floor_pairs": readout["floor"]["n_floor_pairs"],
+        "floor_share": _fmt(readout["floor"]["floor_share"], 4),
+        "ctrl_mean_delta": _fmt(comparison["control_shift"]["mean_delta"], 4),
+        "ctrl_rank_p50_delta": _fmt(comparison["control_shift"]["rank_p50_delta"], 4),
+        "floor_gap_delta": _fmt(comparison["floor_gap"]["delta"], 4),
+        "hit1_pos": _fmt((arm.get("hit_at_k") or {}).get("label1", {}).get("hit@1"), 4),
+        "hit1_pos_ref": _fmt(
+            ((comparison.get("hit_at_k") or {}).get("reference") or {})
+            .get("label1", {})
+            .get("hit@1"),
+            4,
+        ),
+        "n_pairs": (scorings.get(primary) or {}).get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -955,13 +1048,28 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     )
 
     dictionary_block = None
-    if analysis.dictionary is not None and analysis.dictionary.include_map:
-        dictionary_block = _dictionary_block(
-            pair_report.records,
-            analysis.dictionary.folds,
-            _dictionary_seed(analysis, config.seed),
-            view,
+    dictionary_map = None
+    dictionary_fold_ids = None
+    dictionary_seed = None
+    if analysis.dictionary is not None:
+        dictionary_seed = _dictionary_seed(analysis, config.seed)
+        dictionary_fold_ids = _dictionary_fold_ids(
+            len(pair_report.records), analysis.dictionary.folds, dictionary_seed
         )
+        dictionary_map = build_question_map(
+            [record.paragraph_text for record in pair_report.records],
+            [record.question_text for record in pair_report.records],
+            [record.label for record in pair_report.records],
+        )
+        if analysis.dictionary.include_map:
+            dictionary_block = _dictionary_block(
+                pair_report.records,
+                analysis.dictionary.folds,
+                dictionary_seed,
+                view,
+                dictionary_map,
+                dictionary_fold_ids,
+            )
 
     models: list[dict[str, Any]] = []
     for entry in analysis.embedders:
@@ -1106,6 +1214,50 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 ),
             )
         models.append(model_block)
+
+    # The dictionary arm (CS-49): the question map as a pair scorer, beside the
+    # run's own full-text cosine. The map reads no embedding, so the arm enters
+    # the artifact as its own entry (the decision arm's pattern).
+    if analysis.dictionary is not None and analysis.dictionary.scorings:
+        records = pair_report.records
+        probe_cells = [(row, column) for _, row, column in view.control.cells]
+        grids = cross_fit_grids(
+            [record.paragraph_text for record in records],
+            [record.question_text for record in records],
+            [record.label for record in records],
+            dictionary_fold_ids,
+            paragraphs=tuple(view.paragraphs),
+            questions=tuple(view.questions),
+            scorings=analysis.dictionary.scorings,
+            probe_cells=probe_cells,
+        )
+        blind_grids = None
+        if analysis.dictionary.blind:
+            permutation = blind_question_permutation(len(records), dictionary_seed)
+            blind_grids = cross_fit_grids(
+                [record.paragraph_text for record in records],
+                [records[int(index)].question_text for index in permutation],
+                [record.label for record in records],
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=analysis.dictionary.scorings,
+            )
+        models.append(
+            build_dictionary_model(
+                view,
+                grids=grids,
+                blind_grids=blind_grids,
+                reference_similarities=baseline.similarities,
+                reference_name=entry.name,
+                folds=analysis.dictionary.folds,
+                seed=dictionary_seed,
+                resamples=analysis.bootstrap.resamples,
+                bootstrap_seed=bootstrap_seed,
+                primary=PRIMARY_SCORING,
+                probe=(grids.get("probe") or {}).get(PRIMARY_SCORING),
+            )
+        )
 
     # The decision arm (CS-7b): the decision model scores the **whole**
     # same-document grid, so it becomes an arm of this run — the same cells,
@@ -1304,6 +1456,18 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     table_rows: list[dict[str, Any]] = []
     has_stage3 = False
     for model in models:
+        if model.get("kind") == "dictionary":
+            # The dictionary arm (CS-49): its own entry and its own section.
+            table_rows.append(
+                _dictionary_arm_row(
+                    model,
+                    run_id=omct_run_id,
+                    n_control=view.control.n_cells,
+                    n_docs=view.pooled["n_documents"],
+                    seconds=payload["total_seconds"],
+                )
+            )
+            continue
         if model.get("kind") == "decision":
             # The decision arm (CS-7b): its own entry, one row per arm.
             for arm_name, arm in (model.get("arms") or {}).items():
@@ -1383,7 +1547,13 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     has_arms = any(model.get("arms") for model in models)
     has_reporting = any((model.get("stage3") or {}).get("reporting") for model in models)
     has_dictionary = dictionary_block is not None
-    if has_dictionary:
+    has_dictionary_arm = any(model.get("kind") == "dictionary" for model in models)
+    if has_dictionary_arm:
+        # The arm's own section (CS-49): its row shape carries the AUCs and
+        # the comparison, so it is not the map's section (CS-48's).
+        columns = ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS
+        key_columns = ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS
+    elif has_dictionary:
         # The dictionary's own section (CS-48): the map is a description and
         # its rows are not arms, so the section and its columns are its own.
         # A dictionary-only run has no model rows; a later change set that
@@ -1445,6 +1615,29 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             f"(evidence {_fmt(overall_availability.get('with_evidence_share'), 4)})"
         )
     for model in models:
+        if model.get("kind") == "dictionary":
+            # The dictionary arm (CS-49): its own entry, printed on its own lines.
+            readout = model["readout"]
+            comparison = model["comparisons"][DICTIONARY_ARM]
+            within = comparison["auc_decomposition"]["within_group_paired"]
+            blind_gap = (readout.get("blind_gap") or {}).get("primary")
+            print(
+                f"  [{DICTIONARY_ARM}] the question map ({readout['primary']}) against "
+                f"{readout['reference']['model']}'s full-text cosine: within-document AUC "
+                f"{_fmt(within.get('auc_arm'), 4)} vs {_fmt(within.get('auc_reference'), 4)} "
+                f"(delta {_fmt(within.get('delta_auc'), 4)}, 95% CI "
+                f"[{_fmt(within.get('ci_low'), 4)}, {_fmt(within.get('ci_high'), 4)}])"
+            )
+            blind_block = (readout.get("blind") or {}).get(readout["primary"]) or {}
+            print(
+                f"      the blind map's within-document AUC "
+                f"{_fmt(blind_block.get('within_auc'), 4)} "
+                f"(gap {_fmt(blind_gap, 4)}); the floor carries "
+                f"{readout['floor']['n_floor_pairs']} pairs "
+                f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
+                f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
+            )
+            continue
         if model.get("kind") == "decision":
             # The decision arm (CS-7b): its own entry, printed on its own lines.
             decision_block = model["arms"][DECISION_ARM]

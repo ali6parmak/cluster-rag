@@ -446,6 +446,47 @@ ANALYZE_OMCT_DICTIONARY_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS: tuple[str, ...] = ("run_id", "arm")
 
+# The dictionary **arm** (CS-49): the question map as a pair scorer, one row
+# per run. The headline is the **within-document** AUC of the pre-registered
+# primary arm against the run's plain full-text cosine (the pooled number and
+# the paired pooled difference sit beside it), with the **control role** (the
+# score/rank shift of the unjudged cells and the floor gap), the **label-blind**
+# counterpart (the same pipeline with the questions permuted) and the floor's
+# share next to it. The four arms' own within-document AUCs are columns, so the
+# spread the primary arm sits in is visible without the artifact.
+ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "reference_model",
+    "arm",
+    "within_auc",
+    "within_d_auc",
+    "within_d_auc_ci",
+    "ref_within_auc",
+    "pooled_auc",
+    "pooled_d_auc",
+    "deshifted_auc",
+    "auc_sum_logodds",
+    "auc_sum_positive",
+    "auc_max_logodds",
+    "auc_support_count",
+    "auc_sum_positive_nonfloor",
+    "blind_within_auc",
+    "blind_gap",
+    "floor_pairs",
+    "floor_share",
+    "ctrl_mean_delta",
+    "ctrl_rank_p50_delta",
+    "floor_gap_delta",
+    "hit1_pos",
+    "hit1_pos_ref",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The decision probe's table (the `decide-omct` command, Stage 3.5): one row
 # per arm of a run. The headline is the **within-document** AUC (the pooled
 # number sits beside it, never alone); the **calibration** columns sit next to

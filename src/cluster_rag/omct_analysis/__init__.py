@@ -9,6 +9,7 @@ working exactly as before the split. The modules underneath are layered:
       arms   the ladder's arms and the comparison against the baseline
     stage3   the learned feature pack and its reporting
   decision   the decision models and the safe-negative rule
+ dictionary  the question map as a pair scorer (CS-49)
     report   the artifact one run writes
 """
 
@@ -27,6 +28,12 @@ from cluster_rag.omct_analysis.decision import (
     score_decision_arm,
     score_stage3_model,
     shortlist_rerank_block,
+)
+from cluster_rag.omct_analysis.dictionary import (
+    BLIND_GAP_BAR,
+    DICTIONARY_ARM,
+    build_dictionary_model,
+    measure_dictionary_arms,
 )
 from cluster_rag.omct_analysis.helpers import (
     BASELINE_ARM,
@@ -79,10 +86,12 @@ __all__ = [
     "ArmScores",
     "BASELINE_ARM",
     "BASELINE_CHUNKER",
+    "BLIND_GAP_BAR",
     "BaselineArm",
     "COSINE_FEATURE_NAME",
     "ChunkedSide",
     "DECISION_ARM",
+    "DICTIONARY_ARM",
     "DECISION_FIXED_CUT",
     "DECISION_RULE_FIT_THRESHOLD",
     "DECISION_RULE_FIXED_CUT",
@@ -107,6 +116,7 @@ __all__ = [
     "Stage3Grid",
     "build_analysis_report",
     "build_dataset_view",
+    "build_dictionary_model",
     "build_stage3_grid",
     "compare_arms",
     "compare_stage3_arm",
@@ -118,6 +128,7 @@ __all__ = [
     "length_correlation",
     "logger",
     "measure_arm",
+    "measure_dictionary_arms",
     "paragraph_length_report",
     "score_arm",
     "score_decision_arm",
