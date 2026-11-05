@@ -1753,81 +1753,17 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   grammatical filter is unlikely to be a lever — the pre-registration must say
   so and test it.
 
-- [ ] **CS-52 — POS: the grammatical axis (cheap, and predicted a null).** CS-34's
-  five Penn classes on the pair unit (the noun/verb/adjective/adverb/other split
-  of the map's words, the class of each word's modal tag), the POS readout
-  crossed with the z-score, and the two POS-restricted z arms
-  (`noun`, `verb`) measured against the full z arm.
-
-  **The UPR verdict this ports (the prior), and its reason.** CS-34 (executed
-  2026-11-01) was a **null on both halves**: the nouns and the verbs were
-  nearly identical (+2.0044 against +1.9856, a difference of +0.0188 where the
-  registered margin was 1.0) and the noun-only map was **materially worse**
-  (0.4840 against the full map's 0.5243, a paired **+0.0403 [+0.0258,
-  +0.0545]**); the verb-only map reached 0.1261. The reason: the map treats
-  the grammatical classes almost identically — the register is in the *words*,
-  not in their part of speech.
-
-  **The flip, and the prediction.** CS-51 just showed the hard **class** filter
-  is a small cost on top of the z-score's soft prior (the class readout's
-  separation is the finding, the filter is the null). The grammatical axis was
-  the weaker of the two on UPR, so the pre-registered prediction is a **null
-  again**: the noun-only and verb-only z arms should land **within ±0.02** of
-  the full z arm (the filters are not levers), and the POS readout should show
-  the classes' **z-means close** (the noun–verb difference below the **0.5**
-  bar). "It works" = the noun-only arm **beats** the full arm by **≥ 0.05**
-  with a paired interval excluding zero **and** the noun–verb z difference
-  clears 0.5.
-
-  **The mechanism.** The tagger is the track's own (the edge's `NltkTagger`
-  with the `averaged_perceptron_tagger_eng` model, its answers cached), tagging
-  the reviewed set's **225 distinct paragraphs** with the track's tokenization
-  (the words line up by position, as in CS-34); each word's class is the class
-  of its **modal** tag. The readout is per class: the words, the pairs, the
-  positive share, the mean log-odds and the **mean z-score**; the test is the
-  **noun − verb z difference** (the registered bar 0.5, the z-measure version
-  of CS-51's rule). The two restricted arms are the primary z arm with the
-  map's POS classes filtered (`noun` keeps only nouns; `verb` only verbs),
-  scored behind the same folds and compared with the **full** z arm on the same
-  pairs.
-
-  **The falsification conditions, registered.**
-
-  1. **The increment test (the primary).** The noun-only arm's paired
-     within-document difference against the full z arm: the prediction is
-     **within ±0.02**; the ≥ +0.05 bar with the interval excluding zero would
-     make the grammatical filter a lever (the unseen case).
-  2. **The verb-only test.** Predicted to lose (the verbs are the register's
-     carriers; the point estimate below the full arm's).
-  3. **The POS readout test.** The noun class's mean z-score must exceed the
-     verb class's by **≥ 0.5** for the grammatical axis to separate (the UPR
-     null did not).
-  4. **The count check** (kept from CS-49): the measure-free count within 0.10
-     of the full z arm.
-
-  **The cost.** **0 model calls** (the tagger is a local model, already
-  downloaded for the UPR run; the 225 paragraphs are tagged once and cached);
-  the two POS arms double the fold-grid work (~12 s).
-
-  **Leakage.** Unchanged; the tagger reads the paragraph texts only (no
-  labels), and its classes are a property of the words, so no label
-  information enters the restriction.
-
-  **The runs.** One: **`omct-analyze-voyage-dict-pos`**, the artifact
-  `results/omct-analyze-voyage-dict-pos/analysis.json`; the sweep
-  `experiments_text_processing/omct_dictionary_pos_sweep.py` (the label
-  `omct_dictionary_pos`, the table's section `## OMCT — omct_dictionary_pos`);
-  the config additions `analysis.dictionary.pos_restrictions` and the
-  `pos:` section on; the log section **`## CS-52 — the grammatical axis on
-  OMCT`**.
-
-  **The exit criteria.** A hand-computed unit test of the POS class assignment
-  on a toy map; a test that a POS-filtered word contributes nothing; the
-  fixture run and the real run; `ruff check` / `ruff format` clean over
-  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
-
-  *(pre-registered 2026-11-05; awaiting execution.)*
-
+- **CS-52** (the grammatical axis) → executed 2026-11-05 → the archive's §7.9
+  (the grammatical axis) and the track log's §CS-52. **A null that reproduces**:
+  the noun-only z arm is **−0.0041 [−0.0097, +0.0016]** against the full z arm
+  (the interval includes zero — a free-ish filter, not a lever) and the
+  verb-only arm **−0.0723 [−0.0878, −0.0571]**; the classes' **z means are
+  within 0.016** of each other (noun +0.0885, verb +0.1032, the noun − verb
+  difference **−0.0148** against the 0.5 bar, of the wrong sign). The
+  grammatical axis is a null on both datasets, and CS-50's prior does not
+  interact with it. **The next change set is CS-53** (phrases): the unit change
+  is the next lever candidate — and the one whose UPR verdict was a null for
+  rarity (82.8 % hapax).
 
 ## 8. The durable deliverable (named, so it is not lost)
 

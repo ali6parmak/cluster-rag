@@ -103,6 +103,7 @@ research record and are **not** indexed here.
 | [CS-49 — the map as a pair scorer on OMCT](#cs-49--the-map-as-a-pair-scorer-on-omct-2026-11-05) | one `omct-analyze-voyage-dict` run (the map as a pair scorer; **0 model calls**, 10.8 s) | **a null that matches the cosine**: the primary arm 0.5419 against the cosine's 0.5238 (+0.0181 [−0.0267, +0.0630]); the floor (518 pairs, 34.08 %, 77.8 % of them negative) carries the edge (the non-floor reading is 0.4439, below chance); and the **measure-free count** is the only arm that beats the cosine (**0.6360**, +0.1122 [+0.0672, +0.1584], non-floor 0.6645) — the UPR's measure lever **inverts** on the pair unit | `results/omct-analyze-voyage-dict/analysis.json` |
 | [CS-50 — the estimator on OMCT](#cs-50--the-estimator-on-omct-the-upr-gain-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-z` run (CS-31's six measures on the pair unit; the two z arms; **0 model calls**, 14.5 s) | **the registered null is REFUTED — the estimator transfers and is the chain's first win**: `sum_zscore_positive` **0.7020** against the cosine's 0.5238 (**+0.1782 [+0.1303, +0.2272]**, P 1.000), the non-floor reading **0.8158**, the blind gap **+0.2340**, all three documents above the cosine; the z head changes 177 of 209 tables (84.7 %, the prediction was < 50 %) — the prior's per-word normalization makes the weights comparable across questions | `results/omct-analyze-voyage-dict-z/analysis.json` |
 | [CS-51 — the word classes on OMCT](#cs-51--the-word-classes-on-omct-the-soft-prior-already-does-it-2026-11-05) | one `omct-analyze-voyage-dict-classes` run (the two class-restricted z arms against the full z arm; **0 model calls**, 18.7 s) | **a null for the hard filter**: `nogeneric` −0.0123 [−0.0221, −0.0024] (a small, detectable **cost**) and `distinctive` −0.0758 [−0.1052, −0.0472] with its floor jumping to 71.6 % — the **soft prior already does the class filter's work**; the class readout is the finding: the z-score separates the classes (distinctive +0.3782 / generic +0.0234) while the **raw log-odds reverse CS-33's order** (distinctive −0.2317 / generic +0.9081) | `results/omct-analyze-voyage-dict-classes/analysis.json` |
+| [CS-52 — the grammatical axis on OMCT](#cs-52--the-grammatical-axis-on-omct-a-null-that-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-pos` run (CS-34's POS classes, the two POS-restricted z arms; **0 model calls**, 18.6 s) | **a null that reproduces**: the noun-only arm −0.0041 [−0.0097, +0.0016] (a free-ish filter, not a lever) and the verb-only −0.0723 [−0.0878, −0.0571]; the classes' z means are within 0.016 of each other (the noun−verb difference −0.0148 against the 0.5 bar) — the register is in the words, not their part of speech | `results/omct-analyze-voyage-dict-pos/analysis.json` |
 
 ## Change sets
 
@@ -9039,3 +9040,76 @@ class threshold** (the quarter share was fixed in advance and not swept).
 **The gate.** `pytest`: **977 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **237** files. Two consecutive runs are
 bit-identical (bar the clock fields).
+
+**A correction to this section's table row, appended when CS-52 landed (the log
+is append-only).** The row's *rendering* was wrong: CS-51 added a new section
+shape but the command's section-choice flow fell through to the arm's columns,
+so the row printed "n/a" in most cells. No number changed — the artifact was
+always correct — and the CS-51 sweep was re-run after the fix so the row in
+`docs/experiments_table_text_processing_omct.md` now carries the class arms'
+numbers. The fix is in CS-52's commit.
+
+## CS-52 — the grammatical axis on OMCT: a null that reproduces (2026-11-05)
+
+**The run.** One: `omct-analyze-voyage-dict-pos` — CS-34's five Penn classes on
+the reviewed set (the class of each word's **modal** tag, the tagger the
+track's own nltk client, its answers cached), the POS readout crossed with the
+z-score, and the two POS-restricted z arms (`noun`, `verb`) against the full z
+arm. **0 model calls**, **18.6 s**, the artifact **15.1 MB**, **no new
+dependency**. The tagger is `averaged_perceptron_tagger_eng` (the model the UPR
+CS-34 run already downloaded) and tags the reviewed set's **225 distinct
+paragraphs** (225 cache misses on the first run, hits on the re-run). The
+CS-50 numbers are reproduced exactly (the full arm 0.7020, non-floor 0.8158).
+The sweep is `experiments_text_processing/omct_dictionary_pos_sweep.py` (the
+label `omct_dictionary_pos`, the table's section
+`## OMCT — omct_dictionary_pos`).
+
+**The grammatical classes do not separate — the UPR null reproduces, on the
+z-score this time.**
+
+| the class | the words | the pairs | positive share | the mean log-odds | **the mean z-score** |
+|---|---|---|---|---|---|
+| noun | 979 | 14,387 | 66.0 % | +0.7749 | **+0.0885** |
+| verb | 483 | 5,731 | 66.9 % | +0.8307 | **+0.1032** |
+| adjective | 361 | 4,641 | 65.4 % | +0.7956 | +0.1045 |
+| adverb | 69 | 813 | 65.2 % | +0.7972 | +0.1025 |
+| other | 190 | 2,407 | 66.8 % | +0.8512 | +0.1004 |
+
+The noun − verb z difference is **−0.0148**: not only far below the registered
+0.5 bar, but of the **wrong sign** (the verbs sit marginally higher), and every
+class's z mean is within **0.016** of every other's. On UPR the same null held
+on the log-odds (+2.0044 against +1.9856); on OMCT it holds on the z-score too
+— **the register is in the words, not in their part of speech**, and CS-50's
+prior does not interact with the grammatical axis.
+
+**The arms: the noun filter is free, the verb filter costs — the grammatical
+filter is not a lever.**
+
+- **noun-only: 0.6979, −0.0041 [−0.0097, +0.0016]** against the full arm
+  (P(Δ>0) 0.077). The interval **includes zero**: the noun filter is a
+  free-ish simplification, exactly the registered prediction (within ±0.02),
+  and the ≥ +0.05 "lever" bar is far away.
+- **verb-only: 0.6297, −0.0723 [−0.0878, −0.0571]** — it loses, as predicted
+  (the verbs carry the register's function words; the filter drops them and
+  takes the coverage with them).
+- Both arms keep the full arm's **518-pair floor** (34.1 %) — the POS filter
+  empties no table (unlike the distinctive-only class filter, which emptied
+  71.6 % of them).
+
+**The falsification, read out.** 1 (the increment) **holds as a null** — the
+noun-only arm within ±0.02, the interval including zero; 2 (verb-only loses)
+**holds**; 3 (the POS readout separates) **fails** — the z difference is
+−0.0148 against the 0.5 bar, in the wrong direction; 4 (the count within 0.10
+of the full arm) **holds** (0.6360 against 0.7020). So the grammatical axis is
+a **null that reproduces**, and its registration cost was one cached tagger
+pass.
+
+**What this change set does not say.** Nothing about **phrases** (CS-53, the
+unit change that is the next lever candidate), **stability** (CS-54), the
+**mined lexicon** (CS-55) or **abstention** (CS-56); nothing about a
+**different tagset** (the Penn groups were fixed in advance); nothing about
+UPR; and nothing about a **POS × class interaction** (not registered).
+
+**The gate.** `pytest`: **979 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **238** files. Two consecutive runs are
+bit-identical (bar the tagger's cache counters on the first pass).

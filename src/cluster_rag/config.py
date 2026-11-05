@@ -1031,6 +1031,9 @@ class DictionaryConfig(BaseModel):
       **primary** arm's scoring and compared with the **full** primary arm (the
       increment test): ``nogeneric`` (drop the register) and ``distinctive``
       (keep only the topic's own vocabulary). Empty (the default) runs none.
+    - ``pos_restrictions``: CS-52's grammatical arms (``noun``, ``verb``), the
+      same increment test on the POS axis; it needs the ``pos:`` section on
+      (the tagger supplies the classes).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1042,6 +1045,7 @@ class DictionaryConfig(BaseModel):
     blind: bool = True
     primary: str | None = None
     class_restrictions: tuple[str, ...] = ()
+    pos_restrictions: tuple[str, ...] = ()
 
     @field_validator("scorings")
     @classmethod
@@ -1081,6 +1085,28 @@ class DictionaryConfig(BaseModel):
             raise ValueError(
                 "analysis.dictionary.class_restrictions must not repeat a "
                 f"restriction: {list(value)}"
+            )
+        return value
+
+    @field_validator("pos_restrictions")
+    @classmethod
+    def _pos_restrictions_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown POS restriction at config time."""
+        if not value:
+            return value
+        from cluster_rag.text_processors.lexical.question_map_score import (
+            POS_RESTRICTIONS,
+        )
+
+        unknown = [name for name in value if name not in POS_RESTRICTIONS]
+        if unknown:
+            raise ValueError(
+                f"analysis.dictionary.pos_restrictions has unknown restriction(s) "
+                f"{unknown}; expected some of {list(POS_RESTRICTIONS)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(
+                f"analysis.dictionary.pos_restrictions must not repeat a restriction: {list(value)}"
             )
         return value
 

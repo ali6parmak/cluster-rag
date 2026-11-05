@@ -556,6 +556,36 @@ ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_CLASSES_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The dictionary **POS** (CS-52): the grammatical arms measured against the
+# full primary arm, with the noun/verb class means beside them.
+ANALYZE_OMCT_DICTIONARY_POS_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "full_within_auc",
+    "full_nonfloor_auc",
+    "noun_within_auc",
+    "noun_delta",
+    "noun_ci",
+    "noun_nonfloor_auc",
+    "verb_within_auc",
+    "verb_delta",
+    "verb_ci",
+    "verb_nonfloor_auc",
+    "noun_mean_z",
+    "verb_mean_z",
+    "noun_mean_logodds",
+    "verb_mean_logodds",
+    "floor_full",
+    "floor_noun",
+    "floor_verb",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The decision probe's table (the `decide-omct` command, Stage 3.5): one row
 # per arm of a run. The headline is the **within-document** AUC (the pooled
 # number sits beside it, never alone); the **calibration** columns sit next to

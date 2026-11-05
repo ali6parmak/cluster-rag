@@ -31,6 +31,7 @@ from cluster_rag.commands._common import (
     _upr_label_catalog,
     _warn_upr_prefix,
     _write_resolved_config,
+    pos_word_classes,
 )
 from cluster_rag.config import AppConfig, ChunkerSpec
 from cluster_rag.data import (
@@ -75,8 +76,6 @@ from cluster_rag.experiment_table import (
 from cluster_rag.label_catalog import LabelEntry, load_label_catalog
 from cluster_rag.omct_analysis import BASELINE_ARM
 from cluster_rag.omct_decision import DecisionArm, score_cells
-from cluster_rag.pos.cache import CachedTagger
-from cluster_rag.pos.nltk_tagger import NltkTagger
 from cluster_rag.predictors import build_predictor, predictor_requirements
 from cluster_rag.predictors.base import PredictorContext
 from cluster_rag.preprocess import build_preprocess_spec
@@ -143,9 +142,6 @@ from cluster_rag.text_processors.lexical.label_pairs import (
 )
 from cluster_rag.text_processors.lexical.pos_class import (
     POS_CLASSES,
-    merge_distributions,
-    modal_classes,
-    word_tag_counts,
 )
 from cluster_rag.text_processors.lexical.stability import (
     estimate_stability,
@@ -231,76 +227,6 @@ def build_upr_decider(model_config: Any, config: AppConfig) -> Any:
     )
     prompt_version = decision.prompt_version if decision else "v1"
     return CachedDecider(client, config.paths.cache, prompt_version=prompt_version)
-
-
-def build_pos_tagger(config: AppConfig) -> Any:
-    """Build the part-of-speech tagger (the CLI's wiring seam, the track's CS-34).
-
-    The tagger is a **model client**: it downloads its model into the run's own
-    cache root and its answers are cached on disk (its own root under
-    ``cache/``, never the embedding cache), so a re-run never re-tags a text.
-    The track's pure package never imports the client — only the port.
-
-    Returns:
-        The cached tagger, or ``None`` when the tagger is off (the default).
-
-    Raises:
-        RuntimeError: If the model cannot be found or downloaded.
-    """
-    pos = config.pos
-    if not pos.enabled:
-        return None
-    if pos.backend != "nltk":
-        raise ValueError(f"Unknown part-of-speech backend {pos.backend!r}; expected 'nltk'")
-    client = NltkTagger(
-        pos.model_id,
-        data_root=Path(config.paths.cache) / "pos" / "nltk_data",
-        language=pos.language,
-    )
-    return CachedTagger(client, config.paths.cache)
-
-
-def pos_word_classes(
-    config: AppConfig,
-    texts: Sequence[str],
-) -> tuple[dict[str, str], dict[str, Counter[str]], dict[str, Any]]:
-    """The train corpus's **grammatical classes** (the track's CS-34).
-
-    The corpus is tagged with the track's own tokenization, so the tagger's
-    tokens and the map's words line up by position; the per-word tag counts
-    are merged over the corpus and each word's class is the class of its
-    **modal** tag.
-
-    Args:
-        config: The resolved app config (the ``pos:`` section decides).
-        texts: The corpus's texts (the train split).
-
-    Returns:
-        The per-word class, the per-word tag counts and the tagger's
-        provenance (with the cache's counters). All three are empty when the
-        tagger is off.
-    """
-    tagger = build_pos_tagger(config)
-    if tagger is None:
-        return {}, {}, {}
-    distributions = []
-    for text in texts:
-        tagged = tagger.tag(text)
-        distributions.append(word_tag_counts(text, tagged))
-    merged = merge_distributions(distributions)
-    classes = modal_classes(merged)
-    info = tagger.info
-    provenance = {
-        "model_id": info.model_id,
-        "digest": info.digest,
-        "backend": info.backend,
-        "cache_hits": getattr(tagger, "cache_hits", 0),
-        "cache_misses": getattr(tagger, "cache_misses", 0),
-        "n_stored": getattr(tagger, "n_stored", 0),
-        "n_texts_tagged": len(texts),
-        **info.extra,
-    }
-    return classes, merged, provenance
 
 
 def _cmd_decide_upr(config: AppConfig) -> int:

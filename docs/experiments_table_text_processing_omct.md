@@ -401,6 +401,12 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 
 ## OMCT — omct_dictionary_classes
 
-| run_id | date | reference_model | arm | within_auc | within_d_auc | within_d_auc_ci | ref_within_auc | pooled_auc | pooled_d_auc | deshifted_auc | auc_sum_logodds | auc_sum_positive | auc_max_logodds | auc_support_count | auc_sum_positive_nonfloor | blind_within_auc | blind_gap | floor_pairs | floor_share | ctrl_mean_delta | ctrl_rank_p50_delta | floor_gap_delta | hit1_pos | hit1_pos_ref | n_pairs | n_control | n_docs | seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| omct-analyze-voyage-dict-classes | 2026-11-05 | n/a | sum_zscore_positive | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 1520 | 4000 | 3 | 18.431 |
+| run_id | date | arm | full_within_auc | full_nonfloor_auc | nogeneric_within_auc | nogeneric_delta | nogeneric_ci | nogeneric_nonfloor_auc | distinctive_within_auc | distinctive_delta | distinctive_ci | distinctive_nonfloor_auc | class_distinctive_mean_z | class_generic_mean_z | class_generic_positive_share | floor_full | floor_nogeneric | floor_distinctive | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-classes | 2026-11-05 | sum_zscore_positive | 0.7020 | 0.8158 | 0.6897 | -0.0123 | [-0.0221, -0.0024] | 0.7872 | 0.6262 | -0.0758 | [-0.1052, -0.0472] | 0.5157 | 0.3782 | 0.0234 | 0.7248 | 518 | 518 | 1088 | 1520 | 4000 | 3 | 18.318 |
+
+## OMCT — omct_dictionary_pos
+
+| run_id | date | arm | full_within_auc | full_nonfloor_auc | noun_within_auc | noun_delta | noun_ci | noun_nonfloor_auc | verb_within_auc | verb_delta | verb_ci | verb_nonfloor_auc | noun_mean_z | verb_mean_z | noun_mean_logodds | verb_mean_logodds | floor_full | floor_noun | floor_verb | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-pos | 2026-11-05 | sum_zscore_positive | 0.7020 | 0.8158 | 0.6979 | -0.0041 | [-0.0097, +0.0016] | 0.8062 | 0.6297 | -0.0723 | [-0.0878, -0.0571] | 0.6478 | 0.0885 | 0.1032 | 0.7749 | 0.8307 | 518 | 518 | 518 | 1520 | 4000 | 3 | 18.528 |

@@ -38,7 +38,7 @@ Pure core: numpy and the standard library only (no model client, no I/O).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -89,6 +89,13 @@ CLASS_RESTRICTIONS: dict[str, tuple[str, ...]] = {
     "distinctive": ("distinctive",),
 }
 
+# CS-52's POS restrictions: the name the config carries -> the grammatical
+# classes the map keeps.
+POS_RESTRICTIONS: dict[str, tuple[str, ...]] = {
+    "noun": ("noun",),
+    "verb": ("verb",),
+}
+
 
 def _allowed_classes(restrict: Sequence[str] | None) -> frozenset[str] | None:
     """The classes a restriction keeps (``None`` = every class).
@@ -111,16 +118,46 @@ def _allowed_classes(restrict: Sequence[str] | None) -> frozenset[str] | None:
     return frozenset(kept)
 
 
+def _allowed_pos(restrict_pos: Sequence[str] | None) -> frozenset[str] | None:
+    """The grammatical classes a POS restriction keeps (``None`` = every class).
+
+    Raises:
+        ValueError: On an unknown restriction or an empty one.
+    """
+    if restrict_pos is None:
+        return None
+    if not restrict_pos:
+        raise ValueError("a POS restriction must keep at least one class")
+    unknown = [name for name in restrict_pos if name not in POS_RESTRICTIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown POS restriction(s) {unknown}; expected some of {list(POS_RESTRICTIONS)}"
+        )
+    kept: set[str] = set()
+    for name in restrict_pos:
+        kept.update(POS_RESTRICTIONS[name])
+    return frozenset(kept)
+
+
 def _table_is_empty(
-    question_map: QuestionMap, question: str, allowed: frozenset[str] | None
+    question_map: QuestionMap,
+    question: str,
+    allowed: frozenset[str] | None,
+    allowed_pos: frozenset[str] | None = None,
 ) -> bool:
-    """Whether a question's table has no row the restriction keeps."""
+    """Whether a question's table has no row the restriction(s) keep."""
     rows = question_map.per_question.get(question) or ()
     if not rows:
         return True
-    if allowed is None:
+    if allowed is None and allowed_pos is None:
         return False
-    return not any(question_map.word_classes.get(row.word) in allowed for row in rows)
+    for row in rows:
+        if allowed is not None and question_map.word_classes.get(row.word) not in allowed:
+            continue
+        if allowed_pos is not None and question_map.pos_classes.get(row.word) not in allowed_pos:
+            continue
+        return False
+    return True
 
 
 def _index_map(values: tuple[str, ...]) -> dict[str, int]:
@@ -137,6 +174,7 @@ def score_grid(
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     units: object = None,
     restrict: Sequence[str] | None = None,
+    restrict_pos: Sequence[str] | None = None,
 ) -> np.ndarray:
     """Score every (paragraph, question) cell from the map's own weights.
 
@@ -153,6 +191,8 @@ def score_grid(
             tokenizer).
         restrict: The **class restriction** (CS-51): the restriction names whose
             kept classes only contribute (``None`` keeps every class).
+        restrict_pos: The **POS restriction** (CS-52): the same rule on the
+            grammatical axis (``None`` keeps every grammatical class).
 
     Returns:
         A ``(n_paragraphs, n_questions)`` float64 matrix, higher = more
@@ -170,6 +210,7 @@ def score_grid(
         )
     aggregation, measure, positive_only = _ARMS[scoring]
     allowed = _allowed_classes(restrict)
+    allowed_pos = _allowed_pos(restrict_pos)
     units_of = units or (lambda text: content_tokens(text, stopwords))
 
     columns = tuple(questions)
@@ -182,6 +223,8 @@ def score_grid(
     present = np.zeros((len(words), n_questions), dtype=bool)
     for word_index, word in enumerate(words):
         if allowed is not None and question_map.word_classes.get(word) not in allowed:
+            continue
+        if allowed_pos is not None and question_map.pos_classes.get(word) not in allowed_pos:
             continue
         for pair in question_map.per_word[word]:
             column = column_of.get(pair.question)
@@ -217,7 +260,7 @@ def score_grid(
     empty_columns = [
         column
         for column, question in enumerate(columns)
-        if _table_is_empty(question_map, question, allowed)
+        if _table_is_empty(question_map, question, allowed, allowed_pos)
     ]
     if empty_columns:
         seen = np.delete(grid, empty_columns, axis=1)
@@ -241,6 +284,8 @@ def cross_fit_grids(
     units: object = None,
     probe_cells: Sequence[tuple[int, int]] | None = None,
     restrict: Sequence[str] | None = None,
+    restrict_pos: Sequence[str] | None = None,
+    word_pos: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """The out-of-fold score grids: every judged cell from a map that never saw it.
 
@@ -265,6 +310,11 @@ def cross_fit_grids(
         restrict: The **class restriction** (CS-51), riding into every fold's
             grid and into the floor flags (a table the filter empties carries
             the floor).
+        restrict_pos: The **POS restriction** (CS-52), the same rule on the
+            grammatical axis. It needs ``word_pos`` (the fold maps are rebuilt
+            here, so the classes must ride along or every table would empty).
+        word_pos: The words' grammatical classes (CS-52), when the paragraphs
+            were tagged; passed to the full map and to every fold's map.
 
     Returns:
         A dict with the grid's ``paragraphs`` / ``questions``, one assembled
@@ -299,7 +349,12 @@ def cross_fit_grids(
     columns = np.asarray([question_of[text] for text in question_texts], dtype=np.int64)
 
     full_map = build_question_map(
-        list(paragraph_texts), list(question_texts), labels_list, stopwords=stopwords, units=units
+        list(paragraph_texts),
+        list(question_texts),
+        labels_list,
+        stopwords=stopwords,
+        units=units,
+        word_pos=word_pos,
     )
     fold_maps: dict[int, QuestionMap] = {}
     for fold in fold_values:
@@ -310,12 +365,19 @@ def cross_fit_grids(
             [labels_list[index] for index in keep],
             stopwords=stopwords,
             units=units,
+            word_pos=word_pos,
         )
 
     allowed = _allowed_classes(restrict)
+    allowed_pos = _allowed_pos(restrict_pos)
     floor = np.asarray(
         [
-            _table_is_empty(fold_maps[int(fold_ids[index])], question_texts[index], allowed)
+            _table_is_empty(
+                fold_maps[int(fold_ids[index])],
+                question_texts[index],
+                allowed,
+                allowed_pos,
+            )
             for index in range(len(labels_list))
         ],
         dtype=bool,
@@ -331,6 +393,7 @@ def cross_fit_grids(
             stopwords=stopwords,
             units=units,
             restrict=restrict,
+            restrict_pos=restrict_pos,
         )
         fold_grids = {
             fold: score_grid(
@@ -341,6 +404,7 @@ def cross_fit_grids(
                 stopwords=stopwords,
                 units=units,
                 restrict=restrict,
+                restrict_pos=restrict_pos,
             )
             for fold in fold_values
         }

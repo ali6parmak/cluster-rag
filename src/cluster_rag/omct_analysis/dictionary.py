@@ -271,6 +271,8 @@ def build_dictionary_model(
     probe: Mapping[str, Any] | None = None,
     class_grids: Mapping[str, Mapping[str, Any]] | None = None,
     class_readout: Mapping[str, Any] | None = None,
+    pos_grids: Mapping[str, Mapping[str, Any]] | None = None,
+    pos_readout: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -289,6 +291,9 @@ def build_dictionary_model(
         class_grids: The class-restricted grids (CS-51), keyed by the
             restriction name; ``None`` runs none.
         class_readout: The map's class readout (CS-51), carried beside the arms.
+        pos_grids: The POS-restricted grids (CS-52), keyed by the restriction
+            name; ``None`` runs none.
+        pos_readout: The map's grammatical readout (CS-52), carried beside it.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -358,6 +363,15 @@ def build_dictionary_model(
             resamples=resamples,
             seed=bootstrap_seed,
         )
+    if pos_grids:
+        readout["pos_arms"] = class_arms_block(
+            view,
+            pos_grids,
+            primary=primary,
+            full_matrix=matrix,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
     readout["spread_note"] = (
         "the four arms' paired comparisons against the same cosine: the primary "
         "arm's is the pre-registered test; the other three are the spread, "
@@ -381,4 +395,5 @@ def build_dictionary_model(
         "comparisons": {DICTIONARY_ARM: comparison},
         "readout": readout,
         "class_readout": None if class_readout is None else dict(class_readout),
+        "pos_readout": None if pos_readout is None else dict(pos_readout),
     }

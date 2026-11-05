@@ -25,6 +25,7 @@ from cluster_rag.commands._common import (
     _omct_run_id,
     _require_run_id,
     _write_resolved_config,
+    pos_word_classes,
 )
 from cluster_rag.config import AnalysisConfig, AppConfig, ChunkerSpec
 from cluster_rag.dataset_stats import file_sha256
@@ -44,6 +45,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_POS_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
@@ -509,6 +512,61 @@ def _dictionary_class_row(
         "floor_full": readout["floor"]["n_floor_pairs"],
         "floor_nogeneric": _arm("nogeneric", "floor_pairs"),
         "floor_distinctive": _arm("distinctive", "floor_pairs"),
+        "n_pairs": full.get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_pos_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **POS** section (CS-52)."""
+    readout = model["readout"]
+    arms = readout.get("pos_arms") or {}
+    primary = readout["primary"]
+    full = readout["scorings"][primary]
+    pos = model.get("pos_readout") or {}
+    classes = pos.get("classes") or {}
+
+    def _arm(name: str, key: str) -> Any:
+        return (arms.get(name) or {}).get(key)
+
+    def _ci(name: str) -> str | None:
+        block = arms.get(name) or {}
+        if block.get("ci_low") is None:
+            return None
+        return f"[{block['ci_low']:+.4f}, {block['ci_high']:+.4f}]"
+
+    noun = classes.get("noun") or {}
+    verb = classes.get("verb") or {}
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": primary,
+        "full_within_auc": _fmt(full.get("within_auc"), 4),
+        "full_nonfloor_auc": _fmt((readout.get("secondary_non_floor") or {}).get("within_auc"), 4),
+        "noun_within_auc": _fmt(_arm("noun", "within_auc"), 4),
+        "noun_delta": _fmt(_arm("noun", "delta_vs_full"), 4),
+        "noun_ci": _ci("noun"),
+        "noun_nonfloor_auc": _fmt((_arm("noun", "non_floor") or {}).get("within_auc"), 4),
+        "verb_within_auc": _fmt(_arm("verb", "within_auc"), 4),
+        "verb_delta": _fmt(_arm("verb", "delta_vs_full"), 4),
+        "verb_ci": _ci("verb"),
+        "verb_nonfloor_auc": _fmt((_arm("verb", "non_floor") or {}).get("within_auc"), 4),
+        "noun_mean_z": _fmt(noun.get("mean_z_score"), 4),
+        "verb_mean_z": _fmt(verb.get("mean_z_score"), 4),
+        "noun_mean_logodds": _fmt(noun.get("mean_log_odds"), 4),
+        "verb_mean_logodds": _fmt(verb.get("mean_log_odds"), 4),
+        "floor_full": readout["floor"]["n_floor_pairs"],
+        "floor_noun": _arm("noun", "floor_pairs"),
+        "floor_verb": _arm("verb", "floor_pairs"),
         "n_pairs": full.get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
@@ -1119,10 +1177,23 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         dictionary_fold_ids = _dictionary_fold_ids(
             len(pair_report.records), analysis.dictionary.folds, dictionary_seed
         )
+        pos_classes: dict[str, str] = {}
+        pos_provenance: dict[str, Any] = {}
+        if analysis.dictionary.pos_restrictions:
+            # CS-52: the grammatical classes of the reviewed paragraphs (the
+            # tagger is the edge's nltk client; its answers are cached). The
+            # POS arms are the tagger's on-switch for a dictionary run: the
+            # ``pos:`` section's own ``enabled`` stays the UPR default.
+            pos_config = config.pos.model_copy(update={"enabled": True})
+            pos_classes, _pos_distribution, pos_provenance = pos_word_classes(
+                config.model_copy(update={"pos": pos_config}),
+                list(dict.fromkeys(r.paragraph_text for r in pair_report.records)),
+            )
         dictionary_map = build_question_map(
             [record.paragraph_text for record in pair_report.records],
             [record.question_text for record in pair_report.records],
             [record.label for record in pair_report.records],
+            word_pos=pos_classes or None,
         )
         if analysis.dictionary.include_map:
             dictionary_block = _dictionary_block(
@@ -1133,6 +1204,8 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 dictionary_map,
                 dictionary_fold_ids,
             )
+            if dictionary_block.get("pos") is not None and pos_provenance:
+                dictionary_block["pos"]["tagger"] = dict(pos_provenance)
 
     models: list[dict[str, Any]] = []
     for entry in analysis.embedders:
@@ -1318,13 +1391,28 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 scorings=(analysis.dictionary.primary or PRIMARY_SCORING,),
                 restrict=(restriction,),
             )
+        pos_grids: dict[str, Any] = {}
+        for restriction in analysis.dictionary.pos_restrictions:
+            pos_grids[restriction] = cross_fit_grids(
+                [record.paragraph_text for record in records],
+                [record.question_text for record in records],
+                [record.label for record in records],
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(analysis.dictionary.primary or PRIMARY_SCORING,),
+                restrict_pos=(restriction,),
+                word_pos=pos_classes or None,
+            )
         models.append(
             build_dictionary_model(
                 view,
                 grids=grids,
                 blind_grids=blind_grids,
                 class_grids=class_grids,
+                pos_grids=pos_grids,
                 class_readout=(dictionary_block or {}).get("classes"),
+                pos_readout=(dictionary_block or {}).get("pos"),
                 reference_similarities=baseline.similarities,
                 reference_name=entry.name,
                 folds=analysis.dictionary.folds,
@@ -1537,7 +1625,17 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("class_arms"):
+            if (model.get("readout") or {}).get("pos_arms"):
+                table_rows.append(
+                    _dictionary_pos_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("class_arms"):
                 table_rows.append(
                     _dictionary_class_row(
                         model,
@@ -1642,23 +1740,28 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         # The arm's own section (CS-49): its row shape carries the AUCs and
         # the comparison, so it is not the map's section (CS-48's). The
         # estimator's run (CS-50) adds the two z-scored arms' columns.
+        has_pos_arms = any(
+            (model.get("readout") or {}).get("pos_arms")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_class_arms = any(
             (model.get("readout") or {}).get("class_arms")
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_class_arms:
+        if has_pos_arms:
+            columns = ANALYZE_OMCT_DICTIONARY_POS_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS
+        elif has_class_arms:
             columns = ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_CLASSES_KEY_COLUMNS
-            has_estimator_arms = False
-        else:
-            has_estimator_arms = any(
-                (model.get("readout") or {}).get("scorings", {}).keys()
-                & {"sum_zscore", "sum_zscore_positive"}
-                for model in models
-                if model.get("kind") == "dictionary"
-            )
-        if has_estimator_arms:
+        elif any(
+            (model.get("readout") or {}).get("scorings", {}).keys()
+            & {"sum_zscore", "sum_zscore_positive"}
+            for model in models
+            if model.get("kind") == "dictionary"
+        ):
             columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS
         else:

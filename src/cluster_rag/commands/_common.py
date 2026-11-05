@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,14 @@ from cluster_rag.experiment_table import (
     table_target,
 )
 from cluster_rag.label_catalog import LabelEntry, load_label_catalog
+from cluster_rag.pos.cache import CachedTagger
+from cluster_rag.pos.nltk_tagger import NltkTagger
 from cluster_rag.text_processors.features.corpus_map import CorpusMap, build_corpus_map
+from cluster_rag.text_processors.lexical.pos_class import (
+    merge_distributions,
+    modal_classes,
+    word_tag_counts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -276,3 +284,73 @@ def _train_corpus_map(
         labels,
         word_pos=word_pos,
     )
+
+
+def build_pos_tagger(config: AppConfig) -> Any:
+    """Build the part-of-speech tagger (the CLI's wiring seam, the track's CS-34).
+
+    The tagger is a **model client**: it downloads its model into the run's own
+    cache root and its answers are cached on disk (its own root under
+    ``cache/``, never the embedding cache), so a re-run never re-tags a text.
+    The track's pure package never imports the client — only the port.
+
+    Returns:
+        The cached tagger, or ``None`` when the tagger is off (the default).
+
+    Raises:
+        RuntimeError: If the model cannot be found or downloaded.
+    """
+    pos = config.pos
+    if not pos.enabled:
+        return None
+    if pos.backend != "nltk":
+        raise ValueError(f"Unknown part-of-speech backend {pos.backend!r}; expected 'nltk'")
+    client = NltkTagger(
+        pos.model_id,
+        data_root=Path(config.paths.cache) / "pos" / "nltk_data",
+        language=pos.language,
+    )
+    return CachedTagger(client, config.paths.cache)
+
+
+def pos_word_classes(
+    config: AppConfig,
+    texts: Sequence[str],
+) -> tuple[dict[str, str], dict[str, Counter[str]], dict[str, Any]]:
+    """The train corpus's **grammatical classes** (the track's CS-34).
+
+    The corpus is tagged with the track's own tokenization, so the tagger's
+    tokens and the map's words line up by position; the per-word tag counts
+    are merged over the corpus and each word's class is the class of its
+    **modal** tag.
+
+    Args:
+        config: The resolved app config (the ``pos:`` section decides).
+        texts: The corpus's texts (the train split).
+
+    Returns:
+        The per-word class, the per-word tag counts and the tagger's
+        provenance (with the cache's counters). All three are empty when the
+        tagger is off.
+    """
+    tagger = build_pos_tagger(config)
+    if tagger is None:
+        return {}, {}, {}
+    distributions = []
+    for text in texts:
+        tagged = tagger.tag(text)
+        distributions.append(word_tag_counts(text, tagged))
+    merged = merge_distributions(distributions)
+    classes = modal_classes(merged)
+    info = tagger.info
+    provenance = {
+        "model_id": info.model_id,
+        "digest": info.digest,
+        "backend": info.backend,
+        "cache_hits": getattr(tagger, "cache_hits", 0),
+        "cache_misses": getattr(tagger, "cache_misses", 0),
+        "n_stored": getattr(tagger, "n_stored", 0),
+        "n_texts_tagged": len(texts),
+        **info.extra,
+    }
+    return classes, merged, provenance

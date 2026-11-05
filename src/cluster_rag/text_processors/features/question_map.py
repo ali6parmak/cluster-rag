@@ -67,6 +67,7 @@ import numpy as np
 from cluster_rag.text_processors.features.corpus_map import log_odds
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
 from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
+from cluster_rag.text_processors.lexical.pos_class import POS_CLASSES
 from cluster_rag.text_processors.lexical.word_class import (
     DISTINCTIVE_MAX_TABLES,
     GENERIC_SHARE,
@@ -169,6 +170,9 @@ class QuestionMap:
         word_classes: Each word's class (CS-51): how many of the **labelled**
             tables it sits in — ``distinctive`` (1-2), ``shared`` (3 to a
             quarter of them - 1) or ``generic`` (at least a quarter).
+        pos_classes: Each word's grammatical class (CS-52): the class of its
+            modal tag in the reviewed paragraphs. Empty when the corpus was
+            not tagged.
     """
 
     n_reviewed_pairs: int
@@ -182,6 +186,7 @@ class QuestionMap:
     word_df: Mapping[str, int]
     alpha0: float = 0.0
     word_classes: Mapping[str, str] = field(default_factory=dict)
+    pos_classes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def n_questions(self) -> int:
@@ -244,6 +249,7 @@ def build_question_map(
     *,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     units: Any = None,
+    word_pos: Mapping[str, str] | None = None,
 ) -> QuestionMap:
     """Build the question map from the **reviewed** pairs.
 
@@ -261,6 +267,9 @@ def build_question_map(
             units its tables are keyed by. The default is the track's own
             content-word tokenizer; the phrase variant (CS-53) passes a bigram
             tokenizer instead.
+        word_pos: The words' **grammatical classes** (CS-52), when the
+            paragraphs were tagged. The class is a property of the word, so it
+            rides on every table the word sits in.
 
     Returns:
         The question map.
@@ -362,6 +371,7 @@ def build_question_map(
         word_df=dict(word_df),
         alpha0=alpha0,
         word_classes=word_classes,
+        pos_classes=dict(word_pos or {}),
     )
 
 
@@ -822,6 +832,77 @@ def class_block(question_map: QuestionMap) -> dict[str, Any]:
     }
 
 
+def pos_block(question_map: QuestionMap) -> dict[str, Any]:
+    """The grammatical readout (CS-52): CS-34's classes, crossed with the z-score.
+
+    Per POS class (the class of each word's modal tag): the words, the pairs,
+    the share of **positive** log-odds, the mean log-odds and the **mean
+    z-score**. The registered test is the **noun - verb z difference** against
+    the 0.5 bar (the UPR test's margin was 1.0 on the log-odds; the z-scores
+    sit on a smaller scale, so the bar is halved and stated in advance).
+
+    Args:
+        question_map: The map.
+
+    Returns:
+        A JSON-serializable readout block (with ``available: False`` when the
+        corpus was not tagged).
+    """
+    if not question_map.pos_classes:
+        return {"available": False, "note": "the reviewed paragraphs were not tagged"}
+    per_class: dict[str, dict[str, Any]] = {
+        name: {"words": 0, "pairs": 0, "positive_pairs": 0, "log_odds": [], "z_scores": []}
+        for name in POS_CLASSES
+    }
+    for word, rows in question_map.per_word.items():
+        name = question_map.pos_classes.get(word, "")
+        if name not in per_class:
+            continue
+        block = per_class[name]
+        block["words"] += 1
+        for row in rows:
+            block["pairs"] += 1
+            block["positive_pairs"] += 1 if row.log_odds > 0.0 else 0
+            block["log_odds"].append(row.log_odds)
+            block["z_scores"].append(row.z_score)
+    report: dict[str, Any] = {}
+    for name, block in per_class.items():
+        pairs = block["pairs"]
+        report[name] = {
+            "words": block["words"],
+            "pairs": pairs,
+            "positive_pairs": block["positive_pairs"],
+            "positive_share": (block["positive_pairs"] / pairs) if pairs else None,
+            "mean_log_odds": (float(np.mean(block["log_odds"])) if block["log_odds"] else None),
+            "mean_z_score": (float(np.mean(block["z_scores"])) if block["z_scores"] else None),
+        }
+    nouns = report.get("noun") or {}
+    verbs = report.get("verb") or {}
+    difference = (
+        nouns["mean_z_score"] - verbs["mean_z_score"]
+        if nouns.get("mean_z_score") is not None and verbs.get("mean_z_score") is not None
+        else None
+    )
+    return {
+        "available": True,
+        "classes": report,
+        "separation": {
+            "mean_z_difference": difference,
+            "margin": 0.5,
+            "holds": (difference is not None and difference >= 0.5),
+            "note": (
+                "the z-measure version of CS-34's noun-vs-verb test (the UPR "
+                "margin was 1.0 on the log-odds; the z-scores sit on a smaller "
+                "scale, so the bar is halved and stated in advance)"
+            ),
+        },
+        "note": (
+            "a word's class is the class of its modal tag in the reviewed "
+            "paragraphs; the tagger is the edge's nltk client, its answers cached"
+        ),
+    }
+
+
 def question_map_block(
     question_map: QuestionMap,
     availability: Mapping[str, Any] | None,
@@ -889,6 +970,7 @@ def question_map_block(
         "readout": readout_block(question_map),
         "estimator": estimator_block(question_map),
         "classes": class_block(question_map),
+        "pos": pos_block(question_map),
         "cross_fit": {
             "folds": int(folds),
             "seed": int(seed),

@@ -166,6 +166,33 @@ analysis:
     resamples: 200
 """
 
+# CS-52: the grammatical arms (the tagger is faked in the test: no nltk data).
+DICTIONARY_POS_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings:
+      - sum_zscore_positive
+    primary: sum_zscore_positive
+    pos_restrictions: [noun, verb]
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-49: the dictionary arm needs exactly one reference model (its cosine).
 DICTIONARY_ARM_CONFIG_EXTRA = """
 analysis:
@@ -906,6 +933,50 @@ def test_analyze_omct_dictionary_classes_end_to_end(
     assert "sum_zscore_positive" in row
 
 
+def test_analyze_omct_dictionary_pos_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-52: the grammatical classes and the POS arms (the tagger is faked)."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    monkeypatch.setattr(
+        omct_commands,
+        "pos_word_classes",
+        lambda config, texts: (
+            {"defenders": "noun", "detained": "verb", "forced": "adjective"},
+            {},
+            {"model_id": "fake-tagger", "n_texts_tagged": len(texts)},
+        ),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-pos-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_POS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-pos-test" / "analysis.json").read_text("utf-8")
+    )
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    readout = entry["readout"]
+    assert set(readout["pos_arms"]) == {"noun", "verb"}
+    assert readout["pos_arms"]["noun"]["reference_arm"] == "sum_zscore_positive"
+    assert entry["pos_readout"]["available"] is True
+    assert entry["pos_readout"]["classes"]["noun"]["words"] == 1
+    assert entry["pos_readout"]["classes"]["verb"]["words"] == 1
+    assert payload["dictionary"]["pos"]["tagger"]["model_id"] == "fake-tagger"
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-pos-test"))
+    assert "sum_zscore_positive" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -954,6 +1025,13 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     )
     with pytest.raises(ValueError, match="unknown restriction"):
         DictionaryConfig(class_restrictions=("generic",))
+    # CS-52: the POS restrictions are validated too
+    assert DictionaryConfig(pos_restrictions=("noun", "verb")).pos_restrictions == (
+        "noun",
+        "verb",
+    )
+    with pytest.raises(ValueError, match="unknown restriction"):
+        DictionaryConfig(pos_restrictions=("adjective",))
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

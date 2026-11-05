@@ -171,3 +171,37 @@ def test_the_class_restriction_filters_the_words() -> None:
     assert restricted[0, 0] < 0.0
     with pytest.raises(ValueError, match="Unknown class restriction"):
         score_grid(("a",), ("q1",), question_map, restrict=("bogus",))
+
+
+def test_the_pos_restriction_filters_the_words() -> None:
+    """CS-52: the grammatical filter keeps only the requested classes."""
+    paragraphs = ["alpha bravo", "alpha charlie", "delta echo", "delta foxtrot"]
+    question_map = build_question_map(
+        paragraphs,
+        ["q"] * 4,
+        [1, 1, 0, 0],
+        word_pos={"alpha": "noun", "bravo": "noun", "charlie": "verb"},
+    )
+    grid_paragraphs = ("alpha bravo", "alpha charlie")
+    nouns = score_grid(
+        grid_paragraphs,
+        ("q",),
+        question_map,
+        scoring="sum_zscore_positive",
+        restrict_pos=("noun",),
+    )
+    verbs = score_grid(
+        grid_paragraphs,
+        ("q",),
+        question_map,
+        scoring="sum_zscore_positive",
+        restrict_pos=("verb",),
+    )
+    # row 0 keeps its two nouns; its only word under the verb filter is absent
+    assert nouns[0, 0] > 0.0
+    assert verbs[0, 0] == 0.0
+    # row 1 loses alpha (a noun) and keeps charlie (the verb)
+    assert verbs[1, 0] > 0.0
+    assert nouns[1, 0] < nouns[0, 0]
+    with pytest.raises(ValueError, match="Unknown POS restriction"):
+        score_grid(grid_paragraphs, ("q",), question_map, restrict_pos=("adjective",))
