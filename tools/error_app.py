@@ -266,6 +266,33 @@ def _name_pills(names: Sequence[str]) -> str:
     )
 
 
+def _interactive() -> bool:
+    """Whether the sidebar's interactive-table toggle is on."""
+    return bool(st.session_state.get("interactive", False))
+
+
+def _show_table(
+    html: str,
+    frame: pd.DataFrame,
+    *,
+    column_config: dict[str, Any] | None = None,
+) -> None:
+    """The styled table, or Streamlit's native table (sort/search/fullscreen)."""
+    if _interactive():
+        st.dataframe(
+            frame,
+            hide_index=True,
+            width="stretch",
+            column_config=column_config or {},
+        )
+        st.caption(
+            "Interactive table: click a header to sort; use the toolbar for search, "
+            "download and fullscreen."
+        )
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+
 def _html_table(
     headers: list[str],
     rows: list[list[str]],
@@ -381,7 +408,22 @@ def errors_view(
         f"{len(frame)} mistake cells; showing the top {min(limit, len(frame))} by confidence "
         "(the score that made the pick; for an FN, the score that fell short)."
     )
-    records = frame.head(limit).to_dict("records")
+    table = frame.head(limit)[
+        [
+            "text",
+            "error",
+            "label",
+            "score",
+            "rank",
+            "gap_to_cut",
+            "gold",
+            "predicted",
+            "has_evidence",
+            "length_bucket",
+            "text_id",
+        ]
+    ].copy()
+    records = table.to_dict("records")
     max_score = max((float(record["score"]) for record in records), default=1.0)
     max_gap = max((abs(float(record["gap_to_cut"])) for record in records), default=1.0)
     rows = []
@@ -404,58 +446,93 @@ def errors_view(
                 f'<span class="ev-id">{_esc(record["text_id"])}</span>',
             ]
         )
-    st.markdown(
-        _html_table(
-            [
-                "text",
-                "error",
-                "label",
-                "score",
-                "rank",
-                "gap to cut",
-                "gold",
-                "pred",
-                "evidence",
-                "length",
-                "top words",
-                "text id",
-            ],
-            rows,
-            [
-                "left",
-                "center",
-                "left",
-                "right",
-                "right",
-                "right",
-                "center",
-                "center",
-                "center",
-                "left",
-                "left",
-                "left",
-            ],
-            columns=[
-                "text",
-                "error",
-                "label",
-                "score",
-                "rank",
-                "gap_to_cut",
-                "gold",
-                "predicted",
-                "has_evidence",
-                "length_bucket",
-                "top_words",
-                "text_id",
-            ],
-        ),
-        unsafe_allow_html=True,
+    html = _html_table(
+        [
+            "text",
+            "error",
+            "label",
+            "score",
+            "rank",
+            "gap to cut",
+            "gold",
+            "pred",
+            "evidence",
+            "length",
+            "top words",
+            "text id",
+        ],
+        rows,
+        [
+            "left",
+            "center",
+            "left",
+            "right",
+            "right",
+            "right",
+            "center",
+            "center",
+            "center",
+            "left",
+            "left",
+            "left",
+        ],
+        columns=[
+            "text",
+            "error",
+            "label",
+            "score",
+            "rank",
+            "gap_to_cut",
+            "gold",
+            "predicted",
+            "has_evidence",
+            "length_bucket",
+            "top_words",
+            "text_id",
+        ],
     )
-    st.caption(
-        "Hover a text to expand it in place; scroll inside the table to keep the header pinned. "
-        "★ gold · ● predicted · evidence: ● a word gave points, ○ empty slot."
+    display = table.copy()
+    display["top_words"] = [
+        ", ".join(
+            f"{word} {z:+.3f}"
+            for word, z in top_words.get((record["text_id"], record["label"]), [])
+        )
+        for record in records
+    ]
+    display["gold"] = display["gold"].map({True: "★", False: "·"})
+    display["predicted"] = display["predicted"].map({True: "●", False: "·"})
+    display["has_evidence"] = display["has_evidence"].map({True: "●", False: "○"})
+    display = display[
+        [
+            "text",
+            "error",
+            "label",
+            "score",
+            "rank",
+            "gap_to_cut",
+            "gold",
+            "predicted",
+            "has_evidence",
+            "length_bucket",
+            "top_words",
+            "text_id",
+        ]
+    ]
+    _show_table(
+        html,
+        display,
+        column_config={
+            "text": st.column_config.TextColumn("text", width="large"),
+            "score": st.column_config.NumberColumn("score", format="%.3f"),
+            "rank": st.column_config.NumberColumn("rank", format="%d"),
+            "gap_to_cut": st.column_config.NumberColumn("gap to cut", format="%.3f"),
+        },
     )
+    if not _interactive():
+        st.caption(
+            "Hover a text to expand it in place; scroll inside the table to keep the header "
+            "pinned. ★ gold · ● predicted · evidence: ● a word gave points, ○ empty slot."
+        )
     if not frame.empty:
         choices = list(dict.fromkeys(frame["text_id"]))
         picked = st.selectbox(
@@ -543,23 +620,44 @@ def one_text_view(tables: ev.Tables, context: ev.Context) -> None:
                 _meter(row.gap_to_cut, max_gap, signed=True),
             ]
         )
-    st.markdown(
-        _html_table(
-            ["rank", "label", "score", "gold", "pred", "error", "evidence", "gap to cut"],
-            table_rows,
-            ["right", "left", "right", "center", "center", "center", "center", "right"],
-            columns=[
-                "rank",
-                "label",
-                "score",
-                "gold",
-                "predicted",
-                "error",
-                "has_evidence",
-                "gap_to_cut",
-            ],
-        ),
-        unsafe_allow_html=True,
+    html = _html_table(
+        ["rank", "label", "score", "gold", "pred", "error", "evidence", "gap to cut"],
+        table_rows,
+        ["right", "left", "right", "center", "center", "center", "center", "right"],
+        columns=[
+            "rank",
+            "label",
+            "score",
+            "gold",
+            "predicted",
+            "error",
+            "has_evidence",
+            "gap_to_cut",
+        ],
+    )
+    ranking = pd.DataFrame(
+        [
+            {
+                "rank": row.rank,
+                "label": row.label,
+                "score": row.score,
+                "gold": "★" if row.gold else "·",
+                "predicted": "●" if row.predicted else "·",
+                "error": row.error,
+                "has_evidence": "●" if row.has_evidence else "○",
+                "gap_to_cut": row.gap_to_cut,
+            }
+            for row in rows
+        ]
+    )
+    _show_table(
+        html,
+        ranking,
+        column_config={
+            "rank": st.column_config.NumberColumn("rank", format="%d"),
+            "score": st.column_config.NumberColumn("score", format="%.3f"),
+            "gap_to_cut": st.column_config.NumberColumn("gap to cut", format="%.3f"),
+        },
     )
 
     st.markdown("**The words x labels matrix — the dictionary and the model**")
@@ -628,14 +726,30 @@ def one_text_view(tables: ev.Tables, context: ev.Context) -> None:
                     _word_pills(entries, max((z for _, z in entries), default=1.0)),
                 ]
             )
-        st.markdown(
-            _html_table(
-                ["rank", "label", "score", "words"],
-                evidence_rows,
-                ["right", "left", "right", "left"],
-                columns=["rank", "label", "score", "words"],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            ["rank", "label", "score", "words"],
+            evidence_rows,
+            ["right", "left", "right", "left"],
+            columns=["rank", "label", "score", "words"],
+        )
+        evidence_frame = pd.DataFrame(
+            [
+                {
+                    "rank": row.rank,
+                    "label": row.label,
+                    "score": row.score,
+                    "words": ", ".join(f"{word} {z:+.3f}" for word, z in row.words[:2]),
+                }
+                for row in top
+            ]
+        )
+        _show_table(
+            html,
+            evidence_frame,
+            column_config={
+                "rank": st.column_config.NumberColumn("rank", format="%d"),
+                "score": st.column_config.NumberColumn("score", format="%.3f"),
+            },
         )
 
 
@@ -676,14 +790,18 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
             ]
             for row in top
         ]
-        st.markdown(
-            _html_table(
-                ["gold", "predicted", "n", "support", "share of A"],
-                confusion_rows,
-                ["left", "left", "right", "right", "right"],
-                columns=["gold_label", "predicted_label", "n", "support", "share"],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            ["gold", "predicted", "n", "support", "share of A"],
+            confusion_rows,
+            ["left", "left", "right", "right", "right"],
+            columns=["gold_label", "predicted_label", "n", "support", "share"],
+        )
+        _show_table(
+            html,
+            pd.DataFrame([asdict(row) for row in top]),
+            column_config={
+                "share": st.column_config.NumberColumn("share of A", format="%.3f"),
+            },
         )
     with tabs[1]:
         st.caption(
@@ -709,53 +827,60 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
                     _meter(row.fp_rate, 1.0, tone="danger"),
                 ]
             )
-        st.markdown(
-            _html_table(
-                [
-                    "label",
-                    "bucket",
-                    "gold",
-                    "pred",
-                    "tp",
-                    "fp",
-                    "fn",
-                    "near",
-                    "precision",
-                    "recall",
-                    "miss rate",
-                    "fp rate",
-                ],
-                rate_rows,
-                [
-                    "left",
-                    "left",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                    "right",
-                ],
-                columns=[
-                    "label",
-                    "bucket",
-                    "n_gold",
-                    "n_pred",
-                    "tp",
-                    "fp",
-                    "fn",
-                    "near_miss",
-                    "precision",
-                    "recall",
-                    "miss_rate",
-                    "fp_rate",
-                ],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            [
+                "label",
+                "bucket",
+                "gold",
+                "pred",
+                "tp",
+                "fp",
+                "fn",
+                "near",
+                "precision",
+                "recall",
+                "miss rate",
+                "fp rate",
+            ],
+            rate_rows,
+            [
+                "left",
+                "left",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+                "right",
+            ],
+            columns=[
+                "label",
+                "bucket",
+                "n_gold",
+                "n_pred",
+                "tp",
+                "fp",
+                "fn",
+                "near_miss",
+                "precision",
+                "recall",
+                "miss_rate",
+                "fp_rate",
+            ],
+        )
+        _show_table(
+            html,
+            pd.DataFrame([asdict(row) for row in ordered]),
+            column_config={
+                "precision": st.column_config.NumberColumn("precision", format="%.3f"),
+                "recall": st.column_config.NumberColumn("recall", format="%.3f"),
+                "miss_rate": st.column_config.NumberColumn("miss rate", format="%.3f"),
+                "fp_rate": st.column_config.NumberColumn("fp rate", format="%.4f"),
+            },
         )
     with tabs[2]:
         st.caption(
@@ -776,14 +901,19 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
             ]
             for row in top
         ]
-        st.markdown(
-            _html_table(
-                ["word", "cells", "hits", "FPs", "mean z", "precision"],
-                word_rows,
-                ["left", "right", "right", "right", "right", "right"],
-                columns=["word", "n_cells", "n_tp", "n_fp", "mean_z", "precision"],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            ["word", "cells", "hits", "FPs", "mean z", "precision"],
+            word_rows,
+            ["left", "right", "right", "right", "right", "right"],
+            columns=["word", "n_cells", "n_tp", "n_fp", "mean_z", "precision"],
+        )
+        _show_table(
+            html,
+            pd.DataFrame([asdict(row) for row in top]),
+            column_config={
+                "mean_z": st.column_config.NumberColumn("mean z", format="%+.3f"),
+                "precision": st.column_config.NumberColumn("precision", format="%.3f"),
+            },
         )
     with tabs[3]:
         st.caption(
@@ -814,23 +944,27 @@ def aggregates_view(tables: ev.Tables, context: ev.Context) -> None:
             ]
             for row in buckets
         ]
-        st.markdown(
-            _html_table(
-                ["kind", "bucket", "cells", "tp", "fp", "fn", "near", "micro-F1"],
-                bucket_rows,
-                ["left", "left", "right", "right", "right", "right", "right", "right"],
-                columns=[
-                    "kind",
-                    "bucket",
-                    "n_cells",
-                    "tp",
-                    "fp",
-                    "fn",
-                    "near_miss",
-                    "micro_f1",
-                ],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            ["kind", "bucket", "cells", "tp", "fp", "fn", "near", "micro-F1"],
+            bucket_rows,
+            ["left", "left", "right", "right", "right", "right", "right", "right"],
+            columns=[
+                "kind",
+                "bucket",
+                "n_cells",
+                "tp",
+                "fp",
+                "fn",
+                "near_miss",
+                "micro_f1",
+            ],
+        )
+        _show_table(
+            html,
+            pd.DataFrame([asdict(row) for row in buckets]),
+            column_config={
+                "micro_f1": st.column_config.NumberColumn("micro-F1", format="%.3f"),
+            },
         )
 
 
@@ -930,24 +1064,35 @@ def compare_view(
                 f'<span class="ev-id">{_esc(record["text_id"])}</span>',
             ]
         )
-    st.markdown(
-        _html_table(
-            ["text", "ΔF1", "F1 A", "F1 B", "direction", "Δtp", "Δfp", "Δfn", "text id"],
-            table_rows,
-            ["left", "right", "right", "right", "center", "right", "right", "right", "left"],
-            columns=[
-                "text",
-                "delta_f1",
-                "f1_a",
-                "f1_b",
-                "direction",
-                "delta_tp",
-                "delta_fp",
-                "delta_fn",
-                "text_id",
-            ],
-        ),
-        unsafe_allow_html=True,
+    html = _html_table(
+        ["text", "ΔF1", "F1 A", "F1 B", "direction", "Δtp", "Δfp", "Δfn", "text id"],
+        table_rows,
+        ["left", "right", "right", "right", "center", "right", "right", "right", "left"],
+        columns=[
+            "text",
+            "delta_f1",
+            "f1_a",
+            "f1_b",
+            "direction",
+            "delta_tp",
+            "delta_fp",
+            "delta_fn",
+            "text_id",
+        ],
+    )
+    compare_frame = shown[
+        ["delta_f1", "f1_a", "f1_b", "direction", "delta_tp", "delta_fp", "delta_fn", "text_id"]
+    ].copy()
+    compare_frame.insert(0, "text", compare_frame["text_id"].map(lookup))
+    _show_table(
+        html,
+        compare_frame,
+        column_config={
+            "text": st.column_config.TextColumn("text", width="large"),
+            "delta_f1": st.column_config.NumberColumn("ΔF1", format="%+.3f"),
+            "f1_a": st.column_config.NumberColumn("F1 A", format="%.3f"),
+            "f1_b": st.column_config.NumberColumn("F1 B", format="%.3f"),
+        },
     )
     dictionary_side = [item for item in (a, b) if item.arm == "dictionary (recomputed)"]
     if dictionary_side and not shown.empty:
@@ -973,14 +1118,33 @@ def compare_view(
             ]
             for row in detail
         ]
-        st.markdown(
-            _html_table(
-                ["rank", "label", "gold", "pred", "score", "error", "evidence"],
-                detail_rows,
-                ["right", "left", "center", "center", "right", "center", "center"],
-                columns=["rank", "label", "gold", "predicted", "score", "error", "has_evidence"],
-            ),
-            unsafe_allow_html=True,
+        html = _html_table(
+            ["rank", "label", "gold", "pred", "score", "error", "evidence"],
+            detail_rows,
+            ["right", "left", "center", "center", "right", "center", "center"],
+            columns=["rank", "label", "gold", "predicted", "score", "error", "has_evidence"],
+        )
+        detail_frame = pd.DataFrame(
+            [
+                {
+                    "rank": row.rank,
+                    "label": row.label,
+                    "gold": "★" if row.gold else "·",
+                    "predicted": "●" if row.predicted else "·",
+                    "score": row.score,
+                    "error": row.error,
+                    "has_evidence": "●" if row.has_evidence else "○",
+                }
+                for row in detail
+            ]
+        )
+        _show_table(
+            html,
+            detail_frame,
+            column_config={
+                "rank": st.column_config.NumberColumn("rank", format="%d"),
+                "score": st.column_config.NumberColumn("score", format="%.3f"),
+            },
         )
         dictionary_text = next(row for row in tables.texts if row.text_id == text_id)
         st.caption(
@@ -1160,13 +1324,37 @@ def hitmap_compare_view(tables: ev.Tables, context: ev.Context) -> None:
         f"gold: {' · '.join(record.labels)} — the classifier's pick: "
         f"{' · '.join(text_row.predicted_labels) or '(none)'}"
     )
-    st.caption(
-        "Rows are this text's content words; columns are the gold labels (★ gold), the "
-        "classifier's false positives (fp), and the k strongest alternatives (alt). "
-        "A cell is the stored corpus-map z-score: green pulls the label up, red pushes it "
-        "down; · means the word is not in that label's table (it contributes 0)."
+    if _interactive():
+        st.caption(
+            "Rows are this text's content words; the column name carries the kind (★ gold, "
+            "fp, alt) and the label. A cell is the stored corpus-map z-score; a blank cell "
+            "means the word is not in that label's table (it contributes 0)."
+        )
+    else:
+        st.caption(
+            "Rows are this text's content words; columns are the gold labels (★ gold), the "
+            "classifier's false positives (fp), and the k strongest alternatives (alt). "
+            "A cell is the stored corpus-map z-score: green pulls the label up, red pushes it "
+            "down; · means the word is not in that label's table (it contributes 0)."
+        )
+    html = _hitmap_table(columns, rows)
+    hitmap_data: dict[str, list[Any]] = {
+        "word": [row.word for row in rows],
+        "n": [row.n_occurrences for row in rows],
+    }
+    for index, (label, kind, _score, _rank, _has_table, _predicted) in enumerate(columns):
+        prefix = {"gold": "★ ", "fp": "fp ", "alt": "alt "}[kind]
+        hitmap_data[f"{prefix}{label}"] = [
+            float("nan") if row.z_scores[index] is None else row.z_scores[index] for row in rows
+        ]
+    hitmap_frame = pd.DataFrame(hitmap_data)
+    _show_table(
+        html,
+        hitmap_frame,
+        column_config={
+            key: st.column_config.NumberColumn(key, format="%+.3f") for key in list(hitmap_data)[2:]
+        },
     )
-    st.markdown(_hitmap_table(columns, rows), unsafe_allow_html=True)
     n_alt = sum(1 for column in columns if column[1] == "alt")
     st.caption(f"{len(rows)} content words × {len(columns)} labels ({n_alt} alternatives).")
 
@@ -1370,6 +1558,16 @@ def main() -> None:
         index=0,
         key="view",
     )
+    st.sidebar.toggle(
+        "interactive tables",
+        value=False,
+        key="interactive",
+        help=(
+            "Streamlit's native table: click a header to sort; the toolbar has search, "
+            "download and fullscreen. Off = the styled read-only view."
+        ),
+    )
+    st.sidebar.caption("Off = styled view. On = native table (sort · search · fullscreen).")
     top_words = _top_words(tables)
     if view == "Errors":
         errors_view(tables, context, top_words=top_words)

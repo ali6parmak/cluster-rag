@@ -290,6 +290,14 @@ Hovering a text expands it in place — the first row, expanded:
 
 ![The Errors view, one text expanded](error_viewer_errors_hover.png)
 
+## Interactive mode (2026-11-05)
+
+The sidebar's **interactive tables** toggle switches any table to Streamlit's
+native dataframe, with the same rows, filters and order: click a header to
+sort, and the table toolbar provides search, download and fullscreen. Off (the
+default) is the styled read-only HTML view. The native hitmap shows a blank cell
+for the map's silence; the styled view shows `·`.
+
 ## Compare hitmaps (V1.1, 2026-11-05)
 
 A sixth view, between **Compare runs** and **Export**. Pick one text; the view

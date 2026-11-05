@@ -132,6 +132,38 @@ def test_the_compare_view_pairs_the_two_synthetic_runs(
     assert "ev-badge-improved" in shown
 
 
+def test_the_interactive_toggle_restores_native_tables(
+    fixture: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The toggle brings back click-to-sort, search, download and fullscreen."""
+    app = _app(fixture, monkeypatch)
+    app.run()
+    app.get_by_key("interactive").set_value(True).run()
+    assert not app.exception
+    assert app.dataframe, "the interactive Errors table is missing"
+    columns = list(app.dataframe[0].value.columns)
+    assert columns == [
+        "text",
+        "error",
+        "label",
+        "score",
+        "rank",
+        "gap_to_cut",
+        "gold",
+        "predicted",
+        "has_evidence",
+        "length_bucket",
+        "top_words",
+        "text_id",
+    ]
+    captions = " ".join(str(element.value) for element in app.caption)
+    assert "click a header to sort" in captions
+    for view in ("One text", "Aggregates", "Compare runs", "Compare hitmaps"):
+        app.get_by_key("view").set_value(view).run()
+        assert not app.exception, view
+        assert app.dataframe, f"{view} has no interactive table"
+
+
 def test_the_compare_hitmaps_view(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The hitmap view: one row per word, gold + FP + alternative label columns."""
     app = _app(fixture, monkeypatch)
