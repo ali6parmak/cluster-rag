@@ -96,6 +96,8 @@ def test_the_errors_view_lists_a_mistake(fixture: Any, monkeypatch: pytest.Monke
     assert "title=" not in shown  # no tooltip attribute
     assert "ev-pill" in shown  # the contributing words
     assert "ev-dot" in shown  # the booleans
+    captions = " ".join(str(element.value) for element in app.caption)
+    assert "scroll inside the table" in captions
 
 
 def test_the_one_text_view_shows_the_matrix(fixture: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,3 +249,7 @@ def test_the_stylesheet_carries_the_table_look() -> None:
     assert ".ev-dot" in css
     assert ".ev-text:hover" in css
     assert "white-space: normal" in css
+    # the table scrolls inside its own frame, so the header can stay pinned
+    assert "max-height: 72vh" in css
+    assert "position: sticky" in css
+    assert "z-index: 2" in css

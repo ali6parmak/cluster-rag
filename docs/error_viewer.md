@@ -280,8 +280,9 @@ pipeline. If a real discrepancy appears, it is reported, not fixed.
 The Errors view, rendered from the app's own HTML (UPR val, `k=2`). The text
 cell truncates and **expands in place** when hovered (no tooltip); the error
 badges, score/gap chips, boolean dots and contributing-word pills are
-read-only. The colour scheme is Catppuccin Mocha (`.streamlit/config.toml` and
-`tools/error_app.css`).
+read-only. The table frame scrolls (72 vh) with its **header row pinned**; the
+screenshot shows the whole table. The colour scheme is Catppuccin Mocha
+(`.streamlit/config.toml` and `tools/error_app.css`).
 
 ![The Errors view](error_viewer_errors.png)
 

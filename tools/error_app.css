@@ -31,9 +31,12 @@ h1, h2 { color: var(--ctp-mauve); }
 a { color: var(--ctp-blue); }
 [data-testid="stDataFrame"] { font-variant-numeric: tabular-nums; }
 /* read-only diagnostic tables: no checkbox-looking cells */
-.ev-table-wrap { overflow-x: auto; border: 1px solid var(--ctp-surface0); border-radius: 0.6rem; margin: 0.35rem 0 0.8rem; }
+.ev-table-wrap { overflow: auto; max-height: 72vh; border: 1px solid var(--ctp-surface0); border-radius: 0.6rem; margin: 0.35rem 0 0.8rem; scrollbar-width: thin; scrollbar-color: var(--ctp-surface1) var(--ctp-crust); }
+.ev-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
+.ev-table-wrap::-webkit-scrollbar-thumb { background: var(--ctp-surface1); border-radius: 999px; }
+.ev-table-wrap::-webkit-scrollbar-track { background: var(--ctp-crust); }
 .ev-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
-.ev-table thead th { position: sticky; top: 0; z-index: 1; background: var(--ctp-mantle); color: var(--ctp-subtext0); font-weight: 600; letter-spacing: 0.01em; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--ctp-surface1); white-space: nowrap; }
+.ev-table thead th { position: sticky; top: 0; z-index: 2; background: var(--ctp-mantle); color: var(--ctp-subtext0); font-weight: 600; letter-spacing: 0.01em; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--ctp-surface1); white-space: nowrap; box-shadow: 0 1px 0 var(--ctp-surface1); }
 .ev-table tbody td { padding: 0.36rem 0.6rem; border-bottom: 1px solid rgba(49, 50, 68, 0.55); vertical-align: middle; }
 .ev-table tbody tr:nth-child(even) { background: rgba(24, 24, 37, 0.55); }
 .ev-table tbody tr:hover { background: rgba(49, 50, 68, 0.55); }

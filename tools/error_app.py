@@ -452,8 +452,8 @@ def errors_view(
         unsafe_allow_html=True,
     )
     st.caption(
-        "Hover a text to expand it in place. ★ gold · ● predicted · "
-        "evidence: ● a word gave points, ○ empty slot."
+        "Hover a text to expand it in place; scroll inside the table to keep the header pinned. "
+        "★ gold · ● predicted · evidence: ● a word gave points, ○ empty slot."
     )
     if not frame.empty:
         choices = list(dict.fromkeys(frame["text_id"]))
