@@ -1794,6 +1794,129 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   CS-55** (the per-label lexicon + register): the bar and the register analog
   must be stated before measuring.
 
+- [ ] **CS-55 — the per-label lexicon, ported to the label side: the question's
+  own words, and the register.** CS-35/45's channel on the pair unit: the
+  **question text's own vocabulary** as a label-side scorer (no pair labels
+  read), the **register** analog (the questionnaire's shared vocabulary), and
+  the three arms — `all`, `topic`-only and `register`-only — against the
+  cosine and against the map's z arm.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-35 (executed
+  2026-11-02) found the **mined lexicon the best cell-level signal in the
+  pack** (the AUC 0.8109 against the description's 0.7067) but **the bar was
+  not met**: it did not separate from the name+description channel
+  (+0.0272 [+0.0044, +0.0502], only one of three seen buckets clearing), so it
+  did **not** become a catalog channel. CS-45 then showed the **register was
+  the signal**: dropping the distinctive filter halved the channel's gain
+  (0.0272 against 0.0507) and took its AUC to the description's own level
+  (0.7073). The reason: the mined words' advantage over the description lived
+  in the corpus's own register, not in the labels' topic words.
+
+  **The analog, stated before measuring (the reviewer's condition).** OMCT has
+  **no label catalog**: the only text a label has is the **question's own
+  text**. So on this unit the label's "name" and its "description" are the
+  **same object** — the question — and the CS-11/CS-35 "name+description
+  channel" analog is **the question's own vocabulary**. The **register**
+  analog is the **questionnaire's** shared vocabulary: a label-side word that
+  sits in ≥ a quarter (74) of the 294 questions' texts (CS-33's rule, read on
+  the label side). The **topic** analog is the label-side word in 1–2
+  questions' texts. This is a **label-side** register (the questions' habit),
+  not CS-45's corpus-side one (the map tables' habit) — the difference is
+  stated because it is where the port could fail.
+
+  **The read-only shape** (measured 2026-11-05, no pair labels read; the run
+  must reproduce it): 294 questions, **2,445** label-side words — **1,567**
+  distinctive (1–2 questions), **868** shared, **10 generic** (≥ 74);
+  the per-question vocabulary min **9** / median **32** / max **100** words;
+  the generic words *question* (294 questions), *choices* (281), *answer*
+  (281), *data* (265), *torture* (118), *applicable* (107), *state* (83),
+  *following* (82); the reviewed pairs whose paragraph shares **no** label-side
+  word: **3.6 %**; the mean label-side words found per pair's paragraph
+  **4.44** (median 4).
+
+  **The mechanism.** Three arms, all **label-side only** (the question texts;
+  no pair label, no embedding):
+
+  - `all` (**the primary**, fixed a priori — the "name" analog is the whole
+    question text): the count of the question's content words present in the
+    paragraph;
+  - `idf`: the same, weighted by the word's label-side idf
+    `log(294 / (the number of questions whose text holds it))` — the label
+    side's own rarity prior (CS-31's shape, at the label side);
+  - `topic`: the count over the question's **distinctive** words only (the
+    register dropped — CS-45's filter, ported);
+  - `register`: the count over the question's **generic** words only.
+
+  Each arm scores the whole grid (225 × 294) and is read on the reviewed pairs
+  as the run reads every arm: the **within-document AUC**, the paired
+  difference against the run's cosine (0.5238) and — for the primary — against
+  the map's z arm (0.7020, reproduced in the same run). The **label-blind**
+  counterpart is the same channel with the **questions permuted** across the
+  pairs (CS-49's seeded permutation), so its gap is the label-driven part.
+
+  **The metric.**
+
+  1. **The channel test (the primary).** The `all` arm's within-document AUC
+     receives a signal only if it is **above the cosine's**, the paired 95 %
+     interval **excluding zero**.
+  2. **The map bar.** The `all` arm against the **map's z arm** (0.7020): the
+     registered reading (CS-35's lesson) is that the label side **loses** to
+     the corpus side; "it becomes a channel" (beats the map by ≥ +0.05 with
+     the interval excluding zero) is the unseen case.
+  3. **The register test (CS-45's port).** `topic` against `all`: the
+     prediction is that dropping the register **loses** (the register was the
+     signal); **if `topic` beats `all` by ≥ +0.05 with the interval excluding
+     zero, CS-45's reading does not transfer** to the label side.
+  4. **The label-driven check.** The primary arm's within-document AUC minus
+     the blind channel's must be **≥ 0.05**.
+  5. **The readout.** The vocabulary's class split, the top register words,
+     the per-question vocabulary sizes, the zero-overlap share (3.6 %), and
+     the arms' non-blind AUCs.
+
+  **The falsification conditions, registered.**
+
+  1. **The channel test.** Below the cosine with the interval excluding zero →
+     the label side carries **no** signal on this unit (reported as a null);
+     within the interval → a null (the question text is not a channel).
+  2. **The map bar.** As above (the registered direction: the map wins).
+  3. **The register test.** The ≥ +0.05 tower case **falsifies CS-45's
+     transfer** on the label side, and the number is reported with it.
+  4. **The label-driven check.** A blind gap below 0.05 → the channel's edge is
+     the questionnaire's shape, not the question-to-paragraph relation.
+
+  **The cost.** **0 model calls**, **0 pair labels read** (the channel is
+  built from the question texts and the paragraph texts only); four grid
+  scorings (225 × 294 each) plus the blind counterpart — seconds; no new
+  dependency; the artifact grows by the readout and the arms' blocks.
+
+  **Leakage.** The channel reads the question texts and the paragraph texts
+  **only** — no pair label, no map, no embedding — so it cannot leak the
+  reviewed set's labels; the blind counterpart permutes the questions; the
+  control cells never enter any fit (there is none) and are never a label; no
+  UPR data and no UPR artifact is touched.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-lexicon`**, the artifact
+  `results/omct-analyze-voyage-dict-lexicon/analysis.json` (the `dictionary`
+  block's `question_lexicon` readout and the `kind: dictionary` model entry's
+  `question_lexicon` block); the sweep
+  `experiments_text_processing/omct_dictionary_lexicon_sweep.py` (the label
+  `omct_dictionary_lexicon`, the table's section
+  `## OMCT — omct_dictionary_lexicon`); the config addition
+  `analysis.dictionary.question_lexicon` (the on-switch); the log section
+  **`## CS-55 — the label side's own words`**.
+
+  **The exit criteria.** A **hand-computed** vocabulary test (a question's
+  content words, its class from the number of questions' texts holding them);
+  a test that a stopword and a one-letter token never enter the channel; a
+  hand-computed score grid (the count, the idf and the register-only arm on a
+  two-question toy); a test that the blind permutation keeps the per-question
+  counts and that the blind channel differs from the real one; the fixture run
+  and the real run; `ruff check` / `ruff format` clean over
+  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; awaiting execution.)*
+
+
 
 ## 8. The durable deliverable (named, so it is not lost)
 
