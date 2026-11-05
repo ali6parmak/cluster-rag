@@ -45,6 +45,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
@@ -97,7 +99,10 @@ from cluster_rag.text_processors.features import (
     PairFeatureExtractor,
     ProfileUnits,
 )
+from cluster_rag.text_processors.features.phrase_map import phrase_units
 from cluster_rag.text_processors.features.question_map import (
+    UNIT_PHRASES,
+    UNIT_WORDS,
     build_question_map,
     cross_fit_availability,
     question_map_block,
@@ -106,6 +111,7 @@ from cluster_rag.text_processors.lexical.question_map_score import (
     PRIMARY_SCORING,
     blind_question_permutation,
     cross_fit_grids,
+    union_grids,
 )
 
 logger = logging.getLogger(__name__)
@@ -368,6 +374,9 @@ def _dictionary_block(
     view: Any,
     question_map: Any,
     fold_ids: np.ndarray,
+    *,
+    units: Any = None,
+    unit_name: str = UNIT_WORDS,
 ) -> dict[str, Any]:
     """Build the artifact's `dictionary` block (CS-48): the map + its availability.
 
@@ -384,6 +393,10 @@ def _dictionary_block(
         view: The dataset view (the paragraph count and the document count).
         question_map: The map built from the same pairs (shared with the arm).
         fold_ids: The cross-fit's fold assignment (shared with the arm).
+        units: The map's unit (CS-53): the callable the availability readout
+            must read the paragraphs with, so it reads the map's own tables.
+        unit_name: The unit's name (``words`` or ``phrases``), recorded in the
+            block.
 
     Returns:
         The block :func:`question_map_block` assembles.
@@ -398,6 +411,7 @@ def _dictionary_block(
         fold_ids,
         documents=[record.document for record in records],
         pair_ids=[record.pair_id for record in records],
+        units=units,
     )
     return question_map_block(
         question_map,
@@ -406,6 +420,7 @@ def _dictionary_block(
         seed=seed,
         n_paragraphs=len(view.paragraphs),
         n_documents=view.pooled["n_documents"],
+        unit_name=unit_name,
     )
 
 
@@ -568,6 +583,69 @@ def _dictionary_pos_row(
         "floor_noun": _arm("noun", "floor_pairs"),
         "floor_verb": _arm("verb", "floor_pairs"),
         "n_pairs": full.get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_phrases_row(
+    model: dict[str, Any],
+    block: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **phrases** section (CS-53's unit test).
+
+    The headline is the **union** arm against the **word** z arm (the
+    registered increment test, paired), with the union's own cosine comparison
+    and the two halves' readings beside it; the count arms, the floor and the
+    phrase table's shape (the CS-39 readouts) close the row.
+    """
+    readout = model["readout"]
+    union = readout["union"]
+    primary = readout["primary"]
+    vs_word = union["vs_word"]
+    vs_cosine = union["vs_cosine"]
+    profile = (block or {}).get("unit_profile") or {}
+    frequencies = profile.get("df") or {}
+
+    def _ci(low: Any, high: Any) -> str | None:
+        if low is None or high is None:
+            return None
+        return f"[{low:+.4f}, {high:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "reference_model": model["model"].get("reference_model"),
+        "arm": union.get("arm"),
+        "word_within_auc": _fmt(union["word"].get("within_auc"), 4),
+        "word_nonfloor_auc": _fmt(union["word"].get("non_floor_auc"), 4),
+        "word_count_auc": _fmt(union["word"].get("count_within_auc"), 4),
+        "phrase_within_auc": _fmt(union["phrase"].get("within_auc"), 4),
+        "phrase_nonfloor_auc": _fmt(union["phrase"].get("non_floor_auc"), 4),
+        "phrase_count_auc": _fmt(union["phrase"].get("count_within_auc"), 4),
+        "union_within_auc": _fmt(union.get("within_auc"), 4),
+        "union_delta_vs_word": _fmt(vs_word.get("delta"), 4),
+        "union_ci": _ci(vs_word.get("ci_low"), vs_word.get("ci_high")),
+        "union_p_delta": _fmt(vs_word.get("p_delta_positive"), 3),
+        "union_nonfloor_auc": _fmt((union.get("secondary_non_floor") or {}).get("within_auc"), 4),
+        "union_delta_vs_cosine": _fmt(vs_cosine.get("delta"), 4),
+        "union_ci_vs_cosine": _ci(vs_cosine.get("ci_low"), vs_cosine.get("ci_high")),
+        "union_pooled_auc": _fmt(union.get("pooled_auc"), 4),
+        "union_pooled_d_auc": _fmt(vs_cosine.get("pooled_delta"), 4),
+        "union_deshifted_auc": _fmt(vs_cosine.get("deshifted_auc"), 4),
+        "phrase_units": profile.get("n_units"),
+        "phrase_rows": profile.get("n_stored_pairs"),
+        "phrase_generic_row_share": _fmt(profile.get("generic_row_share"), 4),
+        "phrase_hapax_share": _fmt(frequencies.get("hapax_share"), 4),
+        "floor_pairs": union["floor"]["n_floor_pairs"],
+        "floor_share": _fmt(union["floor"]["floor_share"], 4),
+        "n_pairs": (readout["scorings"].get(primary) or {}).get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1177,6 +1255,9 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         dictionary_fold_ids = _dictionary_fold_ids(
             len(pair_report.records), analysis.dictionary.folds, dictionary_seed
         )
+        # CS-53: the map's unit. ``None`` is the track's content-word tokenizer
+        # (the word table); the phrase table passes the bigram tokenizer.
+        dictionary_units = phrase_units if analysis.dictionary.units == UNIT_PHRASES else None
         pos_classes: dict[str, str] = {}
         pos_provenance: dict[str, Any] = {}
         if analysis.dictionary.pos_restrictions:
@@ -1193,6 +1274,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             [record.paragraph_text for record in pair_report.records],
             [record.question_text for record in pair_report.records],
             [record.label for record in pair_report.records],
+            units=dictionary_units,
             word_pos=pos_classes or None,
         )
         if analysis.dictionary.include_map:
@@ -1203,6 +1285,8 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 view,
                 dictionary_map,
                 dictionary_fold_ids,
+                units=dictionary_units,
+                unit_name=analysis.dictionary.units,
             )
             if dictionary_block.get("pos") is not None and pos_provenance:
                 dictionary_block["pos"]["tagger"] = dict(pos_provenance)
@@ -1356,54 +1440,87 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     # the artifact as its own entry (the decision arm's pattern).
     if analysis.dictionary is not None and analysis.dictionary.scorings:
         records = pair_report.records
+        paragraphs = [record.paragraph_text for record in records]
+        questions = [record.question_text for record in records]
+        labels = [record.label for record in records]
+        primary = analysis.dictionary.primary or PRIMARY_SCORING
         probe_cells = [(row, column) for _, row, column in view.control.cells]
         grids = cross_fit_grids(
-            [record.paragraph_text for record in records],
-            [record.question_text for record in records],
-            [record.label for record in records],
+            paragraphs,
+            questions,
+            labels,
             dictionary_fold_ids,
             paragraphs=tuple(view.paragraphs),
             questions=tuple(view.questions),
             scorings=analysis.dictionary.scorings,
+            units=dictionary_units,
             probe_cells=probe_cells,
         )
         blind_grids = None
         if analysis.dictionary.blind:
             permutation = blind_question_permutation(len(records), dictionary_seed)
             blind_grids = cross_fit_grids(
-                [record.paragraph_text for record in records],
+                paragraphs,
                 [records[int(index)].question_text for index in permutation],
-                [record.label for record in records],
+                labels,
                 dictionary_fold_ids,
                 paragraphs=tuple(view.paragraphs),
                 questions=tuple(view.questions),
                 scorings=analysis.dictionary.scorings,
+                units=dictionary_units,
             )
         class_grids: dict[str, Any] = {}
         for restriction in analysis.dictionary.class_restrictions:
             class_grids[restriction] = cross_fit_grids(
-                [record.paragraph_text for record in records],
-                [record.question_text for record in records],
-                [record.label for record in records],
+                paragraphs,
+                questions,
+                labels,
                 dictionary_fold_ids,
                 paragraphs=tuple(view.paragraphs),
                 questions=tuple(view.questions),
-                scorings=(analysis.dictionary.primary or PRIMARY_SCORING,),
+                scorings=(primary,),
+                units=dictionary_units,
                 restrict=(restriction,),
             )
         pos_grids: dict[str, Any] = {}
         for restriction in analysis.dictionary.pos_restrictions:
             pos_grids[restriction] = cross_fit_grids(
-                [record.paragraph_text for record in records],
-                [record.question_text for record in records],
-                [record.label for record in records],
+                paragraphs,
+                questions,
+                labels,
                 dictionary_fold_ids,
                 paragraphs=tuple(view.paragraphs),
                 questions=tuple(view.questions),
-                scorings=(analysis.dictionary.primary or PRIMARY_SCORING,),
+                scorings=(primary,),
                 restrict_pos=(restriction,),
                 word_pos=pos_classes or None,
             )
+        union = None
+        if analysis.dictionary.union:
+            # CS-53: the union arm needs BOTH maps behind the same folds — the
+            # run's map is the phrase table, so the word map is built here.
+            # Each half also carries its measure-free count arm (CS-49's
+            # instrument, kept beside the union's number).
+            word_grids = cross_fit_grids(
+                paragraphs,
+                questions,
+                labels,
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(primary, "support_count"),
+            )
+            phrase_grids = cross_fit_grids(
+                paragraphs,
+                questions,
+                labels,
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(primary, "support_count"),
+                units=dictionary_units,
+            )
+            union = union_grids(word_grids, phrase_grids, scoring=primary)
         models.append(
             build_dictionary_model(
                 view,
@@ -1419,10 +1536,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 seed=dictionary_seed,
                 resamples=analysis.bootstrap.resamples,
                 bootstrap_seed=bootstrap_seed,
-                primary=analysis.dictionary.primary or PRIMARY_SCORING,
-                probe=(grids.get("probe") or {}).get(
-                    analysis.dictionary.primary or PRIMARY_SCORING
-                ),
+                primary=primary,
+                union=union,
+                unit_name=analysis.dictionary.units,
+                probe=(grids.get("probe") or {}).get(primary),
             )
         )
 
@@ -1625,7 +1742,18 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("pos_arms"):
+            if (model.get("readout") or {}).get("union"):
+                table_rows.append(
+                    _dictionary_phrases_row(
+                        model,
+                        dictionary_block,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("pos_arms"):
                 table_rows.append(
                     _dictionary_pos_row(
                         model,
@@ -1750,7 +1878,15 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_pos_arms:
+        has_union = any(
+            (model.get("readout") or {}).get("union")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
+        if has_union:
+            columns = ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS
+        elif has_pos_arms:
             columns = ANALYZE_OMCT_DICTIONARY_POS_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS
         elif has_class_arms:
@@ -1821,9 +1957,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     if dictionary_block is not None:
         shape = dictionary_block["map"]
         overall_availability = (dictionary_block.get("availability") or {}).get("overall") or {}
+        units_label = shape.get("units") or UNIT_WORDS
         print(
             f"  dictionary map (CS-48): {shape['n_questions']} questions, "
-            f"{shape['n_words']} words, {shape['n_stored_pairs']} (question, word) pairs; "
+            f"{shape['n_words']} {units_label}, {shape['n_stored_pairs']} "
+            f"(question, unit) pairs; "
             f"{shape['n_questions_with_table']} tables, {shape['n_questions_empty']} silent; "
             f"cross-fit availability {_fmt(overall_availability.get('with_table_share'), 4)} "
             f"(evidence {_fmt(overall_availability.get('with_evidence_share'), 4)})"
@@ -1851,6 +1989,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
                 f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
             )
+            union = readout.get("union")
+            if union is not None:
+                # CS-53: the union arm and its registered increment.
+                vs_word = union["vs_word"]
+                print(
+                    f"      [{union['arm']}] the word z arm {_fmt(union['word']['within_auc'], 4)} "
+                    f"plus the phrase z arm {_fmt(union['phrase']['within_auc'], 4)} "
+                    f"-> the union {_fmt(union.get('within_auc'), 4)} "
+                    f"(vs the word arm {_fmt(vs_word.get('delta'), 4)}, 95% CI "
+                    f"[{_fmt(vs_word.get('ci_low'), 4)}, {_fmt(vs_word.get('ci_high'), 4)}]; "
+                    f"the bar {vs_word.get('bar')}); non-floor "
+                    f"{_fmt((union.get('secondary_non_floor') or {}).get('within_auc'), 4)} "
+                    f"over {union['floor']['n_floor_pairs']} floor pairs"
+                )
             continue
         if model.get("kind") == "decision":
             # The decision arm (CS-7b): its own entry, printed on its own lines.

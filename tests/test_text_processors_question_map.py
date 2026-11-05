@@ -287,3 +287,84 @@ def test_the_word_classes_are_hand_computed() -> None:
     assert block["classes"]["distinctive"]["words"] == 6
     assert block["classes"]["generic"]["words"] == 2
     assert block["classes"]["distinctive"]["positive_share"] == pytest.approx(1.0)
+
+
+# CS-53: the unit change. The phrase unit is CS-39's, ported unchanged: the
+# consecutive bigrams of the track's FULL token stream (the stopwords kept).
+def test_the_phrase_unit_is_the_consecutive_bigrams() -> None:
+    """The bigrams, in the text's own order, over the tokens the map has always used."""
+    from cluster_rag.text_processors.features.pair_features import content_tokens
+    from cluster_rag.text_processors.features.phrase_map import phrase_units
+
+    assert phrase_units("The death penalty") == ["the death", "death penalty"]
+    # the stopwords are KEPT (CS-39's wording: the formulas live in them), and
+    # so are one-letter tokens -- only the word unit drops them
+    assert phrase_units("a b c") == ["a b", "b c"]
+    assert content_tokens("a b c") == []
+    # a single token has no bigram at all
+    assert phrase_units("alpha") == []
+
+
+def test_the_phrase_map_keys_bigrams_and_a_one_token_positive_is_silent() -> None:
+    """The same builder, the phrase unit: the tables hold bigrams, not words."""
+    from cluster_rag.text_processors.features.phrase_map import phrase_units
+
+    paragraphs, questions, labels = _pairs()
+    question_map = build_question_map(paragraphs, questions, labels, units=phrase_units)
+
+    assert question_map.n_questions_with_table == 1
+    rows = {row.word: row for row in question_map.table_rows(QUESTION)}
+    # the positives are "alpha bravo" and "alpha charlie": one bigram each
+    assert set(rows) == {"alpha bravo", "alpha charlie"}
+    assert rows["alpha bravo"].n_with == 1
+    assert rows["alpha bravo"].df == 1
+    # the words themselves are NOT table keys any more
+    assert "alpha" not in question_map.per_word
+    # a positive paragraph of one token contributes no bigram: the question's
+    # positive exists but its phrase table is empty (silence, never fabricated)
+    silent = build_question_map(["alpha", "beta gamma"], ["q1", "q1"], [1, 0], units=phrase_units)
+    assert silent.n_questions_with_table == 0
+    assert silent.table_rows("q1") == ()
+
+
+def test_the_unit_profile_is_hand_computed_and_the_block_names_the_unit() -> None:
+    """CS-53: the unit's thickness and rarity, and the block's unit name."""
+    from cluster_rag.text_processors.features.phrase_map import phrase_units
+    from cluster_rag.text_processors.features.question_map import (
+        UNIT_PHRASES,
+        UNIT_WORDS,
+        unit_profile_block,
+    )
+
+    paragraphs, questions, labels = _pairs()
+    words = build_question_map(paragraphs, questions, labels)
+    word_profile = unit_profile_block(words, unit_name=UNIT_WORDS)
+    assert word_profile["name"] == UNIT_WORDS
+    assert word_profile["n_units"] == 3  # alpha, bravo, charlie in the table
+    assert word_profile["n_stored_pairs"] == 3
+    # the global df counts every reviewed pair's paragraph: six distinct words
+    assert word_profile["df"]["n_units"] == 6
+    assert word_profile["df"]["hapax"] == 4  # bravo, charlie, echo, foxtrot
+    assert word_profile["df"]["hapax_share"] == pytest.approx(4 / 6)
+    # each table word sits in the one labelled table -> the distinctive class
+    assert word_profile["rows_by_class"]["distinctive"] == 3
+    assert word_profile["generic_row_share"] == 0.0
+
+    phrases = build_question_map(paragraphs, questions, labels, units=phrase_units)
+    phrase_profile = unit_profile_block(phrases, unit_name=UNIT_PHRASES)
+    assert phrase_profile["n_units"] == 2  # the two positives' bigrams
+    assert phrase_profile["n_stored_pairs"] == 2
+    assert phrase_profile["name"] == UNIT_PHRASES
+
+    block = question_map_block(
+        phrases,
+        None,
+        folds=2,
+        seed=42,
+        n_paragraphs=4,
+        n_documents=1,
+        unit_name=UNIT_PHRASES,
+    )
+    assert block["map"]["units"] == UNIT_PHRASES
+    assert block["unit_profile"]["name"] == UNIT_PHRASES
+    assert any("phrases" in note for note in block["notes"])

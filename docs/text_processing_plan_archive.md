@@ -8414,3 +8414,268 @@ tombstone line). The verdict and the numbers are the track log's §CS-52.*
     bit-identical (bar the tagger's cache counters on the first pass). No
     run-id deviation.
 
+## The phrases on OMCT (CS-53) — the pre-registration and the verdict
+
+*Added on 2026-11-05, when the round's sixth change set was executed: the live
+plan's §7.9 block moved here **verbatim** (the archive's convention: an
+executed change set's pre-registration moves here and the live plan keeps one
+tombstone line). The verdict and the numbers are the track log's §CS-53.*
+
+### 7.9 The phrases (CS-53)
+
+- [x] **CS-53 — phrases: does the unit change buy anything on the pair unit?**
+  The map rebuilt over the reviewed paragraphs' **consecutive bigrams** (the
+  same builder, the same folds, the same estimator), the **phrase z arm**
+  against the **word z arm** on the same pairs, and the registered test: the
+  **union arm** = the word z arm + the phrase z arm, which must beat the word z
+  arm by **≥ 0.05** (paired interval excluding zero) to count as "phrases
+  work". This is the round's first **unit** change.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-39 (executed
+  2026-11-02) was a **null**: the phrase table's generic share was **15.5 %**
+  against the word table's **43.6 %** (the phrases are too rare to sit in many
+  labels' tables), **82.8 %** of the phrases were hapax in the train corpus,
+  and the **blind union gained more than the real one** on the fit side
+  (+0.0240 against +0.0050) — the phrases added noise, not signal. The reason:
+  a 1,676-text corpus gives a bigram a df of 1 for four phrases in five, so
+  the phrase unit is too **rare** to be a table. The UPR's one positive read:
+  the register is real but it is a **fragment** ("on its", "with an", "and
+  will").
+
+  **The design decision taken here, and the one premise corrected.** The
+  reviewer's instruction: the phrase table is the map over the reviewed
+  paragraphs' consecutive bigrams (**the content-token stream plus the
+  stopwords**, CS-39's settled wording — the track's `phrase_units`, not a new
+  tokenizer), built with the same builder via its `units` parameter; the union
+  is **the word z arm + the phrase z arm**, not a re-ranked or z-normalized
+  blend. That is what this change set builds. The reviewer's premise for the
+  predicted null — "each bigram's global df is tiny (mostly 1), so the
+  z-score's shrinkage does almost nothing on phrases" — is **measured and
+  refined**: the map's df is **pair-level** (a paragraph repeated over `k`
+  pairs contributes `k`), so the phrase vocabulary's global df has median
+  **5** (not 1), hapax **14.8 %**, and the prior's pseudo-count is
+  `α_w = df + 0.01`; against the words' median **9** the phrase shrink is
+  still **smaller** than the word shrink. So the phrase z is not "unshrunk":
+  it is a **per-word statistic exactly like CS-50's** (the same estimator, a
+  finer unit), and the predicted failure mode is **redundancy, not
+  shrinkage** — a paragraph contains the bigram "human rights" only where it
+  contains both words, so the phrase half re-reads the words' evidence at a
+  second scale. A union of two highly correlated per-word sums moves the
+  ranking only at the margin. The predicted null is therefore restated as:
+  **the union lands within ±0.02 of the word z arm**; the rest of the
+  reviewer's design (the bar, the readouts) is unchanged.
+
+  **The mechanism.** Two maps, both built from the **reviewed pairs only**
+  (subset A), both behind the same **5 folds over the pairs, seed 42** (the
+  track's scheme, each fold's map from the other folds):
+
+  - the **word map** — CS-48's map, unchanged (`content_tokens`);
+  - the **phrase map** — the same builder with `units=phrase_units`: the
+    consecutive bigrams of the track's **full token stream** (stopwords kept),
+    so "human rights" and "on its" are single units of the table.
+
+  The three scorings, all the primary **`sum_zscore_positive`** (CS-50's arm):
+  the **word arm** (0.7020 in CS-50, reproduced inside this run), the
+  **phrase arm** (the phrase table's own cells), and the **union**
+  = `word_grid + phrase_grid` (the UPR CS-39 composition, cell for cell). The
+  measure-free **`support_count`** arm is computed for **both** units and
+  reported beside them (CS-49's instrument, kept as the reviewer asked). The
+  **floor** is the row's smallest seen score minus one, applied per map; the
+  word map's floor set and the phrase map's floor set **coincide on this data**
+  (the same **518** pairs, read-only), so the union's floor is that set, and
+  the secondary reading is over the same **1,002** pairs as CS-50's.
+
+  **What is measured before the run, and must reproduce** (read-only,
+  2026-11-05, the track's own tokenizer; the CS-48 precedent):
+
+  | | the word table (CS-48) | **the phrase table** |
+  |---|---|---|
+  | the distinct units in some table | 2,082 | **7,360** |
+  | the (question, unit) pairs stored | 27,979 | **58,769** |
+  | the questions with a table / silent | 209 / 85 | **209 / 85** |
+  | the per-question table size (min / median / max) | 0 / 65 / 477 | **0 / 120 / 1,107** |
+  | the unit's global df (median / hapax share) | 9 / 9.4 % | **5 / 14.8 %** |
+  | the stored rows with the question's own df = 1 | 75.4 % | **87.9 %** |
+  | the stored rows with `n_with` = 1 | 89.1 % | **95.2 %** |
+  | the rows' mean / median z (share positive) | +0.0956 / +0.0661 (92.2 %) | **+0.1371 / +0.0967 (96.4 %)** |
+  | the cross-fit availability (table / evidence) | 65.9 % / 61.1 % | **65.9 % / 58.2 %** |
+  | the pairs on the floor | 518 (34.1 %) | **518 (34.1 %)**, the same set |
+  | the class split of the vocabulary (d / s / g) | 594 / 1,380 / 108 | **2,911 / 4,337 / 112** |
+  | the **generic** class's share of the stored rows | 30.3 % | **14.3 %** |
+
+  The last row is the CS-39 readout's **direction reproducing**: the phrase
+  rows sit in fewer tables (14.3 % generic against the words' 30.3 %), exactly
+  the UPR pattern (15.5 % against 43.6 %), even though the unit is **thicker**
+  per question (median 120 against 65) and **not** hapax-rare at the pair
+  level (14.8 % against CS-39's 82.8 %). The UPR null's *premise* does not
+  reproduce; its *reading* of the unit ("rarity is read as topicality") may
+  still.
+
+  **The metric (the headline and its companions).**
+
+  1. **Within-document AUC of the union against the word z arm** on the same
+     1,520 pairs — the paired 2,000-resample bootstrap of the difference
+     (the registered test; the pairs are the resampling unit).
+  2. **The phrase arm alone** against the word arm and against the run's
+     **plain full-text cosine** (voyage-4-nano's own, 0.5238) — the spread,
+     reported so the unit's own reading is on the record.
+  3. **The pooled AUC** of the union beside the within-document one (never
+     alone), and **per document** (NU / CIDH / AI; the AI stratum is 99
+     pairs).
+  4. **The non-floor reading** of the union and of both halves (the 1,002
+     pairs off the floor), and the **floor** (518 pairs, 34.1 %) beside it.
+  5. **The count arms** (`support_count`) for both units, and the word arm's
+     reproduction (it must read **0.7020**, the non-floor **0.8158**, the
+     floor **518** — CS-50's numbers, same folds).
+  6. **The phrase table's readout** (CS-39's shape, ported): the generic
+     class's share of the rows, the hapax share, the table sizes — and the
+     phrase map's own class/z readout (the `dictionary` block's `classes`,
+     computed over phrases), which is where the "rarity read as topicality"
+     claim would show.
+
+  **The falsification conditions, registered — read out one by one.**
+
+  1. **The flip (the primary test).** "Phrases work" = the union's
+     within-document AUC is **at least 0.05 above the word z arm's** with the
+     paired 95 % interval **excluding zero**. The registered prediction is a
+     **null**: the union lands **within ±0.02** of the word arm (redundancy).
+     If it is **≤ −0.05** with the interval excluding zero, the union is a
+     **cost** (the phrases dilute the words' ranking) and is reported with its
+     number and its reason.
+  2. **The phrase arm alone.** Predicted **not** to beat the word arm (point
+     estimate below 0.7020); if it does, the phrase unit is a lever on its
+     own and the reading changes.
+  3. **The reproduction guard.** The run's phrase-table shape must equal the
+     read-only table above (7,360 / 58,769 / 209 / 85 / median 120), and the
+     word arm it computes must read **0.7020** with the **518**-pair floor. A
+     difference means the unit, the folds or the estimator is not the
+     pre-registered one → **stop and report**, do not proceed to the reading.
+  4. **The floor check.** The phrase table's floor set must be the **same 518
+     pairs** as the word table's (read-only: it is). If not, the union's
+     silence differs between its halves and the union's floor needs its own
+     reading — **report** rather than substitute.
+  5. **The count check** (CS-49's instrument). Each unit's count arm must land
+     **within 0.10** of its own z arm (words: 0.6360 against 0.7020) — if the
+     count collapses on phrases, the phrase z is a measure effect, not a unit
+     effect, and the union's reading is about measure, not unit.
+  6. **The class readout.** The phrase table's generic-class row share must be
+     **below** the word table's (pre-read 14.3 % against 30.3 %): the CS-39
+     direction. A reversal means the class measure is reading the unit's own
+     prevalence on OMCT and the phrase table's "rarity" claim is a UPR fact
+     only — reported either way.
+
+  **The nulls this change set can produce, stated so they are not read as
+  defects.** (i) The union within ±0.02 of the word arm — the registered null
+  (the phrases are redundant with their own words). (ii) The phrase arm alone
+  below the word arm — the unit is not a table on this data either. (iii) The
+  union's non-floor reading falling below the word arm's while its all-pairs
+  number rises — the floor doing the work again (CS-49's lesson). All three
+  are legitimate results of the transfer test, each reported with its number.
+
+  **The cost.** **0 model calls** (voyage-4-nano's cosine is the Stage-0
+  cache hit); three cross-fit grids (the phrase map's two arms, the word
+  map's two arms, and the union composed from them — no blind arm), each
+  building six maps over the 1,520 pairs, ≈ **30–45 s**; the artifact grows by
+  the phrase map's **58,769** rows (≈ **12 MB**), and no new dependency.
+
+  **The label-blind counterpart is not re-run, and the reason is stated.** The
+  registered test is an **increment between two arms built from the same
+  labels on the same pairs** (the union against the word arm), so a difference
+  between them cannot be a label-blind effect; the base arm's label-driven
+  gap is already measured (**+0.2340**, CS-50). The blind arm would re-measure
+  the word arm's label-drivenness, not the phrase increment.
+
+  **Leakage.** The phrase map and the union's word half are both built from
+  the **reviewed pairs only** (subset A) and both scored **out-of-fold**; the
+  unjudged control (B) never enters any fit, is never a label, and its cells
+  are scored by the full reviewed-set map only (the vintage difference
+  recorded, as in CS-49). The union's two halves share the same folds, so no
+  pair's own label reaches either half. No UPR data and no UPR artifact is
+  touched.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-phrases`**, the artifact
+  `results/omct-analyze-voyage-dict-phrases/analysis.json` (the `dictionary`
+  block now describing the **phrase** table, with its unit name and a
+  unit-profile readout; the `kind: dictionary` model entry with the phrase
+  arm, the count arm and the **union** block); the sweep
+  `experiments_text_processing/omct_dictionary_phrases_sweep.py` (the label
+  `omct_dictionary_phrases`, the table's section
+  `## OMCT — omct_dictionary_phrases`); the config additions
+  `analysis.dictionary.units` (`words` | `phrases`) and
+  `analysis.dictionary.union` (the union arm on, valid only with
+  `units: phrases`); the log section **`## CS-53 — the phrases on OMCT`**.
+
+  **The exit criteria.** A **hand-computed unit test** of the bigram unit (a
+  sentence's consecutive bigrams, the stopwords kept: "the death penalty" →
+  `the death`, `death penalty`); a test that the map keyed by bigrams stores
+  bigrams and that a one-token paragraph has an **empty** phrase table; a
+  **hand-computed union test** (a toy grid whose word and phrase halves are
+  summed cell for cell, the floor preserved); a test that the union's floor
+  set is the word map's and the phrase map's shared set; a test that the
+  `units: phrases` config is required for `union: true` (and that a bad unit
+  is refused at config time); the fixture run and the real run; `ruff check` /
+  `ruff format` clean over `src`/`tests`/`experiments_text_processing`; the
+  full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; **executed 2026-11-05** — the run is
+  `omct-analyze-voyage-dict-phrases` (the artifact
+  `results/omct-analyze-voyage-dict-phrases/analysis.json`, the
+  `kind: dictionary` model entry with the `union` block and the phrase
+  table's `dictionary` block), the log section is
+  `## CS-53 — the phrases on OMCT: the UPR null reproduces, for the other
+  reason` in `docs/experiments_text_processing.md`, and the numbers are
+  below.)*
+
+  **The round's numbers, in one screen (OMCT: the same 1,520 reviewed pairs,
+  4,000 control cells, 5 folds and seed as CS-50; the word z arm is
+  reproduced inside the run; the reference is voyage-4-nano's own plain
+  full-text cosine).**
+
+  - **The cost.** **0 model calls**, **15.2 s**, the artifact **26.7 MB** (the
+    phrase table's 58,769 rows), **no new dependency**.
+  - **The registered test (the union against the word z arm): a null.** The
+    union **0.6976** against the word arm's **0.7020** — a paired **−0.0043
+    [−0.0074, −0.0012]** (P(Δ>0) 0.0045). The registered prediction was
+    **within ±0.02**: the point estimate is inside the band, the interval
+    excludes zero → a **small, detectable cost**, and the ≥ +0.05 bar is far
+    away. The union's non-floor reading **0.8057** (the word arm's 0.8158) over
+    the same 1,002 pairs; below the word arm in **all three** documents
+    (−0.0055 / −0.0013 / −0.0024). Against the cosine: **+0.1738 [+0.1264,
+    +0.2222]**, pooled **0.7421** (+0.2418), de-shifted **0.7272**.
+  - **The phrase arm alone: it works, and it is redundant.** **0.6840**
+    (+0.1602 [+0.1129, +0.2088] against the cosine, P 1.000; non-floor
+    **0.7740**; per document 0.6031 / 0.7911 / 0.8171; de-shifted 0.7091),
+    **below** the word arm — condition 2 holds.
+  - **The reproduction guard holds, digit for digit.** 294 questions, **7,360**
+    phrases, **58,769** (question, phrase) rows; **209** tables / **85** silent;
+    table size min 0 / median **120** / max **1,107**; availability **65.92 %**
+    / **58.16 %**; the floor **518** pairs (34.08 %); the word arm **0.7020**
+    (non-floor 0.8158, count 0.6360); the phrase map's floor set is the word
+    map's (`same_floor_set: true`).
+  - **The UPR null's premise does not transfer.** CS-39's rarity (82.8 %
+    hapax, the generic share 15.5 % against 43.6 %) becomes, on the pair unit:
+    **14.8 %** hapax (global df median **5**; the df is pair-level), the median
+    question's phrase table **120** rows against the word table's **65**, and
+    the generic-class row share **14.3 %** against the word table's **30.3 %**.
+    The **class readout's direction** reproduces (the phrase rows sit in fewer
+    tables — rarity read as topicality) even though the rarity does not; the
+    null reproduces for **redundancy** (a bigram occurs only where both its
+    words do).
+  - **The class readout on the phrase vocabulary.** distinctive 2,911 phrases /
+    4,436 rows / **35.4 %** positive / mean log-odds **−0.2104** / mean z
+    **+0.3900**; shared 4,337 / 45,917 / 67.7 % / +0.9307 / +0.1333; generic
+    **112** / 8,416 / **75.2 %** / **+1.0106** / **+0.0242**. The z
+    difference is **+0.3658** (CS-51's pattern, on a finer unit: the direction
+    holds, the 0.5 bar — CS-51's, not this change set's — does not).
+  - **The count arms.** Word **0.6360** within 0.10 of its z arm (0.7020) ✓;
+    phrase **0.6217** within 0.10 of its own (0.6840) ✓.
+  - **The falsification, read out.** 1 **holds as a null** (−0.0043, inside the
+    ±0.02 band, the interval excluding zero: a small cost); 2 **holds** (the
+    phrase arm below the word arm); 3 **holds** (the shape and CS-50's 0.7020 /
+    518); 4 **holds** (the same 518 pairs in both halves); 5 **holds** (both
+    counts); 6 **holds** (14.3 % < 30.3 %).
+  - **The deviation.** None: the run id, the sweep label, the artifact and the
+    log section are the pre-registered ones; no blind arm (as registered).
+  - **The gate.** **986** tests, ruff clean over **240** files, two consecutive
+    runs bit-identical (bar the clock field).
+

@@ -410,3 +410,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | arm | full_within_auc | full_nonfloor_auc | noun_within_auc | noun_delta | noun_ci | noun_nonfloor_auc | verb_within_auc | verb_delta | verb_ci | verb_nonfloor_auc | noun_mean_z | verb_mean_z | noun_mean_logodds | verb_mean_logodds | floor_full | floor_noun | floor_verb | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-pos | 2026-11-05 | sum_zscore_positive | 0.7020 | 0.8158 | 0.6979 | -0.0041 | [-0.0097, +0.0016] | 0.8062 | 0.6297 | -0.0723 | [-0.0878, -0.0571] | 0.6478 | 0.0885 | 0.1032 | 0.7749 | 0.8307 | 518 | 518 | 518 | 1520 | 4000 | 3 | 18.528 |
+
+## OMCT — omct_dictionary_phrases
+
+| run_id | date | reference_model | arm | word_within_auc | word_nonfloor_auc | word_count_auc | phrase_within_auc | phrase_nonfloor_auc | phrase_count_auc | union_within_auc | union_delta_vs_word | union_ci | union_p_delta | union_nonfloor_auc | union_delta_vs_cosine | union_ci_vs_cosine | union_pooled_auc | union_pooled_d_auc | union_deshifted_auc | phrase_units | phrase_rows | phrase_generic_row_share | phrase_hapax_share | floor_pairs | floor_share | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-phrases | 2026-11-05 | voyage-4-nano | sum_zscore_positive_phrase | 0.7020 | 0.8158 | 0.6360 | 0.6840 | 0.7740 | 0.6217 | 0.6976 | -0.0043 | [-0.0074, -0.0012] | 0.004 | 0.8057 | 0.1738 | [+0.1264, +0.2222] | 0.7421 | 0.2418 | 0.7272 | 7360 | 58769 | 0.1432 | 0.1484 | 518 | 0.3408 | 1520 | 4000 | 3 | 15.004 |

@@ -92,6 +92,15 @@ UNIT_DF = "the word's frequency among that question's reviewed pairs"
 REGISTER_QUARTER = 0.25
 
 
+# The map's unit names (CS-53). The default is the track's content-word
+# tokenizer; the phrase table is the same builder over the paragraphs'
+# consecutive bigrams (the full token stream, the stopwords kept — CS-39's
+# settled wording). The name rides in the artifact so a reader can tell which
+# table a `dictionary` block describes.
+UNIT_WORDS = "words"
+UNIT_PHRASES = "phrases"
+
+
 @dataclass(frozen=True)
 class QuestionPair:
     """One (question, word) pair of the question map, with the counts behind it.
@@ -903,6 +912,62 @@ def pos_block(question_map: QuestionMap) -> dict[str, Any]:
     }
 
 
+def unit_profile_block(question_map: QuestionMap, *, unit_name: str) -> dict[str, Any]:
+    """The unit's own profile (CS-53): how thick and how rare the table's units are.
+
+    The phrase table's port of CS-39's shape readout: the units the tables
+    hold, the stored (question, unit) rows, the unit's **global df**
+    distribution (median, hapax share, the share at df >= 2) and the class
+    split of the stored rows (the CS-39 "generic share": the share of the
+    rows whose unit sits in at least a quarter of the labelled tables). The
+    word table's numbers are the comparison the phrase table is read against.
+
+    Args:
+        question_map: The map.
+        unit_name: The map's unit (``words`` or ``phrases``).
+
+    Returns:
+        A JSON-serializable block.
+    """
+    frequencies = sorted(question_map.word_df.values())
+    n_frequencies = len(frequencies)
+    rows_by_class: dict[str, int] = dict.fromkeys(WORD_CLASSES, 0)
+    for word, rows in question_map.per_word.items():
+        name = question_map.word_classes.get(word, "")
+        if name in rows_by_class:
+            rows_by_class[name] += len(rows)
+    n_rows = question_map.n_stored_pairs
+    return {
+        "name": unit_name,
+        "n_units": question_map.n_words,
+        "n_stored_pairs": n_rows,
+        "df": {
+            "n_units": n_frequencies,
+            "median": _median(frequencies),
+            "hapax": sum(1 for value in frequencies if value == 1),
+            "hapax_share": (
+                sum(1 for value in frequencies if value == 1) / n_frequencies
+                if n_frequencies
+                else None
+            ),
+            "share_df_at_least_2": (
+                sum(1 for value in frequencies if value >= 2) / n_frequencies
+                if n_frequencies
+                else None
+            ),
+        },
+        "rows_by_class": rows_by_class,
+        "generic_row_share": (rows_by_class["generic"] / n_rows) if n_rows else None,
+        "distinctive_row_share": (rows_by_class["distinctive"] / n_rows) if n_rows else None,
+        "note": (
+            "the map's df is pair-level (a paragraph repeated over k reviewed "
+            "pairs contributes k); the generic share is the share of the stored "
+            "(question, unit) rows whose unit sits in at least a quarter of the "
+            "labelled tables — CS-39's phrase-table readout, ported"
+        ),
+    }
+
+
 def question_map_block(
     question_map: QuestionMap,
     availability: Mapping[str, Any] | None,
@@ -911,6 +976,7 @@ def question_map_block(
     seed: int,
     n_paragraphs: int,
     n_documents: int,
+    unit_name: str = UNIT_WORDS,
 ) -> dict[str, Any]:
     """Assemble the artifact's `dictionary` block (CS-48).
 
@@ -922,6 +988,9 @@ def question_map_block(
         seed: The run's seed (the fold split's seed).
         n_paragraphs: The reviewed set's distinct paragraphs.
         n_documents: The reviewed set's documents.
+        unit_name: The map's unit (CS-53): ``words`` (the default) or
+            ``phrases``. It rides in the block so the phrase table is never
+            read as the word table.
 
     Returns:
         A JSON-serializable block: the unit, the corpus, the map's shape, the
@@ -957,6 +1026,7 @@ def question_map_block(
             "n_questions_with_table": question_map.n_questions_with_table,
             "n_questions_empty": len(question_map.empty_questions),
             "empty_questions": list(question_map.empty_questions),
+            "units": unit_name,
             "n_words": question_map.n_words,
             "n_stored_pairs": question_map.n_stored_pairs,
             "table_size": {
@@ -967,6 +1037,7 @@ def question_map_block(
             "n_contrastable_questions": len(contrastable),
             "n_contrastable_pairs": sum(question_map.question_counts[q] for q in contrastable),
         },
+        "unit_profile": unit_profile_block(question_map, unit_name=unit_name),
         "readout": readout_block(question_map),
         "estimator": estimator_block(question_map),
         "classes": class_block(question_map),
@@ -990,6 +1061,9 @@ def question_map_block(
             for word, rows in question_map.per_word.items()
         },
         "notes": [
+            f"the map's unit is {unit_name!r} (CS-53): 'words' is the track's "
+            "content-word tokenizer, 'phrases' the reviewed paragraphs' consecutive "
+            "bigrams over the full token stream, the stopwords kept (CS-39's wording).",
             "the map is built from the REVIEWED pairs only (subset A); the unjudged "
             "control (subset B) never enters it and is never a label.",
             "there is no threshold: every (question, word) pair that occurs is stored "

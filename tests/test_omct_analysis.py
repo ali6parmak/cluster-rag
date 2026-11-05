@@ -193,9 +193,36 @@ analysis:
     resamples: 200
 """
 
-# CS-49: the dictionary arm needs exactly one reference model (its cosine).
-DICTIONARY_ARM_CONFIG_EXTRA = """
+# CS-53: the phrase table and the union arm (the word z arm + the phrase z arm).
+DICTIONARY_PHRASES_CONFIG_EXTRA = """
 analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    units: phrases
+    scorings: [sum_zscore_positive, support_count]
+    primary: sum_zscore_positive
+    blind: false
+    union: true
+  bootstrap:
+    resamples: 200
+"""
+
+# CS-49: the dictionary arm needs exactly one reference model (its cosine).
+DICTIONARY_ARM_CONFIG_EXTRA = """analysis:
   embedders:
     - name: fake-model
       embed:
@@ -977,6 +1004,67 @@ def test_analyze_omct_dictionary_pos_end_to_end(
     assert "sum_zscore_positive" in row
 
 
+def test_analyze_omct_dictionary_phrases_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-53: the phrase table, the two halves, the union and its own section row."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-phrases-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_PHRASES_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-phrases-test" / "analysis.json").read_text("utf-8")
+    )
+    # the map block now describes the PHRASE table, and says so
+    block = payload["dictionary"]
+    assert block["map"]["units"] == "phrases"
+    assert block["unit_profile"]["name"] == "phrases"
+    assert block["unit_profile"]["n_units"] == block["map"]["n_words"]
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    assert entry["model"]["map_units"] == "phrases"
+    assert entry["model"]["primary_scoring"] == "sum_zscore_positive"
+    readout = entry["readout"]
+    # no blind counterpart in this run (the pre-registration's reason)
+    assert readout["blind"] is None
+    union = readout["union"]
+    assert union["arm"] == "sum_zscore_positive_phrase"
+    assert union["scoring"] == "sum_zscore_positive"
+    for key in ("within_auc", "pooled_auc"):
+        assert union[key] is not None
+    # the two halves and the increment are all measured
+    assert union["word"]["within_auc"] is not None
+    assert union["phrase"]["within_auc"] is not None
+    assert union["vs_word"]["within_auc_word"] == union["word"]["within_auc"]
+    assert union["vs_word"]["bar"] == 0.05
+    assert union["vs_word"]["null_band"] == 0.02
+    assert union["vs_word"]["ci_low"] <= union["vs_word"]["delta"] <= union["vs_word"]["ci_high"]
+    # the count arms are carried for both halves (CS-49's instrument)
+    assert union["word"]["count_within_auc"] is not None
+    assert union["phrase"]["count_within_auc"] is not None
+    # the floor is the two halves' shared set
+    assert union["floor"]["n_floor_pairs"] >= 0
+    assert union["floor"]["word_floor_pairs"] == union["floor"]["n_floor_pairs"]
+    assert isinstance(union["floor"]["same_floor_set"], bool)
+    # the phrase arm's own cosine comparison is on the entry (test 2)
+    assert readout["reference"]["model"] == "fake-model"
+    assert "sum_zscore_positive" in readout["scorings"]
+
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-phrases-test"))
+    assert "sum_zscore_positive_phrase" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -1032,6 +1120,15 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     )
     with pytest.raises(ValueError, match="unknown restriction"):
         DictionaryConfig(pos_restrictions=("adjective",))
+    # CS-53: the map's unit and the union arm are validated too
+    assert DictionaryConfig().units == "words"
+    assert DictionaryConfig(units="phrases").units == "phrases"
+    assert DictionaryConfig(units="phrases", union=True).union is True
+    with pytest.raises(ValueError, match="analysis.dictionary.units must be one of"):
+        DictionaryConfig(units="characters")
+    # the union needs the phrase unit (it sums the word and the phrase halves)
+    with pytest.raises(ValueError, match="needs analysis.dictionary.units"):
+        DictionaryConfig(union=True)
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

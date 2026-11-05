@@ -27,7 +27,11 @@ import numpy as np
 from cluster_rag.omct_analysis.arms import compare_arms, measure_arm, score_arm
 from cluster_rag.omct_analysis.helpers import _auc_decomposition, _macro, _safe_auc
 from cluster_rag.omct_analysis.view import DatasetView, SideEncoding
-from cluster_rag.text_processors.lexical.question_map_score import PRIMARY_SCORING
+from cluster_rag.text_processors.features.question_map import UNIT_PHRASES
+from cluster_rag.text_processors.lexical.question_map_score import (
+    PRIMARY_SCORING,
+    UNION_SCORING,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,16 @@ DICTIONARY_ARM = "dictionary"
 # The registered bar of the label-blind test (CS-49's condition 2): the arm's
 # within-document AUC minus the blind map's must be at least this.
 BLIND_GAP_BAR = 0.05
+
+# The registered bar of the unit test (CS-53's condition 1): the union arm's
+# within-document AUC minus the word arm's must be at least this for "phrases
+# work"; below it the increment is a null (the registered prediction).
+UNION_BAR = 0.05
+
+# The band the null prediction is stated against (CS-53): the union is
+# predicted to land within this of the word arm — the two halves read the same
+# evidence (a bigram occurs only where both its words do).
+UNION_NULL_BAND = 0.02
 
 
 def _dictionary_side(texts: Sequence[str], note: str) -> SideEncoding:
@@ -256,6 +270,143 @@ def class_arms_block(
     return block
 
 
+def union_arm_block(
+    view: DatasetView,
+    union: Mapping[str, Any],
+    *,
+    reference_similarities: np.ndarray,
+    reference_name: str,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The union arm's reading (CS-53): the word z arm + the phrase z arm.
+
+    The registered test is the **increment over the word arm** on the same
+    pairs (a paired within-document difference, the pairs the resampling
+    unit), with the comparison against the run's cosine beside it. The block
+    also carries both halves' own readings, their count arms (the
+    measure-free control, CS-49's instrument) and the floor.
+
+    Args:
+        view: The dataset view.
+        union: The :func:`union_grids` output (the union matrix, its two
+            halves, both halves' floor flags and the count arms when the
+            caller computed them).
+        reference_similarities: The run's full-text cosine.
+        reference_name: The reference model's name.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+
+    Returns:
+        The readout block: the union's AUCs, the increment over the word arm
+        (and its bar), the cosine comparison, the halves, the counts and the
+        floor.
+    """
+    matrix = np.asarray(union["union"], dtype=np.float64)
+    word = np.asarray(union["word"], dtype=np.float64)
+    phrase = np.asarray(union["phrase"], dtype=np.float64)
+    word_floor = np.asarray(union["word_floor"], dtype=bool)
+    phrase_floor = np.asarray(union["phrase_floor"], dtype=bool)
+    floor = word_floor | phrase_floor
+
+    measured = measure_arm(view, matrix)
+    stats = _arm_stats(view, measured)
+    word_stats = _arm_stats(view, measure_arm(view, word))
+    phrase_stats = _arm_stats(view, measure_arm(view, phrase))
+
+    def _count(matrix_or_none: Any) -> float | None:
+        if matrix_or_none is None:
+            return None
+        counted = _arm_stats(view, measure_arm(view, np.asarray(matrix_or_none, dtype=np.float64)))
+        return counted["within_auc"]
+
+    comparison_word = compare_arms(
+        view,
+        arm_name=f"{UNION_SCORING}_vs_word",
+        reference_similarities=word,
+        arm_similarities=matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    comparison_cosine = compare_arms(
+        view,
+        arm_name=UNION_SCORING,
+        reference_similarities=reference_similarities,
+        arm_similarities=matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    paired = comparison_word["auc_decomposition"]["within_group_paired"]
+    paired_cosine = comparison_cosine["auc_decomposition"]["within_group_paired"]
+    by_document_vs_word: dict[str, float | None] = {}
+    for document, value in stats["by_document"].items():
+        reference_value = word_stats["by_document"].get(document)
+        by_document_vs_word[document] = (
+            value - reference_value if value is not None and reference_value is not None else None
+        )
+    return {
+        "arm": UNION_SCORING,
+        "scoring": union.get("scoring"),
+        "within_auc": stats["within_auc"],
+        "pooled_auc": stats["pooled_auc"],
+        "by_document": stats["by_document"],
+        "vs_word": {
+            "arm": f"word {union.get('scoring')}",
+            "within_auc_word": word_stats["within_auc"],
+            "delta": paired["delta_auc"],
+            "ci_low": paired["ci_low"],
+            "ci_high": paired["ci_high"],
+            "p_delta_positive": paired["p_delta_positive"],
+            "bar": UNION_BAR,
+            "null_band": UNION_NULL_BAND,
+            "by_document": by_document_vs_word,
+        },
+        "vs_cosine": {
+            "model": reference_name,
+            "within_auc_cosine": paired_cosine["auc_reference"],
+            "delta": paired_cosine["delta_auc"],
+            "ci_low": paired_cosine["ci_low"],
+            "ci_high": paired_cosine["ci_high"],
+            "p_delta_positive": paired_cosine["p_delta_positive"],
+            "pooled_delta": comparison_cosine["paired_auc"]["delta_auc"],
+            "deshifted_auc": comparison_cosine["deshifted_auc"]["overall"],
+        },
+        "word": {
+            "within_auc": word_stats["within_auc"],
+            "non_floor_auc": _non_floor_stats(view, measure_arm(view, word), ~word_floor)[
+                "within_auc"
+            ],
+            "count_within_auc": _count(union.get("word_count")),
+        },
+        "phrase": {
+            "within_auc": phrase_stats["within_auc"],
+            "non_floor_auc": _non_floor_stats(view, measure_arm(view, phrase), ~phrase_floor)[
+                "within_auc"
+            ],
+            "count_within_auc": _count(union.get("phrase_count")),
+        },
+        "floor": {
+            "n_floor_pairs": int(floor.sum()),
+            "floor_share": float(floor.mean()) if floor.size else None,
+            "word_floor_pairs": int(word_floor.sum()),
+            "phrase_floor_pairs": int(phrase_floor.sum()),
+            "same_floor_set": bool(np.array_equal(word_floor, phrase_floor)),
+        },
+        "secondary_non_floor": _non_floor_stats(view, measured, ~floor),
+        "notes": [
+            "the union is the word map's z-scored score plus the phrase map's own, "
+            "both out-of-fold behind the same folds (CS-39's composition, ported).",
+            "the registered test is the union's paired within-document difference "
+            "against the word arm on the same pairs; the cosine comparison is the "
+            "reference reading, not the headline.",
+            "the count arms are the measure-free controls (CS-49's instrument): each "
+            "half's own counts, not the sum of the two (a sum double-counts).",
+            "the floor carries a pair whose question has no table in its fold's map, "
+            "in EITHER half; the halves' flag sets are reported beside each other.",
+        ],
+    }
+
+
 def build_dictionary_model(
     view: DatasetView,
     *,
@@ -273,6 +424,8 @@ def build_dictionary_model(
     class_readout: Mapping[str, Any] | None = None,
     pos_grids: Mapping[str, Mapping[str, Any]] | None = None,
     pos_readout: Mapping[str, Any] | None = None,
+    union: Mapping[str, Any] | None = None,
+    unit_name: str | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -294,6 +447,10 @@ def build_dictionary_model(
         pos_grids: The POS-restricted grids (CS-52), keyed by the restriction
             name; ``None`` runs none.
         pos_readout: The map's grammatical readout (CS-52), carried beside it.
+        union: The union arm's grids (CS-53, the :func:`union_grids` output);
+            ``None`` runs none.
+        unit_name: The map's unit (CS-53), recorded on the entry so a phrase
+            run's artifact is never read as a word run's.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -327,7 +484,11 @@ def build_dictionary_model(
         ),
     )
     arm_block["scoring"] = primary
-    arm_block["unit"] = "the question map's word weights (no embedding)"
+    arm_block["unit"] = (
+        "the question map's phrase weights (no embedding)"
+        if unit_name == UNIT_PHRASES
+        else "the question map's word weights (no embedding)"
+    )
     comparison = compare_arms(
         view,
         arm_name=DICTIONARY_ARM,
@@ -378,6 +539,15 @@ def build_dictionary_model(
         "measured (not selected on this run's numbers) — an observation the "
         "reviewer may turn into a pre-registered test of its own."
     )
+    if union is not None:
+        readout["union"] = union_arm_block(
+            view,
+            union,
+            reference_similarities=reference_similarities,
+            reference_name=reference_name,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
     return {
         "name": DICTIONARY_ARM,
         "kind": "dictionary",
@@ -390,6 +560,7 @@ def build_dictionary_model(
             "reference_model": reference_name,
             "folds": int(folds),
             "seed": int(seed),
+            "map_units": unit_name,
         },
         "arms": {DICTIONARY_ARM: arm_block},
         "comparisons": {DICTIONARY_ARM: comparison},

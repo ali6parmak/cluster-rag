@@ -66,6 +66,12 @@ SCORING_FUNCTIONS: tuple[str, ...] = (
 # pre-registered primary arm of CS-49.
 PRIMARY_SCORING = "sum_positive"
 
+# The **union** arm (CS-53): the word map's z-scored score plus the phrase
+# map's own — CS-39's composition, ported. It is not one of the scoring
+# functions above (it needs **two** maps), so the caller composes it through
+# :func:`union_grids` and the name lives here, beside the others.
+UNION_SCORING = "sum_zscore_positive_phrase"
+
 # What each arm does: the aggregation, the measure it reads and whether it
 # keeps only the words whose value is **positive**.
 _ARMS: dict[str, tuple[str, str, bool]] = {
@@ -465,3 +471,79 @@ def blind_question_permutation(n_pairs: int, seed: int) -> np.ndarray:
         blind arm.
     """
     return np.random.default_rng([int(seed), 1]).permutation(int(n_pairs))
+
+
+def union_grids(
+    word_grids: Mapping[str, Any],
+    phrase_grids: Mapping[str, Any],
+    *,
+    scoring: str = PRIMARY_SCORING,
+) -> dict[str, Any]:
+    """The **union** arm (CS-53): the word map's score plus the phrase map's own.
+
+    CS-39's composition, ported cell for cell: both halves are the same scoring
+    function (:data:`PRIMARY_SCORING`'s z-scored "evidence for" sum in the
+    registered run), each computed from its own map behind the **same folds**,
+    and the union is their sum. No rescaling and no re-ranking: the union's
+    number is what a reader gets by adding the two arms, which is what makes
+    the registered increment test readable.
+
+    Args:
+        word_grids: The word map's cross-fit grids (a :func:`cross_fit_grids`
+            output).
+        phrase_grids: The phrase map's grids (the same output, built with
+            ``units=phrase_units``).
+        scoring: Which arm the union sums.
+
+    Returns:
+        The union's cells, its halves' cells, both halves' floor flags (their
+        union is the union arm's floor) and the two count arms when the caller
+        computed them.
+
+    Raises:
+        ValueError: On an unknown scoring function, or when a grids mapping
+            does not carry the requested scoring.
+    """
+    if scoring not in SCORING_FUNCTIONS:
+        raise ValueError(
+            f"Unknown scoring function {scoring!r}; expected one of {SCORING_FUNCTIONS}"
+        )
+    for name, grids in (("word", word_grids), ("phrase", phrase_grids)):
+        if scoring not in grids["scorings"]:
+            raise ValueError(
+                f"the {name} grids do not carry the scoring {scoring!r}; "
+                f"they carry {sorted(grids['scorings'])}"
+            )
+    word = np.asarray(word_grids["scorings"][scoring], dtype=np.float64)
+    phrase = np.asarray(phrase_grids["scorings"][scoring], dtype=np.float64)
+    if word.shape != phrase.shape:
+        raise ValueError(
+            f"the union's two halves must be the same grid, got {word.shape} and {phrase.shape}"
+        )
+    word_floor = np.asarray(word_grids["floor"], dtype=bool)
+    phrase_floor = np.asarray(phrase_grids["floor"], dtype=bool)
+    if word_floor.shape != phrase_floor.shape:
+        raise ValueError(
+            "the union's two halves must have the same floor shape, got "
+            f"{word_floor.shape} and {phrase_floor.shape}"
+        )
+
+    def _count(grids: Mapping[str, Any]) -> np.ndarray | None:
+        matrix = grids["scorings"].get("support_count")
+        return None if matrix is None else np.asarray(matrix, dtype=np.float64)
+
+    return {
+        "scoring": scoring,
+        "union": word + phrase,
+        "word": word,
+        "phrase": phrase,
+        "word_floor": word_floor,
+        "phrase_floor": phrase_floor,
+        "word_count": _count(word_grids),
+        "phrase_count": _count(phrase_grids),
+        "note": (
+            "the union is the word map's score plus the phrase map's own, both "
+            "out-of-fold behind the same folds (CS-39's composition, ported); "
+            "the union's floor is the union of the two halves' floor flags"
+        ),
+    }

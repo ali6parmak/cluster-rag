@@ -1034,6 +1034,16 @@ class DictionaryConfig(BaseModel):
     - ``pos_restrictions``: CS-52's grammatical arms (``noun``, ``verb``), the
       same increment test on the POS axis; it needs the ``pos:`` section on
       (the tagger supplies the classes).
+    - ``units``: the map's **unit** (CS-53): ``words`` (the default, the
+      track's content-word tokenizer) or ``phrases`` (the reviewed paragraphs'
+      consecutive bigrams over the full token stream, the stopwords kept —
+      CS-39's wording). The phrase table is built with the same builder, so
+      every readout and every arm works unchanged.
+    - ``union``: whether the run also scores the **union arm** (CS-53): the
+      word map's z-scored score plus the phrase map's own, both out-of-fold
+      behind the same folds (CS-39's composition, ported). It needs
+      ``units: phrases`` (the union sums the two halves) and one reference
+      embedder.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1046,6 +1056,36 @@ class DictionaryConfig(BaseModel):
     primary: str | None = None
     class_restrictions: tuple[str, ...] = ()
     pos_restrictions: tuple[str, ...] = ()
+    units: str = "words"
+    union: bool = False
+
+    @field_validator("units")
+    @classmethod
+    def _units_are_known(cls, value: str) -> str:
+        """Reject an unknown unit at config time (CS-53)."""
+        from cluster_rag.text_processors.features.question_map import (
+            UNIT_PHRASES,
+            UNIT_WORDS,
+        )
+
+        known = (UNIT_WORDS, UNIT_PHRASES)
+        if value not in known:
+            raise ValueError(f"analysis.dictionary.units must be one of {known}, got {value!r}")
+        return value
+
+    @model_validator(mode="after")
+    def _union_needs_the_phrase_unit(self) -> DictionaryConfig:
+        """The union arm sums the word and the phrase halves (CS-53)."""
+        if self.union:
+            from cluster_rag.text_processors.features.question_map import UNIT_PHRASES
+
+            if self.units != UNIT_PHRASES:
+                raise ValueError(
+                    "analysis.dictionary.union needs analysis.dictionary.units: "
+                    f"{UNIT_PHRASES!r}: the union is the word map's score plus the "
+                    "phrase map's own, so the run's map must be the phrase table"
+                )
+        return self
 
     @field_validator("scorings")
     @classmethod

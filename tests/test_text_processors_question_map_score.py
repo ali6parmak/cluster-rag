@@ -205,3 +205,101 @@ def test_the_pos_restriction_filters_the_words() -> None:
     assert nouns[1, 0] < nouns[0, 0]
     with pytest.raises(ValueError, match="Unknown POS restriction"):
         score_grid(grid_paragraphs, ("q",), question_map, restrict_pos=("adjective",))
+
+
+def test_the_union_is_the_two_halves_summed_cell_for_cell() -> None:
+    """CS-53: hand-authored halves -> the union's arithmetic and its floor."""
+    from cluster_rag.text_processors.lexical.question_map_score import (
+        UNION_SCORING,
+        union_grids,
+    )
+
+    word_grids = {
+        "scorings": {
+            PRIMARY_SCORING: np.array([[1.0, 0.0], [0.5, -0.5]]),
+            "support_count": np.array([[2.0, 0.0], [1.0, 0.0]]),
+        },
+        "floor": np.array([False, True]),
+    }
+    phrase_grids = {
+        "scorings": {
+            PRIMARY_SCORING: np.array([[0.25, 0.0], [0.5, 0.25]]),
+            "support_count": np.array([[1.0, 0.0], [0.0, 0.0]]),
+        },
+        "floor": np.array([False, False]),
+    }
+    union = union_grids(word_grids, phrase_grids)
+
+    assert union["scoring"] == PRIMARY_SCORING
+    assert union["union"].tolist() == [[1.25, 0.0], [1.0, -0.25]]
+    # the halves are kept beside the union, unreordered
+    assert union["word"].tolist() == word_grids["scorings"][PRIMARY_SCORING].tolist()
+    assert union["phrase"].tolist() == phrase_grids["scorings"][PRIMARY_SCORING].tolist()
+    # the union's floor is the union of the two halves' flags: the word map's
+    # floor on row 1 survives even though the phrase map can speak there
+    assert union["word_floor"].tolist() == [False, True]
+    assert union["phrase_floor"].tolist() == [False, False]
+    assert union["word_count"].tolist() == [[2.0, 0.0], [1.0, 0.0]]
+    assert union["phrase_count"].tolist() == [[1.0, 0.0], [0.0, 0.0]]
+    # the union's name is the shared one (the UPR CS-39 composition)
+    assert UNION_SCORING == "sum_zscore_positive_phrase"
+
+
+def test_the_union_refuses_a_missing_arm_or_a_ragged_grid() -> None:
+    """The composition fails loudly rather than summing mismatched cells."""
+    from cluster_rag.text_processors.lexical.question_map_score import union_grids
+
+    grids = {"scorings": {PRIMARY_SCORING: np.zeros((2, 2))}, "floor": np.zeros(2, dtype=bool)}
+    with pytest.raises(ValueError, match="do not carry the scoring"):
+        union_grids(grids, {"scorings": {}, "floor": np.zeros(2, dtype=bool)})
+    ragged = {"scorings": {PRIMARY_SCORING: np.zeros((3, 2))}, "floor": np.zeros(2, dtype=bool)}
+    with pytest.raises(ValueError, match="same grid"):
+        union_grids(grids, ragged)
+    with pytest.raises(ValueError, match="Unknown scoring function"):
+        union_grids(grids, grids, scoring="sum_g2")
+
+
+def test_the_union_on_the_tiny_maps_is_hand_computable() -> None:
+    """CS-53: the word z arm plus the phrase z arm, both from their own tables."""
+    from cluster_rag.text_processors.features.phrase_map import phrase_units
+    from cluster_rag.text_processors.lexical.question_map_score import union_grids
+
+    scoring = "sum_zscore_positive"  # the registered union's arm (CS-50's primary)
+    question_map, paragraphs, questions = _tiny()
+    phrase_map = build_question_map(
+        ["alpha bravo", "delta echo", "alpha bravo"],
+        [QUESTION, QUESTION, EMPTY],
+        [1, 0, 0],
+        units=phrase_units,
+    )
+    word_grid = score_grid(paragraphs, questions, question_map, scoring=scoring)
+    phrase_grid = score_grid(
+        paragraphs,
+        questions,
+        phrase_map,
+        scoring=scoring,
+        units=phrase_units,
+    )
+    union = union_grids(
+        {
+            "scorings": {scoring: word_grid, "support_count": np.zeros(word_grid.shape)},
+            "floor": np.array([False, True]),
+        },
+        {
+            "scorings": {scoring: phrase_grid, "support_count": np.zeros(phrase_grid.shape)},
+            "floor": np.array([False, True]),
+        },
+        scoring=scoring,
+    )
+    # row 0 ("alpha bravo"): two word rows' z + the one bigram's z
+    word_rows = {row.word: row for row in question_map.table_rows(QUESTION)}
+    phrase_rows = {row.word: row for row in phrase_map.table_rows(QUESTION)}
+    expected = (
+        max(word_rows["alpha"].z_score, 0.0)
+        + max(word_rows["bravo"].z_score, 0.0)
+        + max(phrase_rows["alpha bravo"].z_score, 0.0)
+    )
+    assert union["union"][0, 0] == pytest.approx(expected)
+    assert union["union"][0, 1] == pytest.approx(word_grid[0, 1] + phrase_grid[0, 1])
+    # the phrase table keeps only the bigram, so the phrase half is smaller
+    assert abs(phrase_grid[0, 0]) < abs(word_grid[0, 0])

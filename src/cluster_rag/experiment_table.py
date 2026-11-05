@@ -525,6 +525,46 @@ ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The dictionary **phrases** (CS-53): the unit change. The two halves' own
+# within-document AUCs (the word z arm and the phrase z arm), the **union**
+# against the word arm (the registered increment test, paired) and against the
+# run's cosine, the count arms beside the z arms (the measure-free control),
+# and the phrase table's own shape (the units, the stored rows, the CS-39
+# readout: the generic class's share of the rows and the hapax share).
+ANALYZE_OMCT_DICTIONARY_PHRASES_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "reference_model",
+    "arm",
+    "word_within_auc",
+    "word_nonfloor_auc",
+    "word_count_auc",
+    "phrase_within_auc",
+    "phrase_nonfloor_auc",
+    "phrase_count_auc",
+    "union_within_auc",
+    "union_delta_vs_word",
+    "union_ci",
+    "union_p_delta",
+    "union_nonfloor_auc",
+    "union_delta_vs_cosine",
+    "union_ci_vs_cosine",
+    "union_pooled_auc",
+    "union_pooled_d_auc",
+    "union_deshifted_auc",
+    "phrase_units",
+    "phrase_rows",
+    "phrase_generic_row_share",
+    "phrase_hapax_share",
+    "floor_pairs",
+    "floor_share",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

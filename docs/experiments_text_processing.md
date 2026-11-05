@@ -104,6 +104,7 @@ research record and are **not** indexed here.
 | [CS-50 — the estimator on OMCT](#cs-50--the-estimator-on-omct-the-upr-gain-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-z` run (CS-31's six measures on the pair unit; the two z arms; **0 model calls**, 14.5 s) | **the registered null is REFUTED — the estimator transfers and is the chain's first win**: `sum_zscore_positive` **0.7020** against the cosine's 0.5238 (**+0.1782 [+0.1303, +0.2272]**, P 1.000), the non-floor reading **0.8158**, the blind gap **+0.2340**, all three documents above the cosine; the z head changes 177 of 209 tables (84.7 %, the prediction was < 50 %) — the prior's per-word normalization makes the weights comparable across questions | `results/omct-analyze-voyage-dict-z/analysis.json` |
 | [CS-51 — the word classes on OMCT](#cs-51--the-word-classes-on-omct-the-soft-prior-already-does-it-2026-11-05) | one `omct-analyze-voyage-dict-classes` run (the two class-restricted z arms against the full z arm; **0 model calls**, 18.7 s) | **a null for the hard filter**: `nogeneric` −0.0123 [−0.0221, −0.0024] (a small, detectable **cost**) and `distinctive` −0.0758 [−0.1052, −0.0472] with its floor jumping to 71.6 % — the **soft prior already does the class filter's work**; the class readout is the finding: the z-score separates the classes (distinctive +0.3782 / generic +0.0234) while the **raw log-odds reverse CS-33's order** (distinctive −0.2317 / generic +0.9081) | `results/omct-analyze-voyage-dict-classes/analysis.json` |
 | [CS-52 — the grammatical axis on OMCT](#cs-52--the-grammatical-axis-on-omct-a-null-that-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-pos` run (CS-34's POS classes, the two POS-restricted z arms; **0 model calls**, 18.6 s) | **a null that reproduces**: the noun-only arm −0.0041 [−0.0097, +0.0016] (a free-ish filter, not a lever) and the verb-only −0.0723 [−0.0878, −0.0571]; the classes' z means are within 0.016 of each other (the noun−verb difference −0.0148 against the 0.5 bar) — the register is in the words, not their part of speech | `results/omct-analyze-voyage-dict-pos/analysis.json` |
+| [CS-53 — the phrases on OMCT](#cs-53--the-phrases-on-omct-the-upr-null-reproduces-for-the-other-reason-2026-11-05) | one `omct-analyze-voyage-dict-phrases` run (the phrase table, the word z arm reproduced inside the run, and the union = the two z arms summed; **0 model calls**, 15.2 s) | **a null that reproduces for the other reason**: the union is **−0.0043 [−0.0074, −0.0012]** against the word z arm (0.6976 vs 0.7020 — inside the registered ±0.02 band at the point estimate, the interval excluding zero: a small, detectable cost), and the phrase arm alone (**0.6840**) sits below the word arm; the phrase table is **not** rare on the pair unit (14.8 % hapax against CS-39's 82.8 %; the median question's table holds 120 rows against the word table's 65), so the UPR null's **premise** does not transfer — the phrases are **redundant** with their own words, not rare; the CS-39 readout's direction does (the generic-class row share 14.3 % against the word table's 30.3 %) | `results/omct-analyze-voyage-dict-phrases/analysis.json` |
 
 ## Change sets
 
@@ -9113,3 +9114,101 @@ UPR; and nothing about a **POS × class interaction** (not registered).
 **The gate.** `pytest`: **979 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **238** files. Two consecutive runs are
 bit-identical (bar the tagger's cache counters on the first pass).
+
+## CS-53 — the phrases on OMCT: the UPR null reproduces, for the other reason (2026-11-05)
+
+**The run.** One: `omct-analyze-voyage-dict-phrases` — the map rebuilt over the
+reviewed paragraphs' **consecutive bigrams** (the full token stream, the
+stopwords kept — CS-39's `phrase_units`, built through the same builder's
+`units` parameter), the phrase z arm, the **word z arm reproduced inside the
+run**, and the **union arm** = the word z score + the phrase z score, both
+out-of-fold behind the same 5 folds (seed 42). **0 model calls** (the Stage-0
+cache), **15.2 s**, the artifact **26.7 MB** (the phrase table's 58,769 rows),
+**no new dependency**. The sweep is
+`experiments_text_processing/omct_dictionary_phrases_sweep.py` (the label
+`omct_dictionary_phrases`, the table's section
+`## OMCT — omct_dictionary_phrases`). There is **no blind arm**: the registered
+test is an increment between two arms built from the same labels on the same
+pairs, so a difference between them cannot be a label-blind effect (the
+pre-registration states the reason; CS-50 measured the base arm's gap, +0.2340).
+
+**The registered test is a null — the phrases add nothing to their own words.**
+The union reaches **0.6976** within-document against the word z arm's
+**0.7020** — a paired **−0.0043 [−0.0074, −0.0012]** (P(Δ>0) 0.0045). The
+registered prediction was **within ±0.02** (redundancy): the point estimate
+sits inside that band, but the interval **excludes zero** — so, with CS-51's
+honesty convention, the reading is "the unit change is a **small, detectable
+cost**", not "a free simplification", and the ≥ +0.05 "phrases work" bar is far
+away. Its non-floor reading is **0.8057** (the word arm's 0.8158) over the same
+1,002 pairs, and the union is below the word arm in **all three** documents
+(−0.0055 / −0.0013 / −0.0024). Against the cosine the union is far above it
+(**+0.1738 [+0.1264, +0.2222]**, pooled 0.7421 — +0.2418 —, de-shifted
+0.7272), but that is the word half's win, not the unit's.
+
+**The phrase arm alone works — it just is not a different reading.** The phrase
+z arm reaches **0.6840** (+0.1602 [+0.1129, +0.2088] against the cosine's
+0.5238, P 1.000; non-floor **0.7740**; per document 0.6031 / 0.7911 / 0.8171;
+de-shifted 0.7091), **below** the word arm as registered (condition 2 holds).
+So the phrase table is a good **scorer** on OMCT and a **redundant** one: the
+two halves are near-copies of the same evidence, and their sum cannot separate
+what either already separates.
+
+**The reproduction guard holds, digit for digit.** 294 questions, **7,360**
+phrases, **58,769** (question, phrase) rows; **209** tables / **85** silent;
+table size min 0 / median **120** / max **1,107**; availability **65.92 %** /
+**58.16 %**; the floor **518** pairs (34.08 %). The word arm reads **0.7020**
+(non-floor 0.8158, count 0.6360) — CS-50 reproduced exactly — and the phrase
+map's floor set is the word map's (**518**, `same_floor_set: true`).
+
+**The UPR null's premise does not transfer; its conclusion does.** CS-39's null
+rested on rarity: **82.8 %** hapax and a generic share of **15.5 %** against the
+word table's 43.6 %. On the pair unit the phrase table is **not** rare: only
+**14.8 %** of its 9,258 phrases have a global df of 1 (the df is pair-level,
+median **5**), and the median question's phrase table holds **120** rows against
+the word table's **65**. But its generic-class row share is **14.3 %** against
+the word table's **30.3 %** — the CS-39 *readout's direction* reproduces (the
+phrase rows sit in fewer tables, so the class measure reads rarity as
+topicality) even though the rarity itself does not. The null reproduces for the
+**other** reason the pre-registration registered after measuring the prior: a
+bigram occurs in a paragraph only where **both** its words do, so the phrase z
+arm is a second read of the same evidence, and the union of two strongly
+correlated per-word sums cannot add +0.05.
+
+**The class readout, on the phrase vocabulary** (the `dictionary` block's
+`classes`): distinctive **2,911** phrases / 4,436 rows / **35.4 %** positive /
+mean log-odds **−0.2104** / mean z **+0.3900**; shared 4,337 / 45,917 / 67.7 % /
++0.9307 / +0.1333; generic **112** / 8,416 / **75.2 %** / **+1.0106** /
+**+0.0242**. The z-score separates in the predicted direction (**+0.3658**,
+distinctive − generic) and the raw log-odds again reverse CS-33's class order —
+CS-51's pattern, reproduced on a finer unit (the 0.5 bar is CS-51's, not this
+change set's; the direction is what is reported).
+
+**The count arms.** The word count **0.6360** sits within 0.10 of its z arm
+(0.7020) ✓ and the phrase count **0.6217** within 0.10 of its own (0.6840) ✓ —
+the unit change makes neither count a lever.
+
+**The falsification, read out one by one.**
+
+1. **The flip (the primary): a null** — −0.0043, far under the ≥ +0.05 bar; the
+   point estimate inside the registered ±0.02 band, the interval excluding zero
+   (a small, detectable cost).
+2. **The phrase arm alone: holds** — 0.6840, below the word arm's 0.7020.
+3. **The reproduction guard: holds** — every shape number above, CS-50's
+   0.7020 and the 518-pair floor.
+4. **The floor check: holds** — the same 518 pairs in both halves
+   (`same_floor_set: true`).
+5. **The count check: holds** on both halves (0.066 and 0.062 from their z
+   arms).
+6. **The class readout: holds** — 14.3 % generic rows against the word table's
+   30.3 % (the CS-39 direction).
+
+**What this change set does not say.** Nothing about **stability** (CS-54), the
+**per-label lexicon** (CS-55), **abstention** (CS-56) or **question pairs**
+(CS-57); nothing about a **different phrase length** (the bigrams were fixed by
+CS-39's wording — trigrams or content-only-phrases were not run); nothing about
+the phrases *inside* a rerank or a pack (no viewer, no pack here); nothing
+about UPR; and nothing about `test` (OMCT has none).
+
+**The gate.** `pytest`: **986 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **240** files. Two consecutive runs are
+bit-identical (bar the clock field).
