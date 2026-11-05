@@ -87,6 +87,12 @@ _ARMS: dict[str, tuple[str, str, bool]] = {
 # (the same rule as the UPR coefficient's `score_cells`).
 FLOOR_GAP = 1.0
 
+# The empty-table **fill** (CS-56): what a cell whose question has no table in
+# its map is scored with. ``floor`` is the current "impossible" rule (the row's
+# smallest seen score minus one); ``neutral`` is the row's median of the seen
+# cells ("no evidence"); ``max`` is the row's maximum ("possible").
+FILLS: tuple[str, ...] = ("floor", "neutral", "max")
+
 # CS-51's class restrictions: the name the config carries -> the classes the
 # map keeps. ``nogeneric`` drops the register; ``distinctive`` keeps only the
 # topic's own vocabulary.
@@ -191,6 +197,7 @@ def score_grid(
     restrict: Sequence[str] | None = None,
     restrict_pos: Sequence[str] | None = None,
     keep: Mapping[str, frozenset[str]] | None = None,
+    fill: str = "floor",
 ) -> np.ndarray:
     """Score every (paragraph, question) cell from the map's own weights.
 
@@ -213,6 +220,10 @@ def score_grid(
             mapping. A link outside it contributes nothing, and a question
             whose every link is dropped carries the floor. ``None`` keeps
             every link.
+        fill: The empty-table **fill** (CS-56): ``floor`` (the row's smallest
+            seen score minus one), ``neutral`` (the row's median of the seen
+            cells) or ``max`` (the row's maximum). The fill changes only the
+            cells whose table is empty.
 
     Returns:
         A ``(n_paragraphs, n_questions)`` float64 matrix, higher = more
@@ -228,6 +239,8 @@ def score_grid(
         raise ValueError(
             f"Unknown scoring function {scoring!r}; expected one of {SCORING_FUNCTIONS}"
         )
+    if fill not in FILLS:
+        raise ValueError(f"Unknown empty-table fill {fill!r}; expected one of {FILLS}")
     aggregation, measure, positive_only = _ARMS[scoring]
     allowed = _allowed_classes(restrict)
     allowed_pos = _allowed_pos(restrict_pos)
@@ -286,10 +299,16 @@ def score_grid(
     ]
     if empty_columns:
         seen = np.delete(grid, empty_columns, axis=1)
-        floor = (
-            (seen.min(axis=1) - FLOOR_GAP) if seen.shape[1] else np.full(n_paragraphs, -FLOOR_GAP)
-        )
-        grid[:, empty_columns] = floor[:, None]
+        if not seen.shape[1]:
+            # every column is empty: the fill has nothing to read from
+            fill_values = np.full(n_paragraphs, 0.0 if fill == "neutral" else -FLOOR_GAP)
+        elif fill == "neutral":
+            fill_values = np.median(seen, axis=1)
+        elif fill == "max":
+            fill_values = seen.max(axis=1)
+        else:
+            fill_values = seen.min(axis=1) - FLOOR_GAP
+        grid[:, empty_columns] = fill_values[:, None]
     return grid
 
 
@@ -310,6 +329,7 @@ def cross_fit_grids(
     keep: Mapping[str, frozenset[str]] | None = None,
     keep_by_fold: Mapping[int, Mapping[str, frozenset[str]]] | None = None,
     word_pos: Mapping[str, str] | None = None,
+    fill: str = "floor",
 ) -> dict[str, object]:
     """The out-of-fold score grids: every judged cell from a map that never saw it.
 
@@ -345,6 +365,8 @@ def cross_fit_grids(
             own fold's training pairs, never by the full one.
         word_pos: The words' grammatical classes (CS-52), when the paragraphs
             were tagged; passed to the full map and to every fold's map.
+        fill: The empty-table **fill** (CS-56), applied inside every grid; the
+            floor flags are unchanged by it.
 
     Returns:
         A dict with the grid's ``paragraphs`` / ``questions``, one assembled
@@ -427,6 +449,7 @@ def cross_fit_grids(
             restrict=restrict,
             restrict_pos=restrict_pos,
             keep=keep,
+            fill=fill,
         )
         fold_grids = {
             fold: score_grid(
@@ -439,6 +462,7 @@ def cross_fit_grids(
                 restrict=restrict,
                 restrict_pos=restrict_pos,
                 keep=fold_keeps.get(fold),
+                fill=fill,
             )
             for fold in fold_values
         }

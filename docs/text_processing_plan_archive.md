@@ -9027,3 +9027,123 @@ tombstone line). The verdict and the numbers are the track log's §CS-55.*
   - **The gate.** **996** tests, ruff clean over **246** files, two consecutive
     runs bit-identical (bar the clock field).
 
+## Abstention on the pair unit (CS-56) — the pre-registration and the verdict
+
+*Added on 2026-11-06, when the round's ninth change set was executed: the live
+plan's §7.9 block moved here **verbatim** (the archive's convention: an
+executed change set's pre-registration moves here and the live plan keeps one
+tombstone line). The verdict and the numbers are the track log's §CS-56.*
+
+### 7.9 Abstention (CS-56)
+
+- [x] **CS-56 — abstention: is the floor's "impossible" the right encoding?**
+  CS-37's abstention on the pair unit: the empty-table cells' **fill** — the
+  floor's *impossible*, the row's median's *no evidence* (`neutral`), or the
+  row's maximum's *possible* (`max`) — measured on the primary z arm against
+  the floor on the same pairs.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-37 (executed
+  2026-11-02) was a **null**: the abstention ("no evidence" as NaN instead of
+  the floor) left the eight held-out labels at **0.0000**, a paired
+  **+0.0000** — the "impossible" verdict was **never in the encoding**; a map
+  with no word↔label information at all collapsed them the same way. The
+  reason: it was the **fit-side silence** (the eight were the labels the map
+  was silent about *and* the labels that were never positive) that cost them,
+  not the floor's arithmetic.
+
+  **The OMCT mechanism, and the flip.** The silence is per **question** and
+  large: **85 silent questions** (28.9 %), **331 pairs** with no positive in
+  the question, and **518 floor pairs** (34.1 %) — **77.8 %** of them negative
+  (CS-48/CS-49). So the floor's "impossible" is **right four times in five** on
+  this unit: the silence **is** informative here, and the flip the UPR null
+  opens is the opposite one — the floor should **win**. The test replaces the
+  fill of the empty-table cells only:
+
+  - `floor` (the current rule, the reference): the row's smallest seen score
+    minus one;
+  - `neutral`: the row's **median** of the seen cells ("no evidence");
+  - `max`: the row's **maximum** of the seen cells ("possible").
+
+  **The metric.** Each fill's within-document AUC on the primary
+  `sum_zscore_positive` arm, and the paired difference against the floor
+  (the pairs the resampling unit, 2,000 resamples); the floor's share and the
+  **floor pairs' negative share** (the number that makes the floor work); the
+  non-floor reading (the fill does not touch it); the silent questions' pair
+  counts, per document.
+
+  **The falsification conditions, registered.**
+
+  1. **The abstention test (the primary).** `neutral` against the `floor`: the
+     prediction is the **floor wins** (the point estimate above `neutral`).
+     "The abstention is a lever" = `neutral` beats the floor by **≥ +0.05**
+     with the paired 95 % interval excluding zero — then CS-37's null does not
+     transfer and the floor's "impossible" is a cost.
+  2. **The optimistic-fill test.** `max` is predicted **above the floor** (it
+     lifts the empty cells over) — reported, with its number, but it is not a
+     claim about abstention (it is the "everything is possible" encoding).
+  3. **The informativeness test.** The floor pairs' negative share must be
+     **> 50 %** (the pre-read: 77.8 %): the floor's prior is real on this unit.
+     If it is ≤ 50 %, the floor is a coin and the reading changes.
+  4. **The non-floor check.** The non-floor reading must be the same under all
+     three fills (the fill only touches the empty cells).
+
+  **The cost.** **0 model calls**; one cross-fit per fill (the same folds, the
+  same map; three grids, ≈ **8 s**), **no new dependency**; the artifact grows
+  by the fills' arm blocks and the readout.
+
+  **Leakage.** Unchanged: the map is built on the reviewed pairs only, the
+  control (B) never enters a fit, and the fills change only the score of cells
+  whose fold map is silent — a score, never a label.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-abstain`**, the artifact
+  `results/omct-analyze-voyage-dict-abstain/analysis.json` (the `dictionary`
+  block's `abstention` readout and the model entry's `abstention_arms`); the
+  sweep `experiments_text_processing/omct_dictionary_abstain_sweep.py` (the
+  label `omct_dictionary_abstain`, the table's section
+  `## OMCT — omct_dictionary_abstain`); the config addition
+  `analysis.dictionary.abstention_fills`; the log section
+  **`## CS-56 — abstention on the pair unit`**.
+
+  **The exit criteria.** A **hand-computed** fill test on a toy grid (one
+  empty column: the floor, the neutral median and the max on the same row);
+  a test that the fill never touches a non-empty cell and that the floor flags
+  are unchanged by the fill; a test that an all-empty row keeps its fill; the
+  fixture run and the real run; `ruff check` / `ruff format` clean over
+  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
+
+  *(pre-registered 2026-11-06; **executed 2026-11-06** — the run is
+  `omct-analyze-voyage-dict-abstain` (the artifact
+  `results/omct-analyze-voyage-dict-abstain/analysis.json`, the
+  `dictionary.abstention` readout and the model entry's `abstention_arms`),
+  the log section is
+  `## CS-56 — abstention on the pair unit: the floor's "impossible" is a
+  cost` in `docs/experiments_text_processing.md`, and the numbers are below.
+  **The registered falsifier fired** (the abstention is a lever); the chain
+  continues to CS-57 on the reviewer's standing instruction, and the round
+  ends there.)*
+
+  **The round's numbers, in one screen (OMCT: the same 1,520 reviewed pairs,
+  4,000 control cells and folds as CS-50; the fills change only the cells
+  whose fold map is silent).**
+
+  - **The cost.** **0 model calls**, **11.6 s**, **no new dependency**.
+  - **The abstention test: the falsifier FIRES.** `neutral` **0.7616** against
+    the floor's **0.7020** — **+0.0596 [+0.0291, +0.0927]** (P 1.000), above
+    the ≥ +0.05 bar; per document 0.7120 / 0.8136 / 0.8435 against the floor's
+    0.6219 / 0.7981 / 0.8338. The registered "the floor wins" is **refuted**.
+  - **The optimistic fill: refuted too.** `max` **0.6105**, **−0.0914
+    [−0.1438, −0.0374]** against the floor (the prediction said above; it is
+    below — "possible" maximizes the inversions).
+  - **The informativeness test: holds.** The 518 floor pairs are **77.80 %**
+    negative (NU 338 pairs, 77.2 %; CIDH 12, 33.3 %; AI 168, 82.1 %); **85**
+    silent questions; the floor share 34.08 %.
+  - **The non-floor check: holds.** 0.8158 under all three fills.
+  - **The reading.** The silence is informative as a **group** prior and the
+    floor is the wrong **cell encoding**: it buries the 115 floored positives
+    (22.2 % of the floor pairs) below every seen pair, and the pair-weighted
+    AUC counts that error heavier than the 403 floored negatives' gain. The
+    "no evidence" fill is the better encoding by +0.0596; the "impossible"
+    should not ship on the pair unit.
+  - **The gate.** **998** tests, ruff clean over **247** files, two consecutive
+    runs bit-identical (bar the clock field).
+

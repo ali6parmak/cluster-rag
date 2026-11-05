@@ -274,6 +274,78 @@ def class_arms_block(
     return block
 
 
+def abstention_arms_block(
+    view: DatasetView,
+    floor_grids: Mapping[str, Any],
+    fill_grids: Mapping[str, Mapping[str, Any]],
+    *,
+    primary: str,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The empty-table fills (CS-56), each against the floor on the same pairs.
+
+    The floor is the run's own primary grid (the "impossible" rule); each fill
+    changes only the cells whose fold map is silent. The block also carries the
+    number that makes the floor work: the **floor pairs' negative share**.
+
+    Args:
+        view: The dataset view.
+        floor_grids: The run's grids (the floor is applied inside them).
+        fill_grids: The fills' grids, keyed by the fill's name.
+        primary: The pre-registered primary arm.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+
+    Returns:
+        The readout: the floor's reading, the fills' increment tests and the
+        silence's informativeness (overall and per document).
+    """
+    floor_matrix = np.asarray(floor_grids["scorings"][primary], dtype=np.float64)
+    floor = np.asarray(floor_grids["floor"], dtype=bool)
+    measured = measure_arm(view, floor_matrix)
+    labels = measured.labels
+    documents = measured.documents
+    floor_stats = _arm_stats(view, measured)
+    by_document: dict[str, Any] = {}
+    for stratum in view.strata:
+        document = stratum["document"]
+        mask = floor & (documents == document)
+        by_document[document] = {
+            "n_floor_pairs": int(mask.sum()),
+            "negative_share": (float((labels[mask] == 0).mean()) if mask.any() else None),
+        }
+    block = class_arms_block(
+        view,
+        fill_grids,
+        primary=primary,
+        full_matrix=floor_matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    return {
+        "primary": primary,
+        "floor": {
+            "within_auc": floor_stats["within_auc"],
+            "pooled_auc": floor_stats["pooled_auc"],
+            "non_floor": _non_floor_stats(view, measured, ~floor),
+        },
+        "floor_pairs": int(floor.sum()),
+        "floor_share": float(floor.mean()) if floor.size else None,
+        "floor_negative_share": (float((labels[floor] == 0).mean()) if floor.any() else None),
+        "floor_negative_by_document": by_document,
+        "fills": block,
+        "notes": [
+            "the floor is the run's primary grid: a cell whose fold map has no table "
+            "for its question sits at the row's smallest seen score minus one.",
+            "each fill changes ONLY those cells: neutral is the row's median of the "
+            "seen cells ('no evidence'), max is the row's maximum ('possible').",
+            "the floor's edge is the silence's informativeness: the floor pairs' "
+            "negative share is the number that makes the 'impossible' right.",
+        ],
+    }
+
+
 def question_lexicon_block(
     view: DatasetView,
     matrices: Mapping[str, np.ndarray],
@@ -606,6 +678,7 @@ def build_dictionary_model(
     stability_grids: Mapping[str, Mapping[str, Any]] | None = None,
     stability_readout: Mapping[str, Any] | None = None,
     question_lexicon: Mapping[str, Any] | None = None,
+    abstention_fills: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -637,6 +710,8 @@ def build_dictionary_model(
             the arms.
         question_lexicon: The label side's channel (CS-55): its grids and the
             blind channel's per-pair scores; ``None`` runs none.
+        abstention_fills: The empty-table fills' grids (CS-56), keyed by the
+            fill's name; ``None`` runs none.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -731,6 +806,15 @@ def build_dictionary_model(
             union,
             reference_similarities=reference_similarities,
             reference_name=reference_name,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
+    if abstention_fills:
+        readout["abstention_arms"] = abstention_arms_block(
+            view,
+            grids,
+            abstention_fills,
+            primary=primary,
             resamples=resamples,
             seed=bootstrap_seed,
         )

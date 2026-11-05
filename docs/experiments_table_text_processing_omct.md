@@ -428,3 +428,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | arm | all_within_auc | all_delta_cosine | all_ci | idf_within_auc | topic_within_auc | topic_delta_vs_all | topic_ci | register_within_auc | map_within_auc | all_delta_vs_map | all_ci_vs_map | blind_within_auc | blind_gap | label_words | register_words | topic_words | vocabulary_median | zero_overlap_share | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-lexicon | 2026-11-06 | all | 0.4602 | -0.0636 | [-0.1008, -0.0269] | 0.5474 | 0.5423 | 0.0821 | [+0.0448, +0.1185] | 0.3754 | 0.7020 | -0.2417 | [-0.2887, -0.1949] | 0.4680 | -0.0078 | 2445 | 10 | 1567 | 31.5 | 0.0355 | 1520 | 4000 | 3 | 13.298 |
+
+## OMCT — omct_dictionary_abstain
+
+| run_id | date | arm | floor_within_auc | floor_nonfloor_auc | neutral_within_auc | neutral_delta | neutral_ci | max_within_auc | max_delta | max_ci | floor_pairs | floor_share | floor_negative_share | silent_questions | floor_negative_nu | floor_negative_cidh | floor_negative_ai | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-abstain | 2026-11-06 | sum_zscore_positive | 0.7020 | 0.8158 | 0.7616 | 0.0596 | [+0.0291, +0.0927] | 0.6105 | -0.0914 | [-0.1438, -0.0374] | 518 | 0.3408 | 0.7780 | 85 | 0.7722 | 0.8214 | 0.3333 | 1002 | 4000 | 3 | 11.403 |

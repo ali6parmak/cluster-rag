@@ -107,6 +107,7 @@ research record and are **not** indexed here.
 | [CS-53 — the phrases on OMCT](#cs-53--the-phrases-on-omct-the-upr-null-reproduces-for-the-other-reason-2026-11-05) | one `omct-analyze-voyage-dict-phrases` run (the phrase table, the word z arm reproduced inside the run, and the union = the two z arms summed; **0 model calls**, 15.2 s) | **a null that reproduces for the other reason**: the union is **−0.0043 [−0.0074, −0.0012]** against the word z arm (0.6976 vs 0.7020 — inside the registered ±0.02 band at the point estimate, the interval excluding zero: a small, detectable cost), and the phrase arm alone (**0.6840**) sits below the word arm; the phrase table is **not** rare on the pair unit (14.8 % hapax against CS-39's 82.8 %; the median question's table holds 120 rows against the word table's 65), so the UPR null's **premise** does not transfer — the phrases are **redundant** with their own words, not rare; the CS-39 readout's direction does (the generic-class row share 14.3 % against the word table's 30.3 %) | `results/omct-analyze-voyage-dict-phrases/analysis.json` |
 | [CS-54 — the stability of the pair unit](#cs-54--the-stability-of-the-pair-unit-the-null-becomes-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-stability` run (CS-36's bootstrap over the 1,520 reviewed pairs, 500 resamples; the two filtered z arms; **0 model calls**, 136 s) | **the UPR null becomes a cost**: the τ = 0.75 filtered arm is **0.6399** against the full z arm's 0.7020 (**−0.0621 [−0.0859, −0.0395]**) and τ = 0.90 is −0.1094, with the floor rising to **61.97 %** / 74.9 % — the map's bulk is sampling noise (the presence cliff **63.3 %**, the 1 − e⁻¹ prediction; the sign cliff **54.1 %**, so **not one** single-pair link clears 0.75; the heads keep their place in **65.0 %**), and the registered survival magnitude (10–15 %) **misses** at 6.79 % | `results/omct-analyze-voyage-dict-stability/analysis.json` |
 | [CS-55 — the label side's own words](#cs-55--the-label-sides-own-words-the-register-was-the-noise-2026-11-06) | one `omct-analyze-voyage-dict-lexicon` run (the question text's vocabulary as a label-side channel; the four arms, the map bar and the blind counterpart; **0 model calls**, **0 pair labels read**, 13.5 s) | **the register was the noise**: the raw count **0.4602** against the cosine's 0.5238 (**−0.0636 [−0.1008, −0.0269]**), the idf and topic-only arms at the cosine (nulls), the map bar held (**−0.2417 [−0.2887, −0.1949]**) — and the registered **falsifier FIRED**: topic-only beats the full channel by **+0.0821 [+0.0448, +0.1185]**, so CS-45's "the register was the signal" does not transfer (the label-side register is the questionnaire's boilerplate, identical across questions); the blind gap is **−0.0078**, so the raw count reads the questionnaire's shape, not the relation | `results/omct-analyze-voyage-dict-lexicon/analysis.json` |
+| [CS-56 — abstention on the pair unit](#cs-56--abstention-on-the-pair-unit-the-floors-impossible-is-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-abstain` run (the empty-table fill: the floor against the neutral median and the max; **0 model calls**, 11.6 s) | **the registered falsifier FIRED — the abstention is a lever**: the neutral fill **0.7616** against the floor's 0.7020 (**+0.0596 [+0.0291, +0.0927]**), above the +0.05 bar and in all three documents; the max fill loses (−0.0914); the silence **is** informative (77.80 % of the 518 floor pairs negative, 85 silent questions) and is still the wrong encoding — the floor pushes the 115 floored positives below every seen pair, and the pair-weighted AUC counts that error heavier than the 403 floored negatives' gain | `results/omct-analyze-voyage-dict-abstain/analysis.json` |
 
 ## Change sets
 
@@ -9392,4 +9393,68 @@ that recovers chance); nothing about a **label-side text beyond the question**
 
 **The gate.** `pytest`: **996 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **245** files. Two consecutive runs are
+bit-identical (bar the clock field).
+
+## CS-56 — abstention on the pair unit: the floor's "impossible" is a cost (2026-11-06)
+
+**The run.** One: `omct-analyze-voyage-dict-abstain` — the empty-table cells'
+fill on the primary z arm: the **floor** (the current "impossible" rule, the
+reference), **neutral** (the row's median of the seen cells — "no evidence")
+and **max** (the row's maximum — "possible"). Only the cells whose fold map is
+silent change; the floor flags are untouched. **0 model calls**, **11.6 s**,
+**no new dependency**; the floor arm reproduces **0.7020** (non-floor 0.8158,
+518 floor pairs). The sweep is
+`experiments_text_processing/omct_dictionary_abstain_sweep.py` (the label
+`omct_dictionary_abstain`, the table's section
+`## OMCT — omct_dictionary_abstain`).
+
+**The registered falsifier FIRES: the abstention is a lever, and the floor's
+"impossible" is a cost.** The neutral fill reaches **0.7616** against the
+floor's **0.7020** — a paired **+0.0596 [+0.0291, +0.0927]** (P(Δ>0) 1.000),
+above the registered ≥ +0.05 bar. It beats the floor in **all three**
+documents (0.7120 / 0.8136 / 0.8435 against 0.6219 / 0.7981 / 0.8338). The
+registration predicted the floor would win (the silence is 77.8 % negative);
+**it is refuted**: on a pair-weighted ranking the 115 floored **positives**
+(22.2 % of the 518) pay more than the 403 floored negatives gain.
+
+**The "possible" fill loses, and the prediction there is refuted too.** The max
+fill reaches **0.6105**, **−0.0914 [−0.1438, −0.0374]** against the floor: it
+lifts the 403 floored negatives over the row's positives and maximizes the
+inversions. The registration predicted it above the floor; it is below.
+
+**The silence IS informative — and it is still the wrong encoding.** The
+informativeness test holds: the 518 floor pairs are **77.80 %** negative
+(NU 338 pairs, 77.2 %; CIDH 12, 33.3 %; AI 168, 82.1 %), against the 50 % bar,
+with **85 silent questions**. So the floor is right about the *group* and wrong
+about the 115 positives it buries; the group statement does not survive the
+pair-weighted AUC. The **non-floor check holds**: 0.8158 under all three fills
+(the fill touches only the silent cells).
+
+**The reading.** CS-37's null does **not** transfer. On UPR the silence was
+never informative (the eight held-out labels were never positive), so the
+encoding did not matter. On OMCT the silence **is** informative — but as a
+group prior, not as a cell encoding: the floor pushes every floored pair below
+every seen one, and the floor pairs' 22.2 % positives are the expensive error.
+The "no evidence" fill (the row's median) is the better encoding by +0.0596,
+and the "impossible" should not ship on the pair unit.
+
+**The falsification, read out one by one.**
+
+1. **The abstention test: the falsifier FIRES** — neutral beats the floor by
+   +0.0596 (≥ +0.05, the interval excluding zero): the abstention is a lever;
+   the registered "the floor wins" is refuted.
+2. **The optimistic-fill test: refuted** — max is **below** the floor
+   (−0.0914), not above: "possible" is the worst of the three fills.
+3. **The informativeness test: holds** — 77.80 % of the floor pairs are
+   negative (> 50 %).
+4. **The non-floor check: holds** — 0.8158 under all three fills.
+
+**What this change set does not say.** Nothing about the **question-pair
+relation** (CS-57, the round's last); nothing about a **per-question** fill
+(the fill is per row, and the silent questions have no row of their own —
+their cells are ranked against their fold map's other columns); nothing about
+a **mean** or a **quantile** fill beyond the median; nothing about UPR.
+
+**The gate.** `pytest`: **998 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **247** files. Two consecutive runs are
 bit-identical (bar the clock field).

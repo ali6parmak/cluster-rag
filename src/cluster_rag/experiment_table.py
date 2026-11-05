@@ -632,6 +632,35 @@ ANALYZE_OMCT_DICTIONARY_LEXICON_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_LEXICON_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The empty-table **fills** (CS-56): the floor against the neutral and the max
+# fill on the primary z arm, with the floor pairs' negative share (the number
+# that makes the floor work) and the non-floor reading beside them.
+ANALYZE_OMCT_DICTIONARY_ABSTENTION_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "floor_within_auc",
+    "floor_nonfloor_auc",
+    "neutral_within_auc",
+    "neutral_delta",
+    "neutral_ci",
+    "max_within_auc",
+    "max_delta",
+    "max_ci",
+    "floor_pairs",
+    "floor_share",
+    "floor_negative_share",
+    "silent_questions",
+    "floor_negative_nu",
+    "floor_negative_cidh",
+    "floor_negative_ai",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_ABSTENTION_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

@@ -1059,6 +1059,9 @@ class DictionaryConfig(BaseModel):
       own words** (CS-55): the question text's vocabulary as a channel, the
       register split and the blind counterpart. It needs one reference
       embedder (the cosine comparison) and reads no pair label.
+    - ``abstention_fills``: the **empty-table fills** (CS-56) the run scores
+      beside the floor: ``neutral`` (the row's median of the seen cells) and
+      ``max`` (the row's maximum). Empty (the default) runs only the floor.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1078,6 +1081,28 @@ class DictionaryConfig(BaseModel):
     stability_fold_resamples: int = Field(default=100, ge=1)
     stability_thresholds: tuple[float, ...] = (0.75, 0.90)
     question_lexicon: bool = False
+    abstention_fills: tuple[str, ...] = ()
+
+    @field_validator("abstention_fills")
+    @classmethod
+    def _abstention_fills_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown fill at config time (CS-56)."""
+        if not value:
+            return value
+        from cluster_rag.text_processors.lexical.question_map_score import FILLS
+
+        unknown = [name for name in value if name not in FILLS or name == "floor"]
+        if unknown:
+            raise ValueError(
+                "analysis.dictionary.abstention_fills has unknown fill(s) "
+                f"{unknown}; the floor is the reference and is not listed; "
+                f"expected some of {[name for name in FILLS if name != 'floor']}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(
+                f"analysis.dictionary.abstention_fills must not repeat a fill: {list(value)}"
+            )
+        return value
 
     @field_validator("stability_thresholds")
     @classmethod
@@ -1123,6 +1148,11 @@ class DictionaryConfig(BaseModel):
                     f"{UNIT_PHRASES!r}: the union is the word map's score plus the "
                     "phrase map's own, so the run's map must be the phrase table"
                 )
+        if self.abstention_fills and not self.scorings:
+            raise ValueError(
+                "analysis.dictionary.abstention_fills needs analysis.dictionary.scorings: "
+                "the fills are measured against the floor on the primary arm"
+            )
         if self.question_lexicon and not self.scorings:
             raise ValueError(
                 "analysis.dictionary.question_lexicon needs analysis.dictionary.scorings: "

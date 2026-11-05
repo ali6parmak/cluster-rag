@@ -193,6 +193,33 @@ analysis:
     resamples: 200
 """
 
+# CS-56: the empty-table fills (the floor against the neutral and the max).
+DICTIONARY_ABSTENTION_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings: [sum_zscore_positive]
+    primary: sum_zscore_positive
+    blind: false
+    abstention_fills: [neutral, max]
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-55: the label side's own words (the question text's vocabulary).
 DICTIONARY_LEXICON_CONFIG_EXTRA = """
 analysis:
@@ -1211,6 +1238,49 @@ def test_analyze_omct_dictionary_lexicon_end_to_end(
     assert "all" in row
 
 
+def test_analyze_omct_dictionary_abstention_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-56: the fills' arms, the silence's informativeness and its own row."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-abstain-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_ABSTENTION_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-abstain-test" / "analysis.json").read_text("utf-8")
+    )
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    block = entry["readout"]["abstention_arms"]
+    assert set(block["fills"]) == {"neutral", "max"}
+    assert (
+        block["floor"]["within_auc"]
+        == entry["readout"]["scorings"]["sum_zscore_positive"]["within_auc"]
+    )
+    assert block["floor_pairs"] >= 0
+    assert 0.0 <= (block["floor_negative_share"] or 0.0) <= 1.0
+    for arm in block["fills"].values():
+        assert arm["within_auc"] is None or 0.0 <= arm["within_auc"] <= 1.0
+        assert arm["delta_vs_full"] is not None
+        assert arm["reference_arm"] == "sum_zscore_positive"
+    assert payload["dictionary"]["abstention"]["silent_questions"] == len(
+        payload["dictionary"]["map"]["empty_questions"]
+    )
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-abstain-test"))
+    assert "sum_zscore_positive" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -1295,6 +1365,17 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     )
     with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
         DictionaryConfig(question_lexicon=True)
+    # CS-56: the empty-table fills (the floor is the reference, never listed)
+    assert DictionaryConfig().abstention_fills == ()
+    assert DictionaryConfig(
+        abstention_fills=("neutral", "max"), scorings=("sum_zscore_positive",)
+    ).abstention_fills == ("neutral", "max")
+    with pytest.raises(ValueError, match="unknown fill"):
+        DictionaryConfig(abstention_fills=("floor",))
+    with pytest.raises(ValueError, match="unknown fill"):
+        DictionaryConfig(abstention_fills=("median",))
+    with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
+        DictionaryConfig(abstention_fills=("neutral",))
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

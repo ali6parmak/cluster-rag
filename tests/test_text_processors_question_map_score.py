@@ -303,3 +303,41 @@ def test_the_union_on_the_tiny_maps_is_hand_computable() -> None:
     assert union["union"][0, 1] == pytest.approx(word_grid[0, 1] + phrase_grid[0, 1])
     # the phrase table keeps only the bigram, so the phrase half is smaller
     assert abs(phrase_grid[0, 0]) < abs(word_grid[0, 0])
+
+
+def test_the_empty_table_fills_are_hand_computed() -> None:
+    """CS-56: the floor, the neutral median and the max on the same empty cells."""
+    from cluster_rag.text_processors.lexical.question_map_score import FILLS
+
+    paragraphs = ["alpha bravo", "delta echo", "alpha charlie", "foxtrot golf"]
+    questions = ["q1", "q1", "q2", "q2"]
+    labels = [1, 0, 1, 0]
+    question_map = build_question_map(paragraphs, questions, labels)
+    grid_paragraphs = ("alpha bravo", "foxtrot golf")
+    grid_questions = ("q1", "q2", EMPTY)
+
+    def _fill(fill: str) -> np.ndarray:
+        return score_grid(
+            grid_paragraphs,
+            grid_questions,
+            question_map,
+            scoring="sum_zscore_positive",
+            fill=fill,
+        )
+
+    floor, neutral, optimistic = _fill("floor"), _fill("neutral"), _fill("max")
+    assert set(FILLS) == {"floor", "neutral", "max"}
+    # the non-empty cells are identical under the three fills
+    assert np.array_equal(floor[:, :2], neutral[:, :2])
+    assert np.array_equal(floor[:, :2], optimistic[:, :2])
+    # row 0: the two seen columns' values
+    s1, s2 = neutral[0, 0], neutral[0, 1]
+    assert floor[0, 2] == pytest.approx(min(s1, s2) - FLOOR_GAP)
+    assert neutral[0, 2] == pytest.approx((s1 + s2) / 2.0)
+    assert optimistic[0, 2] == pytest.approx(max(s1, s2))
+    # row 1 sees nothing in either table: 0 for the neutral/max, the gap for the floor
+    assert neutral[1, 2] == 0.0
+    assert optimistic[1, 2] == 0.0
+    assert floor[1, 2] == pytest.approx(-FLOOR_GAP)
+    with pytest.raises(ValueError, match="Unknown empty-table fill"):
+        score_grid(grid_paragraphs, grid_questions, question_map, fill="dense")

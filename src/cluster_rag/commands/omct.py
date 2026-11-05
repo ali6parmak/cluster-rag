@@ -37,6 +37,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_ARMS_COLUMNS,
     ANALYZE_OMCT_ARMS_KEY_COLUMNS,
     ANALYZE_OMCT_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ABSTENTION_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_ABSTENTION_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS,
@@ -798,6 +800,62 @@ def _dictionary_lexicon_row(
         "zero_overlap_share": _fmt((profile.get("paragraph_overlap") or {}).get("zero_share"), 4),
         "n_pairs": (_arm(primary, "pooled_auc") is not None)
         and model["readout"]["scorings"][model["readout"]["primary"]]["n_pairs"],
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_abstention_row(
+    model: dict[str, Any],
+    block: Mapping[str, Any] | None,
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+    documents_by_code: Mapping[str, str],
+) -> dict[str, Any]:
+    """One table row of the dictionary **abstention** section (CS-56)."""
+    readout = (model.get("readout") or {}).get("abstention_arms") or {}
+    fills = readout.get("fills") or {}
+    floor = readout.get("floor") or {}
+    by_document = readout.get("floor_negative_by_document") or {}
+    profile = (block or {}).get("abstention") or {}
+
+    def _arm(name: str, key: str) -> Any:
+        return (fills.get(name) or {}).get(key)
+
+    def _ci(name: str) -> str | None:
+        fill_block = fills.get(name) or {}
+        if fill_block.get("ci_low") is None:
+            return None
+        return f"[{fill_block['ci_low']:+.4f}, {fill_block['ci_high']:+.4f}]"
+
+    def _document_share(code: str) -> Any:
+        document = documents_by_code.get(code, "")
+        return (by_document.get(document) or {}).get("negative_share")
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": readout.get("primary"),
+        "floor_within_auc": _fmt(floor.get("within_auc"), 4),
+        "floor_nonfloor_auc": _fmt((floor.get("non_floor") or {}).get("within_auc"), 4),
+        "neutral_within_auc": _fmt(_arm("neutral", "within_auc"), 4),
+        "neutral_delta": _fmt(_arm("neutral", "delta_vs_full"), 4),
+        "neutral_ci": _ci("neutral"),
+        "max_within_auc": _fmt(_arm("max", "within_auc"), 4),
+        "max_delta": _fmt(_arm("max", "delta_vs_full"), 4),
+        "max_ci": _ci("max"),
+        "floor_pairs": readout.get("floor_pairs"),
+        "floor_share": _fmt(readout.get("floor_share"), 4),
+        "floor_negative_share": _fmt(readout.get("floor_negative_share"), 4),
+        "silent_questions": profile.get("silent_questions"),
+        "floor_negative_nu": _fmt(_document_share("NU"), 4),
+        "floor_negative_cidh": _fmt(_document_share("CIDH"), 4),
+        "floor_negative_ai": _fmt(_document_share("AI"), 4),
+        "n_pairs": (floor.get("non_floor") or {}).get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1737,6 +1795,31 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             stability_readout["thresholds"] = [f"{threshold:.2f}" for threshold in thresholds]
             if dictionary_block is not None:
                 dictionary_block["stability"] = dict(stability_readout)
+        abstention_fills: dict[str, Any] = {}
+        if analysis.dictionary.abstention_fills:
+            # CS-56: the empty-table fills beside the floor (the fills change
+            # only the cells whose fold map is silent).
+            for fill in analysis.dictionary.abstention_fills:
+                abstention_fills[fill] = cross_fit_grids(
+                    paragraphs,
+                    questions,
+                    labels,
+                    dictionary_fold_ids,
+                    paragraphs=tuple(view.paragraphs),
+                    questions=tuple(view.questions),
+                    scorings=(primary,),
+                    units=dictionary_units,
+                    fill=fill,
+                )
+            if dictionary_block is not None:
+                dictionary_block["abstention"] = {
+                    "silent_questions": len(dictionary_map.empty_questions),
+                    "fills": list(analysis.dictionary.abstention_fills),
+                    "note": (
+                        "the empty-table fills (CS-56) scored beside the floor; the "
+                        "silent questions are the ones with no positive reviewed pair"
+                    ),
+                }
         question_lexicon = None
         if analysis.dictionary.question_lexicon:
             # CS-55: the label side's own words — the question text's
@@ -1792,6 +1875,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 stability_grids=stability_grids,
                 stability_readout=stability_readout,
                 question_lexicon=question_lexicon,
+                abstention_fills=abstention_fills,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -1996,7 +2080,21 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("question_lexicon"):
+            if (model.get("readout") or {}).get("abstention_arms"):
+                table_rows.append(
+                    _dictionary_abstention_row(
+                        model,
+                        dictionary_block,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                        documents_by_code={
+                            report["code"]: report["document"] for report in view.documents
+                        },
+                    )
+                )
+            elif (model.get("readout") or {}).get("question_lexicon"):
                 table_rows.append(
                     _dictionary_lexicon_row(
                         model,
@@ -2159,6 +2257,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
+        has_abstention = any(
+            (model.get("readout") or {}).get("abstention_arms")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_question_lexicon = any(
             (model.get("readout") or {}).get("question_lexicon")
             for model in models
@@ -2169,7 +2272,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_question_lexicon:
+        if has_abstention:
+            columns = ANALYZE_OMCT_DICTIONARY_ABSTENTION_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_ABSTENTION_KEY_COLUMNS
+        elif has_question_lexicon:
             columns = ANALYZE_OMCT_DICTIONARY_LEXICON_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_LEXICON_KEY_COLUMNS
         elif has_stability:
@@ -2281,6 +2387,19 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
                 f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
             )
+            abstention = readout.get("abstention_arms")
+            if abstention:
+                fill_parts = ", ".join(
+                    f"{name} {_fmt((block or {}).get('within_auc'), 4)} "
+                    f"({_fmt((block or {}).get('delta_vs_full'), 4)})"
+                    for name, block in abstention["fills"].items()
+                )
+                print(
+                    f"      [fill] the floor {_fmt(abstention['floor']['within_auc'], 4)} "
+                    f"over {abstention['floor_pairs']} pairs "
+                    f"({_fmt(abstention['floor_negative_share'], 4)} of them negative); "
+                    f"the fills: {fill_parts}"
+                )
             label_side = readout.get("question_lexicon")
             if label_side:
                 label_arms = label_side["arms"]
