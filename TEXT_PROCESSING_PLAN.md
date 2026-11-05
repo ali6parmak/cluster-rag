@@ -1780,6 +1780,125 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   **The next change set is CS-54** (stability): its reference on OMCT is now
   the **z-scored** map (the arm that works), not the raw log-odds.
 
+- [ ] **CS-54 — stability: how much of the pair unit's map is sampling noise?**
+  CS-36's bootstrap of the map, ported to the reviewed pairs: the survival
+  curve of the (question, unit) links, the per-question and head readouts, and
+  the **filtered z arm** measured against the **full z arm** — the reference is
+  CS-50's arm (0.7020, non-floor 0.8158), not the raw log-odds.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-36 (executed
+  2026-11-02) found the **filter a null and the readout the deliverable**: the
+  survival curve had a **cliff at 63 %** (1 − e⁻¹, where a single-text link
+  belongs), **not one** of the 12,483 single-text links survived τ = 0.75,
+  only **27.6 %** of the map did — and the filtered map was a **worse**
+  classifier (the fit side's out-of-fold 0.6544 against the full map's
+  0.6613). The reason: the map's classifier works on **coverage**, not on the
+  strength of its best words, so dropping the fragile tail drops coverage.
+
+  **The mechanism, and the pair-unit prediction.** The **reviewed pairs** (the
+  map's rows) are resampled with replacement, B = **500** times (seed 42), and
+  the map is rebuilt from scratch on every resample with the same builder; for
+  every link of the full map: `present_share` (in the question's table at
+  all), `sign_stability` (present **and** keeping the full map's log-odds
+  sign — the statistic the filter uses), `head_stability` (**present and still
+  among the question's top 10** by log-odds, K = 10 — reported, not filtered
+  on). The theory is CS-36's: a link resting on **k** reviewed pairs survives
+  about **1 − e^(−k)** of the resamples — a single-pair link **≈ 63 %**, two
+  pairs **≈ 86 %**, three **≈ 95 %**. On the pair unit the map is thinner than
+  UPR's: CS-48 measured **89.1 %** of the word map's rows at `n_with` = 1 and
+  **75.4 %** at df = 1, so the registered prediction is that only **≈ 10–15 %**
+  of the map survives **τ = 0.75** (the links with ≥ 2 reviewed pairs are
+  10.9 %), that the **filtered arm's floor rises sharply** (from 34.1 % —
+  predicted **≥ 50 %**), and that the filter is therefore a **cost**, not a
+  lever — CS-36's conclusion, at a thinner unit.
+
+  **The filter, and its leakage discipline.** A link survives τ iff its
+  `sign_stability ≥ τ`; the dropped links leave the question's table entirely
+  (a word contributes nothing). **Each fold's filter is estimated on that
+  fold's own training pairs** (B = **100** resamples, the same seed), exactly
+  as CS-36 estimated it per fold, so a judged pair is scored by a map and a
+  filter that both never saw it; the **unjudged control's** filter is the
+  full reviewed-set estimate (the control enters no fit). Two thresholds,
+  **τ = 0.75** (the registered one) and **τ = 0.90** (reported beside it);
+  the control never enters a resample.
+
+  **The metric.** The **readout** (the deliverable): the survival curve
+  (τ from 0.00 to 1.00 in steps of 0.05), the survival share by support
+  (links resting on 1, 2, 3 … pairs — the fragility reading), the per-question
+  stability (each table's size and the share of its links surviving), the
+  head stability (how many of the 209 heads keep their place in ≥ 50 % of the
+  resamples), and the full per-link table. The **model test**: the τ = 0.75
+  filtered z arm's within-document AUC against the **full z arm's on the same
+  pairs** (the paired 2,000-resample bootstrap — the registered headline),
+  its floor and non-floor readings, and the τ = 0.90 arm beside it.
+
+  **The falsification conditions, registered — read out one by one.**
+
+  1. **The model test (the primary).** "The filter is a lever" = the τ = 0.75
+     arm **beats** the full z arm by **≥ +0.05** with the paired 95 % interval
+     excluding zero. The registered prediction is the opposite: the filtered
+     arm's point estimate is **below** the full arm's (the coverage cost). If
+     it is ≥ +0.05 with the interval excluding zero, CS-36's conclusion is
+     refuted on the pair unit and the reading changes.
+  2. **The floor test.** The filtered arm's floor share must **rise** above
+     the full arm's 34.1 % (predicted **≥ 50 %**): the filter empties the
+     questions whose every link rests on one pair. If it stays within 5 points
+     of 34.1 %, the map is not as single-pair-dominated as CS-48's readout
+     says and the rationale (not the verdict) changes.
+  3. **The survival test.** The share of the map surviving τ = 0.75 is
+     predicted **10–15 %** (the `n_with ≥ 2` share, 10.9 %, is the upper
+     reading; single-pair links survive ≈ 63 % and sit below the threshold).
+     **If it is > 40 %**, the pair unit's map is far thicker than CS-48's row
+     statistics suggest; **if < 5 %**, the filter keeps almost nothing — both
+     are reported, with the number.
+  4. **The cliff test.** The single-pair links' survival share must be within
+     **±10 points of 63 %** (the 1 − e⁻¹ prediction; the bootstrap's own
+     finite-corpus correction is small at n = 1,520). A large deviation means
+     the resampling is not the ordinary bootstrap of the pairs.
+  5. **The count check** (CS-49's instrument, kept): the filtered map's
+     measure-free count arm, reported beside the filtered z arm.
+
+  **The nulls this change set can produce.** (i) The filter a cost (the
+  registered prediction; CS-36's verdict reproduces). (ii) The filter a null
+  (within ±0.02, free). (iii) The readout alone: no arm conclusion, the
+  survival numbers are the deliverable. All three are results of the transfer
+  test, each reported with its number.
+
+  **The cost.** **0 model calls**; **500** resamples for the readout (≈ 70 s)
+  and **5 × 100** for the per-fold filters (≈ 65 s), plus two filtered
+  cross-fit grids (≈ 20 s) — about **2.5 minutes**; the artifact grows by the
+  27,979 per-link rows (≈ **3 MB**); no new dependency.
+
+  **Leakage.** The bootstrap draws from the **reviewed pairs only** (subset A);
+  each fold's filter is estimated on that fold's **training** pairs; the
+  unjudged control (B) never enters a resample and is never a label; the
+  filtered arm's judged cells are scored by their own fold's filtered map; no
+  UPR data and no UPR artifact is touched.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-stability`**, the artifact
+  `results/omct-analyze-voyage-dict-stability/analysis.json` (the `dictionary`
+  block with the `stability` readout, the `kind: dictionary` model entry with
+  the full arm reproduced and the two filtered arms); the sweep
+  `experiments_text_processing/omct_dictionary_stability_sweep.py` (the label
+  `omct_dictionary_stability`, the table's section
+  `## OMCT — omct_dictionary_stability`); the config additions
+  `analysis.dictionary.stability`, `stability_resamples` (500),
+  `stability_fold_resamples` (100) and `stability_thresholds` ([0.75, 0.90]);
+  the log section **`## CS-54 — the stability of the pair unit`**.
+
+  **The exit criteria.** A **hand-computed** stability test on a corpus whose
+  every paragraph is identical (every share must be exactly 1.0) and on a
+  hand-authored report (the survival curve, the by-support shares, `survivors`
+  at a threshold); a test that a filtered-out link contributes nothing to the
+  grid and that a question with no surviving link carries the floor; a test
+  that the fold's filter is the fold's own (a link surviving only in the
+  full-set estimate is still dropped in a fold whose estimate lacks it); the
+  fixture run and the real run; `ruff check` / `ruff format` clean over
+  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; awaiting execution.)*
+
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
