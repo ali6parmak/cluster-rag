@@ -398,3 +398,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | reference_model | arm | within_auc | within_d_auc | within_d_auc_ci | ref_within_auc | pooled_auc | pooled_d_auc | deshifted_auc | auc_sum_logodds | auc_sum_positive | auc_max_logodds | auc_support_count | auc_sum_zscore | auc_sum_zscore_positive | auc_sum_positive_nonfloor | blind_within_auc | blind_gap | floor_pairs | floor_share | ctrl_mean_delta | ctrl_rank_p50_delta | floor_gap_delta | hit1_pos | hit1_pos_ref | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-z | 2026-11-05 | voyage-4-nano | sum_zscore_positive | 0.7020 | 0.1782 | [+0.1303, +0.2272] | 0.5238 | 0.7485 | 0.2481 | 0.7334 | 0.5131 | 0.5419 | 0.4967 | 0.6360 | 0.7023 | 0.7020 | 0.8158 | 0.4679 | 0.2340 | 518 | 0.3408 | -0.2867 | 0.0075 | 0.9510 | 0.0744 | 0.1050 | 1520 | 4000 | 3 | 14.471 |
+
+## OMCT — omct_dictionary_classes
+
+| run_id | date | reference_model | arm | within_auc | within_d_auc | within_d_auc_ci | ref_within_auc | pooled_auc | pooled_d_auc | deshifted_auc | auc_sum_logodds | auc_sum_positive | auc_max_logodds | auc_support_count | auc_sum_positive_nonfloor | blind_within_auc | blind_gap | floor_pairs | floor_share | ctrl_mean_delta | ctrl_rank_p50_delta | floor_gap_delta | hit1_pos | hit1_pos_ref | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-classes | 2026-11-05 | n/a | sum_zscore_positive | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 1520 | 4000 | 3 | 18.431 |

@@ -197,6 +197,65 @@ def measure_dictionary_arms(
     }
 
 
+def class_arms_block(
+    view: DatasetView,
+    class_grids: Mapping[str, Mapping[str, Any]],
+    *,
+    primary: str,
+    full_matrix: np.ndarray,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The class-restricted arms' readings, each against the **full** arm (CS-51).
+
+    The increment test: a restricted arm is scored behind the same folds and
+    compared with the full primary arm on the same pairs, so the paired
+    within-document difference is what the hard filter changes (the cosine
+    reference is not involved).
+
+    Args:
+        view: The dataset view.
+        class_grids: The restricted grids, keyed by the restriction name (each
+            one's ``scorings[primary]`` is the matrix).
+        primary: The base arm the restrictions are applied to.
+        full_matrix: The full primary arm's grid.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+
+    Returns:
+        The readout block: per restriction, its AUC, the paired difference
+        against the full arm, its floor and its non-floor reading.
+    """
+    block: dict[str, Any] = {}
+    for name, grids in class_grids.items():
+        matrix = grids["scorings"][primary]
+        measured = measure_arm(view, matrix)
+        stats = _arm_stats(view, measured)
+        floor = np.asarray(grids["floor"], dtype=bool)
+        comparison = compare_arms(
+            view,
+            arm_name=f"{primary}_{name}",
+            reference_similarities=full_matrix,
+            arm_similarities=matrix,
+            resamples=resamples,
+            seed=seed,
+        )
+        paired = comparison["auc_decomposition"]["within_group_paired"]
+        block[name] = {
+            "within_auc": stats["within_auc"],
+            "delta_vs_full": paired["delta_auc"],
+            "ci_low": paired["ci_low"],
+            "ci_high": paired["ci_high"],
+            "p_delta_positive": paired["p_delta_positive"],
+            "by_document": stats["by_document"],
+            "floor_pairs": int(floor.sum()),
+            "floor_share": float(floor.mean()) if floor.size else None,
+            "non_floor": _non_floor_stats(view, measured, ~floor),
+            "reference_arm": primary,
+        }
+    return block
+
+
 def build_dictionary_model(
     view: DatasetView,
     *,
@@ -210,6 +269,8 @@ def build_dictionary_model(
     bootstrap_seed: int,
     primary: str = PRIMARY_SCORING,
     probe: Mapping[str, Any] | None = None,
+    class_grids: Mapping[str, Mapping[str, Any]] | None = None,
+    class_readout: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -225,6 +286,9 @@ def build_dictionary_model(
         bootstrap_seed: The paired bootstrap's seed.
         primary: The pre-registered primary arm.
         probe: The control-vintage block (the per-fold control means).
+        class_grids: The class-restricted grids (CS-51), keyed by the
+            restriction name; ``None`` runs none.
+        class_readout: The map's class readout (CS-51), carried beside the arms.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -285,6 +349,15 @@ def build_dictionary_model(
             )
         )
     readout["spread_comparisons"] = spread
+    if class_grids:
+        readout["class_arms"] = class_arms_block(
+            view,
+            class_grids,
+            primary=primary,
+            full_matrix=matrix,
+            resamples=resamples,
+            seed=bootstrap_seed,
+        )
     readout["spread_note"] = (
         "the four arms' paired comparisons against the same cosine: the primary "
         "arm's is the pre-registered test; the other three are the spread, "
@@ -307,4 +380,5 @@ def build_dictionary_model(
         "arms": {DICTIONARY_ARM: arm_block},
         "comparisons": {DICTIONARY_ARM: comparison},
         "readout": readout,
+        "class_readout": None if class_readout is None else dict(class_readout),
     }

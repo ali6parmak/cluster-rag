@@ -1027,6 +1027,10 @@ class DictionaryConfig(BaseModel):
       by default; CS-50 fixes ``sum_zscore_positive``). It is the arm whose
       comparison with the cosine is the registered test; the other arms are the
       spread.
+    - ``class_restrictions``: CS-51's class-filtered arms, each scored with the
+      **primary** arm's scoring and compared with the **full** primary arm (the
+      increment test): ``nogeneric`` (drop the register) and ``distinctive``
+      (keep only the topic's own vocabulary). Empty (the default) runs none.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1037,6 +1041,7 @@ class DictionaryConfig(BaseModel):
     scorings: tuple[str, ...] = ()
     blind: bool = True
     primary: str | None = None
+    class_restrictions: tuple[str, ...] = ()
 
     @field_validator("scorings")
     @classmethod
@@ -1054,6 +1059,29 @@ class DictionaryConfig(BaseModel):
             )
         if len(set(value)) != len(value):
             raise ValueError(f"analysis.dictionary.scorings must not repeat an arm: {list(value)}")
+        return value
+
+    @field_validator("class_restrictions")
+    @classmethod
+    def _class_restrictions_are_known(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject an unknown class restriction at config time."""
+        if not value:
+            return value
+        from cluster_rag.text_processors.lexical.question_map_score import (
+            CLASS_RESTRICTIONS,
+        )
+
+        unknown = [name for name in value if name not in CLASS_RESTRICTIONS]
+        if unknown:
+            raise ValueError(
+                f"analysis.dictionary.class_restrictions has unknown restriction(s) "
+                f"{unknown}; expected some of {list(CLASS_RESTRICTIONS)}"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError(
+                "analysis.dictionary.class_restrictions must not repeat a "
+                f"restriction: {list(value)}"
+            )
         return value
 
     @field_validator("primary")

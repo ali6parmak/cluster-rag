@@ -81,6 +81,47 @@ _ARMS: dict[str, tuple[str, str, bool]] = {
 # (the same rule as the UPR coefficient's `score_cells`).
 FLOOR_GAP = 1.0
 
+# CS-51's class restrictions: the name the config carries -> the classes the
+# map keeps. ``nogeneric`` drops the register; ``distinctive`` keeps only the
+# topic's own vocabulary.
+CLASS_RESTRICTIONS: dict[str, tuple[str, ...]] = {
+    "nogeneric": ("distinctive", "shared"),
+    "distinctive": ("distinctive",),
+}
+
+
+def _allowed_classes(restrict: Sequence[str] | None) -> frozenset[str] | None:
+    """The classes a restriction keeps (``None`` = every class).
+
+    Raises:
+        ValueError: On an unknown restriction or an empty one.
+    """
+    if restrict is None:
+        return None
+    if not restrict:
+        raise ValueError("a class restriction must keep at least one class")
+    unknown = [name for name in restrict if name not in CLASS_RESTRICTIONS]
+    if unknown:
+        raise ValueError(
+            f"Unknown class restriction(s) {unknown}; expected some of {list(CLASS_RESTRICTIONS)}"
+        )
+    kept: set[str] = set()
+    for name in restrict:
+        kept.update(CLASS_RESTRICTIONS[name])
+    return frozenset(kept)
+
+
+def _table_is_empty(
+    question_map: QuestionMap, question: str, allowed: frozenset[str] | None
+) -> bool:
+    """Whether a question's table has no row the restriction keeps."""
+    rows = question_map.per_question.get(question) or ()
+    if not rows:
+        return True
+    if allowed is None:
+        return False
+    return not any(question_map.word_classes.get(row.word) in allowed for row in rows)
+
 
 def _index_map(values: tuple[str, ...]) -> dict[str, int]:
     """A text -> position map (the grid's rows and columns)."""
@@ -95,6 +136,7 @@ def score_grid(
     scoring: str = PRIMARY_SCORING,
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     units: object = None,
+    restrict: Sequence[str] | None = None,
 ) -> np.ndarray:
     """Score every (paragraph, question) cell from the map's own weights.
 
@@ -109,10 +151,13 @@ def score_grid(
         units: The map's unit (the callable that turns a paragraph into the
             units its tables are keyed by; the default is the content-word
             tokenizer).
+        restrict: The **class restriction** (CS-51): the restriction names whose
+            kept classes only contribute (``None`` keeps every class).
 
     Returns:
         A ``(n_paragraphs, n_questions)`` float64 matrix, higher = more
-        likely. A question with an **empty** table carries the row's floor
+        likely. A question with an **empty** table (under the restriction, if
+        one is given) carries the row's floor
         (the row's smallest seen score minus one), so it can never be ranked
         above a question the map speaks about.
 
@@ -124,6 +169,7 @@ def score_grid(
             f"Unknown scoring function {scoring!r}; expected one of {SCORING_FUNCTIONS}"
         )
     aggregation, measure, positive_only = _ARMS[scoring]
+    allowed = _allowed_classes(restrict)
     units_of = units or (lambda text: content_tokens(text, stopwords))
 
     columns = tuple(questions)
@@ -135,6 +181,8 @@ def score_grid(
     weights = np.zeros((len(words), n_questions), dtype=np.float64)
     present = np.zeros((len(words), n_questions), dtype=bool)
     for word_index, word in enumerate(words):
+        if allowed is not None and question_map.word_classes.get(word) not in allowed:
+            continue
         for pair in question_map.per_word[word]:
             column = column_of.get(pair.question)
             if column is None:
@@ -169,7 +217,7 @@ def score_grid(
     empty_columns = [
         column
         for column, question in enumerate(columns)
-        if not question_map.per_question.get(question)
+        if _table_is_empty(question_map, question, allowed)
     ]
     if empty_columns:
         seen = np.delete(grid, empty_columns, axis=1)
@@ -192,6 +240,7 @@ def cross_fit_grids(
     stopwords: frozenset[str] = DEFAULT_STOPWORDS,
     units: object = None,
     probe_cells: Sequence[tuple[int, int]] | None = None,
+    restrict: Sequence[str] | None = None,
 ) -> dict[str, object]:
     """The out-of-fold score grids: every judged cell from a map that never saw it.
 
@@ -213,6 +262,9 @@ def cross_fit_grids(
         probe_cells: The unjudged cells whose score level is recorded per fold
             (the control cells: the per-fold mean beside the full-map mean is
             the vintage sensitivity check).
+        restrict: The **class restriction** (CS-51), riding into every fold's
+            grid and into the floor flags (a table the filter empties carries
+            the floor).
 
     Returns:
         A dict with the grid's ``paragraphs`` / ``questions``, one assembled
@@ -260,9 +312,10 @@ def cross_fit_grids(
             units=units,
         )
 
+    allowed = _allowed_classes(restrict)
     floor = np.asarray(
         [
-            not fold_maps[int(fold_ids[index])].per_question.get(question_texts[index])
+            _table_is_empty(fold_maps[int(fold_ids[index])], question_texts[index], allowed)
             for index in range(len(labels_list))
         ],
         dtype=bool,
@@ -277,6 +330,7 @@ def cross_fit_grids(
             scoring=scoring,
             stopwords=stopwords,
             units=units,
+            restrict=restrict,
         )
         fold_grids = {
             fold: score_grid(
@@ -286,6 +340,7 @@ def cross_fit_grids(
                 scoring=scoring,
                 stopwords=stopwords,
                 units=units,
+                restrict=restrict,
             )
             for fold in fold_values
         }

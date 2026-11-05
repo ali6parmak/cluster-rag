@@ -142,3 +142,32 @@ def test_the_z_scored_arms_use_the_z_score() -> None:
     assert set(np.sign(signed[:, 0])).issubset({-1.0, 0.0, 1.0})
     with pytest.raises(ValueError, match="Unknown scoring function"):
         score_grid(paragraphs, questions, question_map, scoring="sum_g2")
+
+
+def test_the_class_restriction_filters_the_words() -> None:
+    """CS-51: a filtered word contributes nothing; a filtered-empty table floors."""
+    paragraphs = ["alpha bravo", "alpha bravo", "alpha bravo", "delta echo"]
+    questions = ["q1", "q2", "q3", "q1"]
+    labels = [1, 1, 1, 0]
+    question_map = build_question_map(paragraphs, questions, labels)
+    # alpha sits in all three labelled tables -> generic; bravo too
+    assert question_map.word_classes["alpha"] == "generic"
+    grid = score_grid(
+        ("alpha bravo", "delta echo"),
+        ("q1",),
+        question_map,
+        scoring="sum_zscore_positive",
+    )
+    restricted = score_grid(
+        ("alpha bravo", "delta echo"),
+        ("q1",),
+        question_map,
+        scoring="sum_zscore_positive",
+        restrict=("distinctive",),
+    )
+    # the full grid scores the paragraph from its generic words; the restricted
+    # one has an empty table for q1 -> the row's floor (below everything)
+    assert grid[0, 0] > 0.0
+    assert restricted[0, 0] < 0.0
+    with pytest.raises(ValueError, match="Unknown class restriction"):
+        score_grid(("a",), ("q1",), question_map, restrict=("bogus",))

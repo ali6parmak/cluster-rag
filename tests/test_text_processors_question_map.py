@@ -19,7 +19,9 @@ import pytest
 from cluster_rag.text_processors.features.corpus_map import log_odds as corpus_log_odds
 from cluster_rag.text_processors.features.question_map import (
     REGISTER_QUARTER,
+    QuestionMap,
     build_question_map,
+    class_block,
     cross_fit_availability,
     estimator_block,
     question_map_block,
@@ -248,3 +250,40 @@ def test_the_estimator_readout_carries_the_heads_and_the_prior() -> None:
     assert block["head_difference"]["z"] in (0, 1)
     assert 0.0 <= block["conditional_sign_flip"]["share"] <= 1.0
     assert block["z_score"]["share_positive"] is not None
+
+
+def _class_fixture() -> tuple[QuestionMap, tuple[str, ...], tuple[str, ...]]:
+    """Four questions with a positive each; four words in 1, 2, 3 and 4 tables."""
+    paragraphs: list[str] = []
+    questions: list[str] = []
+    labels: list[int] = []
+    # one positive pair per question, two pairs each
+    for index in range(4):
+        question = f"question {index}"
+        # w1 sits in 1 table, w2 in 2, w3 in 3, w4 in all 4
+        words = [w for w in ("w1", "w2", "w3", "w4") if index < int(w[1])]
+        paragraphs.append(" ".join(words) + f" topic{index}")
+        questions.append(question)
+        labels.append(1)
+        paragraphs.append(f"other{index}")
+        questions.append(question)
+        labels.append(0)
+    question_map = build_question_map(paragraphs, questions, labels)
+    return question_map, tuple(dict.fromkeys(paragraphs)), tuple(dict.fromkeys(questions))
+
+
+def test_the_word_classes_are_hand_computed() -> None:
+    """CS-51: the class is the number of labelled tables the word sits in."""
+    question_map, _, _ = _class_fixture()
+    # four labelled tables -> the generic threshold is max(3, ceil(1)) = 3
+    assert question_map.word_classes["w1"] == "distinctive"
+    assert question_map.word_classes["w2"] == "distinctive"
+    assert question_map.word_classes["w3"] == "generic"
+    assert question_map.word_classes["w4"] == "generic"
+    block = class_block(question_map)
+    assert block["thresholds"]["n_labelled_tables"] == 4
+    assert block["thresholds"]["generic_min_tables"] == 3
+    # w1, w2 and the four per-question topic words (each in one table)
+    assert block["classes"]["distinctive"]["words"] == 6
+    assert block["classes"]["generic"]["words"] == 2
+    assert block["classes"]["distinctive"]["positive_share"] == pytest.approx(1.0)

@@ -525,6 +525,37 @@ ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The dictionary **classes** (CS-51): the class-filtered arms measured against
+# the full primary arm (the increment the hard filter adds on top of the soft
+# prior), with the class readout beside them (the z-score's class means, which
+# is where the prior's work shows).
+ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "full_within_auc",
+    "full_nonfloor_auc",
+    "nogeneric_within_auc",
+    "nogeneric_delta",
+    "nogeneric_ci",
+    "nogeneric_nonfloor_auc",
+    "distinctive_within_auc",
+    "distinctive_delta",
+    "distinctive_ci",
+    "distinctive_nonfloor_auc",
+    "class_distinctive_mean_z",
+    "class_generic_mean_z",
+    "class_generic_positive_share",
+    "floor_full",
+    "floor_nogeneric",
+    "floor_distinctive",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_CLASSES_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The decision probe's table (the `decide-omct` command, Stage 3.5): one row
 # per arm of a run. The headline is the **within-document** AUC (the pooled
 # number sits beside it, never alone); the **calibration** columns sit next to

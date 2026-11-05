@@ -134,6 +134,38 @@ analysis:
   chunker: full_text
 """
 
+# CS-51: the class-restricted arms (the hard filter against the soft prior).
+DICTIONARY_CLASSES_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings:
+      - sum_logodds
+      - sum_positive
+      - max_logodds
+      - support_count
+      - sum_zscore
+      - sum_zscore_positive
+    primary: sum_zscore_positive
+    class_restrictions: [nogeneric, distinctive]
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-49: the dictionary arm needs exactly one reference model (its cosine).
 DICTIONARY_ARM_CONFIG_EXTRA = """
 analysis:
@@ -835,6 +867,45 @@ def test_analyze_omct_dictionary_arm_end_to_end(
     assert "sum_positive" in row
 
 
+def test_analyze_omct_dictionary_classes_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-51: the class-restricted arms land in their own section with a delta."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-classes-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_CLASSES_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-classes-test" / "analysis.json").read_text("utf-8")
+    )
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    readout = entry["readout"]
+    assert readout["primary"] == "sum_zscore_positive"
+    assert set(readout["class_arms"]) == {"nogeneric", "distinctive"}
+    for name in ("nogeneric", "distinctive"):
+        arm = readout["class_arms"][name]
+        assert 0.0 <= (arm["within_auc"] or 0.0) <= 1.0
+        assert arm["reference_arm"] == "sum_zscore_positive"
+        assert arm["floor_pairs"] >= 0
+    assert entry["class_readout"]["thresholds"]["n_labelled_tables"] == 3
+    assert entry["class_readout"]["thresholds"]["generic_min_tables"] == 3
+
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-classes-test"))
+    assert "sum_zscore_positive" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -876,6 +947,13 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
     assert DictionaryConfig().primary is None
     with pytest.raises(ValueError, match="not a known arm"):
         DictionaryConfig(primary="sum_g2")
+    # CS-51: the class restrictions are validated too
+    assert DictionaryConfig(class_restrictions=("nogeneric", "distinctive")).class_restrictions == (
+        "nogeneric",
+        "distinctive",
+    )
+    with pytest.raises(ValueError, match="unknown restriction"):
+        DictionaryConfig(class_restrictions=("generic",))
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

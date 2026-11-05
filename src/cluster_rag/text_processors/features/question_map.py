@@ -59,12 +59,21 @@ import math
 import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 
 from cluster_rag.text_processors.features.corpus_map import log_odds
 from cluster_rag.text_processors.features.pair_features import DEFAULT_STOPWORDS, content_tokens
 from cluster_rag.text_processors.lexical.lexicon import pair_measures, prior_total
+from cluster_rag.text_processors.lexical.word_class import (
+    DISTINCTIVE_MAX_TABLES,
+    GENERIC_SHARE,
+    WORD_CLASSES,
+    classify_word,
+    generic_threshold,
+)
 
 # The unit, as the artifact records it (the descriptions are the block's own
 # words: a reader must be able to tell what the "text" and the "label" are).
@@ -157,6 +166,9 @@ class QuestionMap:
             informative prior's input in CS-50).
         alpha0: The estimator's prior total (CS-50): Σ over the vocabulary of
             the words' global document frequencies plus the floor.
+        word_classes: Each word's class (CS-51): how many of the **labelled**
+            tables it sits in — ``distinctive`` (1-2), ``shared`` (3 to a
+            quarter of them - 1) or ``generic`` (at least a quarter).
     """
 
     n_reviewed_pairs: int
@@ -169,6 +181,7 @@ class QuestionMap:
     per_word: Mapping[str, tuple[QuestionPair, ...]]
     word_df: Mapping[str, int]
     alpha0: float = 0.0
+    word_classes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def n_questions(self) -> int:
@@ -331,6 +344,12 @@ def build_question_map(
         word: tuple(sorted(rows, key=lambda row: (-row.log_odds, row.question)))
         for word, rows in per_word.items()
     }
+    # CS-51's word classes: how many of the LABELLED tables each word sits in
+    # (a question with no positive has an empty table, so it never counts).
+    n_labelled_tables = sum(1 for question in question_counts if positive_words[question])
+    word_classes = {
+        word: classify_word(len(rows), n_labelled_tables) for word, rows in frozen_per_word.items()
+    }
     return QuestionMap(
         n_reviewed_pairs=len(labels),
         n_positive=sum(1 for label in labels if label == 1),
@@ -342,6 +361,7 @@ def build_question_map(
         per_word=frozen_per_word,
         word_df=dict(word_df),
         alpha0=alpha0,
+        word_classes=word_classes,
     )
 
 
@@ -718,6 +738,90 @@ def estimator_block(question_map: QuestionMap) -> dict[str, Any]:
     }
 
 
+def class_block(question_map: QuestionMap) -> dict[str, Any]:
+    """The word-class readout (CS-51): CS-33's classes, crossed with the z-score.
+
+    A word's class is how many of the **labelled** tables it sits in (CS-33's
+    rule): ``distinctive`` (1-2), ``shared`` (the middle) or ``generic`` (at
+    least a quarter). Per class the readout carries the words, the pairs, the
+    share of **positive** log-odds, the mean log-odds **and the mean z-score**
+    (CS-50's measure — the one the restricted arms are built on), plus the
+    registered separation test on the z-score.
+
+    Args:
+        question_map: The map.
+
+    Returns:
+        A JSON-serializable readout block.
+    """
+    n_labelled = sum(
+        1 for question in question_map.questions if question_map.per_question.get(question)
+    )
+    per_class: dict[str, dict[str, Any]] = {
+        name: {"words": 0, "pairs": 0, "positive_pairs": 0, "log_odds": [], "z_scores": []}
+        for name in WORD_CLASSES
+    }
+    for word, rows in question_map.per_word.items():
+        name = question_map.word_classes.get(word, "")
+        if name not in per_class:
+            continue
+        block = per_class[name]
+        block["words"] += 1
+        for row in rows:
+            block["pairs"] += 1
+            block["positive_pairs"] += 1 if row.log_odds > 0.0 else 0
+            block["log_odds"].append(row.log_odds)
+            block["z_scores"].append(row.z_score)
+    report: dict[str, Any] = {}
+    for name, block in per_class.items():
+        pairs = block["pairs"]
+        report[name] = {
+            "words": block["words"],
+            "pairs": pairs,
+            "positive_pairs": block["positive_pairs"],
+            "positive_share": (block["positive_pairs"] / pairs) if pairs else None,
+            "mean_log_odds": (float(np.mean(block["log_odds"])) if block["log_odds"] else None),
+            "mean_z_score": (float(np.mean(block["z_scores"])) if block["z_scores"] else None),
+        }
+    distinctive = report.get("distinctive") or {}
+    generic = report.get("generic") or {}
+    separation = {
+        "mean_z_difference": (
+            distinctive["mean_z_score"] - generic["mean_z_score"]
+            if distinctive.get("mean_z_score") is not None
+            and generic.get("mean_z_score") is not None
+            else None
+        ),
+        "generic_positive_share_lower": (
+            (generic.get("positive_share") or 0.0) < (distinctive.get("positive_share") or 1.0)
+            if distinctive.get("positive_share") is not None
+            and generic.get("positive_share") is not None
+            else None
+        ),
+        "margin": 0.5,
+        "note": (
+            "the z-measure version of CS-33's separation test (the UPR margin was "
+            "1.0 on the log-odds; the z-scores sit on a smaller scale, so the bar "
+            "is halved and stated in advance)"
+        ),
+    }
+    return {
+        "thresholds": {
+            "n_labelled_tables": n_labelled,
+            "distinctive_max_tables": DISTINCTIVE_MAX_TABLES,
+            "generic_share": GENERIC_SHARE,
+            "generic_min_tables": generic_threshold(n_labelled),
+        },
+        "classes": report,
+        "separation": separation,
+        "note": (
+            "a word's class is the number of LABELLED tables (the 209 questions "
+            "with a positive) it sits in; CS-48's register readout used a quarter "
+            "of ALL 294 questions, so its threshold (74) differs from this one"
+        ),
+    }
+
+
 def question_map_block(
     question_map: QuestionMap,
     availability: Mapping[str, Any] | None,
@@ -784,6 +888,7 @@ def question_map_block(
         },
         "readout": readout_block(question_map),
         "estimator": estimator_block(question_map),
+        "classes": class_block(question_map),
         "cross_fit": {
             "folds": int(folds),
             "seed": int(seed),

@@ -102,6 +102,7 @@ research record and are **not** indexed here.
 | [CS-48 — the question map on OMCT](#cs-48--the-question-map-on-omct-2026-11-05) | one `omct-analyze-dictmap` run (the reviewed pairs' own word↔question association; **no embedder**, 0 model calls, 0.5 s) | **the unit is thick only where a question has ≥ 4 positives**: 294 questions → **209 tables / 85 silent**, 27,979 (question, word) pairs; the lift-vs-log-odds separation **does not transfer** (47.4 % of the contrastable tables, UPR's 91.7 %); **101 of 209** tables hold a word shared by two positives (all **37** of the ≥ 4-positive ones, none of the 107 single-positive ones); the cross-fit availability is **65.9 %** of the 1,520 pairs (evidence 61.1 %), so **518 pairs carry the floor** | `results/omct-analyze-dictmap/analysis.json` |
 | [CS-49 — the map as a pair scorer on OMCT](#cs-49--the-map-as-a-pair-scorer-on-omct-2026-11-05) | one `omct-analyze-voyage-dict` run (the map as a pair scorer; **0 model calls**, 10.8 s) | **a null that matches the cosine**: the primary arm 0.5419 against the cosine's 0.5238 (+0.0181 [−0.0267, +0.0630]); the floor (518 pairs, 34.08 %, 77.8 % of them negative) carries the edge (the non-floor reading is 0.4439, below chance); and the **measure-free count** is the only arm that beats the cosine (**0.6360**, +0.1122 [+0.0672, +0.1584], non-floor 0.6645) — the UPR's measure lever **inverts** on the pair unit | `results/omct-analyze-voyage-dict/analysis.json` |
 | [CS-50 — the estimator on OMCT](#cs-50--the-estimator-on-omct-the-upr-gain-reproduces-2026-11-05) | one `omct-analyze-voyage-dict-z` run (CS-31's six measures on the pair unit; the two z arms; **0 model calls**, 14.5 s) | **the registered null is REFUTED — the estimator transfers and is the chain's first win**: `sum_zscore_positive` **0.7020** against the cosine's 0.5238 (**+0.1782 [+0.1303, +0.2272]**, P 1.000), the non-floor reading **0.8158**, the blind gap **+0.2340**, all three documents above the cosine; the z head changes 177 of 209 tables (84.7 %, the prediction was < 50 %) — the prior's per-word normalization makes the weights comparable across questions | `results/omct-analyze-voyage-dict-z/analysis.json` |
+| [CS-51 — the word classes on OMCT](#cs-51--the-word-classes-on-omct-the-soft-prior-already-does-it-2026-11-05) | one `omct-analyze-voyage-dict-classes` run (the two class-restricted z arms against the full z arm; **0 model calls**, 18.7 s) | **a null for the hard filter**: `nogeneric` −0.0123 [−0.0221, −0.0024] (a small, detectable **cost**) and `distinctive` −0.0758 [−0.1052, −0.0472] with its floor jumping to 71.6 % — the **soft prior already does the class filter's work**; the class readout is the finding: the z-score separates the classes (distinctive +0.3782 / generic +0.0234) while the **raw log-odds reverse CS-33's order** (distinctive −0.2317 / generic +0.9081) | `results/omct-analyze-voyage-dict-classes/analysis.json` |
 
 ## Change sets
 
@@ -8952,5 +8953,89 @@ the reading says one is not needed, which is itself a result the later change
 sets may lean on.
 
 **The gate.** `pytest`: **974 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **237** files. Two consecutive runs are
+bit-identical (bar the clock fields).
+
+## CS-51 — the word classes on OMCT: the soft prior already does it (2026-11-05)
+
+**The run.** One: `omct-analyze-voyage-dict-classes` — CS-33's three word
+classes on the pair unit (the class = how many of the **209 labelled tables**
+the word sits in: distinctive 1–2, shared 3–52, generic ≥ 53), the class
+readout crossed with the z-score, and the two class-restricted **z arms**
+compared with the **full z arm** on the same pairs (the increment test CS-50
+re-scoped). **0 model calls**, **18.7 s**, the artifact **15.1 MB**, **no new
+dependency**; the CS-50 numbers are reproduced exactly (the full arm 0.7020,
+the blind 0.4679, the floor 518). The sweep is
+`experiments_text_processing/omct_dictionary_classes_sweep.py` (the label
+`omct_dictionary_classes`, the table's section
+`## OMCT — omct_dictionary_classes`).
+
+**The increment test (the primary): the hard filter costs a little, and it is
+not a lever.** The "no generic" arm (distinctive + shared) reaches a
+within-document AUC of **0.6897** against the full z arm's **0.7020** — a
+paired **−0.0123 [−0.0221, −0.0024]** (P(Δ>0) 0.005). The registered prediction
+was **within ±0.02** of zero (the filters are substitutes): the point estimate
+is inside that band, but the interval **excludes zero** — so the honest reading
+is "the hard filter is a **small, detectable cost**", not "a free
+simplification". The "it works" bar (**≥ +0.05**, the interval excluding zero)
+is far away: **CS-51 is a null** — the soft prior already does the class
+filter's work.
+
+**The distinctive-only arm loses, as predicted, and the floor says why.** It
+reaches **0.6262** — **−0.0758 [−0.1052, −0.0472]** against the full arm —
+while its **floor share jumps from 34.1 % to 71.6 %** (1,088 pairs): the hard
+filter **empties** most questions' tables, because the distinctive words are
+rare (CS-33's reason, measured again). Its non-floor reading is **0.5157** —
+barely above chance — so what is left of its all-pairs number is the silence's
+prior once more. This is the UPR finding (`distinctive only` 0.0798 against
+0.5243) in a milder form, and it confirms the "coverage" reading.
+
+**The class readout is the finding — and it reverses CS-33's classes on the
+raw log-odds while confirming them on the z-score.**
+
+| the class | the words | the pairs | positive share | the mean log-odds | **the mean z-score** |
+|---|---|---|---|---|---|
+| distinctive (1–2 tables) | 594 | 918 | **35.4 %** | **−0.2317** | **+0.3782** |
+| shared (3–52) | 1,380 | 18,598 | 64.7 % | +0.7971 | +0.1145 |
+| generic (≥ 53) | 108 | 8,463 | **72.5 %** | **+0.9081** | **+0.0234** |
+
+On UPR the distinctive class was **100 % positive with +4.27** and the generic
+**81 % with +0.84**; on OMCT the **raw log-odds' class order is inverted** —
+the distinctive words are mostly *negative* within their tables and the generic
+words mostly positive. The reason is the small table: a word in one or two of
+a question's positives is punished by the `(d+0.5)/(c+0.5)` term, which is
+dominated by the question's own positive rate, not by the word's association
+(a question with 10 positives gives a word in 2 of them a negative log-odds
+whatever the word is). The **informative z-score cancels that term**: both δ
+denominators carry `α₀` (97,460), so δ reduces to the per-word
+`log((a+α_w)/(b+α_w))` ratio and the question's positive rate drops out — and
+the class order is the one CS-50's mechanism predicts: **distinctive +0.3782
+against generic +0.0234** (a difference of **+0.3548**). So the z-score is what
+the class readout should be read on; on the raw log-odds the classes mean
+almost the opposite of what CS-33 measured.
+
+**The separation test, read out.** The registered test (the z-measure version
+of CS-33's): the distinctive mean z must exceed the generic one by **≥ 0.5**
+**and** the generic class's positive share must be lower. **Both legs fail** —
+the difference is **+0.3548** (the direction holds, the bar does not) and the
+generic positive share is **higher** (72.5 % against 35.4 %), the second leg
+being a CS-33 carry-over that does not transfer because the raw log-odds' sign
+is table-rate-driven on this unit. The readout is therefore reported as a
+**finding** (the z-measure separates the classes in the predicted direction)
+with the registered bar explicitly not met.
+
+**The other registered checks.** The count remains within 0.10 of the full z
+arm (0.6360 against 0.7020, a gap of 0.066) ✓. The per-document numbers for
+the "no generic" arm are 0.6003 / 0.7975 / 0.8370 (NU / AI / CIDH).
+
+**What this change set does not say.** Nothing about **POS** (CS-52), which is
+the next axis and now has a bar of its own: the hard class filter is a null, so
+a grammatical filter is unlikely to be a lever either — the pre-registration
+must say so and test it. Nothing about the **phrase** table (CS-53), the
+**stability** filter (CS-54), the **mined lexicon** (CS-55) or the
+**abstention** (CS-56); nothing about UPR; and nothing about a **different
+class threshold** (the quarter share was fixed in advance and not swept).
+
+**The gate.** `pytest`: **977 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **237** files. Two consecutive runs are
 bit-identical (bar the clock fields).

@@ -1738,95 +1738,20 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   **The next change set is CS-51** (word classes): it now has to say which
   increment the class restriction adds **on top of** the soft prior.
 
-- [ ] **CS-51 — word classes: what does the hard restriction add on top of the
-  soft prior?** CS-33's three classes on the pair unit (a word's class is how
-  many questions' tables it sits in), the class readout crossed with the
-  z-score, and the two class-restricted z arms measured **against the full
-  z arm** — the bar CS-50 re-scoped: the prior already suppresses the register
-  (the common words get `z ≈ 0`), so the pre-registered question is whether a
-  **hard** filter adds anything to the **soft** one.
-
-  **The UPR verdict this ports (the prior), and its reason.** CS-33 (executed
-  2026-11-01) was a **readout win and a payoff loss**: the classes separate
-  widely (the **distinctive** words 100 % positive at a mean log-odds of
-  **+4.2676**, the **generic** 81 % at **+0.8439** — the registered null did
-  not fire) — but the class-restricted maps were **much worse** as classifiers
-  (0.3815 for "no generic" and **0.0798** for "distinctive only" against the
-  full map's 0.5243). The reason: the strongest words are **rare** and the
-  register is **everywhere**; the map's classifier works on **coverage**, so
-  dropping the generic class keeps the signal and throws the coverage away.
-
-  **The flip, re-scoped by CS-50.** On UPR the register was *inside* the sum
-  (the plain log-odds), so dropping it hurt. On OMCT the z-score's per-word
-  prior already sends the common words to `z ≈ 0` — a **soft** version of the
-  same restriction — and the z arm is the chain's win (0.7020). So the
-  pre-registered prediction is that the **hard** filter adds little: the
-  "no generic" arm should land **within ±0.02** of the full z arm (the two are
-  substitutes), and the **distinctive-only** arm should **lose** (coverage),
-  as on UPR. "It works" (the restriction is a lever) = the "no generic" arm
-  **beats** the full z arm by **≥ 0.05** on the same pairs with a paired
-  interval excluding zero.
-
-  **The mechanism.** A word's class is read off the map's own structure
-  (CS-33's rule, unchanged): the number of the **209 labelled tables** it sits
-  in — **distinctive** 1–2, **shared** 3–52, **generic** ≥ **53** (a quarter of
-  209, the share the rule has always used). The readout is per class: the
-  words, the (question, word) pairs, the share of **positive** log-odds, the
-  mean log-odds **and the mean z-score** (CS-50's measure, the one that
-  matters now). The two restricted arms are the **primary z-scored arm** with the
-  map's classes filtered: **"no generic"** (distinctive + shared) and
-  **"distinctive only"**. Each is scored behind the **same folds** as the full
-  arm and compared with **the full arm on the same pairs** (the paired
-  within-document difference — the increment test), with the cosine reference
-  beside it.
-
-  **The falsification conditions, registered.**
-
-  1. **The increment test (the primary).** The "no generic" arm's paired
-     within-document difference against the full z arm: the prediction is
-     **within ±0.02** of zero (the filters are substitutes). **If it is ≥
-     +0.05 with the interval excluding zero, the hard filter adds beyond the
-     soft prior** and becomes a lever; if ≤ −0.05, the restriction costs the
-     coverage the z arm needs (CS-33's failure reproduces on top of the prior).
-  2. **The distinctive-only test.** Predicted to **lose** (the point estimate
-     below the full arm's; no bar on the size — UPR's loss was −0.4445).
-  3. **The class readout test.** The distinctive class's mean z-score must
-     exceed the generic class's by **≥ 0.5** and the generic class's positive
-     share must be lower — the z-measure version of CS-33's separation test
-     (UPR's margin was 1.0 on the log-odds; the z-scores are on a smaller
-     scale, so the bar is halved and stated in advance).
-  4. **The count check** (CS-49's instrument, kept): the measure-free count's
-     within-document AUC must stay **within 0.10 of the full z arm** — if a
-     class filter somehow helps the count too, the reading is about the unit,
-     not the classes.
-
-  **The cost.** **0 new model calls**; the class index is computed inside the
-  map build, and the two restricted arms double the fold-grid work (~12 s).
-
-  **Leakage.** Unchanged: the map is built on the reviewed pairs only, the
-  classes are a property of the **map's own tables** (no label information
-  beyond the pairs), the control never enters a fit, and the restricted arms
-  are scored by the same out-of-fold maps.
-
-  **The runs.** One: **`omct-analyze-voyage-dict-classes`**, the artifact
-  `results/omct-analyze-voyage-dict-classes/analysis.json` (the `dictionary`
-  block with the class readout, the `kind: dictionary` model entry with the two
-  restricted arms and their comparisons against the full arm); the sweep
-  `experiments_text_processing/omct_dictionary_classes_sweep.py` (the label
-  `omct_dictionary_classes`, the table's section
-  `## OMCT — omct_dictionary_classes`); the config addition
-  `analysis.dictionary.class_restrictions`; the log section
-  **`## CS-51 — the word classes on OMCT`**.
-
-  **The exit criteria.** A hand-computed unit test of the class rule on a toy
-  map (a word in 1, 2, 3 and all of the tables); a test that a filtered word
-  contributes nothing to the grid; a test that the restricted grid differs
-  from the full one only through the filtered words; the fixture run and the
-  real run; `ruff check` / `ruff format` clean over
-  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
-
-  *(pre-registered 2026-11-05; awaiting execution.)*
-
+- **CS-51** (the word classes) → executed 2026-11-05 → the archive's §7.9 (the
+  word classes) and the track log's §CS-51. **The hard filter is a null**: on
+  top of CS-50's soft prior the "no generic" z arm is **−0.0123 [−0.0221,
+  −0.0024]** against the full z arm (the registered ±0.02 band holds at the
+  point estimate, but the interval excludes zero — a small, detectable
+  **cost**), and the "distinctive only" arm loses **−0.0758 [−0.1052,
+  −0.0472]** with its floor jumping to **71.6 %**. The **class readout** is the
+  finding: the z-score separates the classes (distinctive **+0.3782** / generic
+  **+0.0234**) while the **raw log-odds reverse CS-33's order** (distinctive
+  **−0.2317** / generic **+0.9081**) — the α₀ denominators cancel the
+  question's positive rate, which is what the raw log-odds' sign was reading.
+  **The next change set is CS-52** (POS): with the class filter a null, the
+  grammatical filter is unlikely to be a lever — the pre-registration must say
+  so and test it.
 
 ## 8. The durable deliverable (named, so it is not lost)
 

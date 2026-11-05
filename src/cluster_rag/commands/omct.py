@@ -38,6 +38,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ARM_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ARM_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_CLASSES_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS,
@@ -451,6 +453,63 @@ def _dictionary_row(
         "avail_table_cidh": _fmt(_document_share("CIDH", "with_table_share"), 4),
         "avail_table_ai": _fmt(_document_share("AI", "with_table_share"), 4),
         "n_pairs": corpus["n_reviewed_pairs"],
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_class_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **classes** section (CS-51)."""
+    readout = model["readout"]
+    classes = readout.get("class_arms") or {}
+    primary = readout["primary"]
+    full = readout["scorings"][primary]
+    class_readout = (model.get("class_readout") or {}).get("classes") or {}
+
+    def _arm(name: str, key: str) -> Any:
+        return (classes.get(name) or {}).get(key)
+
+    def _ci(name: str) -> str | None:
+        block = classes.get(name) or {}
+        if block.get("ci_low") is None:
+            return None
+        return f"[{block['ci_low']:+.4f}, {block['ci_high']:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": primary,
+        "full_within_auc": _fmt(full.get("within_auc"), 4),
+        "full_nonfloor_auc": _fmt((readout.get("secondary_non_floor") or {}).get("within_auc"), 4),
+        "nogeneric_within_auc": _fmt(_arm("nogeneric", "within_auc"), 4),
+        "nogeneric_delta": _fmt(_arm("nogeneric", "delta_vs_full"), 4),
+        "nogeneric_ci": _ci("nogeneric"),
+        "nogeneric_nonfloor_auc": _fmt((_arm("nogeneric", "non_floor") or {}).get("within_auc"), 4),
+        "distinctive_within_auc": _fmt(_arm("distinctive", "within_auc"), 4),
+        "distinctive_delta": _fmt(_arm("distinctive", "delta_vs_full"), 4),
+        "distinctive_ci": _ci("distinctive"),
+        "distinctive_nonfloor_auc": _fmt(
+            (_arm("distinctive", "non_floor") or {}).get("within_auc"), 4
+        ),
+        "class_distinctive_mean_z": _fmt(
+            (class_readout.get("distinctive") or {}).get("mean_z_score"), 4
+        ),
+        "class_generic_mean_z": _fmt((class_readout.get("generic") or {}).get("mean_z_score"), 4),
+        "class_generic_positive_share": _fmt(
+            (class_readout.get("generic") or {}).get("positive_share"), 4
+        ),
+        "floor_full": readout["floor"]["n_floor_pairs"],
+        "floor_nogeneric": _arm("nogeneric", "floor_pairs"),
+        "floor_distinctive": _arm("distinctive", "floor_pairs"),
+        "n_pairs": full.get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1247,11 +1306,25 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 questions=tuple(view.questions),
                 scorings=analysis.dictionary.scorings,
             )
+        class_grids: dict[str, Any] = {}
+        for restriction in analysis.dictionary.class_restrictions:
+            class_grids[restriction] = cross_fit_grids(
+                [record.paragraph_text for record in records],
+                [record.question_text for record in records],
+                [record.label for record in records],
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(analysis.dictionary.primary or PRIMARY_SCORING,),
+                restrict=(restriction,),
+            )
         models.append(
             build_dictionary_model(
                 view,
                 grids=grids,
                 blind_grids=blind_grids,
+                class_grids=class_grids,
+                class_readout=(dictionary_block or {}).get("classes"),
                 reference_similarities=baseline.similarities,
                 reference_name=entry.name,
                 folds=analysis.dictionary.folds,
@@ -1464,15 +1537,26 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            table_rows.append(
-                _dictionary_arm_row(
-                    model,
-                    run_id=omct_run_id,
-                    n_control=view.control.n_cells,
-                    n_docs=view.pooled["n_documents"],
-                    seconds=payload["total_seconds"],
+            if (model.get("readout") or {}).get("class_arms"):
+                table_rows.append(
+                    _dictionary_class_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
                 )
-            )
+            else:
+                table_rows.append(
+                    _dictionary_arm_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
             continue
         if model.get("kind") == "decision":
             # The decision arm (CS-7b): its own entry, one row per arm.
@@ -1558,12 +1642,22 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
         # The arm's own section (CS-49): its row shape carries the AUCs and
         # the comparison, so it is not the map's section (CS-48's). The
         # estimator's run (CS-50) adds the two z-scored arms' columns.
-        has_estimator_arms = any(
-            (model.get("readout") or {}).get("scorings", {}).keys()
-            & {"sum_zscore", "sum_zscore_positive"}
+        has_class_arms = any(
+            (model.get("readout") or {}).get("class_arms")
             for model in models
             if model.get("kind") == "dictionary"
         )
+        if has_class_arms:
+            columns = ANALYZE_OMCT_DICTIONARY_CLASSES_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_CLASSES_KEY_COLUMNS
+            has_estimator_arms = False
+        else:
+            has_estimator_arms = any(
+                (model.get("readout") or {}).get("scorings", {}).keys()
+                & {"sum_zscore", "sum_zscore_positive"}
+                for model in models
+                if model.get("kind") == "dictionary"
+            )
         if has_estimator_arms:
             columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_ESTIMATOR_KEY_COLUMNS
