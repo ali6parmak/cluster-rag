@@ -88,8 +88,8 @@ a { color: var(--ctp-blue); }
 .ev-pill b { color: var(--ctp-green); font-weight: 600; margin-left: 0.18rem; }
 
 /* Compare hitmaps: the word x label z-score matrix */
-.ev-hitmap thead th { vertical-align: bottom; }
-.ev-h-label { display: block; color: var(--ctp-text); font-weight: 600; font-size: 0.72rem; line-height: 1.25; white-space: normal; max-width: 10rem; margin-left: auto; }
+.ev-hitmap thead th { vertical-align: top; }
+.ev-h-label { display: block; color: var(--ctp-text); font-weight: 600; font-size: 0.72rem; line-height: 1.3; white-space: nowrap; max-width: none; }
 .ev-h-meta { display: block; color: var(--ctp-overlay0); font-weight: 400; font-size: 0.64rem; margin-top: 0.15rem; white-space: nowrap; }
 .ev-h-tag { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.03em; margin-right: 0.25rem; }
 .ev-h-gold { color: var(--ctp-yellow); }

@@ -273,3 +273,6 @@ def test_the_stylesheet_carries_the_table_look() -> None:
     assert ".ev-z-pos" in css
     assert ".ev-h-gold" in css
     assert ".ev-pick" in css
+    # the hitmap headers are top-aligned and one line each, so they line up
+    assert ".ev-hitmap thead th { vertical-align: top; }" in css
+    assert "white-space: nowrap" in css
