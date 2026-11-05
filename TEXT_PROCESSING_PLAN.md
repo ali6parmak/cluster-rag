@@ -1821,6 +1821,95 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   unit. **The next change set is CS-57** (question pairs): the round's last,
   a description with its registered predictions.
 
+- [ ] **CS-57 — question pairs: the questionnaire's own relation, in place of
+  the taxonomy's.** CS-38's label-pair map, adapted: there is **no catalog on
+  OMCT**, so the taxonomy's claim (the corpus rediscovers the siblings) cannot
+  be the test. The adaptation: the **question-pair relation** — do questions
+  that **share a reviewed paragraph** (the same document's questionnaire)
+  share **vocabulary**? — plus the **vocabulary-less class** (the questions
+  with no word of their own) and the **closest-pairs** readout.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-38 (executed
+  2026-11-02) found the **corpus's label-pair relation IS the taxonomy's**: the
+  sibling pairs' mean vocabulary Jaccard was **+0.0413 [+0.0372, +0.0451]**
+  above the other pairs', **11 of the corpus's 20 closest pairs** were
+  siblings, and the **vocabulary-less class held 13 labels**. The reason: the
+  corpus's vocabulary is distributed by the taxonomy's topics, so the lexical
+  neighbours are the siblings.
+
+  **The adaptation, and what replaces the taxonomy.** No catalog exists here,
+  so the relation must be read against the **reviewed set's own structure**:
+  two questions **co-occur** when they were judged against the same paragraph.
+  That is not a taxonomy — it is the review's sampling design (the
+  same-document grid) — and the honest question is whether the questionnaire's
+  co-occurrence is visible in the questions' vocabulary at all. The
+  pre-registered prediction is **yes** (the same document's questions ask about
+  the same subject): the co-occurring pairs' Jaccard is **higher**, the
+  closest-20 pairs co-occur **above the base rate**, and the vocabulary-less
+  class is **large**. If the relation is **≤ 0**, the co-occurrence structure is
+  not lexical and the relation is a **null**, reported with its number (the
+  drop-with-the-reason branch the reviewer asked for).
+
+  **The mechanism.** The questions' vocabulary is their own content words (the
+  track's tokenizer, the stopwords dropped — the CS-55 object); the Jaccard of
+  two questions is ``|A ∩ B| / |A ∪ B|`` over their vocabularies; two questions
+  **co-occur** when at least one reviewed pair's paragraph carries both. The
+  statistic is the co-occurring pairs' mean Jaccard minus the non-co-occurring
+  pairs', bootstrapped over the **questions** (the question is the unit of
+  dependence; 2,000 resamples, the run's seed) — a question-level resample
+  keeps every pair inside a resampled question.
+
+  **The readout (the shape pre-read, 2026-11-06, no pair labels read).** 294
+  questions, **43,071** question pairs, **14,706** co-occurring (**34.14 %**
+  density: NU 44.6 %, CIDH 15.1 %, AI 30.3 %); the vocabulary-less class (every
+  content word also in another question's text) holds **57** questions
+  (19.4 %). The run must reproduce the density and the class.
+
+  **The falsification conditions, registered.**
+
+  1. **The relation test (the primary).** The co-occurring pairs' mean
+     Jaccard minus the others', with the question-level 95 % interval: the
+     prediction is **positive** (the difference above zero, the interval
+     excluding zero). If it is **≤ 0** or its interval includes zero, the
+     relation is a **null** — the questionnaire's co-occurrence is not
+     lexical — and it is reported as the round's last answer, with the number.
+  2. **The closest-pairs test.** The 20 closest question pairs' co-occurrence
+     share must be **above the 34.14 % base rate**; at or below it, the
+     vocabulary's closest pairs are not the co-occurring ones.
+  3. **The vocabulary-less test.** The class must hold **at least 10 %** of the
+     questions (the pre-read: 19.4 %); below it, the questions have a
+     vocabulary of their own and CS-38's class does not reproduce.
+
+  **The cost.** **0 model calls**; one 294 × 294 Jaccard matrix and one
+  co-occurrence matrix (pure numpy, seconds); **no new dependency**; the
+  artifact grows by the readout and the closest-pairs list (not the matrices).
+
+  **Leakage.** The readout reads the question texts and the reviewed pairs'
+  paragraph/question **identities** only — no pair label, no embedding, no
+  model; the control (B) is not involved (it has no question pair structure of
+  its own that this block reads); no UPR data and no UPR artifact is touched.
+
+  **The runs.** One: **`omct-analyze-voyage-dict-qpairs`**, the artifact
+  `results/omct-analyze-voyage-dict-qpairs/analysis.json` (the `dictionary`
+  block's `question_pairs` readout and the model entry's
+  `question_pairs_readout`); the sweep
+  `experiments_text_processing/omct_dictionary_qpairs_sweep.py` (the label
+  `omct_dictionary_qpairs`, the table's section
+  `## OMCT — omct_dictionary_qpairs`); the config addition
+  `analysis.dictionary.question_pairs`; the log section
+  **`## CS-57 — question pairs on OMCT: the questionnaire's own relation`**.
+
+  **The exit criteria.** A **hand-computed** Jaccard (two questions, a shared
+  word); a hand-computed co-occurrence on a toy (two questions judged against
+  the same paragraph); a test that the vocabulary-less class is the questions
+  whose every word is shared; a test that the bootstrap is seeded and
+  deterministic; the fixture run and the real run; `ruff check` /
+  `ruff format` clean over `src`/`tests`/`experiments_text_processing`; the
+  full `pytest` suite green.
+
+  *(pre-registered 2026-11-06; awaiting execution.)*
+
+
 
 
 
