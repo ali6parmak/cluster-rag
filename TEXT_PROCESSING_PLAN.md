@@ -1616,6 +1616,289 @@ fusion parameter) remains the reviewer's.
   rows, the empty tables are omitted (**8** on the UPR map), and the contrast
   block's B carries the same ranking's rank.
 
+### 7.9 The dictionary's chain ported to OMCT (CS-48 … CS-57)
+
+**What prompted it (2026-11-05).** The UPR dictionary track ran from CS-18 to
+CS-47: a word↔label map built from the training corpus (CS-23), used as a
+classifier (CS-30) and improved with an informative-prior/z-score estimator
+(CS-31), then read out by word class (CS-33), POS (CS-34), per-label lexicon
+(CS-35/45), stability (CS-36), abstention (CS-37), label pairs (CS-38), phrases
+(CS-39), a contrast view (CS-40) and a ranking view (CS-47). This round ports
+**the whole dictionary-side chain** to OMCT — **including the change sets that
+were NULLS on UPR**.
+
+**The transfer test, and the two datasets.** A method that failed on UPR may
+work on OMCT, and a null that reproduces is just as informative. **The UPR
+verdict is the prior, never a reason to skip.** Every number in this round is an
+**OMCT** number (run ids keep `omct-`, the log names the dataset); the two
+negative subsets (A = the reviewer-verified hard negatives, B = the unjudged
+control) are **never pooled**; nothing here is a UPR metric and no UPR artifact
+is touched. **OMCT's own prior** (CS-21, `§7.1` of this plan): the surrogate
+does not transfer; the **word-pair** view is the workable object; the clause
+ablation is ~2,700 calls and is **out of scope** for this round.
+
+**The order, and the stop rule.** CS-48 (the map) → CS-49 (the map as a pair
+scorer) → CS-50 (the estimator) → CS-51 (word classes) → CS-52 (POS) → CS-53
+(phrases) → CS-54 (stability) → CS-55 (per-label lexicon + register) → CS-56
+(abstention) → CS-57 (question pairs). Foundation first, cheap readouts next,
+odd ones last. **One change set at a time, with a stop and a report between
+them** (the §7.1 stop rule, which binds every session): a change set is done
+when its pre-registration is written, its code and tests are in, its run's
+numbers are in an artifact, its log section is written, its box is ticked with
+the numbers, its pre-registration is moved to the archive and the commit is
+made — then the work **stops** and reports. **The nine below CS-48 are the
+plan, not the queue: each gets its own pre-registration before its run, and
+none starts without the reviewer's word.**
+
+**The measurement discipline (it binds every change set of the round).**
+
+- **Within-document AUC is the headline** (a pair is ranked against the other
+  pairs of the same document); the **pooled AUC goes beside it, never alone**
+  (the pooled number moves with the documents' score levels, and 58.7% of the
+  reviewed set's positive-negative pairs are cross-document).
+- **The reviewed set is rank-selected**: the Stage-0 cosine's **pooled** pair
+  AUC is **0.4680 / 0.5004 / 0.5371** on the three models (its
+  **within-document** AUC **0.5020–0.5632**), so absolute AUCs look low **by
+  construction**. The instruments are the **relative** comparison (against the
+  plain full-text cosine of the same run) and the **control role** (does the
+  method only re-scale the ordinary unjudged cells?). A dictionary scorer that
+  **beats the cosine is the finding**; one that matches it is a null.
+- The map is built on the **reviewed pairs only** (subset A), with the track's
+  **cross-fit**: folds over the pairs, each fold's map from the other folds
+  (the same `default_rng(seed).permutation` + contiguous-chunk scheme as
+  CS-30/CS-31). **The unjudged control (B) never enters the fit and is never
+  ground truth.**
+- An **empty table** (a question with no evidence in a fold) carries the row's
+  floor and can never be ranked first; **the number of pairs that carries the
+  floor is reported in every change set**.
+- **Per document (NU / CIDH / AI) as well as pooled**; the AI stratum is small
+  (99 pairs) and is read with that in mind.
+- **No thresholds in the map**: every (question, word) pair that occurs is
+  stored with its counts; the noise is displayed (the counts sit next to the
+  number), never removed by dropping data.
+
+**The round's UPR priors, in one table** (the per-change-set pre-registration
+states its own row in full; this table is the plan's shape). Reading the table:
+the UPR verdict is what the same change set concluded on the **UPR val** data,
+the reason is **why** it concluded so, and the flip is what "it works on OMCT"
+would look like — the question the change set answers.
+
+| # | the change set (its UPR twin) | the UPR verdict (the prior) | the reason it was so | the flip on OMCT (what "it works" would be) |
+|---|---|---|---|---|
+| CS-48 | **the map** (CS-23) | **not a null**: a description, and the substrate of CS-30/31 | the unit was **thick** — 1,676 texts × 68 labels, each (label, word) pair with a df spanning the corpus | the **per-question** table is a table at all: the shape and the availability read out as pre-registered |
+| CS-49 | **the map as a pair scorer** (CS-30) | **not a null**: the z-scored map reached micro-F1 **0.5243**, 90% of the champion, with no embedding | the map's measure work was worth **+0.2226** over a plain word count, and the cross-fit was the right instrument | the map's within-document AUC **beats the plain cosine's** on the same 1,520 pairs (the cosine is 0.50–0.56 there); matching it is a null |
+| CS-50 | **the estimator** (CS-31) | **a gain**: 0.4924 → **0.5243**, the paired interval excluded zero | the informative prior shrinks the common words and the standard error the rare ones — a **model** gain, not only a description | the z-scored weights beat the log-odds weights **out-of-fold** on the pair unit |
+| CS-51 | **word classes** (CS-33) | a **readout** win, a **payoff** loss (0.3815 / 0.0798 against the full map's 0.5243) | the strongest words are **rare**, the register is **everywhere**; a classifier needs coverage | the restriction **helps** (or hurts differently) when the "register" is the questionnaire's own vocabulary |
+| CS-52 | **POS** (CS-34) | a **null**: both halves of the registered test failed | the nouns and the verbs were nearly identical (+2.0044 / +1.9856) and the noun-only map was materially worse | the grammatical axis separates (it did not on UPR; the test is cheap and the null may reproduce) |
+| CS-53 | **phrases** (CS-39) | a **null**: the phrase table is too rare and the blind union gained **more** | 82.8% hapax; the register is a **fragment** ("on its", "with an") | bigrams beat their own words on short paragraphs (or the rarity null reproduces) |
+| CS-54 | **stability** (CS-36) | the **filter is a null**, the **readout** is the deliverable (27.6% survives τ = 0.75; not one single-text link survives) | the map's classifier works on **coverage**, not on the strength of its best words | the survival curve and the per-question stability say how much of the pair unit is sampling noise |
+| CS-55 | **per-label lexicon + register** (CS-35/45) | the **bar is not met** (the channel does not become a catalog channel) — and the register **was** the signal | the mined channel's advantage over the description was the register; the filter halved the gain | the **question's own words** as the label side beat the baseline — but the "name" analog must be said before measuring |
+| CS-56 | **abstention** (CS-37) | a **null**: the "impossible" verdict was never in the encoding | the fit-side **silence** was the perfect proxy for the label's absence | here the silence is per-question and large (85 empty tables, 331 pairs): does the "impossible" lesson appear? |
+| CS-57 | **question pairs** (CS-38) | a **null for the relation** (the corpus rediscovers the taxonomy), a **finding** for the vocabulary-less class | there is no catalog on OMCT, so the taxonomy's claim cannot be the test | the question-to-question vocabulary/co-occurrence relation, **adapted or dropped with the reason said** |
+
+**What is not in this round.** The **pack-side** change sets (CS-32, CS-42,
+CS-43, CS-44) need the OMCT pack and are not queued; the **viewer-side** ones
+(CS-40, CS-47) have no viewer in this session and are not queued; CS-21/CS-22
+stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
+
+---
+
+- [ ] **CS-48 — the question map: the reviewed pairs' own word↔question
+  association.** For every question and every word of its reviewed paragraphs:
+  how strongly does this word go with this question? The OMCT twin of CS-23 —
+  the plain statistics of the pair unit, with the counts behind every number.
+
+  **The UPR verdict this ports (the prior), and its reason.** CS-23 (executed
+  2026-11-01) was **not a null**: it is a *description* (the map enters no
+  measurement on its own), and it is the substrate CS-30/CS-31 then scored. The
+  reason it worked: the unit was **thick** — 1,676 train texts × 68 labels gave
+  every (label, word) pair a document frequency spanning the corpus, so the
+  0.5-smoothed log-odds could put a **topical** word at the head of a table
+  (56 of the 60 labelled tables; the lift's head was a hapax for 55) while the
+  **register** ("rights" in all 60 tables) sat at the other end.
+
+  **The mechanism, and the unit (pinned here because it is the whole question).**
+
+  - **The row is the reviewed pair.** The "text" is the pair's **paragraph**;
+    the "label" is the pair's **question**; the word is *present in the pair's
+    paragraph*. For question `q` and word `w` the 2×2 table is over `q`'s
+    reviewed pairs: `a` = positive pairs whose paragraph contains `w`,
+    `b` = negative pairs whose paragraph contains `w`, `c` = positive pairs
+    whose paragraph does not, `d` = negative pairs whose paragraph does not;
+    `n_q = a + b + c + d` is the question's reviewed-pair count and
+    `df_q(w) = a + b` the word's frequency **among `q`'s pairs**. The map's
+    columns are the **294 questions**, its rows the words of the reviewed set.
+  - **Why this unit, and why not the alternatives.** It is the literal analog
+    of CS-23's "text contains the word × text carries the label" (the pair's
+    paragraph is the only text a pair has; the question is the only label a
+    pair has). (i) *Pooling all questions into one table* would lose the
+    question column and could not score a pair — rejected. (ii) *Keying the
+    label by the question number* adds nothing: the number is unique on this
+    file (294 numbers, 294 texts), but the **text** is the semantic unit the
+    scorer will read — the text is the key. (iii) *Deduplicating paragraphs*
+    would drop each pair's own label — rejected. **CS-21's word-pair view**
+    (paragraph word × question word) is a **different object** — it measures
+    the match between the two sides, not the association of a word with the
+    question's outcome — and it is **not** this change set.
+  - **What the unit costs, stated before the measurement.** A question has a
+    **median of 3 reviewed pairs** here (not 1,676 texts), so the table is a
+    thin object by construction: read-only on 2026-11-05, **85 of 294
+    questions** (28.9%) have **no positive pair at all** (their tables are
+    empty by construction, 331 pairs = 21.8%), **95 questions** (249 pairs)
+    are **all-positive** (no negative to contrast), and only **114 questions**
+    (940 pairs = 61.8%) carry **both classes**. That is the transfer's central
+    fact, and this change set measures it instead of assuming it.
+
+  **The measures** (every one stored with the counts behind it, so any number
+  can be recomputed and audited):
+
+  - `n_with` — the question's reviewed pairs that are **positive** and whose
+    paragraph contains the word;
+  - `df` — the question's reviewed pairs whose paragraph contains the word at
+    all (positives **and** negatives);
+  - `lift` = `P(positive | word present) / P(positive)` within the question —
+    1.0 says nothing, > 1 pulls the question, < 1 pushes it away;
+  - `log_odds` = `log((a+0.5)/(b+0.5)) + log((d+0.5)/(c+0.5))` — the
+    0.5-smoothed signed version (the same formula as CS-23; it is preferred to
+    the lift because the lift explodes on rare words).
+
+  **No thresholds.** Every (question, word) pair that occurs is stored; the
+  noise is handled at **display** time (the counts sit next to the number).
+  The **estimator** (CS-50) is the next change set: its informative prior needs
+  a **global** document frequency (the word's df over the 1,520 reviewed pairs),
+  so this change set stores the per-word aggregate as well and does **not** add
+  the prior here.
+
+  **The metric.** CS-48 is a **description**: no AUC, no arm, no comparison
+  (CS-49's). Its metric is the map's **shape** plus four readouts, all
+  pre-registered: (1) the **measure readout** — for every question with a
+  table, the head word under the lift and under the log-odds, and how often the
+  two disagree; (2) the **thickness readout** — how many of a table's words
+  occur in **two or more** of its positives (a word shared by two positives is
+  evidence that generalizes; a word in one positive is a memory of that
+  paragraph); (3) the **register readout** — how many questions' tables each
+  word sits in (the generic class's raw material, ahead of CS-51); (4) the
+  **availability readout** — under the 5-fold cross-fit (seed 42, the track's
+  scheme), for each pair: does the other folds' map hold a table for its
+  question (`avail_table`), and does the pair's paragraph hold at least one
+  word with a **positive** log-odds there (`avail_evidence`)? That last number
+  is the map's **usability** number: a pair that carries the floor cannot be
+  ranked above anything.
+
+  **What the shape is expected to be** (measured **read-only** on 2026-11-05
+  with the track's own tokenizer, so the numbers are known before the run — the
+  CS-23 precedent). The run must reproduce them:
+
+  | | |
+  |---|---|
+  | the reviewed pairs / the questions / the paragraphs | **1,520** (524 +, 996 −) / **294** / **225** |
+  | the distinct words in some table | **2,082** |
+  | the (question, word) pairs stored | **27,979** |
+  | the questions with a table / empty tables | **209 / 85** |
+  | the per-question table size | min **0**, median **65**, max **477** |
+  | the questions with both classes (the contrastable set) | **114** (940 pairs) |
+  | the tables with a word shared by ≥ 2 positives | **101 of 209** (48.3%); all **37** of the tables with ≥ 4 positives |
+  | the words shared by ≥ 2 positives, per table | median **0** over the 209 tables (median **19** over the questions with ≥ 2 positives) |
+  | the words in ≥ a quarter of the 294 tables (≥ 74) | **57** ("state" in 147, "committee" 136, "information" 132) |
+  | the head under the lift vs under the log-odds | differ for **96 of 209** (45.9%), **54 of 114** (47.4%) of the contrastable ones |
+  | the log-odds' head word | occurs **only in the positives** for **206 of 209** (98.6%), and is a hapax (df = 1) for **110 of 209** (52.6%) |
+  | the cross-fit availability (5 folds, seed 42) | a table for **1,002 of 1,520** pairs (65.9%), evidence for **928** (61.1%) — positives **373 of 524** (71.2%), negatives **555 of 996** (55.7%) |
+  | the same, per document (NU / CIDH / AI) | table 60.0 / 70.8 / 87.9 %, evidence 56.2 / 65.5 / 76.8 % |
+
+  One example table (read-only): the question *"Have there been any of the
+  following cases of serious attacks to HRDs in your country?"* has **19
+  reviewed pairs, 16 positive, 477 table words**; its log-odds head is
+  *threats* (n_with 10, df 10, lift **1.19**, log-odds **+2.425**), then
+  *defenders* (9/9, 1.19, +2.182), *leaders* and *journalists* (7/7, 1.19,
+  +1.710), *women* and *indigenous* (6/6, 1.19, +1.466). Note the lift is
+  **the same for every word that occurs only in the positives** (1.19 =
+  19/16): on OMCT the lift's degeneracy is not only "it explodes on rare
+  words" — a word's lift does not depend on **which** word it is.
+
+  **The falsification conditions, registered — read out one by one.** The run
+  is complete when all five are read out; a failed **1, 3, 4 or 5** is a
+  null/stop, while **2 is a prediction** (the UPR measure finding is expected
+  **not** to transfer):
+
+  1. **The reproduction guard.** The run's shape must equal the read-only table
+     above (the questions, the words, the pairs, the empty tables, the
+     contrastable set). A difference means the tokenizer, the pair key or the
+     reviewed-set definition is not the pre-registered one → **stop and
+     report**, do not proceed.
+  2. **The measure test — and it is registered to FAIL (the null that may
+     reproduce).** On UPR the lift and the log-odds picked **different** head
+     words for 55 of 60 labels (92%). Here the registered prediction is
+     **≤ 60%** for the contrastable questions (the read-only read: 47.4%), so
+     "the two measures rank differently" does **not** transfer: with a handful
+     of pairs a word that occurs only in the positives has the same lift
+     whatever it is, and the log-odds' head is a positives-only word for 98.6%
+     of the tables. If the run finds **> 80%**, the transfer is stronger than
+     predicted and the reading changes. (This is a reading of the unit, not a
+     defect of the map.)
+  3. **The thickness test.** At least **40%** of the 209 tables with a positive
+     must hold a word that occurs in **≥ 2** of its positives (the read-only
+     read: 48.3%), and **all 37** of the tables with **≥ 4** positives must
+     (read-only: 37 of 37). If it fails, the table is a memory of one paragraph
+     everywhere and the direct port is not an estimator — **report it as a
+     null**.
+  4. **The availability test (the branch).** At least **50%** of the 1,520
+     pairs must have a table for their question out-of-fold, and at least
+     **45%** must receive a positive word (read-only: 65.9% / 61.1%, per
+     document above). **If it fails**, the cross-fit starves the per-question
+     tables and the scorer (CS-49) would be measured on a minority of pairs →
+     **stop and report before CS-49**; the reviewer's options are a different
+     fold unit (e.g. folds over paragraphs) or CS-21's word-pair view instead.
+  5. **The register test.** At least **one** word must sit in ≥ a quarter of the
+     tables (read-only: 57). If not, CS-51's class machinery has nothing to
+     separate and that change set must be re-scoped.
+
+  **The nulls this change set can produce, stated so they are not read as
+  defects.** (i) The measures' separation (condition 2). (ii) The
+  per-question table as a *description* that is **not** an estimator (condition
+  3). (iii) The availability (condition 4). All three are legitimate results of
+  the transfer test, and each is reported with its number.
+
+  **The cost.** **0 model calls** (the run's cosine baseline is a cache hit —
+  225 paragraphs + 294 questions). The map plus the five cross-fit builds is
+  pure numpy/stdlib work (seconds); the artifact grows by the map's **27,979**
+  rows (a few MB). No new dependency.
+
+  **Leakage.** The map is built from the **reviewed pairs only** (the 1,520
+  judged pairs); the **4,000 unjudged control cells never enter it** and are
+  never a label. There is no val/test split on OMCT: the reviewed set is the
+  only labelled set, which is exactly why the cross-fit is the scoring
+  discipline (CS-49) and why the control role is the instrument. The map is
+  **model-independent** (it never reads an embedding). The reviewed set is
+  **rank-selected** (its negatives are exp18's top false positives), so the map
+  describes the reviewed set and **not** the corpus; the control cannot correct
+  that and is not a label. No UPR data and no UPR artifact is touched.
+
+  **The runs** (fixed before the first call): the run id
+  **`omct-analyze-arctic2-dictmap`** (the analyze command adds the `omct-`
+  prefix; the baseline embedder is arctic2, a warm Stage-0 model — the map
+  block itself is model-independent and appears unchanged in every later run);
+  the artifact **`results/omct-analyze-arctic2-dictmap/analysis.json`** (the
+  new top-level block `dictionary`); the sweep cell in a new sweep file
+  `experiments_text_processing/omct_dictionary_sweep.py` (the sweep label
+  `omct_dictionary`, so the table's section is `## OMCT — omct_dictionary`);
+  the config schema change is `analysis.dictionary` (a new optional section:
+  `include_map`, `folds` = 5, `seed` = None → the run's 42); and the log
+  section **`## CS-48 — the question map`** in
+  `docs/experiments_text_processing.md`.
+
+  **The exit criteria.** The counts / lift / log-odds pinned by a
+  **hand-computed 2×2 unit test** (and counts that do not form a 2×2 table are
+  **refused**, never silently smoothed); a test that the map accepts the
+  reviewed pairs and nothing else (the control cells cannot be handed in); a
+  test of the empty-table case (a question with no positive has no table, and
+  the availability readout marks its pairs); a test of the fold/availability
+  determinism (the same seed reproduces the same folds); the fixture run and
+  the real run; `ruff check` / `ruff format` clean over
+  `src`/`tests`/`experiments_text_processing`; the full `pytest` suite green.
+
+  *(pre-registered 2026-11-05; **awaiting the reviewer's OK** — nothing below
+  CS-48 is queued, and CS-49 does not start on CS-48's completion alone.)*
+
 ## 8. The durable deliverable (named, so it is not lost)
 
 The headline is **not** "which chunker won". It is **a characterized
