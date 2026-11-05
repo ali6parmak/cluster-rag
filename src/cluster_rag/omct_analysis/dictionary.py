@@ -679,6 +679,7 @@ def build_dictionary_model(
     stability_readout: Mapping[str, Any] | None = None,
     question_lexicon: Mapping[str, Any] | None = None,
     abstention_fills: Mapping[str, Mapping[str, Any]] | None = None,
+    question_pairs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -712,6 +713,8 @@ def build_dictionary_model(
             blind channel's per-pair scores; ``None`` runs none.
         abstention_fills: The empty-table fills' grids (CS-56), keyed by the
             fill's name; ``None`` runs none.
+        question_pairs: The question-pair relation's readout (CS-57); ``None``
+            runs none.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -809,6 +812,8 @@ def build_dictionary_model(
             resamples=resamples,
             seed=bootstrap_seed,
         )
+    if question_pairs is not None:
+        readout["question_pairs"] = dict(question_pairs)
     if abstention_fills:
         readout["abstention_arms"] = abstention_arms_block(
             view,

@@ -193,6 +193,33 @@ analysis:
     resamples: 200
 """
 
+# CS-57: the question-pair relation (a description; reads no pair label).
+DICTIONARY_QPAIRS_CONFIG_EXTRA = """
+analysis:
+  embedders:
+    - name: fake-model
+      embed:
+        backend: fake
+        model_id: fake-embedder
+        batch_size: 4
+        prefixes:
+          query: "query: "
+          document: "passage: "
+  control_size: 3
+  sampling_rule: proportional
+  question_transform: strip_block
+  chunker: full_text
+  dictionary:
+    include_map: true
+    folds: 5
+    scorings: [sum_zscore_positive]
+    primary: sum_zscore_positive
+    blind: false
+    question_pairs: true
+  bootstrap:
+    resamples: 200
+"""
+
 # CS-56: the empty-table fills (the floor against the neutral and the max).
 DICTIONARY_ABSTENTION_CONFIG_EXTRA = """
 analysis:
@@ -1281,6 +1308,42 @@ def test_analyze_omct_dictionary_abstention_end_to_end(
     assert "sum_zscore_positive" in row
 
 
+def test_analyze_omct_dictionary_question_pairs_end_to_end(
+    sample_pairs, write_config, monkeypatch, tmp_path
+) -> None:
+    """CS-57: the relation readout, the closest pairs and the class."""
+    monkeypatch.setattr(
+        omct_commands,
+        "build_embedder",
+        lambda config: FakeEmbedder(model_id="fake-embedder", dimension=8),
+    )
+    table = tmp_path / "experiments_table_text_processing_omct.md"
+    config_file = write_config(
+        sample_pairs,
+        run_id="dict-qpairs-test",
+        data_external=sample_pairs,
+        experiment_table_text_processing_omct=table,
+        extra=DICTIONARY_QPAIRS_CONFIG_EXTRA,
+    )
+    assert main(["analyze-omct", "--config", str(config_file)]) == 0
+
+    payload = json.loads(
+        (tmp_path / "results" / "omct-dict-qpairs-test" / "analysis.json").read_text("utf-8")
+    )
+    block = payload["dictionary"]["question_pairs"]
+    assert block["n_questions"] == 4
+    assert block["n_question_pairs"] == 6
+    assert block["relation"]["ci_low"] is not None
+    assert block["closest"]["pairs"]
+    assert 0.0 <= block["co_occurrence"]["density"] <= 1.0
+    assert block["vocabulary_less"]["n_questions"] >= 0
+    entry = next(model for model in payload["models"] if model.get("kind") == "dictionary")
+    assert entry["readout"]["question_pairs"]["n_questions"] == 4
+    text = table.read_text("utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| omct-dict-qpairs-test"))
+    assert "|" in row
+
+
 def test_analyze_omct_without_embedders_needs_the_dictionary_section(
     sample_pairs, write_config, caplog
 ) -> None:
@@ -1376,6 +1439,9 @@ def test_dictionary_config_is_validated_and_defaults_are_the_plan() -> None:
         DictionaryConfig(abstention_fills=("median",))
     with pytest.raises(ValueError, match="needs analysis.dictionary.scorings"):
         DictionaryConfig(abstention_fills=("neutral",))
+    # CS-57: the question-pair relation's on-switch
+    assert DictionaryConfig().question_pairs is False
+    assert DictionaryConfig(question_pairs=True).question_pairs is True
 
 
 def test_analysis_config_rejects_an_unknown_chunker() -> None:

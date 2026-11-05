@@ -434,3 +434,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | arm | floor_within_auc | floor_nonfloor_auc | neutral_within_auc | neutral_delta | neutral_ci | max_within_auc | max_delta | max_ci | floor_pairs | floor_share | floor_negative_share | silent_questions | floor_negative_nu | floor_negative_cidh | floor_negative_ai | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-abstain | 2026-11-06 | sum_zscore_positive | 0.7020 | 0.8158 | 0.7616 | 0.0596 | [+0.0291, +0.0927] | 0.6105 | -0.0914 | [-0.1438, -0.0374] | 518 | 0.3408 | 0.7780 | 85 | 0.7722 | 0.8214 | 0.3333 | 1002 | 4000 | 3 | 11.403 |
+
+## OMCT — omct_dictionary_qpairs
+
+| run_id | date | co_mean | other_mean | delta | ci_low | ci_high | closest20_share | base_rate | vocabulary_less | vocabulary_less_share | n_questions | n_question_pairs | co_occurrence_density | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-dict-qpairs | 2026-11-06 | 0.0958 | 0.0892 | 0.0066 | 0.0027 | 0.0109 | 0.7500 | 0.3414 | 57 | 0.1939 | 294 | 43071 | 0.3414 | 1520 | 4000 | 3 | 8.025 |

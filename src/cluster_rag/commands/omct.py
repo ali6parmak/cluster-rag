@@ -53,6 +53,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_PHRASES_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_POS_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_QPAIRS_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
@@ -133,6 +135,9 @@ from cluster_rag.text_processors.lexical.question_map_stability import (
 )
 from cluster_rag.text_processors.lexical.question_map_stability import (
     stability_block as question_map_stability_block,
+)
+from cluster_rag.text_processors.lexical.question_pairs import (
+    question_pairs_readout,
 )
 
 logger = logging.getLogger(__name__)
@@ -856,6 +861,42 @@ def _dictionary_abstention_row(
         "floor_negative_cidh": _fmt(_document_share("CIDH"), 4),
         "floor_negative_ai": _fmt(_document_share("AI"), 4),
         "n_pairs": (floor.get("non_floor") or {}).get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_qpairs_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **question pairs** section (CS-57)."""
+    readout = (model.get("readout") or {}).get("question_pairs") or {}
+    relation = readout.get("relation") or {}
+    closest = readout.get("closest") or {}
+    co_occurrence = readout.get("co_occurrence") or {}
+    vocabulary_less = readout.get("vocabulary_less") or {}
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "co_mean": _fmt(relation.get("co_occurring_mean"), 4),
+        "other_mean": _fmt(relation.get("other_mean"), 4),
+        "delta": _fmt(relation.get("delta"), 4),
+        "ci_low": _fmt(relation.get("ci_low"), 4),
+        "ci_high": _fmt(relation.get("ci_high"), 4),
+        "closest20_share": _fmt(closest.get("co_occurrence_share"), 4),
+        "base_rate": _fmt(co_occurrence.get("density"), 4),
+        "vocabulary_less": vocabulary_less.get("n_questions"),
+        "vocabulary_less_share": _fmt(vocabulary_less.get("share"), 4),
+        "n_questions": readout.get("n_questions"),
+        "n_question_pairs": readout.get("n_question_pairs"),
+        "co_occurrence_density": _fmt(co_occurrence.get("density"), 4),
+        "n_pairs": model["readout"]["scorings"][model["readout"]["primary"]]["n_pairs"],
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1820,6 +1861,19 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                         "silent questions are the ones with no positive reviewed pair"
                     ),
                 }
+        question_pairs = None
+        if analysis.dictionary.question_pairs:
+            # CS-57: the question-pair relation — a description of the reviewed
+            # set's own structure (no catalog, no pair label, no embedding).
+            question_pairs = question_pairs_readout(
+                tuple(view.questions),
+                questions,
+                paragraphs,
+                documents=[record.document for record in records],
+                seed=dictionary_seed,
+            )
+            if dictionary_block is not None:
+                dictionary_block["question_pairs"] = dict(question_pairs)
         question_lexicon = None
         if analysis.dictionary.question_lexicon:
             # CS-55: the label side's own words — the question text's
@@ -1876,6 +1930,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 stability_readout=stability_readout,
                 question_lexicon=question_lexicon,
                 abstention_fills=abstention_fills,
+                question_pairs=question_pairs,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -2080,7 +2135,17 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("abstention_arms"):
+            if (model.get("readout") or {}).get("question_pairs"):
+                table_rows.append(
+                    _dictionary_qpairs_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("abstention_arms"):
                 table_rows.append(
                     _dictionary_abstention_row(
                         model,
@@ -2257,6 +2322,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
+        has_question_pairs = any(
+            (model.get("readout") or {}).get("question_pairs")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_abstention = any(
             (model.get("readout") or {}).get("abstention_arms")
             for model in models
@@ -2272,7 +2342,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_abstention:
+        if has_question_pairs:
+            columns = ANALYZE_OMCT_DICTIONARY_QPAIRS_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS
+        elif has_abstention:
             columns = ANALYZE_OMCT_DICTIONARY_ABSTENTION_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_ABSTENTION_KEY_COLUMNS
         elif has_question_lexicon:
@@ -2387,6 +2460,20 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 f"({_fmt(readout['floor']['floor_share'], 4)}); control mean "
                 f"{_fmt(comparison['control_shift']['mean_delta'], 4)}"
             )
+            qpairs = readout.get("question_pairs")
+            if qpairs:
+                print(
+                    f"      [question pairs] the co-occurring questions' mean Jaccard "
+                    f"{_fmt(qpairs['relation']['co_occurring_mean'], 4)} against the others' "
+                    f"{_fmt(qpairs['relation']['other_mean'], 4)} "
+                    f"(delta {_fmt(qpairs['relation']['delta'], 4)}, 95% CI "
+                    f"[{_fmt(qpairs['relation']['ci_low'], 4)}, "
+                    f"{_fmt(qpairs['relation']['ci_high'], 4)}]); the closest 20 co-occur "
+                    f"{_fmt(qpairs['closest']['co_occurrence_share'], 4)} against the base "
+                    f"{_fmt(qpairs['closest']['base_rate'], 4)}; "
+                    f"{qpairs['vocabulary_less']['n_questions']} questions have no "
+                    f"word of their own"
+                )
             abstention = readout.get("abstention_arms")
             if abstention:
                 fill_parts = ", ".join(

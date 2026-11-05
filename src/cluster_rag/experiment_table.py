@@ -661,6 +661,31 @@ ANALYZE_OMCT_DICTIONARY_ABSTENTION_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_ABSTENTION_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The question-pair relation (CS-57): the questions' vocabulary Jaccard against
+# their co-occurrence, the closest-20 readout, the base rate and the
+# vocabulary-less class.
+ANALYZE_OMCT_DICTIONARY_QPAIRS_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "co_mean",
+    "other_mean",
+    "delta",
+    "ci_low",
+    "ci_high",
+    "closest20_share",
+    "base_rate",
+    "vocabulary_less",
+    "vocabulary_less_share",
+    "n_questions",
+    "n_question_pairs",
+    "co_occurrence_density",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

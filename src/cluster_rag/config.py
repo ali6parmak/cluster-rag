@@ -1062,6 +1062,10 @@ class DictionaryConfig(BaseModel):
     - ``abstention_fills``: the **empty-table fills** (CS-56) the run scores
       beside the floor: ``neutral`` (the row's median of the seen cells) and
       ``max`` (the row's maximum). Empty (the default) runs only the floor.
+    - ``question_pairs``: whether the run writes the **question-pair
+      relation** (CS-57): the questions' vocabulary Jaccard against their
+      co-occurrence in the reviewed paragraphs, the closest pairs and the
+      vocabulary-less class. A description — it reads no pair label.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1082,6 +1086,7 @@ class DictionaryConfig(BaseModel):
     stability_thresholds: tuple[float, ...] = (0.75, 0.90)
     question_lexicon: bool = False
     abstention_fills: tuple[str, ...] = ()
+    question_pairs: bool = False
 
     @field_validator("abstention_fills")
     @classmethod

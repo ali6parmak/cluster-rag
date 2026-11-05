@@ -108,6 +108,7 @@ research record and are **not** indexed here.
 | [CS-54 — the stability of the pair unit](#cs-54--the-stability-of-the-pair-unit-the-null-becomes-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-stability` run (CS-36's bootstrap over the 1,520 reviewed pairs, 500 resamples; the two filtered z arms; **0 model calls**, 136 s) | **the UPR null becomes a cost**: the τ = 0.75 filtered arm is **0.6399** against the full z arm's 0.7020 (**−0.0621 [−0.0859, −0.0395]**) and τ = 0.90 is −0.1094, with the floor rising to **61.97 %** / 74.9 % — the map's bulk is sampling noise (the presence cliff **63.3 %**, the 1 − e⁻¹ prediction; the sign cliff **54.1 %**, so **not one** single-pair link clears 0.75; the heads keep their place in **65.0 %**), and the registered survival magnitude (10–15 %) **misses** at 6.79 % | `results/omct-analyze-voyage-dict-stability/analysis.json` |
 | [CS-55 — the label side's own words](#cs-55--the-label-sides-own-words-the-register-was-the-noise-2026-11-06) | one `omct-analyze-voyage-dict-lexicon` run (the question text's vocabulary as a label-side channel; the four arms, the map bar and the blind counterpart; **0 model calls**, **0 pair labels read**, 13.5 s) | **the register was the noise**: the raw count **0.4602** against the cosine's 0.5238 (**−0.0636 [−0.1008, −0.0269]**), the idf and topic-only arms at the cosine (nulls), the map bar held (**−0.2417 [−0.2887, −0.1949]**) — and the registered **falsifier FIRED**: topic-only beats the full channel by **+0.0821 [+0.0448, +0.1185]**, so CS-45's "the register was the signal" does not transfer (the label-side register is the questionnaire's boilerplate, identical across questions); the blind gap is **−0.0078**, so the raw count reads the questionnaire's shape, not the relation | `results/omct-analyze-voyage-dict-lexicon/analysis.json` |
 | [CS-56 — abstention on the pair unit](#cs-56--abstention-on-the-pair-unit-the-floors-impossible-is-a-cost-2026-11-06) | one `omct-analyze-voyage-dict-abstain` run (the empty-table fill: the floor against the neutral median and the max; **0 model calls**, 11.6 s) | **the registered falsifier FIRED — the abstention is a lever**: the neutral fill **0.7616** against the floor's 0.7020 (**+0.0596 [+0.0291, +0.0927]**), above the +0.05 bar and in all three documents; the max fill loses (−0.0914); the silence **is** informative (77.80 % of the 518 floor pairs negative, 85 silent questions) and is still the wrong encoding — the floor pushes the 115 floored positives below every seen pair, and the pair-weighted AUC counts that error heavier than the 403 floored negatives' gain | `results/omct-analyze-voyage-dict-abstain/analysis.json` |
+| [CS-57 — question pairs on OMCT](#cs-57--question-pairs-on-omct-the-questionnaires-own-relation-2026-11-06) | one `omct-analyze-voyage-dict-qpairs` run (the question-pair relation: the questions' vocabulary Jaccard against their co-occurrence; **0 model calls**, **0 pair labels read**, 8.0 s) | **the questionnaire's own relation, real and weak**: the co-occurring pairs' mean Jaccard 0.0958 against 0.0892 (**+0.0066 [+0.0027, +0.0109]**), **15 of the 20 closest pairs co-occur** (75.0 % against the 34.14 % base rate), and **57 questions (19.4 %)** have no word of their own — the adaptation is kept (there is no catalog to be the expected source, so a positive relation is the finding, unlike CS-38's taxonomy null) | `results/omct-analyze-voyage-dict-qpairs/analysis.json` |
 
 ## Change sets
 
@@ -9458,3 +9459,82 @@ a **mean** or a **quantile** fill beyond the median; nothing about UPR.
 **The gate.** `pytest`: **998 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **247** files. Two consecutive runs are
 bit-identical (bar the clock field).
+
+## CS-57 — question pairs on OMCT: the questionnaire's own relation (2026-11-06)
+
+**The run.** One: `omct-analyze-voyage-dict-qpairs` — CS-38's label-pair map,
+adapted to the unit that has no catalog: the **question-pair relation** (do
+questions that share a reviewed paragraph — the same document's questionnaire —
+share vocabulary?), the closest-20 readout and the vocabulary-less class.
+**0 model calls**, **0 pair labels read**, **8.0 s**, **no new dependency**.
+The sweep is
+`experiments_text_processing/omct_dictionary_qpairs_sweep.py` (the label
+`omct_dictionary_qpairs`, the table's section
+`## OMCT — omct_dictionary_qpairs`).
+
+**The relation is real, and weak.** The co-occurring question pairs' mean
+vocabulary Jaccard is **0.0958** against the others' **0.0892** — a
+question-level bootstrap **+0.0066 [+0.0027, +0.0109]** (2,000 resamples). The
+registered prediction (positive, the interval excluding zero) **holds**; the
+premium is **six times smaller** than CS-38's +0.0413, because the questions'
+vocabularies are homogeneous (the mean Jaccard over all 43,071 pairs is
+**0.0914**).
+
+**The closest pairs are the same questionnaire's.** Of the **20 closest**
+question pairs, **15 (75.0 %)** share a reviewed paragraph, against the
+**34.14 %** base rate — the registered "above the base rate" **holds**, and the
+top five pairs (J 0.92, 0.92, 0.87, 0.81, 0.80) all co-occur. So the
+vocabulary's head is the questionnaire's own structure, exactly as CS-38 found
+the corpus's head to be the taxonomy's.
+
+**The vocabulary-less class holds 57 questions (19.4 %).** The registered
+"at least 10 %" **holds**: 57 of the 294 questions have **no word of their
+own** (every content word also appears in another question's text) — the
+analog of CS-38's 13 labels, at a much higher share, because the questionnaire
+re-asks the same subject words question after question.
+
+**The shape reproduces.** 294 questions, **43,071** question pairs,
+**14,706** co-occurring (**34.14 %** density; NU 44.6 %, CIDH 15.1 %, AI
+30.3 % — the pre-read numbers), **57** vocabulary-less questions.
+
+**The falsification, read out one by one.**
+
+1. **The relation test (the primary): holds** — +0.0066 [+0.0027, +0.0109],
+   positive, the interval excluding zero.
+2. **The closest-pairs test: holds** — 15 of 20 (75.0 %) against 34.14 %.
+3. **The vocabulary-less test: holds** — 57 questions, 19.4 % ≥ 10 %.
+
+**The reading — and why it is not CS-38's null.** CS-38's relation was a
+**null** because it was the **taxonomy's** (the corpus rediscovered the
+catalog). There is no catalog on OMCT, so the relation has no expected source:
+the questionnaire's co-occurrence is visible in the questions' own vocabulary
+— weakly (+0.0066) but precisely, and its head is nearly all co-occurring
+(15 of 20). The adaptation, therefore, is **kept**: the question-pair relation
+is a real object on the pair unit, and the "drop it with the reason" branch is
+not taken. What it is *not*: a taxonomy (the co-occurrence is the review's
+sampling design, not a semantic partition), and its small premium means it
+cannot rank question pairs the way the map ranks cells.
+
+**What this change set does not say.** Nothing about **UPR**; nothing about a
+**semantic** question relation (there is no catalog to compare against);
+nothing about using the relation in a **scorer** (it is a description); nothing
+about the phrase table's pairs (the question texts only).
+
+**The gate.** `pytest`: **1003 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **250** files. Two consecutive runs are
+bit-identical (bar the clock field).
+
+**The round's close (CS-48 … CS-57), in one screen.** The dictionary's chain,
+ported to the pair unit: the **map** is thin per question but thick enough
+(CS-48); the **measure lever inverts** (CS-49: the count beats the cosine, the
+log-odds do not); the **estimator transfers and is the round's first win**
+(CS-50: 0.7020, the alpha-0 normalization); the **hard class filter is a small
+cost** (CS-51), the **grammatical axis a null that reproduces** (CS-52), the
+**phrase unit a null for redundancy** (CS-53), the **stability filter a large
+cost** (CS-54: −0.0621), the **label side's own words not a channel** (CS-55:
+the register inverts), the **floor's "impossible" a cost** (CS-56: +0.0596 for
+the neutral fill), and the **question-pair relation real and weak** (CS-57:
++0.0066, 15 of the closest 20 co-occur). The round's transferable findings:
+**CS-50's z arm**, **CS-56's neutral fill** (the floor should not ship on the
+pair unit), and the two **registered corrections that held** (CS-53's
+redundancy, CS-54's sign cliff).
