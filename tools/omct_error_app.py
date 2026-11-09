@@ -310,8 +310,8 @@ def errors_view(context: ev.Context) -> None:
     st.subheader("Errors — false positives and false negatives")
     st.caption(
         "The evidence cut: a pair the map gives points to (score > 0) is a positive "
-        "prediction. The floored pairs are their own class. The control cells are never "
-        "errors."
+        "prediction — a display rule, not the run's metric (the run reports AUCs). The "
+        "floored pairs are their own class; the control cells are never errors."
     )
     columns = st.columns(2)
     arms = list(context.run.arms)
@@ -332,7 +332,7 @@ def errors_view(context: ev.Context) -> None:
     metrics[4].metric("floored", counts.get("floored", 0))
     floored_positive = sum(1 for row in rows if row.floored and row.label == 1)
     metrics[5].metric("floored positives", floored_positive)
-    filters = st.columns(4)
+    filters = st.columns(5)
     documents = sorted({row.document for row in rows})
     document = filters[0].selectbox("document", ["All", *documents], key="err_document")
     shown = filters[1].selectbox(
@@ -341,7 +341,10 @@ def errors_view(context: ev.Context) -> None:
     verdict = filters[2].selectbox(
         "human verdict", ["All", "positive", "negative"], key="err_verdict"
     )
-    sort = filters[3].selectbox("sort", ["score (high first)", "rank (best first)"], key="err_sort")
+    floored_filter = filters[3].selectbox(
+        "floored", ["All", "floored", "not floored"], key="err_floored"
+    )
+    sort = filters[4].selectbox("sort", ["score (high first)", "rank (best first)"], key="err_sort")
     if shown == "the errors (FP + FN)":
         selected = [row for row in rows if row.error in ("false_positive", "false_negative")]
     elif shown == "floored":
@@ -353,6 +356,7 @@ def errors_view(context: ev.Context) -> None:
         for row in selected
         if (document == "All" or row.document == document)
         and (verdict == "All" or (row.label == 1) == (verdict == "positive"))
+        and (floored_filter == "All" or row.floored == (floored_filter == "floored"))
     ]
     if sort == "score (high first)":
         selected.sort(key=lambda row: (-row.score, row.pair_id))

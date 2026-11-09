@@ -113,8 +113,8 @@ prediction (the map gave it points). The classes are:
 | `true_negative` | label 0, not floored, score ≤ 0 |
 
 The view filters by document, what to show (the errors / floored / all
-classes), human verdict and sort (score or rank), and opens a selected pair in
-One pair. The **floored positives** are counted separately. The **control
+classes), human verdict, **floored / non-floored** and sort (score or rank), and
+opens a selected pair in One pair. The **floored positives** are counted separately. The **control
 strip** at the bottom lists the 4,000 unjudged cells (no label column) and says
 they are never an error, never ground truth, never pooled.
 
