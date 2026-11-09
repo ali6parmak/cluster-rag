@@ -1066,6 +1066,16 @@ class DictionaryConfig(BaseModel):
       relation** (CS-57): the questions' vocabulary Jaccard against their
       co-occurrence in the reviewed paragraphs, the closest pairs and the
       vocabulary-less class. A description — it reads no pair label.
+    - ``word_pairs``: whether the run builds the **global word-pair table**
+      (CS-59): one table over the words a paragraph and a question share,
+      learned from every judged pair, scored in two evaluations — the
+      pair-level cross-fit (all questions seen) and the question-level
+      cross-fit (held-out questions). It needs the run's reference embedder
+      (the plain full-text cosine) but no new model call.
+    - ``word_pair_scorings``: the arms the word-pair block measures (the
+      primary first; ``sum_zscore_positive`` is the registered one).
+    - ``word_pair_primary``: the word-pair block's pre-registered primary arm;
+      it must be one of ``word_pair_scorings``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1087,6 +1097,28 @@ class DictionaryConfig(BaseModel):
     question_lexicon: bool = False
     abstention_fills: tuple[str, ...] = ()
     question_pairs: bool = False
+    word_pairs: bool = False
+    word_pair_scorings: tuple[str, ...] = ("sum_zscore_positive", "support_count")
+    word_pair_primary: str = "sum_zscore_positive"
+
+    @field_validator("word_pair_scorings", "word_pair_primary")
+    @classmethod
+    def _word_pair_arms_are_known(cls, value: tuple[str, ...] | str) -> tuple[str, ...] | str:
+        """Reject an unknown word-pair arm at config time (CS-59)."""
+        from cluster_rag.text_processors.lexical.question_map_score import SCORING_FUNCTIONS
+
+        values = (value,) if isinstance(value, str) else value
+        unknown = [name for name in values if name not in SCORING_FUNCTIONS]
+        if unknown:
+            raise ValueError(
+                "analysis.dictionary.word_pair_scorings / word_pair_primary has "
+                f"unknown arm(s) {unknown}; expected some of {SCORING_FUNCTIONS}"
+            )
+        if isinstance(value, tuple) and len(set(value)) != len(value):
+            raise ValueError(
+                f"analysis.dictionary.word_pair_scorings must not repeat: {list(value)}"
+            )
+        return value
 
     @field_validator("abstention_fills")
     @classmethod

@@ -440,3 +440,9 @@ Comparison tables for the text-processing track (`TEXT_PROCESSING_PLAN.md`), key
 | run_id | date | co_mean | other_mean | delta | ci_low | ci_high | closest20_share | base_rate | vocabulary_less | vocabulary_less_share | n_questions | n_question_pairs | co_occurrence_density | n_pairs | n_control | n_docs | seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | omct-analyze-voyage-dict-qpairs | 2026-11-06 | 0.0958 | 0.0892 | 0.0066 | 0.0027 | 0.0109 | 0.7500 | 0.3414 | 57 | 0.1939 | 294 | 43071 | 0.3414 | 1520 | 4000 | 3 | 8.025 |
+
+## OMCT — omct_dictionary_wordpairs
+
+| run_id | date | arm | seen_within_auc | seen_delta_vs_perq | seen_ci_vs_perq | seen_delta_vs_cosine | seen_ci_vs_cosine | seen_neutral_within | heldout_within_auc | heldout_delta_vs_cosine | heldout_ci_vs_cosine | heldout_neutral_within | coverage_seen | coverage_heldout | floor_seen | floor_heldout | single_obs_share | single_obs_pairs_share | blind_seen_within | blind_seen_gap | blind_heldout_within | blind_heldout_gap | n_rows | n_questions | n_pairs | n_control | n_docs | seconds |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| omct-analyze-voyage-wpairs | 2026-11-09 | sum_zscore_positive | 0.6808 | -0.0211 | [-0.0638, +0.0182] | 0.1570 | [+0.1154, +0.2002] | 0.6983 | 0.6309 | 0.1071 | [+0.0668, +0.1501] | 0.6493 | 0.9533 | 0.9500 | 71 | 76 | 0.2240 | 0.0021 | 0.5636 | 0.1172 | 0.5612 | 0.0697 | 366 | 294 | 1520 | 4000 | 3 | 22.942 |

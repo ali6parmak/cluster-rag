@@ -57,6 +57,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_STABILITY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
@@ -89,6 +91,7 @@ from cluster_rag.omct_analysis import (
     score_stage3_model,
     shortlist_rerank_block,
     side_cache_versions,
+    word_pairs_block,
 )
 from cluster_rag.omct_decision import DecisionArm, run_decision_arm, score_decision_grid
 from cluster_rag.omct_probe import ProbeCacheOptions, run_probe
@@ -114,6 +117,11 @@ from cluster_rag.text_processors.features.question_map import (
     build_question_map,
     cross_fit_availability,
     question_map_block,
+)
+from cluster_rag.text_processors.features.word_pair_map import (
+    cross_fit_word_pair_questions,
+    cross_fit_word_pair_seen,
+    question_fold_ids,
 )
 from cluster_rag.text_processors.lexical.question_lexicon import (
     LEXICON_ARMS,
@@ -897,6 +905,63 @@ def _dictionary_qpairs_row(
         "n_question_pairs": readout.get("n_question_pairs"),
         "co_occurrence_density": _fmt(co_occurrence.get("density"), 4),
         "n_pairs": model["readout"]["scorings"][model["readout"]["primary"]]["n_pairs"],
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_wordpairs_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **word pairs** section (CS-59)."""
+    word_pairs = (model.get("readout") or {}).get("word_pairs") or {}
+    seen = word_pairs.get("seen") or {}
+    held_out = word_pairs.get("held_out_questions") or {}
+    table = (word_pairs.get("table") or {}).get("full") or {}
+    seen_reference = (seen.get("reference") or {}).get("paired") or {}
+    seen_secondary = (seen.get("secondary") or {}).get("paired") or {}
+    held_reference = (held_out.get("reference") or {}).get("paired") or {}
+
+    def _ci(block: dict[str, Any]) -> str | None:
+        if block.get("ci_low") is None:
+            return None
+        return f"[{block['ci_low']:+.4f}, {block['ci_high']:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": word_pairs.get("primary"),
+        "seen_within_auc": _fmt(seen.get("within_auc"), 4),
+        "seen_delta_vs_perq": _fmt(seen_reference.get("delta"), 4),
+        "seen_ci_vs_perq": _ci(seen_reference),
+        "seen_delta_vs_cosine": _fmt(seen_secondary.get("delta"), 4),
+        "seen_ci_vs_cosine": _ci(seen_secondary),
+        "seen_neutral_within": _fmt((seen.get("neutral_fill") or {}).get("within_auc"), 4),
+        "heldout_within_auc": _fmt(held_out.get("within_auc"), 4),
+        "heldout_delta_vs_cosine": _fmt(held_reference.get("delta"), 4),
+        "heldout_ci_vs_cosine": _ci(held_reference),
+        "heldout_neutral_within": _fmt((held_out.get("neutral_fill") or {}).get("within_auc"), 4),
+        "coverage_seen": _fmt((seen.get("coverage") or {}).get("known_share"), 4),
+        "coverage_heldout": _fmt((held_out.get("coverage") or {}).get("known_share"), 4),
+        "floor_seen": (seen.get("floor") or {}).get("n_floor_pairs"),
+        "floor_heldout": (held_out.get("floor") or {}).get("n_floor_pairs"),
+        "single_obs_share": _fmt(table.get("single_observation_share"), 4),
+        "single_obs_pairs_share": _fmt(
+            (seen.get("coverage") or {}).get("single_observation_pair_share"), 4
+        ),
+        "blind_seen_within": _fmt((seen.get("blind") or {}).get("within_auc"), 4),
+        "blind_seen_gap": _fmt((seen.get("blind") or {}).get("gap"), 4),
+        "blind_heldout_within": _fmt((held_out.get("blind") or {}).get("within_auc"), 4),
+        "blind_heldout_gap": _fmt((held_out.get("blind") or {}).get("gap"), 4),
+        "n_rows": table.get("n_rows"),
+        "n_questions": (word_pairs.get("per_question_held_out") or {}).get("n_questions"),
+        "n_pairs": seen.get("n_pairs"),
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -1909,6 +1974,119 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                     pair_paragraphs=paragraphs,
                     pair_questions=questions,
                 )
+        word_pairs = None
+        if analysis.dictionary.word_pairs:
+            # CS-59: the global word-pair table — one table over the words a
+            # paragraph and a question share, with no question in the key. The
+            # two registered evaluations: the pair-level cross-fit (all
+            # questions seen) and the question-level cross-fit (held-out
+            # questions). It reads no pair label and needs no new embedding.
+            word_pair_primary = analysis.dictionary.word_pair_primary
+            word_pair_scorings = analysis.dictionary.word_pair_scorings
+            if word_pair_primary not in word_pair_scorings:
+                raise ValueError(
+                    "analysis.dictionary.word_pair_primary must be one of "
+                    "word_pair_scorings, got "
+                    f"{word_pair_primary!r} not in {list(word_pair_scorings)}"
+                )
+            if primary not in grids["scorings"]:
+                raise ValueError(
+                    "the word-pair block's seen comparison needs the per-question "
+                    f"arm {primary!r} in analysis.dictionary.scorings"
+                )
+            control_cells = [(row, column) for _, row, column in view.control.cells]
+            permuted_questions = None
+            if analysis.dictionary.blind:
+                permutation = blind_question_permutation(len(records), dictionary_seed)
+                permuted_questions = [records[int(index)].question_text for index in permutation]
+            seen_word_pairs = cross_fit_word_pair_seen(
+                paragraphs,
+                questions,
+                labels,
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=word_pair_scorings,
+                control_cells=control_cells,
+            )
+            seen_blind_word_pairs = None
+            if permuted_questions is not None:
+                seen_blind_word_pairs = cross_fit_word_pair_seen(
+                    paragraphs,
+                    permuted_questions,
+                    labels,
+                    dictionary_fold_ids,
+                    eval_question_texts=questions,
+                    paragraphs=tuple(view.paragraphs),
+                    questions=tuple(view.questions),
+                    scorings=word_pair_scorings,
+                    control_cells=control_cells,
+                )
+            question_folds = question_fold_ids(
+                tuple(view.questions), analysis.dictionary.folds, dictionary_seed
+            )
+            held_out_word_pairs = cross_fit_word_pair_questions(
+                paragraphs,
+                questions,
+                labels,
+                question_folds,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=word_pair_scorings,
+                control_cells=control_cells,
+            )
+            seen_df2_word_pairs = cross_fit_word_pair_seen(
+                paragraphs,
+                questions,
+                labels,
+                dictionary_fold_ids,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(word_pair_primary,),
+                min_df=2,
+            )
+            held_out_df2_word_pairs = cross_fit_word_pair_questions(
+                paragraphs,
+                questions,
+                labels,
+                question_folds,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(word_pair_primary,),
+                min_df=2,
+            )
+            held_out_blind_word_pairs = None
+            if permuted_questions is not None:
+                held_out_blind_word_pairs = cross_fit_word_pair_questions(
+                    paragraphs,
+                    permuted_questions,
+                    labels,
+                    question_folds,
+                    eval_question_texts=questions,
+                    paragraphs=tuple(view.paragraphs),
+                    questions=tuple(view.questions),
+                    scorings=word_pair_scorings,
+                    control_cells=control_cells,
+                )
+            per_question_neutral = None
+            if abstention_fills.get("neutral") is not None:
+                per_question_neutral = abstention_fills["neutral"]["scorings"].get(primary)
+            word_pairs = word_pairs_block(
+                view,
+                seen=seen_word_pairs,
+                held_out=held_out_word_pairs,
+                seen_blind=seen_blind_word_pairs,
+                held_out_blind=held_out_blind_word_pairs,
+                reference_similarities=baseline.similarities,
+                reference_name=entry.name,
+                per_question_similarities=grids["scorings"].get(primary),
+                per_question_neutral=per_question_neutral,
+                resamples=analysis.bootstrap.resamples,
+                seed=bootstrap_seed,
+                primary=word_pair_primary,
+                seen_df2=seen_df2_word_pairs,
+                held_out_df2=held_out_df2_word_pairs,
+            )
         models.append(
             build_dictionary_model(
                 view,
@@ -1931,6 +2109,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 question_lexicon=question_lexicon,
                 abstention_fills=abstention_fills,
                 question_pairs=question_pairs,
+                word_pairs=word_pairs,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -2135,7 +2314,17 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("question_pairs"):
+            if (model.get("readout") or {}).get("word_pairs"):
+                table_rows.append(
+                    _dictionary_wordpairs_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("question_pairs"):
                 table_rows.append(
                     _dictionary_qpairs_row(
                         model,
@@ -2322,6 +2511,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
+        has_word_pairs = any(
+            (model.get("readout") or {}).get("word_pairs")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_question_pairs = any(
             (model.get("readout") or {}).get("question_pairs")
             for model in models
@@ -2342,7 +2536,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_question_pairs:
+        if has_word_pairs:
+            columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS
+        elif has_question_pairs:
             columns = ANALYZE_OMCT_DICTIONARY_QPAIRS_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS
         elif has_abstention:

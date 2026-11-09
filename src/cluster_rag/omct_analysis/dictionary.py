@@ -28,6 +28,7 @@ from cluster_rag.omct_analysis.arms import compare_arms, measure_arm, score_arm
 from cluster_rag.omct_analysis.helpers import _auc_decomposition, _macro, _safe_auc
 from cluster_rag.omct_analysis.view import DatasetView, SideEncoding
 from cluster_rag.text_processors.features.question_map import UNIT_PHRASES
+from cluster_rag.text_processors.features.word_pair_map import WORD_PAIR_PRIMARY
 from cluster_rag.text_processors.lexical.question_lexicon import (
     LEXICON_BAR,
     PRIMARY_LEXICON_ARM,
@@ -656,6 +657,352 @@ def union_arm_block(
     }
 
 
+# The registered bars and bands of the word-pair change set (CS-59).
+WORD_PAIR_COVERAGE_BAR = 0.50
+WORD_PAIR_COLLAPSE_BAND = 0.05
+WORD_PAIR_BLIND_GAP_BAR = BLIND_GAP_BAR
+
+
+def _share(numerator: int | float, denominator: int | float) -> float | None:
+    """A share, or ``None`` when the denominator is empty."""
+    return float(numerator / denominator) if denominator else None
+
+
+def _word_pair_coverage(view: DatasetView, grids: Mapping[str, Any]) -> dict[str, Any]:
+    """The evaluated pairs' coverage: any shared word, a known one, the floor."""
+    floor = np.asarray(grids["floor"], dtype=bool)
+    n_known = np.asarray(grids["n_known"], dtype=np.int64)
+    n_shared = np.asarray(grids["n_shared"], dtype=np.int64)
+    n_single = np.asarray(grids["n_single"], dtype=np.int64)
+    known = n_known > 0
+    shared_any = n_shared > 0
+    single_only = known & (n_single == n_known)
+    documents = np.asarray([record.document for record in view.pairs])
+
+    def _document(mask: np.ndarray) -> dict[str, Any]:
+        return {
+            "n_pairs": int(mask.sum()),
+            "known_share": _share(known[mask].sum(), mask.sum()),
+            "shared_any_share": _share(shared_any[mask].sum(), mask.sum()),
+            "floor_share": _share(floor[mask].sum(), mask.sum()),
+        }
+
+    return {
+        "n_pairs": int(floor.size),
+        "n_known": int(known.sum()),
+        "known_share": _share(known.sum(), floor.size),
+        "shared_any_share": _share(shared_any.sum(), floor.size),
+        "floor_share": _share(floor.sum(), floor.size),
+        "single_observation_pair_share": _share(single_only.sum(), known.sum()),
+        "by_document": {
+            stratum["document"]: _document(documents == stratum["document"])
+            for stratum in view.strata
+        },
+        "note": (
+            "known = at least one shared content word with a row in the fold's table "
+            "(the registered coverage); shared_any = at least one shared content word; "
+            "single_observation_pair_share = of the known pairs, the share whose every "
+            "known row has df == 1 (the CS-54 lesson)"
+        ),
+    }
+
+
+def _paired(comparison: Mapping[str, Any]) -> dict[str, Any]:
+    """The within-document paired block of a :func:`compare_arms` result."""
+    paired = comparison["auc_decomposition"]["within_group_paired"]
+    return {
+        "auc_reference": paired["auc_reference"],
+        "auc_arm": paired["auc_arm"],
+        "delta": paired["delta_auc"],
+        "ci_low": paired["ci_low"],
+        "ci_high": paired["ci_high"],
+        "p_delta_positive": paired["p_delta_positive"],
+        "n_resamples": paired["n_resamples"],
+        "seed": paired["seed"],
+        "method": paired["method"],
+    }
+
+
+def _word_pair_evaluation(
+    view: DatasetView,
+    grids: Mapping[str, Any],
+    *,
+    reference: np.ndarray,
+    reference_name: str,
+    secondary_reference: np.ndarray | None,
+    secondary_name: str | None,
+    neutral_reference: np.ndarray | None,
+    arm_name: str,
+    resamples: int,
+    seed: int,
+    primary: str = WORD_PAIR_PRIMARY,
+    df2: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One word-pair evaluation's readout: the arm, its references, its coverage."""
+    floor = np.asarray(grids["floor"], dtype=bool)
+    matrix = np.asarray(grids["scorings"][primary]["floor"], dtype=np.float64)
+    measured = measure_arm(view, matrix)
+    stats = _arm_stats(view, measured)
+    comparison = compare_arms(
+        view,
+        arm_name=arm_name,
+        reference_similarities=reference,
+        arm_similarities=matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    block: dict[str, Any] = {
+        "within_auc": stats["within_auc"],
+        "pooled_auc": stats["pooled_auc"],
+        "macro_auc": stats["macro_auc"],
+        "by_document": stats["by_document"],
+        "n_pairs": stats["n_pairs"],
+        "reference": {
+            "model": reference_name,
+            "paired": _paired(comparison),
+            "by_document": {
+                document: {
+                    "reference": block["reference"],
+                    "arm": block["arm"],
+                    "delta": block["delta"],
+                }
+                for document, block in comparison["pair_auc"]["by_document"].items()
+            },
+        },
+        "floor": {
+            "n_floor_pairs": int(floor.sum()),
+            "floor_share": _share(floor.sum(), floor.size),
+        },
+        "coverage": _word_pair_coverage(view, grids),
+        "non_floor": _non_floor_stats(view, measured, ~floor),
+        "control": comparison["control_shift"],
+        "deshifted_auc": comparison["deshifted_auc"]["overall"],
+        "control_vintage": grids.get("control_vintage"),
+    }
+    if secondary_reference is not None:
+        secondary = compare_arms(
+            view,
+            arm_name=f"{arm_name}_vs_secondary",
+            reference_similarities=secondary_reference,
+            arm_similarities=matrix,
+            resamples=resamples,
+            seed=seed,
+        )
+        block["secondary"] = {
+            "model": secondary_name,
+            "paired": _paired(secondary),
+            "by_document": {
+                document: {
+                    "reference": block["reference"],
+                    "arm": block["arm"],
+                    "delta": block["delta"],
+                }
+                for document, block in secondary["pair_auc"]["by_document"].items()
+            },
+        }
+    neutral = grids["scorings"][primary].get("neutral")
+    if neutral is not None:
+        neutral_matrix = np.asarray(neutral, dtype=np.float64)
+        neutral_stats = _arm_stats(view, measure_arm(view, neutral_matrix))
+        block["neutral_fill"] = {
+            "within_auc": neutral_stats["within_auc"],
+            "pooled_auc": neutral_stats["pooled_auc"],
+            "by_document": neutral_stats["by_document"],
+        }
+        if neutral_reference is not None:
+            neutral_comparison = compare_arms(
+                view,
+                arm_name=f"{arm_name}_neutral",
+                reference_similarities=neutral_reference,
+                arm_similarities=neutral_matrix,
+                resamples=resamples,
+                seed=seed,
+            )
+            block["neutral_fill"]["paired"] = _paired(neutral_comparison)
+    if df2 is not None:
+        df2_matrix = np.asarray(df2["scorings"][primary]["floor"], dtype=np.float64)
+        df2_stats = _arm_stats(view, measure_arm(view, df2_matrix))
+        df2_comparison = compare_arms(
+            view,
+            arm_name=f"{arm_name}_df2",
+            reference_similarities=reference,
+            arm_similarities=df2_matrix,
+            resamples=resamples,
+            seed=seed,
+        )
+        block["df_ge_2"] = {
+            "within_auc": df2_stats["within_auc"],
+            "pooled_auc": df2_stats["pooled_auc"],
+            "by_document": df2_stats["by_document"],
+            "paired": _paired(df2_comparison),
+            "table_rows": (df2.get("table") or {}).get("n_rows"),
+            "floor": {
+                "n_floor_pairs": int(np.asarray(df2["floor"], dtype=bool).sum()),
+                "floor_share": _share(
+                    np.asarray(df2["floor"], dtype=bool).sum(), len(df2["floor"])
+                ),
+            },
+            "note": (
+                "the CS-54 diagnostic: the same arm with the df == 1 rows dropped; if it "
+                "is below the reference while the full arm is above, the win rests on "
+                "single-observation rows"
+            ),
+        }
+    block["spread"] = {
+        scoring: {
+            "within_auc": _arm_stats(
+                view, measure_arm(view, np.asarray(fills["floor"], dtype=np.float64))
+            )["within_auc"],
+            "pooled_auc": _arm_stats(
+                view, measure_arm(view, np.asarray(fills["floor"], dtype=np.float64))
+            )["pooled_auc"],
+        }
+        for scoring, fills in grids["scorings"].items()
+    }
+    return block
+
+
+def word_pairs_block(
+    view: DatasetView,
+    *,
+    seen: Mapping[str, Any],
+    held_out: Mapping[str, Any],
+    seen_blind: Mapping[str, Any] | None,
+    held_out_blind: Mapping[str, Any] | None,
+    reference_similarities: np.ndarray,
+    reference_name: str,
+    per_question_similarities: np.ndarray | None,
+    per_question_neutral: np.ndarray | None,
+    resamples: int,
+    seed: int,
+    primary: str = WORD_PAIR_PRIMARY,
+    seen_df2: Mapping[str, Any] | None = None,
+    held_out_df2: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The artifact's ``word_pairs`` block (CS-59): the two evaluations.
+
+    Args:
+        view: The dataset view.
+        seen: The pair-level cross-fit (all questions seen).
+        held_out: The question-level cross-fit (held-out questions).
+        seen_blind: The seen arm's label-blind counterpart, or ``None``.
+        held_out_blind: The held-out arm's label-blind counterpart, or ``None``.
+        reference_similarities: The run's plain full-text cosine.
+        reference_name: The reference model's name.
+        per_question_similarities: The per-question z arm's cross-fit grid (the
+            seen arm's registered reference), or ``None``.
+        per_question_neutral: The per-question neutral-fill grid, or ``None``.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+        primary: The registered primary arm.
+
+    Returns:
+        The block: the table's shape, the two evaluations, the blind
+        counterparts and the per-question cannot-compete note.
+    """
+    seen_block = _word_pair_evaluation(
+        view,
+        seen,
+        reference=per_question_similarities
+        if per_question_similarities is not None
+        else reference_similarities,
+        reference_name=(
+            "the per-question z arm (CS-50/56)"
+            if per_question_similarities is not None
+            else reference_name
+        ),
+        secondary_reference=(
+            reference_similarities if per_question_similarities is not None else None
+        ),
+        secondary_name=reference_name if per_question_similarities is not None else None,
+        neutral_reference=(
+            per_question_neutral if per_question_neutral is not None else reference_similarities
+        ),
+        arm_name="word_pairs_seen",
+        resamples=resamples,
+        seed=seed,
+        primary=primary,
+        df2=seen_df2,
+    )
+    held_out_block = _word_pair_evaluation(
+        view,
+        held_out,
+        reference=reference_similarities,
+        reference_name=reference_name,
+        secondary_reference=None,
+        secondary_name=None,
+        neutral_reference=reference_similarities,
+        arm_name="word_pairs_held_out_questions",
+        resamples=resamples,
+        seed=seed,
+        primary=primary,
+        df2=held_out_df2,
+    )
+
+    for block, blind in ((seen_block, seen_blind), (held_out_block, held_out_blind)):
+        if blind is None:
+            block["blind"] = None
+            continue
+        blind_matrix = np.asarray(blind["scorings"][primary]["floor"], dtype=np.float64)
+        blind_stats = _arm_stats(view, measure_arm(view, blind_matrix))
+        gap = (
+            block["within_auc"] - blind_stats["within_auc"]
+            if block["within_auc"] is not None and blind_stats["within_auc"] is not None
+            else None
+        )
+        block["blind"] = {
+            "within_auc": blind_stats["within_auc"],
+            "pooled_auc": blind_stats["pooled_auc"],
+            "by_document": blind_stats["by_document"],
+            "gap": gap,
+            "bar": WORD_PAIR_BLIND_GAP_BAR,
+            "coverage": _word_pair_coverage(view, blind),
+            "note": (
+                "the questions permuted across the pairs (seed 42, the counts preserved); "
+                "the table is built from the permuted pairs and the **real** grid is read"
+            ),
+        }
+
+    n_pairs = len(view.pairs)
+    return {
+        "primary": primary,
+        "reference_model": reference_name,
+        "coverage_bar": WORD_PAIR_COVERAGE_BAR,
+        "collapse_band": WORD_PAIR_COLLAPSE_BAND,
+        "blind_gap_bar": WORD_PAIR_BLIND_GAP_BAR,
+        "table": {
+            "full": dict(seen["table"]),
+            "per_fold": dict(seen["fold_tables"]),
+            "note": (
+                "the full table is the description; every judged score is out-of-fold. "
+                "single_observation_share is the share of rows with df == 1"
+            ),
+        },
+        "seen": seen_block,
+        "held_out_questions": held_out_block,
+        "per_question_held_out": {
+            "n_evaluated_pairs": int(n_pairs),
+            "n_floored": int(n_pairs),
+            "n_questions": int(len(view.questions)),
+            "note": (
+                "under the question-level folds each fold's per-question map holds only the "
+                "training questions, so every held-out question's pairs are floored (100%) "
+                "and the per-question ranking is degenerate; no per-question AUC is reported"
+            ),
+        },
+        "notes": [
+            "the seen evaluation is the pair-level cross-fit (seed 42, the round's scheme); "
+            "the held-out evaluation is the 5-fold split over the 294 question texts "
+            "(default_rng([42, 2])), each fold's table from the other folds' questions",
+            "the floor is the paragraph row's smallest non-floored score minus one; a pair "
+            "with no known shared word can never outrank a pair the table speaks about",
+            "the blind counterpart permutes the questions across the pairs (default_rng([42, 1])) "
+            "and rebuilds the table; the real grid is read, so the gap is the real "
+            "question-word association",
+        ],
+    }
+
+
 def build_dictionary_model(
     view: DatasetView,
     *,
@@ -680,6 +1027,7 @@ def build_dictionary_model(
     question_lexicon: Mapping[str, Any] | None = None,
     abstention_fills: Mapping[str, Mapping[str, Any]] | None = None,
     question_pairs: Mapping[str, Any] | None = None,
+    word_pairs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -715,6 +1063,8 @@ def build_dictionary_model(
             fill's name; ``None`` runs none.
         question_pairs: The question-pair relation's readout (CS-57); ``None``
             runs none.
+        word_pairs: The global word-pair table's readout (CS-59), the two
+            evaluations and their blind counterparts; ``None`` runs none.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -814,6 +1164,8 @@ def build_dictionary_model(
         )
     if question_pairs is not None:
         readout["question_pairs"] = dict(question_pairs)
+    if word_pairs is not None:
+        readout["word_pairs"] = dict(word_pairs)
     if abstention_fills:
         readout["abstention_arms"] = abstention_arms_block(
             view,

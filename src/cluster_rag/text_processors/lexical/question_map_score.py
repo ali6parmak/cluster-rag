@@ -74,7 +74,7 @@ UNION_SCORING = "sum_zscore_positive_phrase"
 
 # What each arm does: the aggregation, the measure it reads and whether it
 # keeps only the words whose value is **positive**.
-_ARMS: dict[str, tuple[str, str, bool]] = {
+ARM_SPECS: dict[str, tuple[str, str, bool]] = {
     "sum_logodds": ("sum", "log_odds", False),
     "sum_positive": ("sum", "log_odds", True),
     "max_logodds": ("max", "log_odds", False),
@@ -241,7 +241,7 @@ def score_grid(
         )
     if fill not in FILLS:
         raise ValueError(f"Unknown empty-table fill {fill!r}; expected one of {FILLS}")
-    aggregation, measure, positive_only = _ARMS[scoring]
+    aggregation, measure, positive_only = ARM_SPECS[scoring]
     allowed = _allowed_classes(restrict)
     allowed_pos = _allowed_pos(restrict_pos)
     units_of = units or (lambda text: content_tokens(text, stopwords))

@@ -686,6 +686,46 @@ ANALYZE_OMCT_DICTIONARY_QPAIRS_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_QPAIRS_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The **word-pair table** (CS-59): one global table over the words a paragraph
+# and a question share, scored two ways. The ``seen`` columns are the
+# pair-level cross-fit (the comparability arm: the per-question z arm is the
+# registered reference, the cosine the secondary one); the ``heldout`` columns
+# are the question-level cross-fit (the cosine is the registered reference).
+# Coverage, the floor and the single-observation shares sit beside the numbers
+# (the CS-54 lesson), and the blind counterpart's gap is the label-driven check.
+ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "seen_within_auc",
+    "seen_delta_vs_perq",
+    "seen_ci_vs_perq",
+    "seen_delta_vs_cosine",
+    "seen_ci_vs_cosine",
+    "seen_neutral_within",
+    "heldout_within_auc",
+    "heldout_delta_vs_cosine",
+    "heldout_ci_vs_cosine",
+    "heldout_neutral_within",
+    "coverage_seen",
+    "coverage_heldout",
+    "floor_seen",
+    "floor_heldout",
+    "single_obs_share",
+    "single_obs_pairs_share",
+    "blind_seen_within",
+    "blind_seen_gap",
+    "blind_heldout_within",
+    "blind_heldout_gap",
+    "n_rows",
+    "n_questions",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

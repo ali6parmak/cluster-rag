@@ -34,6 +34,7 @@ from cluster_rag.omct_analysis.dictionary import (
     DICTIONARY_ARM,
     build_dictionary_model,
     measure_dictionary_arms,
+    word_pairs_block,
 )
 from cluster_rag.omct_analysis.helpers import (
     BASELINE_ARM,
@@ -117,6 +118,7 @@ __all__ = [
     "build_analysis_report",
     "build_dataset_view",
     "build_dictionary_model",
+    "word_pairs_block",
     "build_stage3_grid",
     "compare_arms",
     "compare_stage3_arm",

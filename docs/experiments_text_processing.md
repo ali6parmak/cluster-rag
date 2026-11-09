@@ -9634,3 +9634,125 @@ viewer reads the round as it stands. It does not re-score the artifacts, write
 one, or add a metric; the recomputation exists for attribution and the guard.
 It does not invent a **POS** class, label a **control** cell, or pool subset B
 with the judged set. The next step is the reviewer's.
+
+## CS-59 — the word-pair table on OMCT: a new question can finally be scored (2026-11-09)
+
+**The run.** One: `omct-analyze-voyage-wpairs` — the round's **unit change**.
+The per-question dictionary (CS-48 … CS-57) is a fixed questionnaire: a
+question gets a table only after a positive judged pair (**85 of 294** have
+none), and under the pair cross-fit **518 pairs (34.08 %)** are floored. This
+run builds **one global table** over the words a paragraph and a question
+share, with **no question in the key** (the diagonal of the paragraph-word x
+question-word matrix — the plan's option (a)), and scores the 1,520 judged
+pairs two ways: the round's pair-level cross-fit (all questions seen) and the
+**question-level** cross-fit (held-out questions). **0 model calls** (the
+cosine is the Stage-0 cache), **0 LLM calls**, **23 s**, the artifact
+**3.9 MB**, **no new dependency**; two consecutive runs are bit-identical (the
+`word_pairs` block and the per-question arms). The sweep is
+`experiments_text_processing/omct_dictionary_wordpairs_sweep.py` (the label
+`omct_dictionary_wordpairs`, the table's section
+`## OMCT — omct_dictionary_wordpairs`); the numbers are
+`results/omct-analyze-voyage-wpairs/analysis.json`,
+`models[kind=dictionary].readout.word_pairs` (the full table is
+`…word_pairs.table`; the per-question reference is the same entry's
+`readout.scorings.sum_zscore_positive`, **0.7020**).
+
+**The object.** For each pair, the shared words are the intersection of the
+paragraph's and the question's content tokens (the track's tokenizer, the raw
+question text — CS-55's convention). Each shared word is one row, with the
+CS-50 estimator's counts: `n_with` = the shared pairs labelled 1, `df` = the
+shared pairs, `paragraph_df` = the pairs whose paragraph contains the word (the
+prior). The registered primary is `sum_zscore_positive` — the sum of the
+positive z-scores of the pair's known shared rows; a pair with no known row is
+**floored** (its paragraph row's smallest seen score minus one). The full
+table: **1,520 pairs, 545 distinct shared words, 366 rows**, 82 single-row
+(**22.40 %**), median `df` **5**, max **602**.
+
+**The primary test: the held-out questions win.** Each of the 5 folds holds
+out **59/59/59/59/58** question texts (`default_rng([42, 2])`), and its table
+is built from the other folds' questions' pairs; the held-out questions' pairs
+are the only ones evaluated. The within-document AUC is **0.6309** against the
+cosine's **0.5238** — a paired **+0.1071 [+0.0668, +0.1501]** over the 1,520
+pairs (2,000 resamples, P 1.000). **The per-question dictionary cannot score
+those pairs at all**: every fold map holds only the training questions, so all
+1,520 evaluated pairs are floored (100 %), and no per-question AUC is reported.
+The floor falls from the per-question **518 (34.08 %)** to **76 (5.00 %)**;
+coverage is **95.00 %** (the registered bar 50 %).
+
+**The comparability arm: a null-sized loss on seen questions, not a collapse.**
+The pair-level cross-fit (seed 42, the round's scheme) reaches **0.6808** —
+**−0.0211 [−0.0638, +0.0182]** against the per-question z arm's **0.7020**
+(the interval includes zero) and **+0.1570 [+0.1154, +0.2002]** against the
+cosine. The registered "collapse" bar was 0.6520 with the interval's upper
+bound ≥ −0.05: the point clears the bar and the upper bound is **+0.0182** —
+the question-specific evidence is worth ~0.02, not the instrument.
+
+**The floor and the single-observation share (the CS-54 lesson) do not carry
+it.** The seen/held-out non-floor readings are **0.7167 / 0.6683**, both above
+the cosine, so the all-pairs number is not the floor's prior (CS-49's trap).
+The rows with `df == 1` are **22.40 %** of the table, but only **0.21 % /
+0.48 %** of the known pairs rest only on them; the **df ≥ 2-only** arm is
+**0.6663** (seen, Δ vs the per-question arm −0.0357 [−0.0774, +0.0022]) and
+**0.6074** (held-out, **+0.0836 [+0.0425, +0.1264]** against the cosine) — the
+win survives dropping every single-observation row.
+
+**The blind counterpart.** The questions permuted across the pairs
+(`default_rng([42, 1])`, the counts preserved): the table is rebuilt from the
+permuted pairs and the **real** grid is read. The seen gap is **+0.1172**
+(0.6808 against 0.5636), the held-out gap **+0.0697** (0.6309 against 0.5612)
+— the held-out gap clears the CS-49 0.05 bar; the blind's above-chance level
+says a permuted table still reads common words.
+
+**The neutral fill.** CS-56's rule, beside the floor: seen **0.6983** (vs the
+per-question neutral 0.7616, **−0.0633 [−0.0978, −0.0283]**), held-out
+**0.6493** (vs the cosine **+0.1255 [+0.0839, +0.1692]**). The held-out win
+holds under the fill the round said should ship.
+
+**The count arm inverts CS-49.** The measure-free `support_count` is **below
+chance** — **0.4570** seen / **0.4525** held-out — where on the per-question
+unit it was the only arm that beat the cosine (0.6360). A paragraph and
+question that share many words are long or register-heavy; the z-score's
+per-word normalization is the model. CS-50's lesson, on the global unit.
+
+**The falsification, read out one by one.**
+
+1. **F1 (the primary): holds** — 0.6309 against 0.5238,
+   +0.1071 [+0.0668, +0.1501].
+2. **F2 (no collapse): holds** — 0.6808 ≥ 0.6520 and the interval's upper
+   bound +0.0182 ≥ −0.05.
+3. **F3 (coverage): holds** — 95.00 % against the 50 % bar.
+4. **F4 (blind, secondary): holds** — the held-out gap +0.0697 against 0.05.
+5. **The attribution rules are not tripped** — non-floor 0.6683, df ≥ 2-only
+   0.6074 (+0.0836), neutral fill 0.6493 (+0.1255), all above the cosine.
+
+**Per document (NU / CIDH / AI).** Held-out: arm **0.6385 / 0.6649 / 0.6175**,
+against the cosine **+0.1358 / +0.0484 / +0.0603** (all three above). Seen:
+arm **0.6838 / 0.7196 / 0.6751**; against the per-question z arm **+0.0619 /
+−0.0785 / −0.1588** — the global table gives up the question-specific edge
+where the per-question table is strongest (the two smaller tables) and gains
+on NU.
+
+**The reading.** The round's fixed-questionnaire ceiling is removed: the first
+instrument of the round that scores a question it has never seen reaches
+**0.6309** against the cosine's 0.5238, on a table of 366 shared words, with
+the floor at 5 %. The price on seen questions is a null-sized **−0.021**; the
+gain on new ones is **+0.107**. The mechanism is the shared word's global
+z-score — not the count (below chance), not the floor (non-floor above the
+cosine), not the single-observation rows (the df ≥ 2 arm holds), not the fill
+(the neutral win holds). The natural follow-up is option (b), the full
+paragraph-word x question-word table, **only if** the reviewer wants the
+sparser translation table now that the diagonal has cleared the held-out bar.
+
+**What this change set does not say.** Nothing about (b) — deferred by the
+pre-registration; nothing about **unseen paragraphs** (the held-out unit is
+the question text; the paragraphs are shared with the fit side, so this is the
+new-question-on-known-paragraphs quantity, not a document-generalization
+claim); nothing about a **UPR** number; nothing about the unjudged control
+cells' positive rate (the control is the comparison's own side, never ground
+truth); nothing about the per-question arm under the question folds beyond its
+100 % floor (the ranking there is degenerate, so no AUC is claimed).
+
+**The gate.** `pytest`: **1033 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **273** files. Two consecutive runs are
+bit-identical (the `word_pairs` block and the per-question arms; bar the clock
+fields).
