@@ -1847,6 +1847,171 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
   map-only CS-48 run; the UPR viewer is untouched. **The next step is the
   reviewer's.**
 
+### 7.11 The word-pair table on OMCT (CS-59)
+
+**Why the unit changes.** The round CS-48 … CS-57 built a **per-question**
+dictionary: a question gets a table only after a positive judged pair. **85 of
+294** questions have none, and under the 5-fold pair cross-fit **518 pairs
+(34.08 %)** carry the floor. A **new** question is therefore silent — the
+instrument is a fixed questionnaire. CS-59 moves the unit: **one global table
+over the word pairs a paragraph and a question share**, learned from all 1,520
+judged pairs, with **no question in the key**. The registered question is
+whether that table can rank a *new* question's pairs at all.
+
+**Scope and discipline.** **OMCT only, subset A only.** Subset B (the 4,000
+unjudged control cells) never enters a fit and is never ground truth; it is
+read only as the control side of a comparison, as in every round arm. No UPR
+artifact and no UPR metric. The round's measurement rules bind: the
+**within-document AUC is the headline**, the pooled number and the per-document
+read (NU / CIDH / AI; AI's 99 pairs) sit beside it, and every number says which
+artifact and which block it came from.
+
+- [ ] **CS-59 — the word-pair table: one global table over the shared words,
+  scored two ways (all questions seen, and held-out questions).**
+
+  **The object, and the decision (a) — matching pairs only.** For each judged
+  pair the two sides are tokenized with the track's
+  `features.pair_features.content_tokens` (the CS-55 convention: the **raw**
+  question text, block included, the same stopwords), and the pair's **shared
+  words** are the set intersection `S(pair) = tokens(paragraph) ∩
+  tokens(question)`. The table's row is the shared word `w`; its key is the
+  **diagonal** pair `(w, w)` of the paragraph-word × question-word matrix. For
+  every fit pair: `df_w` = fit pairs with `w ∈ S`, `n_with_w` = those labelled
+  1, and `paragraph_df_w` = fit pairs whose **paragraph** contains `w` (the
+  prior's df). The row's weight is `lexical.lexicon.pair_measures(n_with_w,
+  df_w, n_positive, n_pairs, alpha0, prior_df=paragraph_df_w)` with
+  `alpha0 = prior_total(paragraph_df.values())` — the **same estimator and the
+  same z-score as CS-50's per-question arm**, one key dropped. Rows are stored
+  for words with `n_with_w ≥ 1` (the "evidence-for" rule of CS-48's builder).
+
+  **The score and the floor (defined up front).** The registered primary arm is
+  CS-50/CS-56's **`sum_zscore_positive`**: a pair's score is the sum of the
+  **positive** `z_score` over `S(pair)` ∩ the fold's rows. `support_count` (the
+  number of known shared words) is computed as the measured spread, never the
+  primary. A pair is **floored** iff no word of `S(pair)` has a row in the
+  fold's table; the floor is the **paragraph row's smallest non-floored score
+  minus 1** (the existing scorer's rule), and a row with every cell floored
+  gets −1. A floored pair can never outrank a pair the table speaks about in
+  its paragraph. *(One concrete case: a paragraph and a question that share
+  "forced" and "evictions" sum those two rows; a brand-new question about
+  forced evictions reads the same rows, where the per-question map would have
+  no table at all.)*
+
+  **Why (a), and not (b) — stated before the measurement.** (a) is the exact
+  **global twin** of CS-50's estimator, so the difference from 0.7020 is
+  attributable to the unit change, not to a new statistic. It is **dense**: one
+  row per word, each estimated from up to 1,520 observations. (b) — every
+  paragraph word × every question word — has a key space orders of magnitude
+  larger, each key observed in a handful of pairs, which is CS-54's
+  single-observation disease (89.1 % of the per-question links rested on one
+  pair) and CS-39's rarity null in another guise. The mechanism the plan's
+  §7.1 calls "the workable object" **is** the shared word: if the diagonal
+  cannot beat the cosine on held-out questions, the full cross-product has no
+  reason to. **(b) is deferred** and becomes a follow-up only if (a) clears the
+  held-out bar, as its own pre-registration with its own coverage and
+  single-observation accounting.
+
+  **E1 — all questions seen (the comparability arm).** The round's **pair-level**
+  cross-fit, unchanged: `default_rng(42).permutation(1520)` split into five
+  contiguous chunks (`commands/omct.py` `_dictionary_fold_ids`); each fold's
+  table built from the other folds' pairs; every judged pair scored by its own
+  fold's table, the unjudged cells by the full table (the usual vintage note,
+  recorded). Reference: the **per-question z arm in the same artifact
+  (0.7020)** and the run's plain full-text cosine (**0.5238**). This number is
+  the trade, not the target.
+
+  **E2 — held-out questions (the number that matters).** Five folds over the
+  **294 question texts**, `default_rng([42, 2]).permutation(294)` split into
+  five contiguous chunks (a stream independent of the pair folds and the blind,
+  as CS-49 derived `[seed, 1]`). Each fold's table is built from the **other
+  folds' questions' pairs**; the evaluated pairs are exactly the held-out
+  questions' pairs (each pair belongs to one held-out question, so all 1,520
+  are evaluated once). Reference: the same run's **cosine 0.5238**. The
+  per-question dictionary is recorded as **structurally unable to compete**:
+  each fold's map holds only the training questions, so all 1,520 evaluated
+  pairs are floored (100 %) and its ranking is degenerate — **no per-question
+  AUC is reported for E2**, only that fact.
+
+  **The blind counterpart.** `default_rng([42, 1]).permutation(1520)` (the
+  existing `blind_question_permutation`): the questions permuted across the
+  pairs, counts preserved. The table is rebuilt from the permuted pairs and the
+  permuted pairs are scored, in both evaluations; under E2 the fold of a pair is
+  the fold of its **permuted** question. Coverage is reported for the blind as
+  well, because a permuted question can still share common words.
+
+  **The registered tests (read in order; a falsifier is the condition that
+  refutes the design's claim).**
+
+  | # | the test | passes when | refuted when |
+  |---|---|---|---|
+  | **F1 (primary)** | E2, held-out questions: the global arm against the run's cosine | paired Δ within-document AUC **> 0** and its 95 % interval **excludes 0** (2,000 resamples, the pairs the unit) | the interval includes 0, or Δ ≤ 0 |
+  | **F2 (no collapse)** | E1, all questions seen: the global arm against the per-question z arm | point AUC **≥ 0.6520** (0.7020 − 0.05) **and** the paired 95 % interval's upper bound **≥ −0.05** | either fails — "collapse": the global table is a materially weaker instrument on seen questions |
+  | **F3 (the instrument speaks)** | E2 coverage | **≥ 0.50** of the evaluated pairs have ≥ 1 known shared word in their fold's table (the per-question map's with-evidence availability was 61.1 %, so half is a floor for "the majority", not a prediction) | below 0.50 → the F1 number is descriptive only (the floor's prior, the CS-49 trap) |
+  | **F4 (blind, secondary)** | E2, global minus blind, within-document | **≥ 0.05** (CS-49's bar) | below 0.05 → a caveat, not a primary overturn |
+
+  **"Collapse" is 0.05 by design.** The question-specific evidence is real and
+  the global table trades it for coverage; 0.05 is the round's materiality bar
+  (CS-49's blind gap, CS-53's lever bar). A larger drop means a different,
+  weaker instrument on seen questions — a decision for the reviewer, not a
+  silent pass.
+
+  **The attribution rules (pre-declared, not gates).** (i) If E2's **non-floor**
+  reading (the pairs with ≥ 1 known row) is at or below chance while the
+  all-pairs reading beats the cosine, the win is the **coverage prior**, not
+  word-pair evidence — CS-49's reading, applied. (ii) If the **df ≥ 2-only**
+  readout is below the cosine while the full arm is above, the win rests on
+  single-observation rows and is **not credited as generalization**. (iii) A
+  win that exists only under the **neutral fill** is reported as such.
+
+  **Reported beside every number.** Coverage (`shared_any` — any shared content
+  word; `known` — at least one row; the floor share), the table's
+  **single-observation share** (rows with `df == 1`; the evaluated pairs whose
+  known evidence is all `df == 1`; the median `df`), per document (NU / CIDH /
+  AI), the **blind** counterpart and gap, the **neutral fill** readout (CS-56's
+  rule; the 0.7616 reference), the per-question z reference (0.7020), the
+  per-fold pair counts (E1) and question/pair counts (E2), and the
+  control-vintage block. The table's full 1,520-pair form is the description;
+  every judged score is out-of-fold.
+
+  **The known references, read from the committed artifacts** (the run must
+  reproduce them, not re-derive them): the per-question z arm **0.70195**
+  (`omct-analyze-voyage-dict-z`,
+  `models[kind=dictionary].readout.scorings.sum_zscore_positive.within_auc`),
+  its neutral fill **0.76160** and the floor **518 / 0.3408**
+  (`omct-analyze-voyage-dict-abstain`, `readout.abstention_arms`), the cosine
+  **0.52379** (`…readout.reference`), and the shape **1,520 pairs (524 +, 996
+  −) / 294 questions / 225 paragraphs / 3 documents**, 209 tables / 85 empty
+  (`dictionary.corpus`, `dictionary.map`).
+
+  **Cost and reuse.** **0 model calls, 0 LLM calls, no new dependency**: the
+  table needs no embedder, and the cosine is the round's existing Stage-0 cache
+  (voyage-4-nano). Expected ~15–25 s and a small artifact. The pure cores are
+  **reused, not re-implemented**: `content_tokens` / `DEFAULT_STOPWORDS`,
+  `pair_measures` / `prior_total`, `blind_question_permutation`,
+  `_arm_stats` / `_non_floor_stats` / `measure_arm` / `compare_arms` /
+  `score_arm`, and the `_dictionary_fold_ids` scheme. The new code is confined
+  to a pure `features/word_pair_map.py` (builder + pair scorer + the two fold
+  assemblies), one `dictionary.py` readout block, a `DictionaryConfig` group
+  (`word_pairs`, `word_pair_scorings`, `word_pair_primary`), one row and table
+  section, one sweep file, and tests.
+
+  **The run, if it starts.** One cell: `analyze-voyage-wpairs` →
+  `results/omct-analyze-voyage-wpairs/`, the sweep label
+  `omct_dictionary_wordpairs`, the table section
+  `## OMCT — omct_dictionary_wordpairs`; the numbers in
+  `analysis.json` → `models[kind=dictionary].readout.word_pairs.{table, seen,
+  held_out_questions, blind, coverage, floor}`.
+
+  **What it is not.** Not (b); not a per-question table with a fallback (no
+  question identity enters the table); not subset B as truth; not a claim about
+  unseen **paragraphs** — the held-out unit is the **question text**, and the
+  paragraphs are shared with the fit side (stated in the artifact and the log);
+  not UPR; not a new embedding or LLM call.
+
+  **The stop.** The pre-registration is written here; the code, the run, the
+  table row, the log §CS-59, the archive's §7.11 and the gate follow only on the
+  reviewer's word, and the work stops again after they are in.
+
 
 
 
