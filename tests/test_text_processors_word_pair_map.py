@@ -17,6 +17,7 @@ from cluster_rag.text_processors.features.word_pair_map import (
     build_word_pair_map,
     cross_fit_word_pair_questions,
     cross_fit_word_pair_seen,
+    paragraph_fold_ids,
     question_fold_ids,
     score_word_pair_grid,
 )
@@ -178,6 +179,38 @@ def test_the_blind_builds_from_the_permuted_questions_but_reads_the_real_cell() 
     )
     assert grids["n_known"][0] == 0
     assert bool(grids["floor"][0])
+
+
+def test_the_paragraph_folds_partition_the_paragraphs() -> None:
+    """The paragraph split is its own stream and covers every paragraph once."""
+    paragraphs = [f"paragraph number {index} alpha" for index in range(10)]
+    folds = paragraph_fold_ids(paragraphs, 5, seed=42)
+    assert set(folds) == set(paragraphs)
+    assert sorted(folds.values()) == [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]
+    assert paragraph_fold_ids(paragraphs, 5, seed=42) == folds
+    # the question split on the same texts is a different stream
+    assert question_fold_ids(paragraphs, 5, seed=42) != folds
+    assert paragraph_fold_ids(paragraphs, 5, seed=7) != folds
+
+
+def test_a_held_out_paragraphs_unique_word_is_silent() -> None:
+    """The paragraph holdout: a shared word carries the pair, a unique one does not."""
+    paragraphs = ["alpha bravo", "alpha delta", "alpha echo", "bravo echo"]
+    questions = ["alpha bravo", "alpha", "alpha", "bravo"]
+    labels = [1, 0, 1, 0]
+    # fold 0: paragraphs 0 and 1; fold 1: paragraphs 2 and 3
+    grids = cross_fit_word_pair_seen(
+        paragraphs,
+        questions,
+        labels,
+        np.asarray([0, 0, 1, 1], dtype=np.int64),
+        scorings=(WORD_PAIR_PRIMARY,),
+    )
+    # "alpha" is shared across the folds; "bravo" is unique to paragraph 0
+    # (fold 0) and paragraph 3's training table reads it from paragraph 0.
+    assert grids["n_shared"].tolist() == [2, 1, 1, 1]
+    assert grids["n_known"].tolist() == [1, 1, 1, 1]
+    assert not grids["floor"].any()
 
 
 def test_the_arms_are_rejected_by_name() -> None:

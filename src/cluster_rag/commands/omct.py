@@ -59,6 +59,8 @@ from cluster_rag.experiment_table import (
     ANALYZE_OMCT_DICTIONARY_STABILITY_KEY_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS,
     ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_COLUMNS,
+    ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_KEY_COLUMNS,
     ANALYZE_OMCT_KEY_COLUMNS,
     ANALYZE_OMCT_STAGE3_COLUMNS,
     ANALYZE_OMCT_STAGE3_KEY_COLUMNS,
@@ -86,6 +88,7 @@ from cluster_rag.omct_analysis import (
     build_stage3_grid,
     compare_arms,
     decision_rule_block,
+    paragraph_holdout_block,
     score_decision_arm,
     score_model_arms,
     score_stage3_model,
@@ -121,6 +124,7 @@ from cluster_rag.text_processors.features.question_map import (
 from cluster_rag.text_processors.features.word_pair_map import (
     cross_fit_word_pair_questions,
     cross_fit_word_pair_seen,
+    paragraph_fold_ids,
     question_fold_ids,
 )
 from cluster_rag.text_processors.lexical.question_lexicon import (
@@ -962,6 +966,70 @@ def _dictionary_wordpairs_row(
         "n_rows": table.get("n_rows"),
         "n_questions": (word_pairs.get("per_question_held_out") or {}).get("n_questions"),
         "n_pairs": seen.get("n_pairs"),
+        "n_control": n_control,
+        "n_docs": n_docs,
+        "seconds": seconds,
+    }
+
+
+def _dictionary_wordpairs_paragraph_row(
+    model: dict[str, Any],
+    *,
+    run_id: str,
+    n_control: int,
+    n_docs: int,
+    seconds: float,
+) -> dict[str, Any]:
+    """One table row of the dictionary **word pairs paragraph** section (CS-60)."""
+    block = (model.get("readout") or {}).get("word_pairs_paragraph") or {}
+    neutral = block.get("neutral") or {}
+    floor_arm = block.get("floor_arm") or {}
+    fill = ((block.get("fill_delta") or {}).get("paired")) or {}
+    fallback = block.get("fallback") or {}
+    per_question = block.get("per_question") or {}
+    head_to_head = block.get("head_to_head") or {}
+    blind = block.get("blind") or {}
+    table = ((block.get("table") or {}).get("full")) or {}
+    coverage = neutral.get("coverage") or {}
+    n_pairs = coverage.get("n_pairs")
+
+    def _ci(item: dict[str, Any]) -> str | None:
+        if item.get("ci_low") is None:
+            return None
+        return f"[{item['ci_low']:+.4f}, {item['ci_high']:+.4f}]"
+
+    return {
+        "run_id": run_id,
+        "date": date.today().isoformat(),
+        "arm": block.get("primary_fill"),
+        "within_auc": _fmt(neutral.get("within_auc"), 4),
+        "delta_vs_cosine": _fmt((neutral.get("paired_vs_cosine") or {}).get("delta"), 4),
+        "ci_vs_cosine": _ci(neutral.get("paired_vs_cosine") or {}),
+        "floor_within_auc": _fmt(floor_arm.get("within_auc"), 4),
+        "fill_delta": _fmt(fill.get("delta"), 4),
+        "fill_ci": _ci(fill),
+        "fallback_n": fallback.get("n_pairs"),
+        "fallback_share": _fmt((fallback.get("n_pairs") / n_pairs) if n_pairs else None, 4),
+        "fallback_auc": _fmt(fallback.get("within_auc_arm"), 4),
+        "fallback_delta": _fmt(fallback.get("delta"), 4),
+        "fallback_ci": _ci(fallback),
+        "perq_within_auc": _fmt(per_question.get("within_auc"), 4),
+        "perq_neutral_within": _fmt(per_question.get("neutral_within_auc"), 4),
+        "perq_floor_pairs": per_question.get("floor_pairs"),
+        "perq_floor_share": _fmt(per_question.get("floor_share"), 4),
+        "head_to_head_delta": _fmt(head_to_head.get("delta"), 4),
+        "head_to_head_ci": _ci(head_to_head),
+        "coverage": _fmt(coverage.get("known_share"), 4),
+        "floor_pairs": (neutral.get("floor") or {}).get("n_floor_pairs"),
+        "floor_share": _fmt((neutral.get("floor") or {}).get("floor_share"), 4),
+        "single_obs_share": _fmt(table.get("single_observation_share"), 4),
+        "single_obs_pairs_share": _fmt(coverage.get("single_observation_pair_share"), 4),
+        "blind_within_auc": _fmt(blind.get("neutral_within_auc"), 4),
+        "blind_gap": _fmt(blind.get("neutral_gap"), 4),
+        "n_rows": table.get("n_rows"),
+        "n_questions": (block.get("folds") or {}).get("n_questions"),
+        "n_paragraphs": (block.get("folds") or {}).get("n_paragraphs"),
+        "n_pairs": n_pairs,
         "n_control": n_control,
         "n_docs": n_docs,
         "seconds": seconds,
@@ -2087,6 +2155,78 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 seen_df2=seen_df2_word_pairs,
                 held_out_df2=held_out_df2_word_pairs,
             )
+        word_pairs_paragraph = None
+        if analysis.dictionary.word_pair_paragraph_holdout:
+            # CS-60: the paragraph-level holdout — the same global table, 5
+            # folds over the 225 reviewed paragraph texts (questions shared),
+            # the neutral fill as the primary encoding and the per-question
+            # arm's floored pairs as the fallback set.
+            word_pair_primary = analysis.dictionary.word_pair_primary
+            paragraph_folds = paragraph_fold_ids(
+                tuple(view.paragraphs), analysis.dictionary.folds, dictionary_seed
+            )
+            paragraph_fold_ids_per_pair = np.asarray(
+                [paragraph_folds[record.paragraph_text] for record in records],
+                dtype=np.int64,
+            )
+            control_cells = [(row, column) for _, row, column in view.control.cells]
+            paragraph_word_pairs = cross_fit_word_pair_seen(
+                paragraphs,
+                questions,
+                labels,
+                paragraph_fold_ids_per_pair,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(word_pair_primary, "support_count"),
+                control_cells=control_cells,
+            )
+            paragraph_word_pairs_blind = None
+            if analysis.dictionary.blind:
+                permutation = blind_question_permutation(len(records), dictionary_seed)
+                permuted_questions = [records[int(index)].question_text for index in permutation]
+                paragraph_word_pairs_blind = cross_fit_word_pair_seen(
+                    paragraphs,
+                    permuted_questions,
+                    labels,
+                    paragraph_fold_ids_per_pair,
+                    eval_question_texts=questions,
+                    paragraphs=tuple(view.paragraphs),
+                    questions=tuple(view.questions),
+                    scorings=(word_pair_primary,),
+                    control_cells=control_cells,
+                )
+            paragraph_per_question = cross_fit_grids(
+                paragraphs,
+                questions,
+                labels,
+                paragraph_fold_ids_per_pair,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(primary,),
+                fill="floor",
+            )
+            paragraph_per_question_neutral = cross_fit_grids(
+                paragraphs,
+                questions,
+                labels,
+                paragraph_fold_ids_per_pair,
+                paragraphs=tuple(view.paragraphs),
+                questions=tuple(view.questions),
+                scorings=(primary,),
+                fill="neutral",
+            )
+            word_pairs_paragraph = paragraph_holdout_block(
+                view,
+                grids=paragraph_word_pairs,
+                blind=paragraph_word_pairs_blind,
+                per_question=paragraph_per_question,
+                per_question_neutral=paragraph_per_question_neutral,
+                reference_similarities=baseline.similarities,
+                reference_name=entry.name,
+                resamples=analysis.bootstrap.resamples,
+                seed=bootstrap_seed,
+                primary=word_pair_primary,
+            )
         models.append(
             build_dictionary_model(
                 view,
@@ -2110,6 +2250,7 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
                 abstention_fills=abstention_fills,
                 question_pairs=question_pairs,
                 word_pairs=word_pairs,
+                word_pairs_paragraph=word_pairs_paragraph,
                 unit_name=analysis.dictionary.units,
                 probe=(grids.get("probe") or {}).get(primary),
             )
@@ -2314,7 +2455,17 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
     for model in models:
         if model.get("kind") == "dictionary":
             # The dictionary arm (CS-49): its own entry and its own section.
-            if (model.get("readout") or {}).get("word_pairs"):
+            if (model.get("readout") or {}).get("word_pairs_paragraph"):
+                table_rows.append(
+                    _dictionary_wordpairs_paragraph_row(
+                        model,
+                        run_id=omct_run_id,
+                        n_control=view.control.n_cells,
+                        n_docs=view.pooled["n_documents"],
+                        seconds=payload["total_seconds"],
+                    )
+                )
+            elif (model.get("readout") or {}).get("word_pairs"):
                 table_rows.append(
                     _dictionary_wordpairs_row(
                         model,
@@ -2511,6 +2662,11 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
+        has_word_pairs_paragraph = any(
+            (model.get("readout") or {}).get("word_pairs_paragraph")
+            for model in models
+            if model.get("kind") == "dictionary"
+        )
         has_word_pairs = any(
             (model.get("readout") or {}).get("word_pairs")
             for model in models
@@ -2536,7 +2692,10 @@ def _cmd_analyze_omct(config: AppConfig) -> int:
             for model in models
             if model.get("kind") == "dictionary"
         )
-        if has_word_pairs:
+        if has_word_pairs_paragraph:
+            columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_COLUMNS
+            key_columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_KEY_COLUMNS
+        elif has_word_pairs:
             columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS
             key_columns = ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS
         elif has_question_pairs:

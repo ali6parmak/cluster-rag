@@ -9756,3 +9756,81 @@ truth); nothing about the per-question arm under the question folds beyond its
 `ruff format --check` clean over **273** files. Two consecutive runs are
 bit-identical (the `word_pairs` block and the per-question arms; bar the clock
 fields).
+
+## CS-60 — the paragraph-level holdout: the table generalizes, the routing rule does not (2026-11-09)
+
+**The run.** One: `omct-analyze-voyage-wpairs-paragraph` — CS-59's global
+word-pair table with the **other** unit held out: 5 folds over the **225
+paragraph texts** (`default_rng([42, 3])`), each fold's table from the other
+folds' paragraphs' pairs, the held-out paragraphs' pairs evaluated (the
+questions shared). **0 model calls** (the cosine is the Stage-0 cache), **0
+LLM calls**, **16 s**, the artifact **3.9 MB**, **no new dependency**; two
+consecutive runs are bit-identical. The sweep is
+`experiments_text_processing/omct_dictionary_wordpairs_paragraph_sweep.py`;
+the numbers are
+`results/omct-analyze-voyage-wpairs-paragraph/analysis.json`,
+`models[kind=dictionary].readout.word_pairs_paragraph`. The **neutral fill is
+the primary encoding** (the shipped rule recorded in §7.11); the floor sits
+beside it.
+
+**The primary test: it holds.** The neutral-fill arm's within-document AUC is
+**0.6465** against the cosine's **0.5238** — a paired **+0.1227 [+0.0803,
++0.1652]** (2,000 resamples, P 1.000) — and all three documents are above the
+cosine (NU **+0.1238**, CIDH **+0.1804**, AI **+0.1197**). The floor's reading
+is **0.6277** (**+0.1039 [+0.0627, +0.1463]**). Coverage is **95.0 %**, the
+floor **76 (5.0 %)**; the folds' pair counts are 373/214/396/263/274. So the
+CS-59 win is not "known paragraphs": the table also scores a paragraph it has
+never seen.
+
+**The fill's caveat is closed.** The neutral-vs-floor delta is **+0.0188
+[+0.0104, +0.0284]** — paired, positive, the interval excluding zero. CS-59
+had measured +0.0184 **without** a paired test; the fill's decision is now
+paired-backed (small, but real).
+
+**The routing rule is not licensed by the fallback set.** The per-question map
+under the same paragraph folds speaks on 1,017 pairs and is floored on **503
+(33.09 %)**; those floored pairs are the routing rule's "word-pair otherwise"
+set. On them the word-pair arm is **0.5419** against the cosine's **0.5285** —
+**+0.0134 [−0.0715, +0.0971]**, the interval including zero — and against the
+per-question **neutral fill** it is **−0.0011 [−0.0775, +0.0749]**: no gain at
+all. Where the per-question arm speaks, it dominates: the head-to-head on the
+1,017 non-fallback pairs is **0.8112 against 0.6931**, **−0.1181 [−0.1528,
+−0.0812]**. So "per-question z when a table exists, word-pair otherwise" would
+swap one near-chance score for another; the word-pair table's demonstrated
+role is the **structurally silent question** (CS-59: 100 % floored), not the
+partially silent one (CS-60: 33 %). The fallback premise (F2) is **refuted**;
+the paragraph holdout (F1) holds.
+
+**The blind counterpart.** The neutral blind is **0.5665**, the gap **+0.0800**
+(the floor blind 0.5375, gap +0.0902) — above the CS-49 0.05 bar.
+
+**The falsification, read out one by one.**
+
+1. **F1 (the primary): holds** — 0.6465 against 0.5238, +0.1227 [+0.0803,
+   +0.1652].
+2. **F2 (the fallback premise): refuted** — the fallback set reads 0.5419
+   against the cosine's 0.5285, +0.0134 [−0.0715, +0.0971], and −0.0011
+   against the per-question neutral fill; the routing rule would gain nothing.
+3. **F3 (the instrument): reported** — coverage 95.0 %, floor 76 (5.0 %), the
+   single-observation pair share 0.35 %; the floor arm 0.6277, the fill delta
+   +0.0188 [+0.0104, +0.0284].
+
+**The reading.** The table's generalization claim is now two-sided: it scores
+a new **question** (CS-59, +0.1071) and a new **paragraph** (CS-60, +0.1227)
+above the cosine. What it does **not** do is improve the pairs the
+per-question map is silent about when the question itself is known — there the
+per-question neutral fill is already at the word-pair's level, and the
+per-question arm's table carries the signal where it exists. The conclusion
+for the deliverable is the **word-pair table as the new-question instrument**,
+not the two-arm routing rule; the routing rule would need its own reason (a
+per-question table that is noisy, not silent) and its own pre-registration.
+
+**What this change set does not say.** Nothing about the **joint** holdout
+(new questions **and** new paragraphs together — the two tests are
+complementary, not combined); nothing about (b); nothing about a routing
+rule's pooled number (its fallback premise is refuted here); nothing about
+UPR; nothing about the control cells' positive rate.
+
+**The gate.** `pytest`: **1035 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **275** files. Two consecutive runs are
+bit-identical (bar the clock fields).

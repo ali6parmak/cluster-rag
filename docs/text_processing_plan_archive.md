@@ -9689,3 +9689,134 @@ NU +0.0619).
 **What the verdict does not say.** Nothing about the full cross-product (b,
 deferred); nothing about **unseen paragraphs** (the held-out unit is the
 question; the paragraphs are shared with the fit side); nothing about UPR.
+
+## The paragraph-level holdout (CS-60) — the pre-registration and the verdict
+
+*Added on 2026-11-09, when the change set was executed: the live plan's §7.12
+block moved here **verbatim** (the archive's convention), its box ticked and
+the verdict appended. The numbers are the track log's §CS-60.*
+
+### 7.12 The paragraph-level holdout (CS-60)
+
+**The missing test.** CS-59 holds out **questions** but shares **paragraphs**:
+a held-out question's pairs sit on paragraphs the fit side has seen under other
+questions. So 0.6309 is "new question, known paragraphs", not "new text".
+CS-60 holds out the other side: **5 folds over the 225 paragraph texts**
+(questions shared), each fold's table from the other folds' paragraphs' pairs,
+the held-out paragraphs' pairs evaluated. It is the same global table, the same
+arm, the same 1,520 judged pairs; the unit is the paragraph.
+
+**Scope and discipline.** **OMCT only, subset A only.** Subset B never enters a
+fit and is never ground truth; no UPR artifact and no UPR metric. The
+within-document AUC is the headline, per document (NU / CIDH / AI) beside it,
+and every number names its artifact and block. The **neutral fill is the
+primary encoding** (the shipped rule, recorded in §7.11); the floor is reported
+beside it for comparability with CS-59's 0.6309.
+
+- [x] **CS-60 — the paragraph-level holdout: does the word-pair table score a
+  text it has never seen?**
+
+  **The folds and the table.** The 225 distinct paragraph texts are permuted
+  by `default_rng([42, 3])` — a stream independent of the pair folds
+  (`[42]`), the blind (`[42, 1]`) and the question folds (`[42, 2]`) — and
+  split into five contiguous chunks (45 each). Each fold's table is built from
+  the **other folds' paragraphs' pairs**; the evaluated pairs are the held-out
+  paragraphs' pairs (each pair belongs to one held-out paragraph, so all 1,520
+  are evaluated once). The questions are shared by construction: a question
+  appears in both the training and the held-out pairs whenever it has pairs on
+  both sides — exactly the quantity a routing rule needs.
+
+  **The per-question arm under the same folds, and the fallback set.** The
+  per-question map is built from each fold's training paragraphs' pairs, so it
+  **can** score held-out paragraphs whose question has a training table (the
+  CS-59 question holdout could not), and it is floored for a question whose
+  only pairs are in the held-out fold. The pairs the per-question arm cannot
+  score (its fold map has no table for their question) are the **fallback
+  set** — the routing rule's use case. Its share is reported, and the word-pair
+  arm is scored on it.
+
+  **The registered tests.**
+
+  | # | the test | passes when | refuted when |
+  |---|---|---|---|
+  | **F1 (primary)** | the held-out paragraphs: the word-pair arm (neutral fill) against the run's cosine | paired Δ within-document AUC **> 0** and its 95 % interval **excludes 0** (2,000 resamples, the pairs the unit) | the interval includes 0, or Δ ≤ 0 — then 0.6309 is "new question, known paragraphs" only and the thread **stops** |
+  | **F2 (the fallback premise)** | the fallback set (no per-question table in the fold's map), the word-pair arm against the cosine | paired Δ **> 0** and its 95 % interval **excludes 0** | the interval includes 0 — the routing rule would have no fallback evidence |
+  | **F3 (the instrument)** | coverage / floor / single-observation share | reported beside every number; the non-floor reading beside the headline | — |
+
+  **The head-to-head (a read, not a gate).** On the pairs where the
+  per-question arm speaks (its fold map has a table), the per-question arm is
+  expected to beat the word-pair arm — it knows the question. That is the
+  routing rule's premise, not a failure of CS-60; the registered question is
+  the fallback set (F2).
+
+  **The neutral fill's paired readout.** Unlike CS-59 (+0.0184, measured but
+  not paired-tested), the fill's delta on this unit is **paired-tested**
+  (neutral against floor, both from the same fold tables): it is cheap and the
+  decision's caveat asks for it. The floor's number sits beside it for
+  comparability.
+
+  **Reported beside every number.** Coverage (`shared_any` / `known` / floor),
+  the single-observation share (rows `df == 1`; pairs whose known evidence is
+  all `df == 1`), the neutral-vs-floor paired delta, the per-question arm's
+  own AUC / coverage / floor under the same folds, the fallback set's size and
+  both arms' readings on it, per document, the blind counterpart, the control
+  vintage, and the per-fold pair counts.
+
+  **The blind counterpart.** `default_rng([42, 1]).permutation(1520)`, as
+  CS-59: the table is rebuilt from the permuted pairs and the real grid is
+  read.
+
+  **The known references (from the committed artifacts).** CS-59's held-out
+  questions: the word-pair **0.6309** (floor) / **0.6493** (neutral) against the
+  cosine **0.5238**; the seen arm **0.6808**; the per-question z arm **0.7020**
+  (pair folds) and its neutral **0.7616**; coverage **95.0 %**, floor 76
+  (5.0 %) on the question folds. The cosine is the same model's grid
+  (within-document 0.5238 over the whole set), so the paragraph folds move
+  only the fits.
+
+  **Cost and reuse.** **0 model calls** (the cosine is the Stage-0 cache), no
+  LLM, no new dependency; ~25 s. The word-pair fold assembly is CS-59's
+  (`cross_fit_word_pair_seen` with the paragraph fold ids — the same
+  out-of-fold structure, one level down), and the per-question arm is the same
+  `cross_fit_grids` with those ids. The new code is the paragraph fold helper
+  (`default_rng([seed, 3])`) and the fallback-set readout; the table, both
+  arms' scorings, the fills, the blind, the paired comparisons and the
+  table/row machinery are reused.
+
+  **What it is not.** Not the routing rule itself (that is the follow-up if F1
+  and F2 hold: per-question z when a table exists, word-pair otherwise); not
+  (b); not unseen **documents** (the unit is the paragraph; the questions are
+  shared); not UPR; not a new model call.
+
+  **The stop.** The pre-registration is written here; the code, the run, the
+  table row, the log §CS-60, the archive's §7.12 and the gate follow only on
+  the reviewer's word, and the work stops again after they are in.
+
+**The verdict (2026-11-09).** The registered tests:
+
+1. **F1 (the primary): holds.** The neutral-fill word-pair arm reads
+   **0.6465** against the cosine's **0.5238**, a paired **+0.1227 [+0.0803,
+   +0.1652]** (2,000 resamples, P 1.000), all three documents above the cosine
+   (+0.1238 NU / +0.1804 CIDH / +0.1197 AI). The floor's reading is **0.6277**
+   (+0.1039 [+0.0627, +0.1463]).
+2. **F2 (the fallback premise): refuted.** The 503 pairs (33.09 %) whose
+   per-question map is floored read **0.5419** against the cosine's **0.5285**
+   (**+0.0134 [−0.0715, +0.0971]**) and **−0.0011 [−0.0775, +0.0749]**
+   against the per-question neutral fill: the "word-pair otherwise" branch
+   gains nothing. Where the per-question arm speaks, it dominates: **0.8112
+   against 0.6931**, **−0.1181 [−0.1528, −0.0812]**.
+3. **F3 (the instrument): reported.** Coverage **95.0 %**, floor **76
+   (5.0 %)**, the single-observation pair share **0.35 %**; the fill's paired
+   delta is **+0.0188 [+0.0104, +0.0284]**, closing CS-59's caveat.
+
+**The reading.** The word-pair table's generalization claim is two-sided — a
+new question (CS-59) and a new paragraph (CS-60) both above the cosine — but
+the **routing rule is not licensed**: on the partially silent per-question set
+the word-pair arm is at the cosine and below the per-question neutral fill.
+The deliverable is the word-pair table as the **new-question instrument**, not
+the two-arm routing rule.
+
+**What it does not say.** Nothing about the **joint** holdout (new questions
+and new paragraphs together — the two tests are complementary, not combined);
+nothing about (b); nothing about a routing rule's pooled number (its fallback
+premise is refuted here); nothing about UPR.

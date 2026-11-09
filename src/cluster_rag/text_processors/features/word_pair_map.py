@@ -356,17 +356,41 @@ def score_word_pair_grid(
     }
 
 
+def _text_fold_ids(
+    texts: Sequence[str],
+    folds: int,
+    seed: int,
+    *,
+    stream: int,
+    unit: str,
+) -> dict[str, int]:
+    """A text-unit cross-fit's fold assignment (the CS-59/CS-60 scheme)."""
+    values = tuple(dict.fromkeys(texts))
+    if folds < 2:
+        raise ValueError(f"a cross-fit needs at least two folds, got {folds}")
+    if len(values) < folds:
+        raise ValueError(f"the {unit} cross-fit needs at least {folds} {unit}s, got {len(values)}")
+    order = np.random.default_rng([int(seed), int(stream)]).permutation(len(values))
+    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
+    mapping: dict[str, int] = {}
+    for fold, chunk in enumerate(chunks):
+        for index in chunk:
+            mapping[values[int(index)]] = fold
+    return mapping
+
+
 def question_fold_ids(
     question_texts: Sequence[str],
     folds: int,
     seed: int,
 ) -> dict[str, int]:
-    """The question-level cross-fit's fold assignment (the CS-59 scheme).
+    """The question-level cross-fit's fold assignment (CS-59's scheme).
 
     The distinct question texts are permuted by ``default_rng([seed, 2])`` — a
-    stream independent of the pair folds (``default_rng(seed)``) and of the
-    blind permutation (``default_rng([seed, 1])``) — and split into contiguous
-    chunks, the track's cross-fit scheme one level up.
+    stream independent of the pair folds (``default_rng(seed)``), the blind
+    permutation (``default_rng([seed, 1])``) and the paragraph folds
+    (``default_rng([seed, 3])``) — and split into contiguous chunks, the
+    track's cross-fit scheme one level up.
 
     Args:
         question_texts: The distinct question texts (the fold unit).
@@ -380,20 +404,35 @@ def question_fold_ids(
         ValueError: If there are fewer questions than folds, or fewer than two
             folds.
     """
-    questions = tuple(dict.fromkeys(question_texts))
-    if folds < 2:
-        raise ValueError(f"a cross-fit needs at least two folds, got {folds}")
-    if len(questions) < folds:
-        raise ValueError(
-            f"the question cross-fit needs at least {folds} questions, got {len(questions)}"
-        )
-    order = np.random.default_rng([int(seed), 2]).permutation(len(questions))
-    chunks = [np.asarray(chunk, dtype=np.int64) for chunk in np.array_split(order, folds)]
-    mapping: dict[str, int] = {}
-    for fold, chunk in enumerate(chunks):
-        for index in chunk:
-            mapping[questions[int(index)]] = fold
-    return mapping
+    return _text_fold_ids(question_texts, folds, seed, stream=2, unit="question")
+
+
+def paragraph_fold_ids(
+    paragraph_texts: Sequence[str],
+    folds: int,
+    seed: int,
+) -> dict[str, int]:
+    """The paragraph-level cross-fit's fold assignment (CS-60's scheme).
+
+    The distinct paragraph texts are permuted by ``default_rng([seed, 3])`` —
+    a stream independent of the pair folds (``[seed]``), the blind
+    (``[seed, 1]``) and the question folds (``[seed, 2]``) — and split into
+    contiguous chunks. The held-out unit is the paragraph text; the questions
+    stay shared, which is the quantity a routing rule reads.
+
+    Args:
+        paragraph_texts: The distinct paragraph texts (the fold unit).
+        folds: The number of folds (at least 2).
+        seed: The run's seed.
+
+    Returns:
+        A paragraph text -> fold mapping.
+
+    Raises:
+        ValueError: If there are fewer paragraphs than folds, or fewer than two
+            folds.
+    """
+    return _text_fold_ids(paragraph_texts, folds, seed, stream=3, unit="paragraph")
 
 
 def _cross_fit(

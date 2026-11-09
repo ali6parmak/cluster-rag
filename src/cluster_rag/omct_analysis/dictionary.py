@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from cluster_rag.eval.metrics import paired_within_group_auc_bootstrap
 from cluster_rag.omct_analysis.arms import compare_arms, measure_arm, score_arm
 from cluster_rag.omct_analysis.helpers import _auc_decomposition, _macro, _safe_auc
 from cluster_rag.omct_analysis.view import DatasetView, SideEncoding
@@ -1003,6 +1004,286 @@ def word_pairs_block(
     }
 
 
+def _paired_scores(
+    view: DatasetView,
+    reference: np.ndarray,
+    arm: np.ndarray,
+    *,
+    mask: np.ndarray | None = None,
+    resamples: int,
+    seed: int,
+    label: str,
+) -> dict[str, Any]:
+    """The within-document paired read on a **subset** of the judged pairs."""
+    labels = np.asarray([record.label for record in view.pairs], dtype=np.int64)
+    documents = np.asarray([record.document for record in view.pairs])
+    reference_scores = measure_arm(view, reference).pair_scores
+    arm_scores = measure_arm(view, arm).pair_scores
+    selected = np.ones(labels.size, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    block: dict[str, Any] = {
+        "label": label,
+        "n_pairs": int(selected.sum()),
+        "within_auc_reference": None,
+        "within_auc_arm": None,
+        "delta": None,
+        "ci_low": None,
+        "ci_high": None,
+        "p_delta_positive": None,
+    }
+    if not selected.any() or not ((labels[selected] == 1).any() and (labels[selected] == 0).any()):
+        block["note"] = "the subset carries no both-class pairs; no AUC is claimed"
+        return block
+    block["within_auc_reference"] = _auc_decomposition(
+        labels[selected], reference_scores[selected], documents[selected]
+    ).get("within_group_auc")
+    block["within_auc_arm"] = _auc_decomposition(
+        labels[selected], arm_scores[selected], documents[selected]
+    ).get("within_group_auc")
+    paired = paired_within_group_auc_bootstrap(
+        labels[selected].tolist(),
+        reference_scores[selected].tolist(),
+        arm_scores[selected].tolist(),
+        documents[selected].tolist(),
+        n_resamples=resamples,
+        seed=seed,
+    )
+    block.update(
+        {
+            "delta": paired["delta_auc"],
+            "ci_low": paired["ci_low"],
+            "ci_high": paired["ci_high"],
+            "p_delta_positive": paired["p_delta_positive"],
+            "n_resamples": paired["n_resamples"],
+            "seed": paired["seed"],
+        }
+    )
+    return block
+
+
+def paragraph_holdout_block(
+    view: DatasetView,
+    *,
+    grids: Mapping[str, Any],
+    blind: Mapping[str, Any] | None,
+    per_question: Mapping[str, Any],
+    per_question_neutral: Mapping[str, Any],
+    reference_similarities: np.ndarray,
+    reference_name: str,
+    resamples: int,
+    seed: int,
+    primary: str = WORD_PAIR_PRIMARY,
+) -> dict[str, Any]:
+    """The artifact's ``word_pairs_paragraph`` block (CS-60).
+
+    The same global table, held out by **paragraph**: the neutral fill is the
+    primary encoding (the shipped rule), the floor is reported beside it, and
+    the **fallback set** — the pairs whose per-question map has no table in
+    their fold — is the routing rule's use case.
+
+    Args:
+        view: The dataset view.
+        grids: The paragraph-fold word-pair cross-fit.
+        blind: The paragraph-fold blind counterpart, or ``None``.
+        per_question: The per-question z arm's grids under the same paragraph
+            folds (its ``floor`` array is the fallback set).
+        per_question_neutral: The per-question neutral-fill grids under the
+            same folds (the head-to-head's reference).
+        reference_similarities: The run's plain full-text cosine.
+        reference_name: The reference model's name.
+        resamples: The paired bootstrap's resamples.
+        seed: The paired bootstrap's seed.
+        primary: The registered primary arm.
+
+    Returns:
+        The block: the two fills, the fallback set, the per-question arm and
+        the blind counterpart.
+    """
+    neutral_matrix = np.asarray(grids["scorings"][primary]["neutral"], dtype=np.float64)
+    floor_matrix = np.asarray(grids["scorings"][primary]["floor"], dtype=np.float64)
+    neutral_stats = _arm_stats(view, measure_arm(view, neutral_matrix))
+    floor_stats = _arm_stats(view, measure_arm(view, floor_matrix))
+    comparison_neutral = compare_arms(
+        view,
+        arm_name="word_pairs_paragraph_neutral",
+        reference_similarities=reference_similarities,
+        arm_similarities=neutral_matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    comparison_floor = compare_arms(
+        view,
+        arm_name="word_pairs_paragraph_floor",
+        reference_similarities=reference_similarities,
+        arm_similarities=floor_matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+    fill_comparison = compare_arms(
+        view,
+        arm_name="neutral_vs_floor",
+        reference_similarities=floor_matrix,
+        arm_similarities=neutral_matrix,
+        resamples=resamples,
+        seed=seed,
+    )
+
+    per_question_floor = np.asarray(per_question["floor"], dtype=bool)
+    per_question_matrix = np.asarray(per_question["scorings"][primary], dtype=np.float64)
+    per_question_neutral_matrix = np.asarray(
+        per_question_neutral["scorings"][primary], dtype=np.float64
+    )
+    per_question_stats = _arm_stats(view, measure_arm(view, per_question_matrix))
+    per_question_neutral_stats = _arm_stats(view, measure_arm(view, per_question_neutral_matrix))
+    fallback = per_question_floor
+    fallback_block = _paired_scores(
+        view,
+        reference_similarities,
+        neutral_matrix,
+        mask=fallback,
+        resamples=resamples,
+        seed=seed,
+        label="the fallback set (the per-question map has no table)",
+    )
+    head_to_head = _paired_scores(
+        view,
+        per_question_neutral_matrix,
+        neutral_matrix,
+        mask=~fallback,
+        resamples=resamples,
+        seed=seed,
+        label="the non-fallback pairs (per-question as the reference)",
+    )
+    fallback_increment = _paired_scores(
+        view,
+        per_question_neutral_matrix,
+        neutral_matrix,
+        mask=fallback,
+        resamples=resamples,
+        seed=seed,
+        label="the fallback set (word-pair against the per-question neutral fill)",
+    )
+
+    blind_block: dict[str, Any] | None = None
+    if blind is not None:
+        blind_floor = np.asarray(blind["scorings"][primary]["floor"], dtype=np.float64)
+        blind_neutral = np.asarray(blind["scorings"][primary]["neutral"], dtype=np.float64)
+        blind_floor_stats = _arm_stats(view, measure_arm(view, blind_floor))
+        blind_neutral_stats = _arm_stats(view, measure_arm(view, blind_neutral))
+        blind_block = {
+            "floor_within_auc": blind_floor_stats["within_auc"],
+            "neutral_within_auc": blind_neutral_stats["within_auc"],
+            "floor_gap": (
+                floor_stats["within_auc"] - blind_floor_stats["within_auc"]
+                if floor_stats["within_auc"] is not None
+                and blind_floor_stats["within_auc"] is not None
+                else None
+            ),
+            "neutral_gap": (
+                neutral_stats["within_auc"] - blind_neutral_stats["within_auc"]
+                if neutral_stats["within_auc"] is not None
+                and blind_neutral_stats["within_auc"] is not None
+                else None
+            ),
+            "note": (
+                "the questions permuted across the pairs (seed 42, the counts preserved); "
+                "the table is rebuilt from the permuted pairs and the real grid is read"
+            ),
+        }
+
+    fold_ids = np.asarray(grids["fold_ids"], dtype=np.int64)
+    return {
+        "primary_fill": "neutral",
+        "reference_model": reference_name,
+        "folds": {
+            "n_paragraphs": int(len(view.paragraphs)),
+            "n_questions": int(len(view.questions)),
+            "n_folds": int(len(set(fold_ids.tolist()))),
+            "per_fold_pair_counts": {
+                str(fold): int((fold_ids == fold).sum()) for fold in sorted(set(fold_ids.tolist()))
+            },
+            "seed": int(seed),
+            "stream": "default_rng([seed, 3])",
+        },
+        "table": {
+            "full": dict(grids["table"]),
+            "per_fold": dict(grids["fold_tables"]),
+            "note": (
+                "the full table is the description; every judged score is out-of-fold by "
+                "paragraph. single_observation_share is the share of rows with df == 1"
+            ),
+        },
+        "neutral": {
+            "within_auc": neutral_stats["within_auc"],
+            "pooled_auc": neutral_stats["pooled_auc"],
+            "macro_auc": neutral_stats["macro_auc"],
+            "by_document": neutral_stats["by_document"],
+            "paired_vs_cosine": _paired(comparison_neutral),
+            "by_document_delta": {
+                document: {
+                    "reference": block["reference"],
+                    "arm": block["arm"],
+                    "delta": block["delta"],
+                }
+                for document, block in comparison_neutral["pair_auc"]["by_document"].items()
+            },
+            "floor": {
+                "n_floor_pairs": int(np.asarray(grids["floor"], dtype=bool).sum()),
+                "floor_share": _share(
+                    np.asarray(grids["floor"], dtype=bool).sum(), len(grids["floor"])
+                ),
+            },
+            "coverage": _word_pair_coverage(view, grids),
+            "control": comparison_neutral["control_shift"],
+            "control_vintage": grids.get("control_vintage"),
+        },
+        "floor_arm": {
+            "within_auc": floor_stats["within_auc"],
+            "pooled_auc": floor_stats["pooled_auc"],
+            "by_document": floor_stats["by_document"],
+            "paired_vs_cosine": _paired(comparison_floor),
+            "by_document_delta": {
+                document: {
+                    "reference": block["reference"],
+                    "arm": block["arm"],
+                    "delta": block["delta"],
+                }
+                for document, block in comparison_floor["pair_auc"]["by_document"].items()
+            },
+        },
+        "fill_delta": {
+            "paired": _paired(fill_comparison),
+            "note": (
+                "the neutral fill minus the floor, paired on the same 1,520 pairs: the "
+                "decision's caveat asks for the paired test CS-59 did not run"
+            ),
+        },
+        "fallback": fallback_block,
+        "per_question": {
+            "within_auc": per_question_stats["within_auc"],
+            "neutral_within_auc": per_question_neutral_stats["within_auc"],
+            "by_document": per_question_stats["by_document"],
+            "floor_pairs": int(per_question_floor.sum()),
+            "floor_share": _share(per_question_floor.sum(), per_question_floor.size),
+            "note": (
+                "the per-question z arm under the same paragraph folds: it can score a "
+                "held-out paragraph whose question has a training table, and its floored "
+                "pairs are the fallback set"
+            ),
+        },
+        "head_to_head": head_to_head,
+        "fallback_increment": fallback_increment,
+        "blind": blind_block,
+        "notes": [
+            "5 folds over the 225 paragraph texts (default_rng([42, 3])), each fold's table "
+            "from the other folds' paragraphs' pairs; the questions are shared",
+            "the neutral fill is the primary encoding (the shipped rule); the floor is "
+            "reported beside it for comparability with CS-59's 0.6309",
+            "the fallback set is the pairs whose per-question fold map holds no table for "
+            "their question — the routing rule's use case",
+        ],
+    }
+
+
 def build_dictionary_model(
     view: DatasetView,
     *,
@@ -1028,6 +1309,7 @@ def build_dictionary_model(
     abstention_fills: Mapping[str, Mapping[str, Any]] | None = None,
     question_pairs: Mapping[str, Any] | None = None,
     word_pairs: Mapping[str, Any] | None = None,
+    word_pairs_paragraph: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The artifact's ``kind: dictionary`` model entry (the arm + its comparison).
 
@@ -1065,6 +1347,8 @@ def build_dictionary_model(
             runs none.
         word_pairs: The global word-pair table's readout (CS-59), the two
             evaluations and their blind counterparts; ``None`` runs none.
+        word_pairs_paragraph: The paragraph-level holdout's readout (CS-60);
+            ``None`` runs none.
 
     Returns:
         The model entry: the arm's measured block, its comparison against the
@@ -1166,6 +1450,8 @@ def build_dictionary_model(
         readout["question_pairs"] = dict(question_pairs)
     if word_pairs is not None:
         readout["word_pairs"] = dict(word_pairs)
+    if word_pairs_paragraph is not None:
+        readout["word_pairs_paragraph"] = dict(word_pairs_paragraph)
     if abstention_fills:
         readout["abstention_arms"] = abstention_arms_block(
             view,

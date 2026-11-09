@@ -726,6 +726,51 @@ ANALYZE_OMCT_DICTIONARY_WORDPAIRS_COLUMNS: tuple[str, ...] = (
 )
 ANALYZE_OMCT_DICTIONARY_WORDPAIRS_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
 
+# The **paragraph-level holdout** (CS-60): the same word-pair table with the
+# 225 paragraph texts held out in 5 folds (questions shared). The neutral fill
+# is the primary encoding (the shipped rule), the floor sits beside it, and the
+# **fallback set** — the pairs whose per-question map has no table in their
+# fold — is the routing rule's use case. The per-question arm under the same
+# folds and the head-to-head on the pairs it can score are the routing
+# premise, not the test.
+ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_COLUMNS: tuple[str, ...] = (
+    "run_id",
+    "date",
+    "arm",
+    "within_auc",
+    "delta_vs_cosine",
+    "ci_vs_cosine",
+    "floor_within_auc",
+    "fill_delta",
+    "fill_ci",
+    "fallback_n",
+    "fallback_share",
+    "fallback_auc",
+    "fallback_delta",
+    "fallback_ci",
+    "perq_within_auc",
+    "perq_neutral_within",
+    "perq_floor_pairs",
+    "perq_floor_share",
+    "head_to_head_delta",
+    "head_to_head_ci",
+    "coverage",
+    "floor_pairs",
+    "floor_share",
+    "single_obs_share",
+    "single_obs_pairs_share",
+    "blind_within_auc",
+    "blind_gap",
+    "n_rows",
+    "n_questions",
+    "n_paragraphs",
+    "n_pairs",
+    "n_control",
+    "n_docs",
+    "seconds",
+)
+ANALYZE_OMCT_DICTIONARY_WORDPAIRS_PARAGRAPH_KEY_COLUMNS: tuple[str, ...] = ("run_id",)
+
 # The dictionary **classes** (CS-51): the class-filtered arms measured against
 # the full primary arm (the increment the hard filter adds on top of the soft
 # prior), with the class readout beside them (the z-score's class means, which

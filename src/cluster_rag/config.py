@@ -1076,6 +1076,11 @@ class DictionaryConfig(BaseModel):
       primary first; ``sum_zscore_positive`` is the registered one).
     - ``word_pair_primary``: the word-pair block's pre-registered primary arm;
       it must be one of ``word_pair_scorings``.
+    - ``word_pair_paragraph_holdout``: whether the run adds the **paragraph-level
+      holdout** (CS-60): 5 folds over the reviewed paragraphs (questions
+      shared), each fold's table from the other folds' paragraphs' pairs, the
+      neutral fill as the primary encoding and the fallback set reported. It
+      reuses the word-pair table and the reference embedder's cosine.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1100,6 +1105,7 @@ class DictionaryConfig(BaseModel):
     word_pairs: bool = False
     word_pair_scorings: tuple[str, ...] = ("sum_zscore_positive", "support_count")
     word_pair_primary: str = "sum_zscore_positive"
+    word_pair_paragraph_holdout: bool = False
 
     @field_validator("word_pair_scorings", "word_pair_primary")
     @classmethod
