@@ -52,14 +52,13 @@ Source: `data/external/omct_pairs.json` (the path in `configs/base.yaml`'s
 | `data/external/omct_pairs.json` | the reviewed pairs (read-only) | sha256; `n_pairs` / `n_positive` / `n_negative` = 1520 / 524 / 996; 3 documents |
 | `results/<run>/analysis.json` | `dictionary.map`, `dictionary.corpus`, `dictionary.tables`, `dictionary.words`, `dictionary.classes` (when present), `dictionary.availability`, `dictionary.readout`, `models[kind == "dictionary"].arms.dictionary.judged_pairs` / `control_cells`, the model's `readout.scorings` | `run_id` == the folder; seed 42; folds 5; 1,520 judged rows; 4,000 control cells; the map's counts |
 | `results/omct-analyze-voyage-dict-abstain/analysis.json` | `readout.abstention_arms`: `floor_pairs`, `floor_negative_share`, `non_floor` | 518 / 0.7780 / 1002, checked **when the abstain run is selected** |
-| `results/omct-analyze-voyage-dict-stability/analysis.json` | `dictionary.stability.links` (27,979 rows, the file is 60 MB) | read **lazily**, only when the One question view opens with the stability run selected |
+| `results/omct-analyze-voyage-dict-stability/analysis.json` | `dictionary.stability.links` (27,979 rows, the file is 60 MB) | read only when the stability run is selected; its links are indexed only when the One question view opens |
 
 The offered runs are `omct-analyze-voyage-dict-z` (default, CS-50),
 `…-dict` (CS-49), `omct-analyze-dictmap` (CS-48), `…-dict-phrases`,
 `…-dict-stability`, `…-dict-lexicon`, `…-dict-abstain`, `…-dict-qpairs`. The
 CS-48 run is **map-only**: it carries no dictionary scorer, so the viewer names
-it and refuses the pair-level views with a clear message (it does not fake a
-scorer).
+it and refuses the views with a clear message (it does not fake a scorer).
 
 ## The trap: the fold rebuild
 
@@ -134,7 +133,9 @@ word, and the view shows none.
 
 When the stability run is selected, each link also carries `present_share`,
 `sign_stability`, `head_stability` and its survival at τ = 0.75 / 0.90
-(`sign_stability ≥ τ`). The 60 MB artifact is read only here, lazily.
+(`sign_stability ≥ τ`). The 60 MB artifact is read when that run is selected
+(the run's own scores need it); its links are indexed only when this view
+opens, and the default run never reads it.
 
 ### 4. Compare arms
 

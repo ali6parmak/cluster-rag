@@ -9581,9 +9581,10 @@ cells only in a separate strip. (3) **One question**: the full map's table
 classes derived from `dictionary.words`' `tables` counts (distinctive ≤ 2,
 shared 3–52, generic ≥ 53 of the 209 labelled tables); **no POS is invented**,
 because the artifacts store no grammatical class per word. When the stability
-run is selected, the view lazily reads the 60 MB `dictionary.stability.links`
+run is selected, the view indexes the run's 27,979 `dictionary.stability.links`
 and joins the table's links (`present_share`, `sign_stability`,
-`head_stability`, survival at 0.75 / 0.90). (4) **Compare arms**: two
+`head_stability`, survival at 0.75 / 0.90); the 60 MB artifact is read when that
+run is selected, and the default run never reads it. (4) **Compare arms**: two
 `(run, arm)` series over the same pairs, with the artifact's own within/pooled
 AUCs beside them and the rank movement (right minus left) below.
 

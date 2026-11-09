@@ -84,17 +84,6 @@ def load_data(
     return {"sources": sources, "context": context, "report": report}
 
 
-@st.cache_resource(show_spinner="reading the 60 MB stability artifact…")
-def load_stability(config: str, results: str, stability_run: str) -> ev.StabilityIndex:
-    """Read the per-link stability artifact once, lazily."""
-    sources = ev.resolve_sources(
-        Path(config),
-        results=Path(results),
-        stability_run=stability_run,
-    )
-    return ev.load_stability_index(sources)
-
-
 def _bundle(config: str, results: str, run_id: str) -> dict[str, Any] | None:
     """Load one run, or show the refusal (map-only run / missing artifact)."""
     try:
@@ -427,7 +416,7 @@ def errors_view(context: ev.Context) -> None:
 # --- 3. One question --------------------------------------------------------
 
 
-def one_question_view(context: ev.Context, config: str, results: str) -> None:
+def one_question_view(context: ev.Context) -> None:
     """A question's table, counts, per-fold availability, classes and stability."""
     st.subheader("One question")
     st.caption(
@@ -444,7 +433,7 @@ def one_question_view(context: ev.Context, config: str, results: str) -> None:
     stability_index = None
     stability_loaded = False
     if context.run.run_id == context.sources.stability_run:
-        index = load_stability(config, results, context.sources.stability_run)
+        index = ev.stability_index_from_block(context.run.dictionary, run_id=context.run.run_id)
         stability_index = index.links
         stability_loaded = True
     view = ev.question_view(context, question, stability_index=stability_index)
@@ -538,8 +527,8 @@ def one_question_view(context: ev.Context, config: str, results: str) -> None:
             st.info("No stability links for this question's table.")
     else:
         st.caption(
-            "Select the stability run in the sidebar to load the 60 MB per-link artifact "
-            "(lazily, only here)."
+            "Select the stability run in the sidebar to show its 27,979 per-link stability "
+            "rows (indexed only here; the default run never reads the 60 MB artifact)."
         )
 
 
@@ -719,7 +708,6 @@ def main() -> None:
     )
     if st.sidebar.button("reload the artifacts", key="src_reload"):
         load_data.clear()
-        load_stability.clear()
     bundle = _bundle(config, results, run_id)
     if bundle is None:
         st.stop()
@@ -739,7 +727,7 @@ def main() -> None:
     elif view == "Errors":
         errors_view(context)
     elif view == "One question":
-        one_question_view(context, config, results)
+        one_question_view(context)
     else:
         compare_view(context, config, results)
 
