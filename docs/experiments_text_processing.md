@@ -9593,6 +9593,12 @@ run is selected, and the default run never reads it. (4) **Compare arms**: two
 `(run, arm)` series over the same pairs, with the artifact's own within/pooled
 AUCs beside them and the rank movement (right minus left) below.
 
+**The styling.** The reviewer asked for the UPR viewer's visual language, so
+the tables now use the same Catppuccin Mocha chips, badges, dots and sticky
+headers (inline CSS in the app; no shared file, no new dependency) and a
+sidebar **interactive tables** toggle for Streamlit's native tables. The rows,
+the columns and the numbers are unchanged; only the rendering is.
+
 **The guard, read out.** On the default run (`omct-analyze-voyage-dict-z`):
 the run shape (seed 42, folds 5, 1,520 judged, 4,000 control, 3 documents), the
 map (294 questions, 209 tables, 85 empty, 27,979 stored pairs, 2,082 words), the

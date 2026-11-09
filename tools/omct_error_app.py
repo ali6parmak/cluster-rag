@@ -29,9 +29,11 @@ environment variables (which the tests use).
 
 from __future__ import annotations
 
+import html as html_lib
 import os
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,224 @@ FILL_HELP = (
     "minus one; neutral = the row's median; max = the row's maximum. Only the "
     "floor arm is the artifact's own; the other two are recomputed attribution."
 )
+ERROR_TONES = {
+    "true_positive": "green",
+    "false_positive": "red",
+    "false_negative": "amber",
+    "true_negative": "muted",
+    "floored": "mauve",
+}
+CLASS_TONES = {"distinctive": "green", "shared": "blue", "generic": "amber"}
+
+# The project's Streamlit theme is Catppuccin Mocha (`.streamlit/config.toml`);
+# this is the viewer's own compact styling, kept in the app so the two viewers
+# stay separate files.
+CSS = """
+:root {
+  --ctp-base: #1e1e2e; --ctp-mantle: #181825; --ctp-crust: #11111b;
+  --ctp-surface0: #313244; --ctp-surface1: #45475a; --ctp-overlay0: #6c7086;
+  --ctp-subtext0: #a6adc8; --ctp-text: #cdd6f4; --ctp-mauve: #cba6f7;
+  --ctp-green: #a6e3a1; --ctp-red: #f38ba8; --ctp-blue: #89b4fa;
+  --ctp-peach: #fab387; --ctp-yellow: #f9e2af;
+}
+[data-testid="stSidebar"] {
+  background: var(--ctp-mantle);
+  border-right: 1px solid var(--ctp-surface0);
+}
+[data-testid="stMetric"] {
+  background: var(--ctp-mantle);
+  border: 1px solid var(--ctp-surface0);
+  border-radius: 0.6rem;
+  padding: 0.55rem 0.75rem;
+}
+[data-testid="stMetricLabel"] { color: var(--ctp-subtext0); }
+[data-testid="stMetricValue"] { color: var(--ctp-text); }
+[data-testid="stCaptionContainer"] { color: var(--ctp-subtext0); }
+h1, h2 { color: var(--ctp-mauve); }
+.ev-table-wrap {
+  overflow: auto; max-height: 72vh; border: 1px solid var(--ctp-surface0);
+  border-radius: 0.6rem; margin: 0.35rem 0 0.8rem; scrollbar-width: thin;
+  scrollbar-color: var(--ctp-surface1) var(--ctp-crust);
+}
+.ev-table-wrap::-webkit-scrollbar { width: 8px; height: 8px; }
+.ev-table-wrap::-webkit-scrollbar-thumb { background: var(--ctp-surface1); border-radius: 999px; }
+.ev-table-wrap::-webkit-scrollbar-track { background: var(--ctp-crust); }
+.ev-table {
+  width: 100%; border-collapse: collapse; font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.ev-table thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--ctp-mantle);
+  color: var(--ctp-subtext0); font-weight: 600; letter-spacing: 0.01em;
+  padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--ctp-surface1);
+  white-space: nowrap; box-shadow: 0 1px 0 var(--ctp-surface1);
+}
+.ev-table tbody td {
+  padding: 0.36rem 0.6rem; border-bottom: 1px solid rgba(49, 50, 68, 0.55);
+  vertical-align: middle;
+}
+.ev-table tbody tr:nth-child(even) { background: rgba(24, 24, 37, 0.55); }
+.ev-table tbody tr:hover { background: rgba(49, 50, 68, 0.55); }
+.ev-table tbody tr:last-child td { border-bottom: 0; }
+.ev-empty { color: var(--ctp-overlay0); text-align: center; padding: 0.8rem; }
+.ev-text {
+  display: inline-block; max-width: 26rem; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: middle; cursor: zoom-in;
+  border-bottom: 1px dotted var(--ctp-overlay0);
+}
+.ev-text:hover {
+  max-width: 44rem; overflow: visible; text-overflow: clip; white-space: normal;
+  cursor: zoom-out;
+}
+.ev-id {
+  color: var(--ctp-overlay0); font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.72rem;
+}
+.ev-muted { color: var(--ctp-overlay0); }
+.ev-rank {
+  color: var(--ctp-subtext0); font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.74rem;
+}
+.ev-word { color: var(--ctp-text); font-weight: 600; }
+.ev-dot {
+  display: inline-block; min-width: 0.85rem; text-align: center;
+  font-size: 0.82rem; line-height: 1;
+}
+.ev-dot-green { color: var(--ctp-green); }
+.ev-dot-amber { color: var(--ctp-peach); }
+.ev-dot-mauve { color: var(--ctp-mauve); }
+.ev-dot-off { color: var(--ctp-overlay0); opacity: 0.4; }
+.ev-badge {
+  display: inline-block; padding: 0.06rem 0.45rem; border-radius: 999px;
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap;
+}
+.ev-badge-green { color: var(--ctp-green); background: rgba(166, 227, 161, 0.16); }
+.ev-badge-red { color: var(--ctp-red); background: rgba(243, 139, 168, 0.16); }
+.ev-badge-amber { color: var(--ctp-peach); background: rgba(250, 179, 135, 0.16); }
+.ev-badge-blue { color: var(--ctp-blue); background: rgba(137, 180, 250, 0.16); }
+.ev-badge-mauve { color: var(--ctp-mauve); background: rgba(203, 166, 247, 0.16); }
+.ev-badge-muted { color: var(--ctp-overlay0); background: rgba(108, 112, 134, 0.16); }
+.ev-chip {
+  display: inline-block; padding: 0.08rem 0.45rem; border-radius: 999px;
+  font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ev-chip-pos { color: var(--ctp-green); background: rgba(166, 227, 161, var(--alpha, 0.18)); }
+.ev-chip-neg { color: var(--ctp-red); background: rgba(243, 139, 168, var(--alpha, 0.18)); }
+.ev-chip-zero { color: var(--ctp-overlay0); background: rgba(108, 112, 134, 0.16); }
+.ev-chip-score { color: var(--ctp-mauve); background: rgba(203, 166, 247, var(--alpha, 0.18)); }
+.ev-chip-neutral { color: var(--ctp-blue); background: rgba(137, 180, 250, var(--alpha, 0.18)); }
+.ev-chip-warn { color: var(--ctp-peach); background: rgba(250, 179, 135, var(--alpha, 0.18)); }
+.ev-chip-danger { color: var(--ctp-red); background: rgba(243, 139, 168, var(--alpha, 0.18)); }
+"""
+
+
+def _esc(value: object) -> str:
+    """Escape one HTML fragment."""
+    return html_lib.escape(str(value))
+
+
+def _interactive() -> bool:
+    """Whether the sidebar asks for Streamlit's native tables."""
+    return bool(st.session_state.get("interactive", False))
+
+
+def _show_table(
+    html: str,
+    frame: pd.DataFrame,
+    *,
+    column_config: dict[str, Any] | None = None,
+) -> None:
+    """The styled read-only table, or the native table (sort/search/fullscreen)."""
+    if _interactive():
+        st.dataframe(
+            frame,
+            hide_index=True,
+            width="stretch",
+            column_config=column_config or {},
+        )
+        st.caption(
+            "Interactive table: click a header to sort; use the toolbar for search, "
+            "download and fullscreen."
+        )
+    else:
+        st.markdown(html, unsafe_allow_html=True)
+
+
+def _html_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    aligns: Sequence[str] | None = None,
+    *,
+    columns: Sequence[str] | None = None,
+) -> str:
+    """A read-only table: zebra rows, a sticky header and escaped headers."""
+    align = list(aligns or ["left"] * len(headers))
+    keys = list(columns or headers)
+    head = "".join(
+        f'<th style="text-align:{a}">{_esc(h)}</th>' for h, a in zip(headers, align, strict=True)
+    )
+    body = []
+    for row in rows:
+        cells = "".join(
+            f'<td style="text-align:{a}">{cell}</td>' for cell, a in zip(row, align, strict=True)
+        )
+        body.append(f"<tr>{cells}</tr>")
+    if not body:
+        body.append(f'<tr><td class="ev-empty" colspan="{len(headers)}">no rows</td></tr>')
+    return (
+        f'<div class="ev-table-wrap" data-columns="{_esc("|".join(keys))}">'
+        f'<table class="ev-table"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def _badge(text: object, tone: str) -> str:
+    """A small coloured label."""
+    return f'<span class="ev-badge ev-badge-{tone}">{_esc(text)}</span>'
+
+
+def _chip(
+    value: float | int | None,
+    maximum: float,
+    *,
+    signed: bool = False,
+    tone: str = "auto",
+    digits: int = 3,
+) -> str:
+    """A number as a coloured chip; the tint is the value's size on its scale."""
+    if value is None or pd.isna(value):
+        return '<span class="ev-muted">—</span>'
+    number = float(value)
+    ratio = min(abs(number) / maximum, 1.0) if maximum > 0.0 else 0.0
+    css_tone = ("pos" if number >= 0.0 else "neg") if tone == "auto" else tone
+    text = f"{number:+.{digits}f}" if signed and number else f"{number:.{digits}f}"
+    alpha = 0.10 + 0.45 * ratio
+    return (
+        f'<span class="ev-chip ev-chip-{css_tone}" style="--alpha: {alpha:.3f}">{_esc(text)}</span>'
+    )
+
+
+def _dot(active: bool, tone: str = "green") -> str:
+    """A boolean as a coloured dot (a read-only indicator, never a checkbox)."""
+    css = f"ev-dot ev-dot-{tone}" if active else "ev-dot ev-dot-off"
+    return f'<span class="{css}">{"●" if active else "·"}</span>'
+
+
+def _text(value: object) -> str:
+    """A long text that truncates and expands on hover."""
+    return f'<span class="ev-text" title="{_esc(value)}">{_esc(value)}</span>'
+
+
+def _max_abs(values: Sequence[float]) -> float:
+    """The largest absolute value (0.0 when there is none)."""
+    return max((abs(float(value)) for value in values), default=0.0)
+
+
+def _delta_tone(value: float | int) -> str:
+    """A rank/percentile delta: negative is better (moved up), positive worse."""
+    if abs(float(value)) < 1e-12:
+        return "zero"
+    return "pos" if float(value) < 0.0 else "neg"
 
 
 def _env(name: str, default: str) -> str:
@@ -245,11 +465,42 @@ def one_pair_view(context: ev.Context) -> None:
             f"{view.fold_pairs} reviewed pairs in fold {view.fold}'s map."
         )
     st.markdown("**the rank move under the three fills**")
-    moves = pd.DataFrame([asdict(move) for move in view.moves])
-    st.dataframe(
+    move_rows = [asdict(move) for move in view.moves]
+    moves = pd.DataFrame(move_rows)
+    max_score = _max_abs([move.score for move in view.moves])
+    max_delta = _max_abs([move.delta_rank for move in view.moves])
+    max_pct = _max_abs([move.delta_percentile for move in view.moves])
+    fill_tones = {"floor": "blue", "neutral": "green", "max": "amber"}
+    move_html = _html_table(
+        ["fill", "score", "rank", "candidates", "Δ rank", "Δ percentile"],
+        [
+            [
+                _badge(move.fill, fill_tones.get(move.fill, "muted")),
+                _chip(move.score, max_score, signed=True),
+                _esc(move.rank),
+                _esc(move.n_candidates),
+                _chip(
+                    move.delta_rank,
+                    max_delta,
+                    signed=True,
+                    tone=_delta_tone(move.delta_rank),
+                ),
+                _chip(
+                    move.delta_percentile,
+                    max_pct,
+                    signed=True,
+                    tone=_delta_tone(move.delta_percentile),
+                    digits=4,
+                ),
+            ]
+            for move in view.moves
+        ],
+        ["left", "right", "right", "right", "right", "right"],
+        columns=["fill", "score", "rank", "n_candidates", "delta_rank", "delta_percentile"],
+    )
+    _show_table(
+        move_html,
         moves,
-        hide_index=True,
-        width="stretch",
         column_config={
             "fill": "fill",
             "score": st.column_config.NumberColumn("score", format="%.6f"),
@@ -312,10 +563,49 @@ def one_pair_view(context: ev.Context) -> None:
                 for word in selected
             ]
         )
-        st.dataframe(
+        max_odds = _max_abs([word.log_odds for word in selected])
+        max_z = _max_abs([word.z_score for word in selected])
+        max_contribution = _max_abs([word.contribution for word in selected])
+        word_html = _html_table(
+            ["word", "n_with", "df", "log-odds", "z", "contribution", "direction", "in score"],
+            [
+                [
+                    f'<span class="ev-word">{_esc(word.word)}</span>',
+                    _esc(word.n_with),
+                    _esc(word.df),
+                    _chip(word.log_odds, max_odds, signed=True),
+                    _chip(word.z_score, max_z, signed=True),
+                    _chip(
+                        word.contribution,
+                        max_contribution,
+                        signed=True,
+                        tone="pos" if word.summed else "zero",
+                    ),
+                    _badge(
+                        word.direction,
+                        {"positive": "green", "negative": "red", "zero": "muted"}.get(
+                            word.direction, "muted"
+                        ),
+                    ),
+                    _dot(word.summed, "green"),
+                ]
+                for word in selected
+            ],
+            ["left", "right", "right", "right", "right", "right", "center", "center"],
+            columns=[
+                "word",
+                "n_with",
+                "df",
+                "log_odds",
+                "z_score",
+                "contribution",
+                "direction",
+                "summed",
+            ],
+        )
+        _show_table(
+            word_html,
             table,
-            hide_index=True,
-            width="stretch",
             column_config={
                 "n_with": st.column_config.NumberColumn("n_with", format="%d"),
                 "df": st.column_config.NumberColumn("df", format="%d"),
@@ -420,10 +710,55 @@ def errors_view(context: ev.Context) -> None:
             for row in shown_rows
         ]
     )
-    st.dataframe(
+    max_score = _max_abs([row.score for row in shown_rows])
+    error_html = _html_table(
+        [
+            "pair",
+            "document",
+            "human",
+            "class",
+            "score",
+            "rank",
+            "candidates",
+            "rank percentile",
+            "floored",
+        ],
+        [
+            [
+                f'<span class="ev-id">{_esc(row.pair_id)}</span>',
+                _text(row.document),
+                _badge(
+                    "positive" if row.label == 1 else "negative",
+                    "green" if row.label == 1 else "red",
+                ),
+                _badge(
+                    ERROR_LABELS.get(row.error, row.error),
+                    ERROR_TONES.get(row.error, "muted"),
+                ),
+                _chip(row.score, max_score, signed=True, tone="score"),
+                _esc(row.rank),
+                _esc(row.n_candidates),
+                _esc(f"{row.rank_percentile:.4f}"),
+                _badge("floored", "amber") if row.floored else '<span class="ev-muted">—</span>',
+            ]
+            for row in shown_rows
+        ],
+        ["left", "left", "center", "left", "right", "right", "right", "right", "center"],
+        columns=[
+            "pair",
+            "document",
+            "human",
+            "class",
+            "score",
+            "rank",
+            "n_candidates",
+            "rank_percentile",
+            "floored",
+        ],
+    )
+    _show_table(
+        error_html,
         table,
-        hide_index=True,
-        width="stretch",
         column_config={
             "score": st.column_config.NumberColumn("score", format="%.6f"),
             "rank percentile": st.column_config.NumberColumn("rank percentile", format="%.4f"),
@@ -510,10 +845,42 @@ def one_question_view(context: ev.Context) -> None:
             for word in view.words[:limit]
         ]
     )
-    st.dataframe(
+    max_odds = _max_abs([word.log_odds for word in view.words[:limit]])
+    max_z = _max_abs([word.z_score for word in view.words[:limit]])
+    word_html = _html_table(
+        ["word", "n_with", "df", "lift", "log-odds", "z", "std err", "tables", "class"],
+        [
+            [
+                f'<span class="ev-word">{_esc(word.word)}</span>',
+                _esc(word.n_with),
+                _esc(word.df),
+                _esc(f"{word.lift:.4f}"),
+                _chip(word.log_odds, max_odds, signed=True),
+                _chip(word.z_score, max_z, signed=True),
+                f'<span class="ev-muted">{_esc(f"{word.standard_error:.6f}")}</span>',
+                _esc(word.tables),
+                _badge(word.word_class, CLASS_TONES.get(word.word_class, "muted"))
+                if word.word_class
+                else '<span class="ev-muted">—</span>',
+            ]
+            for word in view.words[:limit]
+        ],
+        ["left", "right", "right", "right", "right", "right", "right", "right", "center"],
+        columns=[
+            "word",
+            "n_with",
+            "df",
+            "lift",
+            "log_odds",
+            "z_score",
+            "standard_error",
+            "tables",
+            "word_class",
+        ],
+    )
+    _show_table(
+        word_html,
         words,
-        hide_index=True,
-        width="stretch",
         column_config={
             "lift": st.column_config.NumberColumn("lift", format="%.4f"),
             "log-odds": st.column_config.NumberColumn("log-odds", format="%+.6f"),
@@ -529,10 +896,36 @@ def one_question_view(context: ev.Context) -> None:
     )
     st.markdown("**per-fold availability**")
     folds = pd.DataFrame([asdict(row) for row in view.folds])
-    st.dataframe(
+    fold_html = _html_table(
+        ["fold", "pairs", "positives", "table size", "with table", "with evidence", "floored"],
+        [
+            [
+                f'<span class="ev-rank">{_esc(row.fold)}</span>',
+                _esc(row.pairs),
+                _esc(row.positives),
+                _esc(row.table_size),
+                _esc(row.with_table),
+                _esc(row.with_evidence),
+                _badge(f"{row.floored} floored", "amber")
+                if row.floored
+                else '<span class="ev-muted">0</span>',
+            ]
+            for row in view.folds
+        ],
+        ["right", "right", "right", "right", "right", "right", "center"],
+        columns=[
+            "fold",
+            "pairs",
+            "positives",
+            "table_size",
+            "with_table",
+            "with_evidence",
+            "floored",
+        ],
+    )
+    _show_table(
+        fold_html,
         folds,
-        hide_index=True,
-        width="stretch",
         column_config={
             "fold": st.column_config.NumberColumn("fold", format="%d"),
             "pairs": st.column_config.NumberColumn("pairs", format="%d"),
@@ -555,10 +948,32 @@ def one_question_view(context: ev.Context) -> None:
         st.markdown("**stability of the table's links (CS-54)**")
         if view.stability:
             stability = pd.DataFrame([asdict(row) for row in view.stability])
-            st.dataframe(
+            stability_html = _html_table(
+                ["word", "present", "sign", "head", "τ .75", "τ .90"],
+                [
+                    [
+                        f'<span class="ev-word">{_esc(row.word)}</span>',
+                        _chip(row.present_share, 1.0, tone="neutral", digits=3),
+                        _chip(row.sign_stability, 1.0, tone="neutral", digits=3),
+                        _chip(row.head_stability, 1.0, tone="neutral", digits=3),
+                        _dot(row.survives_075, "green"),
+                        _dot(row.survives_090, "green"),
+                    ]
+                    for row in view.stability
+                ],
+                ["left", "right", "right", "right", "center", "center"],
+                columns=[
+                    "word",
+                    "present_share",
+                    "sign_stability",
+                    "head_stability",
+                    "survives_075",
+                    "survives_090",
+                ],
+            )
+            _show_table(
+                stability_html,
                 stability,
-                hide_index=True,
-                width="stretch",
                 column_config={
                     "present_share": st.column_config.NumberColumn("present_share", format="%.4f"),
                     "sign_stability": st.column_config.NumberColumn(
@@ -709,10 +1124,82 @@ def compare_view(context: ev.Context, config: str, results: str) -> None:
             for row in shown
         ]
     )
-    st.dataframe(
+    max_rank_delta = _max_abs([row.delta_rank for row in shown])
+    max_pct_delta = _max_abs([row.delta_percentile for row in shown])
+    compare_html = _html_table(
+        [
+            "pair",
+            "document",
+            "human",
+            "left score",
+            "left rank",
+            "left pct",
+            "right score",
+            "right rank",
+            "right pct",
+            "Δ rank",
+            "Δ pct",
+        ],
+        [
+            [
+                f'<span class="ev-id">{_esc(row.pair_id)}</span>',
+                _text(row.document),
+                _badge(
+                    "positive" if row.label == 1 else "negative",
+                    "green" if row.label == 1 else "red",
+                ),
+                f'<span class="ev-muted">{_esc(f"{row.left_score:.6f}")}</span>',
+                _esc(row.left_rank),
+                _esc(f"{row.left_percentile:.4f}"),
+                f'<span class="ev-muted">{_esc(f"{row.right_score:.6f}")}</span>',
+                _esc(row.right_rank),
+                _esc(f"{row.right_percentile:.4f}"),
+                _chip(
+                    row.delta_rank,
+                    max_rank_delta,
+                    signed=True,
+                    tone=_delta_tone(row.delta_rank),
+                ),
+                _chip(
+                    row.delta_percentile,
+                    max_pct_delta,
+                    signed=True,
+                    tone=_delta_tone(row.delta_percentile),
+                    digits=4,
+                ),
+            ]
+            for row in shown
+        ],
+        [
+            "left",
+            "left",
+            "center",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+            "right",
+        ],
+        columns=[
+            "pair",
+            "document",
+            "human",
+            "left_score",
+            "left_rank",
+            "left_percentile",
+            "right_score",
+            "right_rank",
+            "right_percentile",
+            "delta_rank",
+            "delta_percentile",
+        ],
+    )
+    _show_table(
+        compare_html,
         table,
-        hide_index=True,
-        width="stretch",
         column_config={
             "left score": st.column_config.NumberColumn("left score", format="%.6f"),
             "right score": st.column_config.NumberColumn("right score", format="%.6f"),
@@ -735,6 +1222,7 @@ def compare_view(context: ev.Context, config: str, results: str) -> None:
 def main() -> None:
     """The app's entry point: sources, the guard, then the four views."""
     st.set_page_config(page_title="OMCT dictionary error viewer", page_icon="🔎", layout="wide")
+    st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
     st.title("OMCT dictionary error viewer")
     st.caption(
         "The dictionary round's mistakes on the 1,520 reviewed pairs. OMCT auxiliary data "
@@ -769,6 +1257,16 @@ def main() -> None:
         f"run {context.run.run_id} · {context.unit_name} · primary arm {context.run.scoring}"
     )
     view = st.sidebar.radio("view", list(VIEWS), index=0, key="view")
+    st.sidebar.toggle(
+        "interactive tables",
+        value=False,
+        key="interactive",
+        help=(
+            "Off = the styled read-only table; on = Streamlit's native table "
+            "(click a header to sort; the toolbar has search, download and fullscreen)."
+        ),
+    )
+    st.sidebar.caption("Off = styled view. On = native table (sort · search · fullscreen).")
     if view == "One pair":
         one_pair_view(context)
     elif view == "Errors":

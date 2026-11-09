@@ -181,6 +181,24 @@ shows a red banner and blocks every view (`st.stop`).
 
 A failed check blocks the views; the failure is shown, never smoothed over.
 
+## Styling
+
+The viewer uses the UPR viewer's visual language **without importing it** (the
+two apps stay separate files):
+
+- the app shell uses the project's Catppuccin Mocha theme (mauve headings,
+  mantle metric cards, muted captions);
+- every read-only table has a sticky header, zebra rows, a hover highlight and
+  a rounded frame;
+- signed numbers are coloured chips (green positive, red negative, mauve for a
+  score); directions, classes, error types and fills are badges; booleans are
+  dots; long document names truncate and expand on hover;
+- the sidebar's **interactive tables** toggle switches any table to Streamlit's
+  native dataframe (sort, search, download, fullscreen). Off is the styled
+  read-only view.
+
+No row and no number changes with the styling; only the rendering does.
+
 ## Data-layer API (`tools/omct_error_view.py`)
 
 Pure (numpy + the track's pure cores; no Streamlit, no model client, no
