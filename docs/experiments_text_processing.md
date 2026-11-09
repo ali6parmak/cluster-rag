@@ -9538,3 +9538,84 @@ the neutral fill), and the **question-pair relation real and weak** (CS-57:
 **CS-50's z arm**, **CS-56's neutral fill** (the floor should not ship on the
 pair unit), and the two **registered corrections that held** (CS-53's
 redundancy, CS-54's sign cliff).
+
+## CS-58 — the OMCT dictionary error viewer (2026-11-09)
+
+**The question.** The round CS-48 … CS-57 is complete, and its ten artifacts
+say *how well* the dictionary ranks the 1,520 reviewed pairs — never *which*
+pair it gets wrong, with which words, on which question, or how the floor moves
+it. This change set is the round's **viewer**: a read-only Streamlit app over
+the dictionary artifacts, kept separate from the UPR error viewer. It is a
+**tool** change like CS-47: no run, no sweep, no artifact written, no new
+number, no new dependency, and no UPR file touched.
+
+**The files.** `tools/omct_error_view.py` (the data layer; numpy + the track's
+pure cores; **no Streamlit**), `tools/omct_error_app.py` (the only Streamlit
+import), `tests/test_omct_error_view.py`, and `docs/omct_error_viewer.md` (the
+V1 spec). The app runs as `uv run streamlit run tools/omct_error_app.py`; the
+paths have environment-variable overrides for the tests.
+
+**The trap, and the rebuild.** `dictionary.tables` is the **full** map, while
+a judged pair's stored score is **out-of-fold**: five folds over the 1,520
+pairs, each fold's map built from the other folds. The layer rebuilds the five
+maps with the round's own `build_question_map` / `score_grid` and the command's
+`_dictionary_fold_ids` scheme, and assembles the artifact's matrix — the pair's
+cell from its fold, every other candidate from the full map. The first attempt
+that used only the judged cells reproduced the **scores** but not the
+**ranks**; the ranks are measured against the full map's scores of the other
+candidates, and that is the matrix the artifact's `rank_percentile` uses. With
+it, all **1,520 / 1,520** scores and rank percentiles reproduce: max |score|
+**0.0**, max |rank percentile| **0.0** (atol 1e-12). A mismatch fails the guard
+and withholds the contributions; it is never smoothed over.
+
+**The four views.** (1) **One pair**: the paragraph, the question, the human
+verdict, the artifact and rebuilt scores, the rank among the paragraph's
+same-document candidates, the fold map's contributing words (`word`, `n_with`,
+`df`, log-odds, z, contribution), the floor's reason (how many positives the
+question had in that fold), a floor / neutral / max toggle with the rank move,
+and an arm selector over the run's own `readout.scorings`. (2) **Errors**:
+false positives and false negatives under the pre-registered **evidence cut**
+(score > 0), with **floored as its own class** and the 4,000 unjudged control
+cells only in a separate strip. (3) **One question**: the full map's table
+(top words by z), the pair/positive counts, per-fold availability, and the word
+classes derived from `dictionary.words`' `tables` counts (distinctive ≤ 2,
+shared 3–52, generic ≥ 53 of the 209 labelled tables); **no POS is invented**,
+because the artifacts store no grammatical class per word. When the stability
+run is selected, the view lazily reads the 60 MB `dictionary.stability.links`
+and joins the table's links (`present_share`, `sign_stability`,
+`head_stability`, survival at 0.75 / 0.90). (4) **Compare arms**: two
+`(run, arm)` series over the same pairs, with the artifact's own within/pooled
+AUCs beside them and the rank movement (right minus left) below.
+
+**The guard, read out.** On the default run (`omct-analyze-voyage-dict-z`):
+the run shape (seed 42, folds 5, 1,520 judged, 4,000 control, 3 documents), the
+map (294 questions, 209 tables, 85 empty, 27,979 stored pairs, 2,082 words), the
+source join (1520 / 524 / 996), the fold rebuild (0.0 / 0.0), and the fill
+block (not selected there). On the abstain run the fill block reads
+`floor_pairs` **518**, `floor_negative_share` **0.7780**, `non_floor` **1002**.
+All seven scorer runs pass; the map-only CS-48 run (`omct-analyze-dictmap`) is
+named and refused, because it carries no scorer. Nothing under `results/`
+changed, and the UPR viewer's files are byte-identical.
+
+**What the screen says (the default run; a display, not a metric).** The pair
+`AI-11-Q70` — artifact and rebuilt score **4.406361730316086**, rank **1 / 51**,
+not floored, fold 1 with 10 positives of its 10 reviewed pairs, **18**
+contributing words; the fill toggle moves it from rank 1 (floor) to rank 1
+(neutral) to rank 3 (max). The evidence cut reads **492** false positives,
+**10** false negatives, **399** true positives, **101** true negatives and
+**518** floored pairs — **115** of them positive. Q70 has 14 reviewed pairs
+(14 positive) and a 394-word table. The compare view, plain sum → z on the
+same 1,520 pairs, moves **376** up, **639** down and **505** unchanged. None of
+these is a new measurement: they are the artifact's own numbers, the source's
+labels, or recomputations labelled as attribution.
+
+**The gate.** `pytest`: **1020 passed**, 13 deselected. `ruff check` and
+`ruff format --check` clean over **209** files. The AppTest smoke test renders
+the four views on the real default run with no exception and no guard banner.
+
+**What this change set does not say.** Nothing about **UPR** (no `upr-` run is
+listed; the UPR viewer is untouched) and nothing about a **new method**: the
+viewer reads the round as it stands. It does not re-score the artifacts, write
+one, or add a metric; the recomputation exists for attribution and the guard.
+It does not invent a **POS** class, label a **control** cell, or pool subset B
+with the judged set. The next step is the reviewer's.

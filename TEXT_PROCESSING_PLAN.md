@@ -1836,157 +1836,16 @@ stay untouched; the **clause ablation** (~2,700 LLM calls) is out of scope.
 
 ### 7.10 The OMCT dictionary error viewer (CS-58)
 
-**Why it is separate.** The round CS-48 … CS-57 is complete, but its evidence
-has only ever been read as aggregate AUCs: the ten artifacts say *how well* the
-dictionary ranks the 1,520 reviewed pairs, never *which* pair it gets wrong,
-with which words, on which question, or how the floor moves it. The UPR track
-already has an error viewer (`docs/error_viewer.md`, `tools/error_view.py` +
-`tools/error_app.py`), and the reviewer wants the two viewers kept separate:
-this change set adds **new files**, touches none of the UPR viewer's, and reads
-`omct-` artifacts only. It is a **tool** change like CS-47 — no run, no sweep,
-no artifact written, no new number, no UPR metric.
-
-- [ ] **CS-58 — the OMCT dictionary error viewer: one pair, the errors, one
-  question, two arms.** A read-only Streamlit viewer over the dictionary
-  round's own artifacts.
-
-  **What it reads (read-only; nothing under `results/` is written).**
-
-  - `data/external/omct_pairs.json` (the path in
-    `configs/base.yaml`'s `paths.data_external`): the 1,520 reviewer-judged
-    pairs — 524 positive, 996 reviewer-verified hard negatives — over 225
-    paragraphs in 3 documents (NU 75 / 243 questions, CIDH 112 / 217, AI
-    38 / 51), 294 distinct question texts, 44,467 same-document cells. Every
-    artifact row is joined to this file on `pair_id`.
-  - the run artifact, default
-    `results/omct-analyze-voyage-dict-z/analysis.json` (CS-50, the z arm), and
-    selectable from `…-dict` (CS-49), `…-dictmap` (CS-48, the map-only run),
-    `…-dict-phrases`, `…-dict-stability`, `…-dict-lexicon`, `…-dict-abstain`
-    and `…-dict-qpairs`. It reads `dictionary.map`, `dictionary.corpus`,
-    `dictionary.tables`, `dictionary.words`, `dictionary.classes` (when the
-    run carries it), `dictionary.availability`, `dictionary.readout`,
-    `dictionary.stability` (lazily), and
-    `models[kind == "dictionary"].arms.dictionary.judged_pairs` /
-    `control_cells`, plus the model entry's `readout.scorings`.
-  - `results/omct-analyze-voyage-dict-abstain/analysis.json` for the fill
-    block only: `readout.abstention_arms` (`floor_pairs` 518,
-    `floor_negative_share` 0.7780, `non_floor` 1002).
-  - `results/omct-analyze-voyage-dict-stability/analysis.json` for per-link
-    stability (`dictionary.stability.links`, 27,979 rows; the file is 60 MB,
-    loaded **lazily and only** when the question view opens with the stability
-    run selected).
-
-  **The trap, registered before the code.** `dictionary.tables` is the **full**
-  map, while the judged pairs' scores are **out-of-fold** (5 folds over the
-  1,520 pairs, seed 42). The data layer therefore rebuilds the five fold maps
-  with the round's own pure functions —
-  `features.question_map.build_question_map` and
-  `lexical.question_map_score.score_grid` — and the fold scheme of
-  `commands/omct.py`'s `_dictionary_fold_ids`:
-  `np.random.default_rng(seed).permutation(n_pairs)`, split into five
-  contiguous chunks. Each fold's map is built from the **other** folds; the
-  pair's score is its own fold map's grid cell; the **unjudged cells keep the
-  full map's score** (the artifact's assembled matrix, which is what its
-  rank percentile is measured on). `score_grid`'s token sum is over a
-  **sorted** order and is kept exactly. The rebuild must reproduce every
-  judged pair's artifact score at **1e-12** and every `rank_percentile` at
-  **1e-12**; if one does not, the guard fails and **no contribution is shown**.
-  The recomputation is for **attribution and the guard only**, and is labelled
-  as such on the screen — it is never presented as an artifact number or a new
-  metric.
-
-  **The four views (V1; no fifth).**
-
-  1. **One pair (the core).** The paragraph text, the question text, the human
-     verdict, the artifact score, the pair's rank among its paragraph's
-     same-document candidates, the contributing words from the **fold** map
-     (word, `n_with`, `df`, log-odds, z, contribution), and whether the pair is
-     **FLOORED** — the question has no table in that fold's map — with the
-     reason: how many positives the question had in that fold. A
-     **floor / neutral / max** toggle shows the pair's rank move under CS-56's
-     three fills. An **arm** selector offers the run's own `readout.scorings`
-     arms (`sum_positive`, `sum_zscore_positive`, `support_count`) and labels
-     every non-primary one "recomputed attribution".
-  2. **Errors.** False positives and false negatives under the **evidence cut**
-     (`score > 0`: did the map give the pair any points?), sorted by score or
-     rank, with filters for document, floored / non-floored, arm, and human
-     verdict. **Floored is its own error class** — never folded into the false
-     negatives — and the floored positives are counted separately (115 of the
-     518 floored pairs on the default run). The 4,000 unjudged control cells
-     appear **only** in a separate control strip, with no label column, never
-     as errors and never as ground truth.
-  3. **One question.** Its table from the full map (top words by z, with
-     `n_with`, `df`, lift, log-odds, z, standard error), its reviewed-pair and
-     positive counts, per-fold availability (pairs, positives, the fold map's
-     table size, floored pairs), and the word classes derived from
-     `dictionary.words`' own `tables` counts with
-     `lexical.word_class.classify_word` (distinctive ≤ 2, shared 3–52,
-     generic ≥ 53 of the 209 labelled tables). **No POS is invented**: the
-     word's grammatical class is not stored per word and is not shown. When the
-     stability run is selected, each link also carries `present_share`,
-     `sign_stability`, `head_stability` and its survival at τ = 0.75 / 0.90
-     (`sign_stability ≥ τ`).
-  4. **Compare arms.** The same 1,520 pairs under two `(run, arm)` series —
-     e.g. `sum_positive` vs `sum_zscore_positive` vs `support_count` — joined
-     on `pair_id`, with the score, the rank percentile and the **rank
-     movement** (`Δ` percentile / `Δ` rank) per pair, and the artifact's own
-     `within_auc` / `pooled_auc` / `floor_pairs` beside each side. Scores are
-     not compared across units (word vs phrase).
-
-  **The guard (UPR-style; on failure the app shows the failure and no views).**
-
-  - `run_id` matches its folder; `seed` 42; `availability.folds` 5; 1,520
-    judged rows; 4,000 control cells; 3 documents.
-  - `dictionary.map`: 294 questions, 209 with a table, 85 empty, **27,979**
-    stored (question, word) pairs and **2,082** words for the word unit; every
-    table's rows sum to `n_stored_pairs`, and `n_words` equals the artifact's
-    `dictionary.words` length. (The phrase run's 58,769 / 7,360 are its own
-    unit; the guard names the unit and pins 27,979 / 2,082 only for the word
-    unit.)
-  - every `pair_id` joins the source; the source's `n_pairs` / `n_positive` /
-    `n_negative` agree (1520 / 524 / 996) and the judged labels agree.
-  - the rebuilt fold score equals the artifact's score for every pair at
-    1e-12, and the rebuilt rank percentile equals the artifact's at 1e-12.
-  - the fill block's `floor_pairs == 518`, `floor_negative_share` rounds to
-    0.7780 and `non_floor == 1002` **when the abstain run is selected**.
-
-  **The non-goals (registered).** No run, sweep or experiment; no file under
-  `results/` written; no artifact, log or auto table re-written; no change to
-  the round's numbers; no UPR file read or touched (no `upr-` run is ever
-  listed); no new dependency (Streamlit is already the UPR viewer's dev
-  dependency); no pack/LLM view, no causal what-if, no export view; no
-  semantics inferred — no POS, no label, no control-cell ground truth.
-
-  **The falsification, registered in advance.** A tool change must move **no
-  number**: `results/` has the same files and shas before and after, the UPR
-  viewer's files are byte-identical, the app writes nothing, and every
-  displayed score is the artifact's own or is labelled "recomputed
-  attribution". If the fold rebuild does not reproduce a judged score at
-  1e-12, the guard fails and the views are blocked — the discrepancy is
-  reported, never smoothed over.
-
-  **The cost.** 0 model calls, 0 new dependency, 0 new artifact. The load
-  rebuilds five fold maps and six 225 × 294 grids (~1–2 s, cached); the 60 MB
-  stability artifact is read only on demand.
-
-  **The files (new; the UPR viewer is untouched).**
-  `tools/omct_error_view.py` (data layer; pandas/numpy; **no streamlit**),
-  `tools/omct_error_app.py` (the only Streamlit import),
-  `tests/test_omct_error_view.py`, `docs/omct_error_viewer.md` (the V1 spec).
-  The app runs as `uv run streamlit run tools/omct_error_app.py`, with path
-  overrides through environment variables for the tests.
-
-  **The exit criteria.** The pre-registration is committed first; the four
-  files are in place; `uv run python tools/omct_error_view.py --check` exits 0
-  on the default run (and on the word-unit runs; the map-only CS-48 run is
-  named as map-only and blocked); the hand-computed tests cover the fold
-  rebuild on a known pair, the floor/neutral/max fill on a toy row, the class
-  derivation, the error classification, a doctored count rejected by the
-  guard, and the data layer's import purity; `pytest` is green and `ruff
-  check` / `ruff format --check` clean over `src` / `tests` / `tools`; the log
-  section is appended; the pre-registration is moved verbatim to the archive
-  with a tombstone left here; the commits are made. Then the work **stops**
-  and reports.
+- **CS-58** (the OMCT dictionary error viewer) → executed 2026-11-09 → the
+  archive's §7.10 (the viewer) and the track log's §CS-58. A **tool** change:
+  four new files, no run, no new number. The rebuild reproduces all **1,520**
+  judged scores and rank percentiles at **0.0** (atol 1e-12); the default run's
+  evidence cut reads **492** false positives, **10** false negatives, **518**
+  floored pairs (**115** floored positives), and the compare view moves **376**
+  up / **639** down / **505** unchanged from the plain sum to the z arm. The
+  guard also reads the abstain fill block (518 / 0.7780 / 1002) and refuses the
+  map-only CS-48 run; the UPR viewer is untouched. **The next step is the
+  reviewer's.**
 
 
 
