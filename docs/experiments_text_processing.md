@@ -9570,10 +9570,15 @@ and withholds the contributions; it is never smoothed over.
 
 **The four views.** (1) **One pair**: the paragraph, the question, the human
 verdict, the artifact and rebuilt scores, the rank among the paragraph's
-same-document candidates, the fold map's contributing words (`word`, `n_with`,
-`df`, log-odds, z, contribution), the floor's reason (how many positives the
-question had in that fold), a floor / neutral / max toggle with the rank move,
-and an arm selector over the run's own `readout.scorings`. (2) **Errors**:
+same-document candidates, the fold map's **signed** word table (`word`,
+`n_with`, `df`, signed log-odds, signed z, the arm's contribution, a
+positive / negative direction and whether the arm adds it), the floor's reason
+(how many positives the question had in that fold), a floor / neutral / max
+toggle with the rank move, and an arm selector over the run's own
+`readout.scorings`. The word table changed after the reviewer's first look: it
+originally listed only the words that *added* to the score, because the
+artifact's primary arm is positive-only; it now keeps the **negative** words
+too and says which side the selected arm actually sums. (2) **Errors**:
 false positives and false negatives under the pre-registered **evidence cut**
 (score > 0), with **floored as its own class** and the 4,000 unjudged control
 cells only in a separate strip. (3) **One question**: the full map's table
@@ -9600,9 +9605,12 @@ changed, and the UPR viewer's files are byte-identical.
 
 **What the screen says (the default run; a display, not a metric).** The pair
 `AI-11-Q70` — artifact and rebuilt score **4.406361730316086**, rank **1 / 51**,
-not floored, fold 1 with 10 positives of its 10 reviewed pairs, **18**
-contributing words; the fill toggle moves it from rank 1 (floor) to rank 1
-(neutral) to rank 3 (max). The evidence cut reads **492** false positives,
+not floored, fold 1 with 10 positives of its 10 reviewed pairs, **18** signed
+words (all positive under the z arm); the fill toggle moves it from rank 1
+(floor) to rank 1 (neutral) to rank 3 (max). The sign reversal is visible on
+`AI-30-Q276`: `within` has `z = -0.148466` and `log-odds = +2.564949`, so it is
+**against** the z arm (contribution 0, not summed) and **for** the log-odds arm
+(contribution +2.564949). That is CS-50's lesson in one row. The evidence cut reads **492** false positives,
 **10** false negatives, **399** true positives, **101** true negatives and
 **518** floored pairs — **115** of them positive. Q70 has 14 reviewed pairs
 (14 positive) and a 394-word table. The compare view, plain sum → z on the
@@ -9610,7 +9618,7 @@ same 1,520 pairs, moves **376** up, **639** down and **505** unchanged. None of
 these is a new measurement: they are the artifact's own numbers, the source's
 labels, or recomputations labelled as attribution.
 
-**The gate.** `pytest`: **1020 passed**, 13 deselected. `ruff check` and
+**The gate.** `pytest`: **1022 passed**, 13 deselected. `ruff check` and
 `ruff format --check` clean over **209** files. The AppTest smoke test renders
 the four views on the real default run with no exception and no guard banner.
 

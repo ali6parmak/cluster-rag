@@ -697,6 +697,28 @@ class Contribution:
 
 
 @dataclass(frozen=True)
+class SignedWord:
+    """One paragraph word in the question's fold table, with its **signed** evidence.
+
+    ``direction`` follows the selected arm's own measure: the log-odds for
+    ``sum_positive``, the z-score for the z arms (and for ``support_count``,
+    which has no sign of its own). ``summed`` says whether the positive-only
+    arm actually adds this word: a negative word is shown, but contributes
+    **0** under ``sum_positive`` / ``sum_zscore_positive``. The raw log-odds
+    and z are both kept, because they can disagree in sign (CS-50).
+    """
+
+    word: str
+    n_with: int
+    df: int
+    log_odds: float
+    z_score: float
+    contribution: float
+    direction: str
+    summed: bool
+
+
+@dataclass(frozen=True)
 class RankMove:
     """One pair's score and rank under one fill."""
 
@@ -716,6 +738,7 @@ class PairView:
     artifact_score: float
     rebuilt_score: float
     reproduction_ok: bool
+    is_primary: bool
     arm: str
     fill: str
     score: float
@@ -727,6 +750,7 @@ class PairView:
     fold_positive: int
     fold_pairs: int
     contributions: tuple[Contribution, ...]
+    signed_words: tuple[SignedWord, ...]
     moves: tuple[RankMove, ...]
 
 
@@ -736,43 +760,82 @@ def _units_of(context: Context, text: str) -> set[str]:
     return set(units(text))
 
 
-def contributions_for(context: Context, index: int, arm: str) -> tuple[Contribution, ...]:
-    """The fold-map rows that gave the pair points under ``arm``.
+def signed_words_for(context: Context, index: int, arm: str) -> tuple[SignedWord, ...]:
+    """Every paragraph word in the question's fold table, signed by the arm's measure.
 
-    Only the additive arms are offered. ``sum_positive`` keeps the positive
-    log-odds, ``sum_zscore_positive`` the positive z-scores, and
-    ``support_count`` one point per present table unit. A floored pair has no
-    table and therefore no contributions.
+    The fold map is the pair's own out-of-fold map, so this is the evidence the
+    artifact's score actually used. Negative words are **kept**: they are the
+    map's evidence against the question, and the viewer shows them even though
+    the positive-only arms do not subtract them. A floored pair has no table,
+    so it has no words.
     """
     if floored(context, index):
         return ()
     question = context.pairs[index].question_text
     fold_map = context.fold_maps[int(context.fold_ids[index])]
     wanted = _units_of(context, context.pairs[index].paragraph_text)
-    rows: list[Contribution] = []
+    rows: list[tuple[float, SignedWord]] = []
     for row in fold_map.per_question.get(question, ()):
         if row.word not in wanted:
             continue
         if arm == "sum_positive":
-            value = row.log_odds if row.log_odds > 0.0 else 0.0
+            measure = float(row.log_odds)
+            contribution = measure if measure > 0.0 else 0.0
+            summed = measure > 0.0
         elif arm == "sum_zscore_positive":
-            value = row.z_score if row.z_score > 0.0 else 0.0
+            measure = float(row.z_score)
+            contribution = measure if measure > 0.0 else 0.0
+            summed = measure > 0.0
         elif arm == "support_count":
-            value = 1.0
+            measure = float(row.z_score)
+            contribution = 1.0
+            summed = True
         else:
             raise ValueError(f"arm {arm!r} has no additive contribution")
-        if value <= 0.0:
-            continue
+        direction = "positive" if measure > 0.0 else "negative" if measure < 0.0 else "zero"
         rows.append(
-            Contribution(
-                word=row.word,
-                n_with=int(row.n_with),
-                df=int(row.df),
-                log_odds=float(row.log_odds),
-                z_score=float(row.z_score),
-                contribution=float(value),
+            (
+                measure,
+                SignedWord(
+                    word=row.word,
+                    n_with=int(row.n_with),
+                    df=int(row.df),
+                    log_odds=float(row.log_odds),
+                    z_score=float(row.z_score),
+                    contribution=float(contribution),
+                    direction=direction,
+                    summed=summed,
+                ),
             )
         )
+    rows.sort(key=lambda item: (-item[0], item[1].word))
+    return tuple(word for _, word in rows)
+
+
+def contributions_for(context: Context, index: int, arm: str) -> tuple[Contribution, ...]:
+    """The fold-map rows that gave the pair points under ``arm``.
+
+    This is the positive-only decomposition of the score: the words the arm
+    actually sums. The signed table is :func:`signed_words_for`; this helper is
+    kept for the CLI and the tests, and for the score's own audit.
+    """
+    return _contributions_from_signed(signed_words_for(context, index, arm))
+
+
+def _contributions_from_signed(words: Sequence[SignedWord]) -> tuple[Contribution, ...]:
+    """The summed, positive part of a signed word list (the score's decomposition)."""
+    rows = [
+        Contribution(
+            word=word.word,
+            n_with=word.n_with,
+            df=word.df,
+            log_odds=word.log_odds,
+            z_score=word.z_score,
+            contribution=word.contribution,
+        )
+        for word in words
+        if word.summed and word.contribution > 0.0
+    ]
     rows.sort(key=lambda contribution: (-contribution.contribution, contribution.word))
     return tuple(rows)
 
@@ -799,11 +862,13 @@ def pair_view(
         (row.score for row in context.run.judged if row.pair_id == pair_id),
         float("nan"),
     )
-    reproduction_ok = bool(abs(rebuilt - artifact_score) <= SCORE_TOLERANCE)
+    is_primary = selected_arm == context.run.scoring
+    reproduction_ok = bool(abs(rebuilt - artifact_score) <= SCORE_TOLERANCE) if is_primary else True
     rank, n_candidates, percentile = rank_in_candidates(context, grids.assembled, index)
     is_floored = floored(context, index)
     fold_positive, fold_pairs = fold_counts(context, index)
-    contributions = contributions_for(context, index, selected_arm) if reproduction_ok else ()
+    signed_words = signed_words_for(context, index, selected_arm) if reproduction_ok else ()
+    contributions = _contributions_from_signed(signed_words)
     moves: list[RankMove] = []
     if with_moves:
         base_rank = rank
@@ -828,6 +893,7 @@ def pair_view(
         artifact_score=artifact_score,
         rebuilt_score=rebuilt,
         reproduction_ok=reproduction_ok,
+        is_primary=is_primary,
         arm=selected_arm,
         fill=fill,
         score=float(grids.assembled[row, column]),
@@ -839,6 +905,7 @@ def pair_view(
         fold_positive=fold_positive,
         fold_pairs=fold_pairs,
         contributions=contributions,
+        signed_words=signed_words,
         moves=tuple(moves),
     )
 

@@ -210,12 +210,16 @@ def one_pair_view(context: ev.Context) -> None:
         st.write(view.pair.question_text)
     metrics = st.columns(6)
     metrics[0].metric("human verdict", "positive" if view.pair.label == 1 else "negative")
-    metrics[1].metric("artifact score", f"{view.artifact_score:.6f}")
-    metrics[2].metric(
-        "rebuilt score",
-        f"{view.rebuilt_score:.6f}",
-        delta=f"{view.rebuilt_score - view.artifact_score:.1e}",
-    )
+    if view.is_primary:
+        metrics[1].metric("artifact score", f"{view.artifact_score:.6f}")
+        metrics[2].metric(
+            "rebuilt score",
+            f"{view.rebuilt_score:.6f}",
+            delta=f"{view.rebuilt_score - view.artifact_score:.1e}",
+        )
+    else:
+        metrics[1].metric("artifact (primary)", f"{view.artifact_score:.6f}")
+        metrics[2].metric("recomputed (this arm)", f"{view.rebuilt_score:.6f}")
     metrics[3].metric("rank", f"{view.rank} / {view.n_candidates}")
     metrics[4].metric("rank percentile", f"{view.rank_percentile:.4f}")
     metrics[5].metric("floored", "yes" if view.floored else "no")
@@ -223,6 +227,11 @@ def one_pair_view(context: ev.Context) -> None:
         st.error(
             "THE REBUILT SCORE DOES NOT REPRODUCE THE ARTIFACT'S — the contributions are "
             "withheld and the guard blocks the views."
+        )
+    elif not view.is_primary:
+        st.caption(
+            "This arm is **recomputed attribution**: the artifact stores only the primary "
+            "arm's judged score, so the two scores above are not the same measurement."
         )
     if view.floored:
         st.warning(
@@ -254,35 +263,73 @@ def one_pair_view(context: ev.Context) -> None:
         "Δ is against the selected fill. Only the floor fill is the artifact's own; the "
         "neutral and max fills are CS-56's recomputed attribution."
     )
-    st.markdown(f"**the contributing words — the fold {view.fold} map**")
+    st.markdown(f"**the words and their signed evidence — the fold {view.fold} map**")
     if not view.reproduction_ok:
         st.caption("withheld: the score did not reproduce.")
-    elif not view.contributions:
+    elif not view.signed_words:
         extra = (
             "the question has no table in this fold's map"
             if view.floored
-            else "no word of the paragraph gave the pair points under this arm"
+            else "no word of the paragraph appears in this question's fold table"
         )
-        st.info(f"No contributing words: {extra}.")
+        st.info(f"No words to show: {extra}.")
     else:
-        contributions = pd.DataFrame([asdict(row) for row in view.contributions])
+        positives = sum(1 for word in view.signed_words if word.direction == "positive")
+        negatives = sum(1 for word in view.signed_words if word.direction == "negative")
+        summed = sum(1 for word in view.signed_words if word.summed)
+        st.caption(
+            f"{positives} words point **for** the question and {negatives} **against** it; "
+            f"the `{view.arm}` arm adds {summed} of them to the pair's score. The direction "
+            "follows the arm's own measure: log-odds for `sum_positive`, z for the z arms "
+            "(the count arm has no sign, so its direction is the z sign and it adds every "
+            "present word)."
+        )
+        choice = st.radio(
+            "show",
+            ["all words", "positive only", "negative only"],
+            horizontal=True,
+            key="pair_word_direction",
+        )
+        selected = [
+            word
+            for word in view.signed_words
+            if choice == "all words"
+            or (choice == "positive only" and word.direction == "positive")
+            or (choice == "negative only" and word.direction == "negative")
+        ]
+        table = pd.DataFrame(
+            [
+                {
+                    "word": word.word,
+                    "n_with": word.n_with,
+                    "df": word.df,
+                    "log-odds": word.log_odds,
+                    "z": word.z_score,
+                    "contribution": word.contribution,
+                    "direction": word.direction,
+                    "in score": word.summed,
+                }
+                for word in selected
+            ]
+        )
         st.dataframe(
-            contributions,
+            table,
             hide_index=True,
             width="stretch",
             column_config={
-                "word": "word",
                 "n_with": st.column_config.NumberColumn("n_with", format="%d"),
                 "df": st.column_config.NumberColumn("df", format="%d"),
-                "log_odds": st.column_config.NumberColumn("log-odds", format="%+.6f"),
-                "z_score": st.column_config.NumberColumn("z", format="%+.6f"),
+                "log-odds": st.column_config.NumberColumn("log-odds", format="%+.6f"),
+                "z": st.column_config.NumberColumn("z", format="%+.6f"),
                 "contribution": st.column_config.NumberColumn("contribution", format="%+.6f"),
             },
         )
         st.caption(
-            "The fold map's own rows (the full map is in One question). The contributions "
-            "sum to the score under the floor fill; a non-floor fill replaces a floored "
-            "pair's score and has no words behind it."
+            "The fold map's own rows (the full map is in One question). A positive-only arm "
+            "adds only the positive side; a negative word is shown for interpretation but "
+            "contributes 0 under that arm. The direction and contribution follow the selected "
+            "arm, so the same word can be positive for `sum_positive` and negative for "
+            "`sum_zscore_positive` (CS-50's sign reversal)."
         )
     if arm != context.run.scoring:
         st.caption(

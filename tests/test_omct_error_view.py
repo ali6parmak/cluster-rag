@@ -431,6 +431,44 @@ def test_the_contributions_sum_to_the_score(ev: Any, toy: Toy) -> None:
         )
 
 
+def test_the_signed_words_keep_the_negative_side(ev: Any, toy: Toy) -> None:
+    """The signed table is a superset of the positive-only decomposition."""
+    context = _context(ev, toy)
+    for pair in context.pairs:
+        view = ev.pair_view(context, pair.pair_id, with_moves=False)
+        if view.floored:
+            assert view.signed_words == ()
+            continue
+        assert {word.word for word in view.contributions} <= {
+            word.word for word in view.signed_words
+        }
+        assert all(word.contribution >= 0.0 for word in view.signed_words)
+        assert sum(word.contribution for word in view.signed_words if word.summed) == pytest.approx(
+            view.rebuilt_score, abs=1e-12
+        )
+
+
+@pytest.mark.skipif(
+    not (Path("results") / "omct-analyze-voyage-dict-z" / "analysis.json").is_file(),
+    reason="the real artifacts are not present",
+)
+def test_the_signed_table_shows_the_sign_reversal(ev: Any) -> None:
+    """On AI-30-Q276, "within" is against the z arm and for the log-odds arm."""
+    context = ev.load_context(ev.resolve_sources())
+    z_view = ev.pair_view(context, "AI-30-Q276", arm="sum_zscore_positive", with_moves=False)
+    within = next(word for word in z_view.signed_words if word.word == "within")
+    assert within.z_score < 0.0
+    assert within.log_odds > 0.0
+    assert within.direction == "negative"
+    assert within.contribution == pytest.approx(0.0)
+    assert not within.summed
+    odds_view = ev.pair_view(context, "AI-30-Q276", arm="sum_positive", with_moves=False)
+    within_odds = next(word for word in odds_view.signed_words if word.word == "within")
+    assert within_odds.direction == "positive"
+    assert within_odds.summed
+    assert within_odds.contribution == pytest.approx(within_odds.log_odds)
+
+
 def test_the_fill_values_are_hand_computed(ev: Any) -> None:
     """CS-56's three fills on a known row (and on the empty row)."""
     seen = np.asarray([1.0, 3.0, 8.0])

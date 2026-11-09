@@ -96,7 +96,19 @@ how many positives and how many reviewed pairs the question had in that fold.
 A **floor / neutral / max** toggle (CS-56) shows the pair's rank move; the
 floor fill is the artifact's own, the other two are recomputed. An **arm**
 selector offers the run's own `readout.scorings` arms; only the primary arm's
-judged pairs are in the artifact.
+judged pairs are in the artifact, so a non-primary arm is labelled
+"recomputed attribution" and its score is not compared with the artifact's.
+
+The word table is **signed**: every paragraph word in the question's fold
+table, with `n_with`, `df`, the signed log-odds, the signed `z`, the arm's
+contribution, a **positive / negative** direction and whether the arm actually
+adds it. The direction follows the arm's own measure — log-odds for
+`sum_positive`, `z` for the z arms; `support_count` has no sign of its own, so
+its direction is the `z` sign and it adds every present word. **Negative words
+are kept and shown**; a positive-only arm does not subtract them (they
+contribute 0), which is why the same word can be positive for `sum_positive`
+and negative for `sum_zscore_positive` — CS-50's sign reversal. A filter shows
+all / positive / negative words.
 
 ### 2. Errors
 
@@ -176,13 +188,14 @@ network, no write); deterministic given the files.
 
 - dataclasses: `Sources`, `SourcePair`, `JudgedPair`, `ControlCell`,
   `RunArtifact`, `Provenance`, `GridSet`, `Context`, `Contribution`,
-  `RankMove`, `PairView`, `ErrorRow`, `QuestionWord`, `QuestionFold`,
+  `SignedWord`, `RankMove`, `PairView`, `ErrorRow`, `QuestionWord`, `QuestionFold`,
   `StabilityLink`, `QuestionView`, `StabilityIndex`, `RunView`, `CompareRow`,
   `Check`, `Reproduction`, `GuardReport`;
 - loading: `resolve_sources`, `load_run`, `load_context`,
-  `load_stability_index`;
+  `stability_index_from_block`, `load_stability_index`;
 - arithmetic: `fold_ids`, `grids_for`, `floored`, `fold_counts`,
-  `rank_in_candidates`, `empty_fill`, `contributions_for`, `pair_view`,
+  `rank_in_candidates`, `empty_fill`, `signed_words_for`, `contributions_for`,
+  `pair_view`,
   `error_of`, `error_rows`, `question_view`, `control_strip`, `run_view`,
   `compare_views`;
 - guard: `reproduce`, `check_all`;
@@ -202,6 +215,11 @@ dependency.
    - a non-floored pair's rebuilt score equals the fold map's positive z-scores
      summed over the paragraph's units **by hand**, and the contributions sum
      to the score;
+   - the signed table keeps the negative side (a superset of the positive
+     decomposition, whose summed contributions still equal the score), and on
+     the real `AI-30-Q276` the word `within` is negative for the z arm
+     (`z = -0.148466…`, contribution 0) and positive for the log-odds arm
+     (`log-odds = +2.564949…`);
    - the floor / neutral / max fills on `[1, 3, 8]` are `0 / 3 / 8`, and on an
      empty row `-1 / 0 / -1`;
    - the class boundaries (2 / 3 / 52 / 53 of 209) and the toy question's
