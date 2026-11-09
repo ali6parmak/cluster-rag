@@ -14,6 +14,10 @@ Four read-only views over the round's own artifacts:
 4. **Compare arms** — the same 1,520 pairs under two ``(run, arm)`` series,
    with the rank movement.
 
+The run selector offers both the per-question dictionary runs (CS-48 … CS-57)
+and the word-pair runs (CS-59 / CS-60); the four views branch by run kind and
+reuse the same styling.
+
 The app is the **only** file that imports Streamlit (and pandas for display).
 Every number is the data layer's: the artifact's own, or a recomputation that
 is labelled "attribution" and guarded at 1e-12. A failed guard blocks every
@@ -299,7 +303,7 @@ def load_data(
         abstain_run=abstain_run,
         stability_run=stability_run,
     )
-    context = ev.load_context(sources)
+    context = ev.load_any_context(sources)
     report = ev.check_all(sources, context=context)
     return {"sources": sources, "context": context, "report": report}
 
@@ -1216,6 +1220,585 @@ def compare_view(context: ev.Context, config: str, results: str) -> None:
         )
 
 
+# --- word-pair views (CS-59 / CS-60) ---------------------------------------
+
+
+def _open_wp_pair(pair_id: str) -> None:
+    """Open a word-pair pair in the word-pair One pair view."""
+    st.session_state["wp_pair_id"] = pair_id
+    st.session_state["wp_pair_document"] = "All"
+    st.session_state["wp_pair_verdict"] = "All"
+    st.session_state["wp_pair_floored"] = "All"
+    st.session_state["view"] = "One pair"
+
+
+def word_pair_one_pair_view(context: ev.WordPairContext) -> None:
+    """The word-pair One pair view: shared words, fills, reference."""
+    st.subheader("One pair — the word-pair table")
+    st.caption(
+        "The global table over the words the paragraph and the question share. The "
+        "score is the sum of the positive z-scores of the shared words that have a row "
+        "in the pair's fold table; a pair with no such row is floored."
+    )
+    documents = sorted({pair.document for pair in context.pairs})
+    columns = st.columns(3)
+    document = columns[0].selectbox("document", ["All", *documents], key="wp_pair_document")
+    verdict = columns[1].selectbox(
+        "human verdict", ["All", "positive", "negative"], key="wp_pair_verdict"
+    )
+    floored_filter = columns[2].selectbox(
+        "floored", ["All", "floored", "not floored"], key="wp_pair_floored"
+    )
+    candidates = [
+        pair
+        for pair in context.pairs
+        if (document == "All" or pair.document == document)
+        and (verdict == "All" or (pair.label == 1) == (verdict == "positive"))
+        and (
+            floored_filter == "All"
+            or bool(context.floor[context.pair_index[pair.pair_id]])
+            == (floored_filter == "floored")
+        )
+    ]
+    if not candidates:
+        st.info("No reviewed pair matches these filters.")
+        return
+    ids = [pair.pair_id for pair in candidates]
+    if st.session_state.get("wp_pair_id") not in ids:
+        st.session_state["wp_pair_id"] = ids[0]
+    labels = {_pair_label(pair): pair.pair_id for pair in candidates}
+    selected_id = st.session_state["wp_pair_id"]
+    default_label = next(label for label, pair_id in labels.items() if pair_id == selected_id)
+    if st.session_state.get("wp_pair_label") not in labels:
+        st.session_state["wp_pair_label"] = default_label
+    arms = list(context.arms)
+    arm = st.selectbox(
+        "arm",
+        arms,
+        index=arms.index(context.run.primary) if context.run.primary in arms else 0,
+        key="wp_pair_arm",
+    )
+    label = st.selectbox(
+        "pair", list(labels), index=list(labels).index(default_label), key="wp_pair_label"
+    )
+    pair_id = labels[label]
+    st.session_state["wp_pair_id"] = pair_id
+    view = ev.word_pair_pair_view(context, pair_id, arm=arm)
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**the paragraph**")
+        st.write(view.pair.paragraph_text)
+    with right:
+        st.markdown("**the question**")
+        st.write(view.pair.question_text)
+    metrics = st.columns(6)
+    metrics[0].metric("human verdict", "positive" if view.pair.label == 1 else "negative")
+    metrics[1].metric(
+        "held out",
+        f"the {view.held_out}",
+        help="CS-59 holds out the question; CS-60 the paragraph.",
+    )
+    metrics[2].metric("fold", view.fold)
+    metrics[3].metric("floored", "yes" if view.floored else "no")
+    metrics[4].metric("floor score", f"{view.scores['floor']:.6f}")
+    metrics[5].metric("neutral score", f"{view.scores['neutral']:.6f}")
+    primary = view.primary_fill
+    reference_rank, _, reference_pct = (
+        view.reference_rank,
+        None,
+        view.reference_percentile,
+    )
+    st.caption(
+        f"primary fill for this run: **{primary}**. The per-question reference arm "
+        f"(`{view.reference_scoring}`, pair folds) gives this pair **{view.reference_score:.6f}** "
+        f"at rank **{reference_rank} / {view.ranks[primary][1]}** "
+        f"(percentile {reference_pct:.4f}) — it is the reference, **not** the word-pair score."
+    )
+    in_fold = [row for row in view.contributions if row.in_fold]
+    not_in_fold = [row for row in view.contributions if not row.in_fold]
+    if view.floored:
+        st.warning(
+            f"FLOORED — no shared word has a row in fold {view.fold}'s table "
+            f"(held out: the {view.held_out}). The score is the **{primary}** fill, "
+            "not shared-word evidence. The shared words with no row: "
+            + ", ".join(row.word for row in not_in_fold[:10])
+            + ("…" if len(not_in_fold) > 10 else "")
+            + "."
+        )
+    else:
+        st.info(
+            f"Not floored — {len(in_fold)} of {len(view.contributions)} shared words have "
+            f"a row in fold {view.fold}'s table."
+        )
+    st.markdown("**the floor and neutral rank move**")
+    base_rank, n_candidates, base_pct = view.ranks[primary]
+    move_rows = []
+    for fill in ("floor", "neutral"):
+        rank, candidates, pct = view.ranks[fill]
+        move_rows.append(
+            [
+                _badge(fill, "green" if fill == primary else "blue"),
+                _chip(
+                    view.scores[fill],
+                    max(abs(view.scores["floor"]), abs(view.scores["neutral"])),
+                    signed=True,
+                ),
+                _esc(rank),
+                _esc(candidates),
+                _esc(f"{pct:.4f}"),
+                _chip(rank - base_rank, 1.0, signed=True, tone=_delta_tone(rank - base_rank)),
+                _chip(pct - base_pct, 1.0, signed=True, tone=_delta_tone(pct - base_pct), digits=4),
+            ]
+        )
+    _show_table(
+        _html_table(
+            ["fill", "score", "rank", "candidates", "percentile", "Δ rank", "Δ pct"],
+            move_rows,
+            ["left", "right", "right", "right", "right", "right", "right"],
+            columns=[
+                "fill",
+                "score",
+                "rank",
+                "n_candidates",
+                "percentile",
+                "delta_rank",
+                "delta_pct",
+            ],
+        ),
+        pd.DataFrame(
+            [
+                {
+                    "fill": fill,
+                    "score": view.scores[fill],
+                    "rank": view.ranks[fill][0],
+                    "n_candidates": view.ranks[fill][1],
+                    "percentile": view.ranks[fill][2],
+                }
+                for fill in ("floor", "neutral")
+            ]
+        ),
+    )
+    st.caption(
+        f"Δ is against the run's primary fill ({primary}; the badge). CS-59's primary is "
+        "floor; CS-60's is neutral. The other fill is CS-56's recomputed attribution."
+    )
+    st.markdown(f"**the shared words — the fold {view.fold} table**")
+    choice = st.radio(
+        "show",
+        ["all shared words", "in fold", "not in fold", "positive", "negative"],
+        horizontal=True,
+        key="wp_word_direction",
+    )
+    selected = [
+        row
+        for row in view.contributions
+        if choice == "all shared words"
+        or (choice == "in fold" and row.in_fold)
+        or (choice == "not in fold" and not row.in_fold)
+        or (choice == "positive" and row.direction == "positive")
+        or (choice == "negative" and row.direction == "negative")
+    ]
+    max_z = _max_abs([row.z_score or 0.0 for row in selected])
+    max_contribution = _max_abs([row.contribution for row in selected])
+    contribution_html = _html_table(
+        ["word", "df", "n_with", "z", "contribution", "direction", "in fold", "df == 1"],
+        [
+            [
+                f'<span class="ev-word">{_esc(row.word)}</span>',
+                _esc(row.df) if row.in_fold else '<span class="ev-muted">—</span>',
+                _esc(row.n_with) if row.in_fold else '<span class="ev-muted">—</span>',
+                _chip(row.z_score, max_z, signed=True)
+                if row.in_fold
+                else '<span class="ev-muted">—</span>',
+                _chip(
+                    row.contribution,
+                    max_contribution,
+                    signed=True,
+                    tone="pos" if row.in_fold and row.contribution > 0 else "zero",
+                ),
+                _badge(
+                    row.direction,
+                    "green"
+                    if row.direction == "positive"
+                    else "red"
+                    if row.direction == "negative"
+                    else "muted",
+                ),
+                _badge("in fold", "green") if row.in_fold else _badge("not in fold", "amber"),
+                _dot(row.single, "green") if row.in_fold else '<span class="ev-muted">—</span>',
+            ]
+            for row in selected
+        ],
+        ["left", "right", "right", "right", "right", "center", "center", "center"],
+        columns=[
+            "word",
+            "df",
+            "n_with",
+            "z_score",
+            "contribution",
+            "direction",
+            "in_fold",
+            "single",
+        ],
+    )
+    _show_table(
+        contribution_html,
+        pd.DataFrame(
+            [
+                {
+                    "word": row.word,
+                    "df": row.df,
+                    "n_with": row.n_with,
+                    "z": row.z_score,
+                    "contribution": row.contribution,
+                    "direction": row.direction,
+                    "in fold": row.in_fold,
+                    "df == 1": row.single,
+                }
+                for row in selected
+            ]
+        ),
+    )
+    st.caption(
+        "The contribution is the positive z of an in-fold shared word under "
+        "`sum_zscore_positive` (1 per in-fold word under `support_count`). A word "
+        "**not in fold** has no row in this fold's table, contributes 0, and is why a "
+        "pair can be floored. `df == 1` marks a row resting on a single judged pair."
+    )
+    if arm == "support_count":
+        st.caption(
+            "The count arm has no sign of its own: it adds 1 for every in-fold shared "
+            "word; the `z` column is shown for interpretation."
+        )
+
+
+def word_pair_errors_view(context: ev.WordPairContext) -> None:
+    """The word-pair Errors view (floored as its own class)."""
+    st.subheader("Errors — the word-pair table")
+    st.caption(
+        "The evidence cut (score > 0) is a display rule, not the run's metric. The "
+        "floored pairs are their own class; the 4,000 unjudged control cells stay in "
+        "the separate strip."
+    )
+    columns = st.columns(2)
+    arms = list(context.arms)
+    arm = columns[0].selectbox(
+        "arm",
+        arms,
+        index=arms.index(context.run.primary) if context.run.primary in arms else 0,
+        key="wp_err_arm",
+    )
+    fill = columns[1].selectbox(
+        "fill",
+        ["floor", "neutral"],
+        index=0 if context.run.primary_fill == "floor" else 1,
+        key="wp_err_fill",
+    )
+    rows = ev.word_pair_error_rows(context, arm=arm, fill=fill)
+    counts = Counter(row.error for row in rows)
+    metrics = st.columns(6)
+    metrics[0].metric("false positives", counts.get("false_positive", 0))
+    metrics[1].metric("false negatives", counts.get("false_negative", 0))
+    metrics[2].metric("true positives", counts.get("true_positive", 0))
+    metrics[3].metric("true negatives", counts.get("true_negative", 0))
+    metrics[4].metric("floored", counts.get("floored", 0))
+    metrics[5].metric("floored positives", sum(1 for row in rows if row.floored and row.label == 1))
+    filters = st.columns(5)
+    documents = sorted({row.document for row in rows})
+    document = filters[0].selectbox("document", ["All", *documents], key="wp_err_document")
+    shown = filters[1].selectbox(
+        "what to show", ["the errors (FP + FN)", "floored", "all classes"], key="wp_err_shown"
+    )
+    verdict = filters[2].selectbox(
+        "human verdict", ["All", "positive", "negative"], key="wp_err_verdict"
+    )
+    floored_filter = filters[3].selectbox(
+        "floored", ["All", "floored", "not floored"], key="wp_err_floored"
+    )
+    sort = filters[4].selectbox(
+        "sort", ["score (high first)", "rank (best first)"], key="wp_err_sort"
+    )
+    if shown == "the errors (FP + FN)":
+        selected = [row for row in rows if row.error in ("false_positive", "false_negative")]
+    elif shown == "floored":
+        selected = [row for row in rows if row.error == "floored"]
+    else:
+        selected = list(rows)
+    selected = [
+        row
+        for row in selected
+        if (document == "All" or row.document == document)
+        and (verdict == "All" or (row.label == 1) == (verdict == "positive"))
+        and (floored_filter == "All" or row.floored == (floored_filter == "floored"))
+    ]
+    if sort == "score (high first)":
+        selected.sort(key=lambda row: (-row.score, row.pair_id))
+    else:
+        selected.sort(key=lambda row: (row.rank, row.pair_id))
+    limit = st.slider("rows", 5, 500, 100, key="wp_err_limit")
+    shown_rows = selected[:limit]
+    st.caption(
+        f"{len(selected)} rows match; showing {len(shown_rows)}. Floored pairs are a "
+        "separate class, never folded into the false negatives."
+    )
+    max_score = _max_abs([row.score for row in shown_rows])
+    error_html = _html_table(
+        [
+            "pair",
+            "document",
+            "human",
+            "class",
+            "score",
+            "rank",
+            "candidates",
+            "rank percentile",
+            "floored",
+        ],
+        [
+            [
+                f'<span class="ev-id">{_esc(row.pair_id)}</span>',
+                _text(row.document),
+                _badge(
+                    "positive" if row.label == 1 else "negative",
+                    "green" if row.label == 1 else "red",
+                ),
+                _badge(
+                    ERROR_LABELS.get(row.error, row.error),
+                    ERROR_TONES.get(row.error, "muted"),
+                ),
+                _chip(row.score, max_score, signed=True, tone="score"),
+                _esc(row.rank),
+                _esc(row.n_candidates),
+                _esc(f"{row.rank_percentile:.4f}"),
+                _badge("floored", "amber") if row.floored else '<span class="ev-muted">—</span>',
+            ]
+            for row in shown_rows
+        ],
+        ["left", "left", "center", "left", "right", "right", "right", "right", "center"],
+        columns=[
+            "pair",
+            "document",
+            "human",
+            "class",
+            "score",
+            "rank",
+            "n_candidates",
+            "rank_percentile",
+            "floored",
+        ],
+    )
+    _show_table(
+        error_html,
+        pd.DataFrame(
+            [
+                {
+                    "pair": row.pair_id,
+                    "document": row.document,
+                    "human": "positive" if row.label == 1 else "negative",
+                    "class": ERROR_LABELS.get(row.error, row.error),
+                    "score": row.score,
+                    "rank": row.rank,
+                    "candidates": row.n_candidates,
+                    "rank percentile": row.rank_percentile,
+                    "floored": row.floored,
+                }
+                for row in shown_rows
+            ]
+        ),
+    )
+    if shown_rows:
+        choices = [row.pair_id for row in shown_rows]
+        columns = st.columns([3, 1])
+        choice = columns[0].selectbox("open one of these pairs", choices, key="wp_err_open")
+        columns[1].button(
+            "open in One pair",
+            on_click=_open_wp_pair,
+            args=(choice,),
+            key="wp_err_open_button",
+        )
+    st.divider()
+    with st.expander(
+        f"Control strip — {len(context.run.control)} unjudged cells (subset B), reference-arm rows",
+        expanded=False,
+    ):
+        st.caption(
+            "Never reviewed; no label exists. These are the **per-question reference "
+            "arm's** control rows from the artifact; the word-pair block stores only "
+            "aggregate control deltas, not per-cell word-pair scores. They are never "
+            "errors, never ground truth, and never pooled."
+        )
+        st.dataframe(
+            pd.DataFrame([asdict(cell) for cell in context.run.control]),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "score": st.column_config.NumberColumn("reference score", format="%.6f"),
+                "rank_percentile": st.column_config.NumberColumn(
+                    "reference rank percentile", format="%.4f"
+                ),
+            },
+        )
+
+
+def word_pair_question_view(context: ev.WordPairContext) -> None:
+    """The word-pair One question view: the question's words in the global table."""
+    st.subheader("One question — the word-pair table")
+    st.caption(
+        "The full global table is a description; the fold scores are in One pair. This "
+        "view shows which of the question's words are in the table and how many of the "
+        "question's pairs have a known shared word."
+    )
+    question = st.selectbox(
+        "question",
+        list(context.questions),
+        key="wp_question",
+        format_func=lambda value: _question_label(context, value),
+    )
+    view = ev.word_pair_question_view(context, question)
+    metrics = st.columns(6)
+    metrics[0].metric("question", f"Q{view.question_number}")
+    metrics[1].metric("pairs", view.pairs)
+    metrics[2].metric("known pairs", view.known_pairs)
+    metrics[3].metric("coverage", f"{view.coverage:.4f}")
+    metrics[4].metric("table rows", view.table_stats.n_rows)
+    metrics[5].metric("shared words", view.table_stats.n_shared_words)
+    st.markdown("**the question**")
+    st.write(view.question)
+    st.markdown("**the question's words in the full global table**")
+    max_z = _max_abs([word.z_score or 0.0 for word in view.words])
+    word_html = _html_table(
+        ["word", "in table", "df", "n_with", "paragraph_df", "z", "log-odds", "df == 1"],
+        [
+            [
+                f'<span class="ev-word">{_esc(word.word)}</span>',
+                _badge("in table", "green") if word.in_table else _badge("not in table", "muted"),
+                _esc(word.df) if word.in_table else '<span class="ev-muted">—</span>',
+                _esc(word.n_with) if word.in_table else '<span class="ev-muted">—</span>',
+                _esc(word.paragraph_df) if word.in_table else '<span class="ev-muted">—</span>',
+                _chip(word.z_score, max_z, signed=True)
+                if word.in_table
+                else '<span class="ev-muted">—</span>',
+                _chip(word.log_odds, _max_abs([w.log_odds or 0.0 for w in view.words]), signed=True)
+                if word.in_table
+                else '<span class="ev-muted">—</span>',
+                _dot(word.single, "green") if word.in_table else '<span class="ev-muted">—</span>',
+            ]
+            for word in view.words
+        ],
+        ["left", "center", "right", "right", "right", "right", "right", "center"],
+        columns=[
+            "word",
+            "in_table",
+            "df",
+            "n_with",
+            "paragraph_df",
+            "z_score",
+            "log_odds",
+            "single",
+        ],
+    )
+    _show_table(
+        word_html,
+        pd.DataFrame(
+            [
+                {
+                    "word": word.word,
+                    "in table": word.in_table,
+                    "df": word.df,
+                    "n_with": word.n_with,
+                    "paragraph_df": word.paragraph_df,
+                    "z": word.z_score,
+                    "log-odds": word.log_odds,
+                    "df == 1": word.single,
+                }
+                for word in view.words
+            ]
+        ),
+    )
+    st.caption(
+        f"coverage: {view.known_pairs} / {view.pairs} of the question's pairs have at "
+        "least one shared word with a row in the full table. `paragraph_df` is the "
+        "prior's df; `df == 1` marks a single-observation row."
+    )
+
+
+def word_pair_compare_view(context: ev.WordPairContext) -> None:
+    """The word-pair Compare view: the artifact's stored comparisons."""
+    st.subheader("Compare arms — the word-pair table")
+    st.caption(
+        "All numbers below are the artifact's **stored** paired comparisons; nothing is "
+        "recomputed. The word-pair arm is compared with the per-question z arm and/or "
+        "the cosine on the same pairs."
+    )
+    metrics = st.columns(4)
+    metrics[0].metric("run", context.run.run_id)
+    metrics[1].metric("held out", f"the {context.run.held_out}")
+    metrics[2].metric("primary fill", context.run.primary_fill)
+    metrics[3].metric(
+        "table rows", context.run.block.get("table", {}).get("full", {}).get("n_rows", "—")
+    )
+    rows = ev.word_pair_comparisons(context)
+    if not rows:
+        st.info("No stored paired comparison is present in this artifact.")
+        return
+    max_delta = _max_abs([row.delta for row in rows])
+    compare_html = _html_table(
+        ["comparison", "word-pair AUC", "reference AUC", "Δ", "95% CI", "n pairs", "reference"],
+        [
+            [
+                _esc(row.label),
+                _esc(f"{row.arm:.4f}"),
+                _esc(f"{row.reference:.4f}"),
+                _chip(
+                    row.delta,
+                    max_delta,
+                    signed=True,
+                    tone="pos" if row.delta > 0 else "neg" if row.delta < 0 else "zero",
+                    digits=4,
+                ),
+                _esc(f"[{row.ci_low:+.4f}, {row.ci_high:+.4f}]"),
+                _esc(row.n_pairs) if row.n_pairs is not None else '<span class="ev-muted">—</span>',
+                _esc(row.reference_name),
+            ]
+            for row in rows
+        ],
+        ["left", "right", "right", "right", "right", "right", "left"],
+        columns=[
+            "label",
+            "arm",
+            "reference",
+            "delta",
+            "ci_low",
+            "ci_high",
+            "n_pairs",
+            "reference_name",
+        ],
+    )
+    _show_table(
+        compare_html,
+        pd.DataFrame(
+            [
+                {
+                    "comparison": row.label,
+                    "word-pair AUC": row.arm,
+                    "reference AUC": row.reference,
+                    "Δ": row.delta,
+                    "CI low": row.ci_low,
+                    "CI high": row.ci_high,
+                    "n pairs": row.n_pairs,
+                    "reference": row.reference_name,
+                }
+                for row in rows
+            ]
+        ),
+    )
+    st.caption(
+        "Δ is the arm minus its reference. A positive Δ means the word-pair arm is "
+        "above that reference; the head-to-head row is the exception by construction "
+        "(the per-question arm is the reference there)."
+    )
+
+
 # --- the app ----------------------------------------------------------------
 
 
@@ -1248,14 +1831,20 @@ def main() -> None:
         st.stop()
     context = bundle["context"]
     report = bundle["report"]
-    assert isinstance(context, ev.Context)
+    assert isinstance(context, (ev.Context, ev.WordPairContext))
     assert isinstance(report, ev.GuardReport)
     if not report.ok:
         _guard_failure(report)
     _guard(report)
-    st.sidebar.caption(
-        f"run {context.run.run_id} · {context.unit_name} · primary arm {context.run.scoring}"
-    )
+    if isinstance(context, ev.WordPairContext):
+        st.sidebar.caption(
+            f"run {context.run.run_id} · word pairs · held out: the "
+            f"{context.run.held_out} · primary fill {context.run.primary_fill}"
+        )
+    else:
+        st.sidebar.caption(
+            f"run {context.run.run_id} · {context.unit_name} · primary arm {context.run.scoring}"
+        )
     view = st.sidebar.radio("view", list(VIEWS), index=0, key="view")
     st.sidebar.toggle(
         "interactive tables",
@@ -1267,7 +1856,16 @@ def main() -> None:
         ),
     )
     st.sidebar.caption("Off = styled view. On = native table (sort · search · fullscreen).")
-    if view == "One pair":
+    if isinstance(context, ev.WordPairContext):
+        if view == "One pair":
+            word_pair_one_pair_view(context)
+        elif view == "Errors":
+            word_pair_errors_view(context)
+        elif view == "One question":
+            word_pair_question_view(context)
+        else:
+            word_pair_compare_view(context)
+    elif view == "One pair":
         one_pair_view(context)
     elif view == "Errors":
         errors_view(context)

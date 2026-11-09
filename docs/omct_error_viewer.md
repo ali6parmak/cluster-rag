@@ -1,16 +1,17 @@
 # OMCT dictionary error viewer — V1 spec (CS-58)
 
 Status: **implemented**. V1 reads the dictionary round's own artifacts
-(CS-48 … CS-57); it runs **no** experiment, writes nothing under `results/`,
-changes no log or auto table, and touches none of the UPR viewer's files. OMCT
-is **auxiliary** data: every number here annotates method choice and is **never
-a UPR metric**. No `upr-` run is listed.
+(CS-48 … CS-57) and, since the word-pair change sets, the two CS-59 / CS-60
+word-pair artifacts; it runs **no** experiment, writes nothing under
+`results/`, changes no log or auto table, and touches none of the UPR viewer's
+files. OMCT is **auxiliary** data: every number here annotates method choice and
+is **never a UPR metric**. No `upr-` run is listed.
 
 ## Scope and staging
 
 | stage | what | status |
 |---|---|---|
-| **V1** | the dictionary's out-of-fold pair scores, rebuilt from the run artifact; four views; the guard; the control strip | this spec |
+| **V1** | the per-question and word-pair out-of-fold scores, rebuilt from the run artifacts; four views; the guard; the control strip | this spec |
 | V2 | pack / LLM views | not planned here |
 
 V1 is **discovery instrumentation**, not a demo. It answers: which reviewed
@@ -53,12 +54,16 @@ Source: `data/external/omct_pairs.json` (the path in `configs/base.yaml`'s
 | `results/<run>/analysis.json` | `dictionary.map`, `dictionary.corpus`, `dictionary.tables`, `dictionary.words`, `dictionary.classes` (when present), `dictionary.availability`, `dictionary.readout`, `models[kind == "dictionary"].arms.dictionary.judged_pairs` / `control_cells`, the model's `readout.scorings` | `run_id` == the folder; seed 42; folds 5; 1,520 judged rows; 4,000 control cells; the map's counts |
 | `results/omct-analyze-voyage-dict-abstain/analysis.json` | `readout.abstention_arms`: `floor_pairs`, `floor_negative_share`, `non_floor` | 518 / 0.7780 / 1002, checked **when the abstain run is selected** |
 | `results/omct-analyze-voyage-dict-stability/analysis.json` | `dictionary.stability.links` (27,979 rows, the file is 60 MB) | read only when the stability run is selected; its links are indexed only when the One question view opens |
+| `results/omct-analyze-voyage-wpairs/analysis.json` | `models[kind == "dictionary"].readout.word_pairs` (CS-59), and `arms.dictionary` as the **per-question reference** | `run_id` == the folder; seed 42; 1,520 reference rows; 4,000 control cells; the stored table shape and AUCs |
+| `results/omct-analyze-voyage-wpairs-paragraph/analysis.json` | `models[kind == "dictionary"].readout.word_pairs_paragraph` (CS-60), and `arms.dictionary` as the **per-question reference** | the same, with the paragraph folds and the neutral primary fill |
 
 The offered runs are `omct-analyze-voyage-dict-z` (default, CS-50),
 `…-dict` (CS-49), `omct-analyze-dictmap` (CS-48), `…-dict-phrases`,
-`…-dict-stability`, `…-dict-lexicon`, `…-dict-abstain`, `…-dict-qpairs`. The
-CS-48 run is **map-only**: it carries no dictionary scorer, so the viewer names
-it and refuses the views with a clear message (it does not fake a scorer).
+`…-dict-stability`, `…-dict-lexicon`, `…-dict-abstain`, `…-dict-qpairs`, plus
+the word-pair runs `omct-analyze-voyage-wpairs` (CS-59) and
+`omct-analyze-voyage-wpairs-paragraph` (CS-60). The CS-48 run is **map-only**:
+it carries no dictionary scorer, so the viewer names it and refuses the views
+with a clear message (it does not fake a scorer).
 
 ## The trap: the fold rebuild
 
@@ -199,6 +204,73 @@ two apps stay separate files):
 
 No row and no number changes with the styling; only the rendering does.
 
+## Word-pair runs (CS-59 / CS-60)
+
+The two word-pair artifacts are a **different run kind**, not another
+per-question arm. They have no top-level `dictionary` block; the global table
+lives in the model entry's `readout.word_pairs` (CS-59, questions held out) or
+`readout.word_pairs_paragraph` (CS-60, paragraphs held out). Their
+`arms.dictionary` rows are the **per-question reference arm** under the pair
+folds: the viewer shows them only as the labelled reference and never as the
+word-pair score.
+
+**The table and the folds.** `features/word_pair_map.build_word_pair_map`
+builds one global table over the words a paragraph and a question **share**
+(the diagonal; no question in the key). The viewer rebuilds the folds with the
+module's own functions:
+
+- CS-59: `question_fold_ids(view.questions, 5, 42)` (`default_rng([42, 2])`);
+  the held-out side is the **question**; the pair-level "seen" arm is rebuilt
+  beside it for the guard.
+- CS-60: `paragraph_fold_ids(view.paragraphs, 5, 42)`
+  (`default_rng([42, 3])`); the held-out side is the **paragraph**; the
+  neutral fill is the registered primary.
+
+The per-pair word-pair scores are **not stored**. The viewer rebuilds each
+pair's fold table and scores it with `cross_fit_word_pair_questions` (CS-59) or
+`cross_fit_word_pair_seen` with the paragraph folds (CS-60). A pair with no
+shared word that has a row in its fold's table is **floored**; its score is the
+paragraph row's smallest seen score minus one (floor) or the row's median
+(neutral).
+
+**The guard.** The word-pair guard checks the source counts, the run shape, the
+stored `table.full` shape (1,520 / 545 / 366 / 82 on both real runs), the
+stored floor counts (71 seen / 76 held-out questions / 76 held-out paragraphs),
+and the rebuilt AUCs at 1e-12:
+
+- CS-59 seen (pair folds, floor): **0.6808020168816336**;
+- CS-59 held-out questions (question folds, floor): **0.6308860536163653**;
+- CS-60 held-out paragraphs (neutral): **0.6465024932445608** (floor 0.6277).
+
+The per-question reference arm's judged scores and rank percentiles are
+rebuilt field for field beside it. A mismatch withholds every word-pair
+contribution and blocks the word-pair views.
+
+**The four views for a word-pair run.**
+
+1. **One pair** — the paragraph, question, human verdict, the pair's fold and
+   held-out side, floored/why, the floor and neutral scores with the rank move,
+   and the **shared-word table**: `word`, `df`, `n_with`, `z`, contribution,
+   direction, in-fold / not-in-fold, and a `df == 1` flag. Not-in-fold shared
+   words are shown with `—` and contribute 0 (they are why a pair can be
+   floored). The per-question reference arm's score and rank sit beside it,
+   labelled as the reference.
+2. **Errors** — false positives / false negatives under the evidence cut, with
+   the floored pairs as their own class, and the 4,000 unjudged control cells in
+   the separate strip (the artifact's **reference-arm** rows; the word-pair
+   block stores only aggregate control deltas).
+3. **One question** — which of the question's words are in the full global
+   table (`df`, `n_with`, `paragraph_df`, `z`, `log-odds`, `df == 1`) and the
+   coverage of the question's pairs. The full table is a description, not the
+   fold score.
+4. **Compare arms** — the artifact's **stored** paired comparisons only:
+   word-pair vs the per-question z arm and/or the cosine, the neutral/floor
+   fills, and (CS-60) the fallback and head-to-head sets. No metric is
+   recomputed.
+
+The word-pair runs keep the same styling and the interactive-table toggle as
+the per-question runs.
+
 ## Data-layer API (`tools/omct_error_view.py`)
 
 Pure (numpy + the track's pure cores; no Streamlit, no model client, no
@@ -208,12 +280,17 @@ network, no write); deterministic given the files.
   `RunArtifact`, `Provenance`, `GridSet`, `Context`, `Contribution`,
   `SignedWord`, `RankMove`, `PairView`, `ErrorRow`, `QuestionWord`, `QuestionFold`,
   `StabilityLink`, `QuestionView`, `StabilityIndex`, `RunView`, `CompareRow`,
+  `WordPairTableStats`, `WordPairRun`, `WordPairAuc`, `WordPairReproduction`,
+  `WordPairContext`, `WordPairContribution`, `WordPairPairView`,
+  `WordPairQuestionWord`, `WordPairQuestionView`, `WordPairComparison`,
   `Check`, `Reproduction`, `GuardReport`;
-- loading: `resolve_sources`, `load_run`, `load_context`,
+- loading: `resolve_sources`, `load_run`, `load_context`, `load_any_context`,
+  `load_word_pair_run`, `load_word_pair_context`,
   `stability_index_from_block`, `load_stability_index`;
 - arithmetic: `fold_ids`, `grids_for`, `floored`, `fold_counts`,
   `rank_in_candidates`, `empty_fill`, `signed_words_for`, `contributions_for`,
-  `pair_view`,
+  `pair_view`, `word_pair_pair_view`, `word_pair_question_view`,
+  `word_pair_error_rows`, `word_pair_comparisons`, `word_pair_control_strip`,
   `error_of`, `error_rows`, `question_view`, `control_strip`, `run_view`,
   `compare_views`;
 - guard: `reproduce`, `check_all`;
@@ -258,9 +335,16 @@ dependency.
    score **4.406361730316086** and rank **1 / 51**; the evidence cut gives
    **492** false positives, **10** false negatives, **518** floored pairs
    (**115** floored positives) on the default run.
+   The two word-pair runs exit 0 with their stored AUCs reproduced at 0.0:
+   **0.6808020168816336** / **0.6308860536163653** (CS-59) and
+   **0.6465024932445608** / 0.6276940505706141 (CS-60), the table shape
+   **1,520 / 545 / 366 / 82**, and the floor counts **71 / 76 / 76**. On
+   `AI-11-Q70` the CS-59 pair view shows its shared words, its score
+   **1.194094166979…**, and the per-question reference **4.406361730316086**
+   at rank **1 / 51**.
 3. **App smoke test** (Streamlit `AppTest`, no browser, no network; skipped
    when `results/` is absent): the four views render on the real default run
-   with no exception and no guard banner.
+   and on the real CS-59 word-pair run with no exception and no guard banner.
 4. **The gate**: `ruff check` and `ruff format --check` over `src`, `tests`,
    `tools`; the full `pytest` suite; `git status` shows only the intended
    files; nothing under `results/` changed.
@@ -270,5 +354,8 @@ dependency.
 No pack/LLM views, no causal what-if, no export view, no new run, no artifact
 rewrite, no log or table edit, no change to the pipeline or to the UPR viewer.
 No POS is invented; no control cell is labelled; no number is presented as a
-finding that is not the artifact's own or a labelled recomputation. If a real
-discrepancy appears, it is reported, not fixed.
+finding that is not the artifact's own or a labelled recomputation. The
+word-pair block does **not** store per-cell control scores; its control strip
+shows the reference arm's rows, labelled as the reference, never as word-pair
+scores and never pooled. If a real discrepancy appears, it is reported, not
+fixed.

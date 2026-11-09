@@ -647,6 +647,70 @@ def test_the_data_layer_has_no_ui_or_model_imports() -> None:
     assert "numpy" in imported
 
 
+# --- the word-pair runs (CS-59 / CS-60) -------------------------------------
+
+
+WPAIRS = Path("results") / "omct-analyze-voyage-wpairs" / "analysis.json"
+WPAIRS_PARAGRAPH = Path("results") / "omct-analyze-voyage-wpairs-paragraph" / "analysis.json"
+
+
+@pytest.mark.skipif(not WPAIRS.is_file(), reason="the CS-59 artifact is not present")
+def test_the_word_pair_guard_reproduces_the_stored_aucs(ev: Any) -> None:
+    """Both word-pair runs pass the guard; the stored AUCs are reproduced exactly."""
+    for run in (ev.WPAIRS_RUN, ev.WPAIRS_PARAGRAPH_RUN):
+        sources = ev.resolve_sources(ev.DEFAULT_CONFIG, run_id=run)
+        context = ev.load_any_context(sources)
+        assert isinstance(context, ev.WordPairContext)
+        report = ev.check_all(sources, context=context)
+        assert report.ok, report.lines()
+        assert report.word_pair is not None
+        assert report.word_pair.table_ok
+        assert report.word_pair.floor_ok
+        assert report.word_pair.aucs
+        for auc in report.word_pair.aucs:
+            assert auc.abs_diff <= ev.SCORE_TOLERANCE
+
+
+@pytest.mark.skipif(not WPAIRS.is_file(), reason="the CS-59 artifact is not present")
+def test_the_word_pair_pair_view_and_reference(ev: Any) -> None:
+    """A held-out-question pair shows its shared words and the reference arm."""
+    sources = ev.resolve_sources(ev.DEFAULT_CONFIG, run_id=ev.WPAIRS_RUN)
+    context = ev.load_any_context(sources)
+    assert isinstance(context, ev.WordPairContext)
+    view = ev.word_pair_pair_view(context, "AI-11-Q70")
+    assert view.held_out == "question"
+    assert view.contributions
+    assert any(row.in_fold for row in view.contributions)
+    assert sum(row.contribution for row in view.contributions) == pytest.approx(
+        view.scores[view.primary_fill], abs=1e-12
+    )
+    assert view.reference_score == pytest.approx(4.406361730316086, abs=1e-12)
+    question = ev.word_pair_question_view(context, context.questions[0])
+    assert question.pairs > 0
+    assert 0.0 <= question.coverage <= 1.0
+    assert ev.word_pair_comparisons(context)
+    errors = ev.word_pair_error_rows(context)
+    assert len(errors) == len(context.pairs)
+    assert sum(1 for row in errors if row.floored) == 76
+
+
+@pytest.mark.skipif(not WPAIRS.is_file(), reason="the CS-59 artifact is not present")
+def test_the_word_pair_guard_rejects_a_doctored_auc(ev: Any, tmp_path: Path) -> None:
+    """A stored AUC that the rebuild does not match fails the guard."""
+    payload = json.loads(WPAIRS.read_text(encoding="utf-8"))
+    model = next(entry for entry in payload["models"] if entry.get("kind") == "dictionary")
+    block = model["readout"]["word_pairs"]["held_out_questions"]
+    block["within_auc"] = float(block["within_auc"]) + 0.01
+    artifact = tmp_path / ev.WPAIRS_RUN / "analysis.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+    sources = ev.resolve_sources(ev.DEFAULT_CONFIG, results=tmp_path, run_id=ev.WPAIRS_RUN)
+    context = ev.load_word_pair_context(sources)
+    report = ev.check_all(sources, context=context)
+    assert not report.ok
+    assert any(check.name == "word-pair AUC" and not check.ok for check in report.checks)
+
+
 # --- the optional real-artifact app smoke test ------------------------------
 
 
@@ -663,6 +727,23 @@ def test_the_app_renders_the_four_views() -> None:
     os.environ["OMCT_VIEW_RESULTS"] = str(Path("results").resolve())
     os.environ["OMCT_VIEW_RUN"] = "omct-analyze-voyage-dict-z"
     app = AppTest.from_file(str(TOOLS / "omct_error_app.py"), default_timeout=180)
+    app.run()
+    assert not list(app.exception)
+    for view in ("Errors", "One question", "Compare arms", "One pair"):
+        app.sidebar.radio[0].set_value(view).run()
+        assert not list(app.exception), view
+
+
+@pytest.mark.skipif(not WPAIRS.is_file(), reason="the CS-59 artifact is not present")
+def test_the_app_renders_the_word_pair_views() -> None:
+    """A real-artifact AppTest smoke test for the CS-59 run (skipped when absent)."""
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    os.environ["OMCT_VIEW_CONFIG"] = str(Path("configs/base.yaml").resolve())
+    os.environ["OMCT_VIEW_RESULTS"] = str(Path("results").resolve())
+    os.environ["OMCT_VIEW_RUN"] = "omct-analyze-voyage-wpairs"
+    app = AppTest.from_file(str(TOOLS / "omct_error_app.py"), default_timeout=240)
     app.run()
     assert not list(app.exception)
     for view in ("Errors", "One question", "Compare arms", "One pair"):
