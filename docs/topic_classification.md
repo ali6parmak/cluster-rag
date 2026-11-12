@@ -225,3 +225,159 @@ classifies goods in the Combined Nomenclature.
    part of the result, not a footnote.
 5. **Split roles.** `train` is the index/fit split; `dev` is the
    tuning/product-like split; `test` stays held out. The audit does not re-split.
+
+## 8. First experiment — dictionary vs embedding k-NN shortlist
+
+**Pre-registered 2026-11-13, before the run.** Artifact:
+`results/eurlex-shortlist/metrics.json`; script:
+`experiments_topic_classification/shortlist_baselines.py`.
+
+**Question.** Can the train-only corpus dictionary produce a useful shortlist
+at 4,271 labels, and how does it compare with a cheap embedding k-NN?
+
+**Split.** `train` is the index/fit split (45,000 documents), `dev` the
+evaluation and tuning split (6,000), `test` held out. No resplit, no test.
+
+**Methods.**
+
+1. **Dictionary** — the corpus map of the train split (`build_corpus_map`,
+   imported from `text_processors/`, not copied). Primary arm
+   `sum_zscore_positive`: sum the map's z-scores over the document's content
+   words, keeping only positive evidence. Secondary arms `sum_logodds` and
+   `support_count` (the measure-free control). A label with no train example
+   carries the row floor, so the 163 zero-shot labels cannot enter a shortlist.
+2. **Embedding k-NN** — MiniLM-L6-v2 (revision
+   `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`), the whole document text,
+   `document` kind, cosine, `k = 100` neighbours, similarity-weighted label
+   votes (power 1.0), via the pipeline's `knn_vote_scores`. The model's context
+   is 256 tokens, so it truncates long documents; the dictionary reads the
+   whole text.
+3. **Frequency prior** — rank labels by their train document frequency, the
+   same ranking for every document; the label-blind floor.
+
+**Metrics.** Primary: **recall@50** (macro over documents), **R-precision**
+(macro precision at `|gold|`), **nDCG@10** (binary relevance). Secondary:
+recall@5, recall@10, recall@20, recall@100, nDCG@50. Diagnostics: coverage@50
+(share of documents with at least one gold in the top 50), mean gold
+cardinality, and **label-level recall@50 by bucket** (head ≥100 train
+documents, torso 10–99, tail 1–9, unseen 0). Ties break by label column order
+(a stable descending sort). The definitions live in
+`src/cluster_rag/topic_classification/metrics.py`.
+
+**Leakage control.** The audit found that 26.1% of dev/test documents have a
+train neighbour at TF-IDF cosine ≥0.90. Every method is reported **overall**
+and on the **clean slice** (best train cosine < 0.90), using the audit's
+near-duplicate text view.
+
+**Pre-registered reading (the bars, fixed before the run).**
+
+- **Beat the prior.** The dictionary must beat the frequency prior's R@50 by
+  at least **0.10**; otherwise the "dictionary" is only the label prior.
+- **Useful absolute level.** Dictionary R@50 **≥ 0.80** is useful for a
+  downstream reranker; **0.50–0.80** is marginal; **< 0.50** is not useful at
+  this label count.
+- **Cheap alternative.** The dictionary is a viable cheap alternative to the
+  embedding k-NN if its R@50 is within **0.10** of the embedding's. If the
+  embedding is more than 0.10 ahead, the embedding is the shortlist generator
+  to use for the next step.
+- **Leakage.** If the dictionary's overall R@50 exceeds its clean-slice R@50
+  by more than **0.05**, the overall number is inflated by near-duplicates and
+  the clean slice is the headline.
+- **Breadth vs ordering.** R-precision and nDCG@10 carry no separate bar, but
+  a method that wins R@50 while collapsing R-precision is reported as a
+  breadth-only shortlist.
+- **No auto-adopt.** The numbers are the evidence; the reviewer decides the
+  next step.
+
+**Cost.** Dictionary: CPU, ~1–2 minutes. Embedding: one MiniLM pass over
+51,000 documents, ~10 minutes on this CPU, no GPU, no LLM. The k-NN and metrics
+are a few minutes.
+
+**Not tested here.** `test`; the label-holdout mask (needs a held-out label
+set); the decision model (LLM cost); label-name embeddings (titles are
+available but not used in this arm); chunked embeddings (the MiniLM context is
+the current embedding view).
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-shortlist/metrics.json` (run `eurlex-shortlist`, 1,452 s,
+no LLM, embedding cache 0 hits / 51,000 misses). The experiment's score columns
+are the **4,197 labels present in train + dev**. The audit's dataset-wide union
+is 4,271; the 74 labels that occur only in `test` are deliberately excluded —
+`test` is untouched and they have no dev gold, so they would be floored and
+could not change any dev metric. The dev unseen bucket is therefore 89 labels
+(the dev-only zero-shot ones), not 163.
+
+**Primary metrics (overall / clean slice, macro over documents):**
+
+| method | R@50 | R-precision | nDCG@10 | coverage@50 |
+|---|---:|---:|---:|---:|
+| frequency prior | 0.3203 / 0.2680 | 0.0769 / 0.0420 | 0.1037 / 0.0680 | 0.6867 |
+| dictionary `sum_zscore_positive` (**pre-registered primary**) | **0.5388** / 0.4846 | **0.3810** / 0.3149 | **0.4835** / 0.4142 | 0.8887 |
+| dictionary `sum_logodds` | 0.6714 / 0.6095 | 0.3569 / 0.2924 | 0.4571 / 0.3867 | 0.9430 |
+| dictionary `support_count` (measure-free) | **0.8171** / 0.7694 | 0.3376 / 0.3140 | 0.4508 / 0.4180 | 0.9803 |
+| embedding k-NN (MiniLM, k=100) | **0.9168** / 0.8979 | **0.5715** / 0.5079 | **0.7070** / 0.6545 | 0.9978 |
+
+**Secondary metrics (overall):**
+
+| method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---:|---:|---:|---:|---:|
+| frequency prior | 0.0720 | 0.1289 | 0.1929 | 0.4604 | 0.1737 |
+| dictionary `sum_zscore_positive` | 0.3801 | 0.4860 | 0.5263 | 0.5527 | 0.5058 |
+| dictionary `sum_logodds` | 0.3598 | 0.4854 | 0.5734 | 0.7358 | 0.5278 |
+| dictionary `support_count` | 0.3473 | 0.5194 | 0.6797 | 0.8777 | 0.5670 |
+| embedding k-NN | 0.5623 | 0.7230 | 0.8306 | 0.9473 | 0.7838 |
+
+**Label-level recall@50 by train-support bucket (overall):**
+
+| method | head (441) | torso (1,400) | tail (2,267) | unseen (89) |
+|---|---:|---:|---:|---:|
+| frequency prior | 0.4167 | 0.0000 | 0.0000 | 0.0000 |
+| dictionary `sum_zscore_positive` | 0.5943 | 0.3376 | 0.1686 | 0.0000 |
+| dictionary `sum_logodds` | 0.6624 | 0.6836 | 0.5464 | 0.0000 |
+| dictionary `support_count` | 0.9228 | 0.5036 | 0.1223 | 0.0000 |
+| embedding k-NN | 0.9614 | 0.8068 | **0.4093** | 0.0000 |
+
+**The bars, read out.**
+
+- **Beat the prior: passed by every dictionary arm.** R@50 gains over the
+  frequency prior: z-score +0.2185, log-odds +0.3511, count +0.4968.
+- **Useful absolute level: only the count arm passes, and it is breadth-only.**
+  The pre-registered primary (`sum_zscore_positive`) is **marginal** at 0.5388
+  (0.50–0.80 band); `sum_logodds` is also marginal at 0.6714; only
+  `support_count` clears 0.80 (0.8171). But the count arm's R-precision
+  (0.3376) and nDCG@10 (0.4508) are **below** the z-scored arm's
+  (0.3810 / 0.4835) and far below the embedding's (0.5715 / 0.7070). Its
+  head recall is 0.9228 against a tail recall of 0.1223: it is a head-heavy
+  breadth shortlist, not a balanced one.
+- **Cheap alternative: no on the clean slice.** The count arm is 0.0997 behind
+  the embedding overall — just inside the 0.10 band — but 0.1285 behind on the
+  clean slice, and its R-precision gap is 0.2339. The pre-registered primary is
+  0.3780 behind overall. The embedding is the shortlist generator at this label
+  count.
+- **Leakage: the dictionary's overall number is inflated.** Clean-slice drops:
+  z-score 0.0542 (> 0.05, so the clean number is the headline), log-odds
+  0.0619 (> 0.05), count 0.0477, embedding 0.0189. The dictionary reads the
+  whole document and benefits more from the template duplicates than the
+  256-token embedding does.
+- **Breadth vs ordering.** The count arm wins breadth (R@50 0.8171) but loses
+  ordering (nDCG@10 0.4508; R-precision 0.3376). The z-scored arm is the
+  dictionary's best orderer (nDCG@10 0.4835; R-precision 0.3810) and its worst
+  at breadth. The signed log-odds is the most balanced across buckets
+  (torso 0.6836, tail 0.5464) but below the count arm on R@50.
+
+**Reading.** The pre-registered dictionary arm does **not** produce a useful
+shortlist at this label count: 0.5388 R@50 and 0.3810 R-precision. The
+measure-free count reaches 0.8171 R@50, but it does so by ranking the head
+labels, and it collapses on the tail (0.1223), on R-precision and on nDCG@10.
+The embedding k-NN is materially better on every headline metric and much
+better on the tail (0.4093). The dictionary is not a substitute for the
+embedding shortlist here; it may still be a useful **feature/channel** in a
+later pack, which is the UPR precedent (the dictionary's column inside the
+pack, not the dictionary alone).
+
+**What the result does not say.** Nothing about `test`; nothing about a
+label-holdout mask; nothing about the decision model; nothing about label-name
+embeddings (titles are available but this arm does not use them); nothing about
+chunked embeddings (the MiniLM context is 256 tokens). The next step is the
+reviewer's.
