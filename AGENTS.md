@@ -4,9 +4,9 @@ Instructions for AI coding agents (and humans) working in this repo. **Read the 
 
 ## START HERE
 
-**The one-paragraph version.** The pipeline embeds a text, retrieves similar labeled examples and candidate labels, fuses their scores and suggests labels; feedback updates the system online and an active learner picks what a human should review next. Two tracks run side by side: the **main pipeline** (`PLAN.md`) and the **text-processing / segmentation track** (`TEXT_PROCESSING_PLAN.md`). The track's evidence trail is `docs/experiments_text_processing.md` (47 sections, append-only) and its curated tables are `docs/experiments_table_text_processing_omct.md` and `docs/experiments_table_text_processing_upr.md`. The track's plan is split in two: the **live** plan holds the open work, and `docs/text_processing_plan_archive.md` holds the executed pre-registrations and the questions they answered (moved verbatim, append-only).
+**The one-paragraph version.** The pipeline embeds a text, retrieves similar labeled examples and candidate labels, fuses their scores and suggests labels; feedback updates the system online and an active learner picks what a human should review next. Three tracks run side by side: the **main pipeline** (`PLAN.md`), the **text-processing / segmentation track** (`TEXT_PROCESSING_PLAN.md`) and the **EURLEX-4K topic-classification track** (`TOPIC_CLASSIFICATION_PLAN.md`; its detailed log is `docs/topic_classification.md`). The text-processing track's evidence trail is `docs/experiments_text_processing.md` (47 sections, append-only) and its curated tables are `docs/experiments_table_text_processing_omct.md` and `docs/experiments_table_text_processing_upr.md`. The track's plan is split in two: the **live** plan holds the open work, and `docs/text_processing_plan_archive.md` holds the executed pre-registrations and the questions they answered (moved verbatim, append-only).
 
-**The two datasets — never mix them.** A `upr-` run is the **UPR** human-rights recommendation data (train / val / test; the text-processing track has only ever touched **val** — `test` is reserved). An `omct-` run is the **auxiliary OMCT pairwise data** (1,520 reviewed pairs plus a seeded 4,000-cell unjudged control): it is method-choice evidence and **never** a UPR metric.
+**The three datasets — never mix them.** A `upr-` run is the **UPR** human-rights recommendation data (train / val / test; the text-processing track has only ever touched **val** — `test` is reserved). An `omct-` run is the **auxiliary OMCT pairwise data** (1,520 reviewed pairs plus a seeded 4,000-cell unjudged control): it is method-choice evidence and **never** a UPR metric. An `eurlex-` run is the **EURLEX-4K** multi-label topic data (`data/eurlex_4k/`, 4,271 labels; train / dev / test, `test` reserved): the topic-classification track's data, never pooled with UPR or OMCT.
 
 ### The headline numbers
 
@@ -52,6 +52,7 @@ Every row names the dataset, the split, the value, the artifact it comes from an
 | question | where to look |
 |---|---|
 | What is this project, and what state is it in? | `PLAN.md` §1 and §4 · `AGENTS.md` "Project summary" |
+| What is the EURLEX-4K topic-classification track, and what has it tried? | `TOPIC_CLASSIFICATION_PLAN.md` (context, rules, executed change sets, open options) · `docs/topic_classification.md` (the detailed audit, pre-registrations and results) |
 | What is the best number on UPR, and what produces it? | the table above → `docs/experiments_text_processing.md` §CS-13 |
 | What exactly is the champion config (the pipeline's own scoring)? | `results/upr-analyze-final-champion/config.yaml` → §CS-8a |
 | Where do run artifacts live, and what is inside one? | `AGENTS.md` "Runs and where things live" |
@@ -126,6 +127,7 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     ├── PLAN.md
     ├── AGENTS.md
     ├── TEXT_PROCESSING_PLAN.md  # satellite track: text processing / segmentation
+    ├── TOPIC_CLASSIFICATION_PLAN.md  # satellite track: EURLEX-4K topic classification
     ├── pyproject.toml
     ├── configs/                 # the single base config (paths, defaults)
     │   └── base.yaml            # experiments live in experiments/*.py sweeps, authored in Python
@@ -143,12 +145,14 @@ Retrieval-augmented multi-label topic classification. Texts are embedded (Huggin
     │   ├── experiments_table_upr.md  # UPR comparison tables, auto-appended by CLI commands
     │   ├── experiments_table_omct.md # OMCT comparison tables, auto-appended by CLI commands
     │   ├── experiments_text_processing.md            # text-processing track log (append-only)
+    │   ├── topic_classification.md                   # EURLEX-4K track log (audit, pre-registrations, results)
     │   ├── experiments_table_text_processing_omct.md  # track tables, auto-appended
     │   ├── experiments_table_text_processing_upr.md   # track tables (UPR stage)
     │   └── text_processing_plan_archive.md  # the track plan's executed pre-registrations (append-only)
     ├── notebooks/               # exploration only, no logic that others import
     ├── experiments/             # experiment sweep files: typed Cells -> resolved configs (`cluster-rag sweep --file`)
     ├── experiments_text_processing/  # the text-processing track's sweep files
+    ├── experiments_topic_classification/  # the EURLEX-4K track's experiment scripts
     ├── tools/                   # repo tools: verification scripts over the run artifacts
     ├── src/cluster_rag/
     │   ├── config.py
@@ -255,8 +259,9 @@ Every run (one CLI command execution or sweep cell) is identified by its
 
 - **Run-id grammar:** `<dataset>-<command>-<detail>[-<split>]` — e.g.
   `upr-embed-e5-base-v2`, `upr-eval-mf-topk2-val`, `omct-stats-base`,
-  `omct-probe2-arctic2`, `omct-decide-tev1-pair-noul`. Datasets: `upr` (the
-  UPR train/val/test data) and `omct` (the auxiliary OMCT pairwise data).
+  `omct-probe2-arctic2`, `omct-decide-tev1-pair-noul`, `eurlex-shortlist`.
+  Datasets: `upr` (the UPR train/val/test data), `omct` (the auxiliary OMCT
+  pairwise data) and `eurlex` (the EURLEX-4K topic data).
 - **Prefixes per command:** the OMCT commands (`probe-omct`, `analyze-omct`,
   `decide-omct`, and `stats --omct`) add the `omct-` prefix themselves at run time — configs and sweep
   cells carry the bare detail (`run_id: stats-base` → `results/omct-stats-base/`);
