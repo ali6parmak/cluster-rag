@@ -613,3 +613,100 @@ is a **calibrated** zero-shot channel — map the unseen labels’ title scores
 into the seen score distribution (rank/quantile mapping) instead of replacing
 raw cosines. The untuned fusion does not earn a follow-up; the dictionary-as-
 feature fusion (step 3) remains the next real pack step.
+
+## 11. Dictionary as a feature — one-parameter fusion (pre-registered 2026-11-13, before the run)
+
+**Question.** The UPR table’s “boosting + dictionary column” asks whether the
+dictionary helps inside a model even when it is weak alone. The cheapest form
+is one parameter: z-score the dictionary and the k-NN scores per document and
+add them, `fusion = z(k-NN) + w · z(dictionary)`. Does any `w > 0` beat the
+k-NN alone (`w = 0`)?
+
+**Scores.** The same 4,197-label dev evaluation as sections 8–10. Three
+dictionary arms: `sum_zscore_positive` (the section-8 primary),
+`sum_logodds` and `support_count`. The k-NN is the same MiniLM k=100 vote
+score. Each matrix is z-scored **per document** (mean 0, std 1; a zero-variance
+row becomes zeros), then combined at weight `w`.
+
+**Weight grid and selection.** `w ∈ {0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0,
+1.5, 2.0}`. Because dev is the only tuning set and the evaluation must stay
+trustworthy, the weight is selected by **5-fold group cross-validation on
+dev**, with the folds grouped by the audit’s title skeleton so a document’s
+weight is never selected on a document from its own family. For each fold, the
+weight maximises R@50 on the other folds (ties go to the smaller weight, i.e.
+towards the k-NN); every dev document is then scored by its held-out fold’s
+weight, and the pooled matrix is evaluated once. The full-dev grid is reported
+beside the cross-validated number, clearly marked as tuned.
+
+**Metrics.** The same primary and secondary set as section 8, plus the
+family_new and family_new_clean slices of section 9. A paired bootstrap over
+documents (2,000 resamples) gives the 95 % interval of the fusion-minus-k-NN
+difference for R@50, R-precision and nDCG@10.
+
+**Pre-registered reading.**
+
+- **A fusion win** requires the cross-validated primary arm’s R@50 to improve
+  by at least **0.01** over the k-NN, with the paired 95 % interval excluding
+  zero, and the same direction on `family_new`. If R@50 does not move but
+  R-precision / nDCG@10 do, it is an **ordering gain**, not a shortlist gain,
+  and the candidate-level combiner (stage 2) is not licensed by this result.
+- **A collapse on any bucket** (head / torso / tail / unseen) is reported even
+  if the pooled number rises.
+- **No auto-adopt.** The reviewer decides; stage 2 (train-candidate combiner)
+  starts only if the fusion gate passes and the reviewer asks for it.
+
+**Cost.** Recompute the dictionary matrices (`~15 min`), the cached MiniLM
+k-NN (`~15 s`), and the fusion grid (seconds). No LLM, no new model. The score
+matrices are saved under `results/eurlex-fusion/scores/` for a possible stage 2.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-fusion/metrics.json` (run `eurlex-fusion`, 1,072 s;
+the score matrices are saved under `results/eurlex-fusion/scores/`). The
+weight is selected by 5-fold group CV on dev (whole families held out), so the
+CV number is not tuned on the evaluated documents.
+
+**Cross-validated fusion vs the k-NN (all dev; Δ is fusion − k-NN, 2,000-resample paired bootstrap):**
+
+| dictionary arm | CV R@50 | Δ R@50 [95 % CI] | Δ R-precision [95 % CI] | Δ nDCG@10 [95 % CI] | selected weights |
+|---|---:|---|---|---|---|
+| `sum_zscore_positive` (primary) | 0.9171 | **+0.0003 [−0.0009, +0.0015]** | **−0.0204 [−0.0233, −0.0176]** | **−0.0190 [−0.0212, −0.0168]** | 1.0, 0.75, 0.75, 0.05, 0.75 |
+| `sum_logodds` | 0.9173 | +0.0005 [−0.0008, +0.0018] | +0.0029 [+0.0019, +0.0039] | +0.0037 [+0.0030, +0.0043] | 0.2, 0.2, 0.3, 0.3, 0.3 |
+| `support_count` | 0.9178 | +0.0010 [+0.0004, +0.0016] | +0.0002 [+0.00004, +0.0004] | +0.0001 [−0.00001, +0.0003] | 0.05 × 5 |
+| k-NN alone | 0.9168 | — | — | — | 0 |
+
+The primary arm’s best **full-dev grid** weight is 0.75, R@50 0.9174 (tuned on
+dev, so not the headline); its CV family-new R@50 is 0.8945 against the k-NN’s
+0.8944. The z-scored fusion’s CV bucket recalls are head 0.9621, torso 0.8063,
+tail 0.4034, unseen 0; the k-NN’s are 0.9614 / 0.8068 / 0.4093 / 0. The
+dictionary does not lift the tail.
+
+**The bars, read out.**
+
+- **A fusion win: not met.** The primary arm’s CV R@50 gain is **+0.0003**,
+  far below the +0.01 bar, and its 95 % interval includes zero. It also loses
+  **0.0204 R-precision** and **0.0190 nDCG@10** — the selected weights trade
+  ordering for a negligible breadth change.
+- **The other arms are not wins either.** `sum_logodds` is a small **ordering
+  gain** (+0.0029 R-precision, +0.0037 nDCG@10) with flat R@50 (+0.0005,
+  interval includes zero); `support_count` gains +0.0010 R@50 but its
+  R-precision is flat and its nDCG interval includes zero. Both are well below
+  the 0.01 shortlist bar.
+- **The full grid confirms the shape.** At small weights the primary arm’s
+  ordering edges up (w = 0.1: R-precision 0.5731, nDCG@10 0.7089, R@50
+  0.9169), and `sum_logodds` at w = 0.3–0.5 reaches R-precision 0.5747–0.5761
+  and nDCG@10 0.7112–0.7140. These are **ordering** gains of a few thousandths,
+  not shortlist gains; no weight reaches the +0.01 R@50 bar.
+- **Stage 2 is not licensed.** The candidate-level combiner was gated on a
+  +0.01 CV R@50 primary-arm gain; the observed gain is +0.0003 with an interval
+  including zero. The one-parameter fusion is a null for the shortlist
+  question.
+
+**Reading.** At 4,197 labels the dictionary adds essentially nothing to the
+k-NN shortlist through a single global weight. The UPR “dictionary column”
+evidence came from a learned pack with many features and a different label
+space; this cheap fusion does not reproduce it. A learned candidate combiner
+could still be worth a separate experiment, but it is not licensed by this
+gate, and the evidence here says the dictionary's value is not a one-parameter
+re-ranking of the k-NN. The calibrated zero-shot channel remains the other
+open follow-up.
