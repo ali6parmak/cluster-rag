@@ -807,3 +807,158 @@ unseen bar; the best full-strength arm misses by one hit and is slightly worse
 than label-name alone. The zero-shot labels remain unsolved in the current
 shortlist methods. A different insertion rule (a quota or a learned
 calibrator) would be a new pre-registration, not a continuation of this one.
+
+## 13. Chunk-mean document embedding — TC-7 (pre-registered 2026-11-13, before the run)
+
+**Question.** The whole-document MiniLM view truncates at the model's 256-token
+context, and the median EURLEX document is 447 words: the embedding sees roughly
+half of it. Does replacing one truncated whole-document vector with the **mean of
+non-overlapping 200-word chunk embeddings** improve the k-NN shortlist,
+especially on `family_new`?
+
+**Mechanism (fixed before the run).**
+
+- **Text view:** the same `full_text` as the baseline — `title`, `header`,
+  `recitals` and `main_body`, newline-joined.
+- **Chunking:** split on whitespace into consecutive, **non-overlapping**
+  windows of exactly **200 words**; the last window carries the remainder
+  (shorter). A document of at most 200 words is one chunk.
+- **Embedding:** MiniLM-L6-v2 (revision
+  `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`), the cached model, `document`
+  kind, each chunk embedded independently.
+- **Pooling:** arithmetic mean of the chunk vectors, then L2-normalize, so the
+  document vector is unit-norm and the k-NN's dot product is a cosine.
+- **k-NN:** identical to the baseline — cosine, `k = 100` neighbours,
+  similarity-weighted label votes (power 1.0), train = the 45,000-document index,
+  dev = the 6,000 evaluated documents.
+- **Cache:** baseline `eurlex-4k-v1` (whole documents); treatment
+  `eurlex-4k-chunk200-v1` (chunks). The version slot is part of the cache key,
+  so the two views never collide.
+- **No tuning.** The chunk size is fixed at **200 words** by this
+  pre-registration; it is not tuned on dev in this change set, and no other
+  chunk-size or pooling variant is run.
+
+**Slices.** `all_dev` (6,000), `family_new` (dev documents whose title skeleton
+is absent from train; 4,260 in section 9), and `family_new_clean`
+(`family_new` ∩ best train TF-IDF cosine < 0.90; 3,764). The baseline is
+recomputed in the same run from its warm cache and reported beside the
+treatment on every slice; test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / unseen. The **paired bootstrap over documents** (2,000
+resamples, percentile 95 % interval) gives the interval of the treatment-minus-
+baseline R@50 difference on each slice; the same resampled document indices are
+used for both methods.
+
+**Pre-registered bar.**
+
+- A **win** requires the treatment to improve `family_new` **R@50 by at least
+  0.01**, with the paired 95 % bootstrap interval **excluding 0**, and to lose
+  **R-precision and nDCG@10 by no more than 0.01** on `family_new`.
+- Otherwise it is a **null**: record it and do not proceed to menu item 2.
+
+**Cost.** ~174,000 chunk embeddings (154,061 train + 20,237 dev; mean 2.7
+chunks/document), a forward pass of the cached MiniLM on CPU; ~25–40 min plus
+the cache writes, the two k-NN passes and the evaluation. No new model
+download, no LLM, no dictionary rebuild.
+
+**Not tested here.** Other chunk sizes, overlap, other pooling rules, longer-
+context embedding models, multi-view embeddings (menu item 2), `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-embed-chunkmean/metrics.json` (run
+`eurlex-embed-chunkmean`, **1,394.6 s**, no LLM). The baseline was re-scored in
+the same run from the warm `eurlex-4k-v1` cache (**51,000 hits / 0 misses**) and
+reproduces section 9 exactly (all dev 0.9168, family_new 0.8944, clean 0.8862
+R@50). The treatment embedded **174,298 chunks** (3.42 per document on average,
+max 18; 154,061 train + 20,237 dev) under `eurlex-4k-chunk200-v1` (**3,977 cache
+hits / 170,321 misses**; the hits are boilerplate chunks already cached by a
+smoke pass on a document subset). Train = 45,000-document index, dev = 6,000 evaluated; test unread.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| baseline — whole document, MiniLM, k=100 | **0.9168 / 0.5715 / 0.7070** | **0.8944 / 0.4869 / 0.6364** | **0.8862 / 0.4744 / 0.6241** |
+| treatment — 200-word chunk mean, same k-NN | 0.9125 / 0.5536 / 0.6881 | 0.8887 / 0.4677 / 0.6145 | 0.8800 / 0.4534 / 0.5995 |
+
+**Secondary metrics by slice (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | **0.5623** | **0.7230** | **0.8306** | **0.9473** | **0.7838** |
+| all_dev | treatment | 0.5459 | 0.7105 | 0.8220 | 0.9453 | 0.7678 |
+| family_new | baseline | **0.4839** | **0.6524** | **0.7843** | **0.9342** | **0.7323** |
+| family_new | treatment | 0.4648 | 0.6364 | 0.7721 | 0.9316 | 0.7139 |
+| family_new_clean | baseline | **0.4742** | **0.6408** | **0.7721** | **0.9287** | **0.7210** |
+| family_new_clean | treatment | 0.4526 | 0.6228 | 0.7593 | 0.9257 | 0.7005 |
+
+**Diagnostics (coverage@50; label-level recall@50 by head / torso / tail /
+unseen; mean gold cardinality):**
+
+| slice | method | coverage@50 | head | torso | tail | unseen | cardinality |
+|---|---|---:|---:|---:|---:|---:|---:|
+| all_dev | baseline | **0.9978** | **0.9614** | **0.8068** | **0.4093** | 0.0 | 5.04 |
+| all_dev | treatment | 0.9968 | 0.9608 | 0.7931 | 0.3895 | 0.0 | 5.04 |
+| family_new | baseline | **0.9972** | **0.9489** | **0.7995** | **0.4011** | 0.0 | 5.163 |
+| family_new | treatment | 0.9958 | 0.9481 | 0.7859 | 0.3819 | 0.0 | 5.163 |
+| family_new_clean | baseline | **0.9968** | **0.9441** | **0.7872** | **0.3868** | 0.0 | 5.134 |
+| family_new_clean | treatment | 0.9952 | 0.9435 | 0.7727 | 0.3649 | 0.0 | 5.134 |
+
+**Paired bootstrap over documents (treatment − baseline R@50, 2,000
+resamples):**
+
+| slice | documents | Δ R@50 | 95 % interval | excludes 0 |
+|---|---:|---:|---|---|
+| all_dev | 6,000 | **−0.0043** | [−0.0071, −0.0015] | yes (negative) |
+| family_new | 4,260 | **−0.0057** | [−0.0094, −0.0020] | yes (negative) |
+| family_new_clean | 3,764 | **−0.0062** | [−0.0102, −0.0022] | yes (negative) |
+
+**The bar, read out.**
+
+- **R@50 gain ≥ 0.01 on family_new: not met.** The treatment **loses** 0.0057
+  (0.8887 vs 0.8944); the interval is entirely below zero.
+- **Interval excluding 0: not met in the required direction.** The interval
+  excludes zero, but on the negative side: the loss is real, not noise.
+- **R-precision loss ≤ 0.01: not met.** It loses **0.0192** (0.4677 vs 0.4869).
+- **nDCG@10 loss ≤ 0.01: not met.** It loses **0.0220** (0.6145 vs 0.6364).
+- **`outcome`: null.** No condition holds. The treatment is worse on every
+  primary metric on every slice, and worse on all secondary metrics except
+  R@100 (a near-tie: 0.9453 vs 0.9473 on all dev).
+
+**Reading.** Chunk-mean is a **null**, and a negative one: it does not merely
+fail to clear the +0.01 bar, it loses 0.4–0.6 points of R@50 and roughly two
+points of R-precision and nDCG@10 on every slice. The loss is ordering-heavy
+(R-precision and nDCG fall ~3–4× more than R@50) and slightly stronger on the
+clean slice than on all dev, so near-duplicate memorisation does not explain it.
+The head bucket is almost unchanged (0.9614 → 0.9608 on all dev) while the torso
+and tail fall (0.8068 → 0.7931, 0.4093 → 0.3895): pooling flattens the ranking
+mostly where the label support is thin.
+
+Two mechanisms are consistent with the numbers, but this run does **not**
+separate them:
+
+1. **The chunk size did not remove the truncation it was meant to remove.** A
+   post-hoc token count (read-only, no metric changed; recorded as
+   `token_diagnostics` in the artifact) shows the whole document
+   has a median of **556 tokens** and 98.7 % of documents exceed MiniLM's 256
+   tokens — the baseline sees the front of the document only. But 200 words is
+   a median of **250 tokens** and **42 % of chunks still exceed 256 tokens**, so
+   the treatment is itself truncated on two-fifths of its inputs.
+2. **The mean dilutes the title/header.** The whole-document view is front-
+   loaded: title + header (~83 words) occupy a large share of the 256-token
+   window the baseline actually reads. The chunk mean gives that signal 1/3.4
+   of the weight and mixes in boilerplate recital chunks, which is a plausible
+   reason the clean topic signal is weaker.
+
+A chunk size that fits the 256-token context (or the front-loaded title kept as
+its own view) would be a **different pre-registration**, not a re-read of this
+one; the chunk size was fixed here at 200 words and is not re-tuned. The null
+does not license menu item 2 by itself; it is the reviewer's call whether the
+representation thread continues.
+
+**What the result does not say.** Nothing about `test`; nothing about other
+chunk sizes, overlap or pooling rules; nothing about longer-context models;
+nothing about multi-view embeddings (menu item 2).

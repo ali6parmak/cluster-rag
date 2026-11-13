@@ -86,6 +86,83 @@ def ndcg_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> float:
     return float(np.mean(values))
 
 
+def per_document_recall_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> np.ndarray:
+    """Per-document ``|top-k ∩ gold| / |gold|`` (the paired bootstrap's unit).
+
+    ``recall_at_k`` averages these values; keeping the vector lets a paired
+    bootstrap resample documents and difference two methods on the same rows.
+
+    Args:
+        ranked: ``(n_documents, n_labels)`` label indices, best first.
+        gold: One non-empty set of gold label indices per document.
+        k: Cut-off.
+
+    Returns:
+        The ``(n_documents,)`` float64 recall values.
+
+    Raises:
+        ValueError: If ``k`` is not positive or a document has no gold label.
+    """
+    if k < 1:
+        raise ValueError(f"k must be positive, got {k}")
+    ranked = np.asarray(ranked)
+    if len(gold) != ranked.shape[0]:
+        raise ValueError(f"{len(gold)} gold sets for {ranked.shape[0]} ranked rows")
+    values = np.empty(len(gold), dtype=np.float64)
+    for row, labels in enumerate(gold):
+        if not labels:
+            raise ValueError("every document must have at least one gold label")
+        top = set(ranked[row, : min(k, ranked.shape[1])].tolist())
+        values[row] = len(top & labels) / len(labels)
+    return values
+
+
+def paired_bootstrap_ci(
+    differences: np.ndarray,
+    *,
+    n_resamples: int = 2000,
+    seed: int = 42,
+    alpha: float = 0.05,
+) -> dict[str, float | int]:
+    """Percentile bootstrap of the mean per-document difference.
+
+    The resampling unit is the **document**: the same row indices are drawn
+    for both methods, so the interval is the paired difference, not the
+    difference of two independent intervals.
+
+    Args:
+        differences: ``(n_documents,)`` per-document differences (treatment
+            minus baseline).
+        n_resamples: Number of bootstrap resamples (2,000 in the track).
+        seed: ``numpy`` generator seed, recorded in the artifact.
+        alpha: Two-sided error; the interval is
+            ``[percentile(alpha/2), percentile(1 - alpha/2)]``.
+
+    Returns:
+        ``{"mean", "ci_low", "ci_high", "n_resamples", "seed", "n_documents"}``.
+
+    Raises:
+        ValueError: On an empty vector or a non-positive resample count.
+    """
+    values = np.asarray(differences, dtype=np.float64)
+    if values.size == 0:
+        raise ValueError("paired_bootstrap_ci needs at least one document")
+    if n_resamples < 1:
+        raise ValueError(f"n_resamples must be positive, got {n_resamples}")
+    rng = np.random.default_rng(seed)
+    indexes = rng.integers(0, values.size, size=(n_resamples, values.size))
+    means = values[indexes].mean(axis=1)
+    low, high = np.percentile(means, [100.0 * alpha / 2.0, 100.0 * (1.0 - alpha / 2.0)])
+    return {
+        "mean": round(float(values.mean()), 6),
+        "ci_low": round(float(low), 6),
+        "ci_high": round(float(high), 6),
+        "n_resamples": int(n_resamples),
+        "seed": int(seed),
+        "n_documents": int(values.size),
+    }
+
+
 def label_recall_at_k(
     ranked: np.ndarray,
     gold: Sequence[set[int]],

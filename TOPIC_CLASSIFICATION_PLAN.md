@@ -87,7 +87,7 @@ is the map.
 | experiments | `experiments_topic_classification/` |
 | artifacts (gitignored) | `results/eurlex-*` |
 | run ids | `eurlex-<detail>` (e.g. `eurlex-shortlist`, `eurlex-fusion`) |
-| embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; labels `eurlex-4k-label-v1`) |
+| embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; chunk view `eurlex-4k-chunk200-v1`; labels `eurlex-4k-label-v1`) |
 
 ## 4. What has been tried (executed change sets)
 
@@ -99,6 +99,7 @@ is the map.
 | TC-4 | **Label-name zero-shot arm** — the only signal for labels with no examples | label-name alone 0.2148 overall, **0.1042** unseen R@50; zero-shot-only **0.8678**; rescue 0.0104 (1/96); untuned fusion 0.8806 (−0.036) | `results/eurlex-labelname/metrics.json` | §10 | `d599a29` |
 | TC-5 | **Dictionary as a feature** — one-parameter z-score fusion | primary CV R@50 0.9171 vs 0.9168, **+0.0003** (CI includes 0), R-precision **−0.0204**, nDCG **−0.0190**; log-odds +0.0029/+0.0037; count +0.0010; stage 2 not licensed | `results/eurlex-fusion/metrics.json` (+ `scores/`) | §11 | `8bf5d5d` |
 | TC-6 | **Calibrated zero-shot channel** — rank/quantile-map the title scores | **null**: best α=1 gives 9/96 unseen (0.0938) and −0.00046 overall; CV selects α=0; zero-shot unsolved | `results/eurlex-zeroshot-calibrated/metrics.json` | §12 | `235a3ac` |
+| TC-7 | **Chunk-mean document embedding** (menu item 1) — 200-word non-overlapping chunks, mean-pooled, same k-NN | **null (negative)**: family_new R@50 **0.8887 vs 0.8944** (Δ **−0.0057 [−0.0094, −0.0020]**), R-precision −0.0192, nDCG@10 −0.0220; worse on every slice; 42% of 200-word chunks still exceed 256 tokens | `results/eurlex-embed-chunkmean/metrics.json` | §13 | this commit |
 
 ## 5. What we learned
 
@@ -121,6 +122,12 @@ is the map.
 - **The near-duplicate clean slice is a useful secondary, not the primary
   evaluation.** `family_new` is the main honest slice; clean is reported beside
   it.
+- **Chunk-mean is not the representation lever.** Replacing the whole-document
+  view with 200-word chunk means loses R@50 on every slice (−0.0057 on
+  `family_new`, interval entirely below zero) and loses ~0.02 R-precision and
+  nDCG@10. The 200-word chunk is itself above the model's 256-token context on
+  42% of inputs, so it does not even fully remove the truncation; the mean also
+  dilutes the front-loaded title/header. The whole-document baseline stands.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -135,7 +142,11 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 
 ### Cheap / quick
 
-1. **Better document embedding.**
+1. **Better document embedding.** — **TC-7 executed 2026-11-13: NULL.** The
+   200-word chunk-mean is worse than the whole-document baseline on every slice
+   and loses 0.0192 R-precision / 0.0220 nDCG@10; do not continue this variant
+   as-is (see `docs/topic_classification.md` §13). The longer-context-model half
+   of the item was **not** run.
    - **What:** replace the 256-token MiniLM whole-document view with a
      **chunk-mean** embedding (split into ~200-word chunks, embed each,
      mean-pool, normalize) or a longer-context model (e5-base 512 tokens,
@@ -244,8 +255,10 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 
 ## 7. Open questions
 
-- Does a longer-context or chunked embedding improve the **0.894** new-family
-  baseline, and by how much?
+- Does a longer-context model (or a chunk size that fits the 256-token context,
+  or a front-loaded title view) improve the **0.894** new-family baseline? The
+  **chunked** half is answered — 200-word chunk-mean is a null (§13); the
+  longer-context half is still open.
 - Can a learned candidate pack beat the k-NN despite the one-parameter fusion
   null? If so, which features carry the signal?
 - Can zero-shot labels be solved by a **quota** or a learned calibrator, or is
@@ -264,7 +277,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M3 — trustworthy evaluation** (done): family-held-out and clean slices.
 - **M4 — zero-shot attempts** (done): label-name and calibrated channel, both
   nulls.
-- **M5 — representation** (open): menu items 1–2.
+- **M5 — representation** (item 1 executed: **null**; item 2 open): menu items
+  1–2.
 - **M6 — candidate quality / rerank** (open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
@@ -286,8 +300,11 @@ For every item:
    next item.
 
 The current baseline to beat (from §5) is the k-NN on `family_new`: **0.8944
-R@50 / 0.4869 R-precision / 0.6364 nDCG@10**. The first change set is
-**TC-7 = menu item 1** (better document embedding).
+R@50 / 0.4869 R-precision / 0.6364 nDCG@10**. The first change set, **TC-7 =
+menu item 1** (better document embedding), is **executed and null** (§13):
+chunk-mean at 200 words loses 0.0057 R@50 on `family_new`. The next change set
+is the reviewer's choice — menu item 2 (multi-view embedding) only if they say
+so; do not queue it.
 
 ## 10. The durable deliverable
 
@@ -306,7 +323,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
 - Experiment scripts: `experiments_topic_classification/`.
 - Artifacts: `results/eurlex-stats/`, `results/eurlex-shortlist/`,
   `results/eurlex-family-heldout/`, `results/eurlex-labelname/`,
-  `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`.
+  `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
+  `results/eurlex-embed-chunkmean/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

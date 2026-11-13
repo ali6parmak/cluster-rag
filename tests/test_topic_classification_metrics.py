@@ -9,6 +9,8 @@ from cluster_rag.topic_classification.metrics import (
     evaluate_ranking,
     label_recall_at_k,
     ndcg_at_k,
+    paired_bootstrap_ci,
+    per_document_recall_at_k,
     r_precision,
     ranked_labels,
     recall_at_k,
@@ -71,3 +73,42 @@ def test_evaluate_ranking_shape() -> None:
     assert result["primary"]["recall@50"] == 1.0
     assert result["primary"]["r_precision"] == 0.75
     assert result["diagnostics"]["coverage@50"] == 1.0
+
+
+def test_per_document_recall_matches_the_macro_average() -> None:
+    scores = np.array([[0.9, 0.8, 0.1], [0.1, 0.9, 0.8]])
+    ranked = ranked_labels(scores)
+    gold = [{0}, {2}]
+    values = per_document_recall_at_k(ranked, gold, 1)
+    assert values.tolist() == [1.0, 0.0]
+    assert values.mean() == pytest.approx(recall_at_k(ranked, gold, 1))
+
+
+def test_per_document_recall_validates_its_inputs() -> None:
+    ranked = ranked_labels(np.array([[0.9, 0.1]]))
+    with pytest.raises(ValueError):
+        per_document_recall_at_k(ranked, [{0}], 0)
+    with pytest.raises(ValueError):
+        per_document_recall_at_k(ranked, [set()], 1)
+
+
+def test_paired_bootstrap_ci_is_deterministic_and_centred() -> None:
+    differences = np.array([0.02, 0.03, 0.01, 0.04, 0.0, 0.02, 0.03, 0.01])
+    result = paired_bootstrap_ci(differences, n_resamples=500, seed=7)
+    again = paired_bootstrap_ci(differences, n_resamples=500, seed=7)
+    assert result == again
+    assert result["mean"] == pytest.approx(0.02)
+    assert result["ci_low"] <= result["mean"] <= result["ci_high"]
+    assert result["n_documents"] == 8
+    assert result["n_resamples"] == 500
+
+
+def test_paired_bootstrap_zero_difference_interval_contains_zero() -> None:
+    result = paired_bootstrap_ci(np.zeros(20), n_resamples=200, seed=1)
+    assert result["ci_low"] == 0.0
+    assert result["ci_high"] == 0.0
+
+
+def test_paired_bootstrap_rejects_empty_input() -> None:
+    with pytest.raises(ValueError):
+        paired_bootstrap_ci(np.array([]))
