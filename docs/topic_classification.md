@@ -512,3 +512,104 @@ new-family claim. The embedding remains clearly ahead of the dictionary, and
 the dictionary's shortlist degrades more when the family is new. The next step
 is the reviewer's; the zero-shot label-name arm and the fusion/pack step are
 still open.
+
+## 10. Label-name embeddings — the zero-shot arm (pre-registered 2026-11-13, before the run)
+
+**Question.** Both current shortlist generators score **0.0000** on the 89 dev
+zero-shot labels: the k-NN can only vote for labels attached to train
+documents, and the dictionary has empty tables for them. The vocabulary now
+gives every label a title. Can a label-name embedding give those labels their
+only signal, and does it improve the shortlist?
+
+**Label titles.** The `eurovoc_concepts.jsonl` title for each of the 4,197
+train+dev labels (the 74 test-only labels stay excluded, as in sections 8–9).
+Raw titles, no template. Embedded with the same MiniLM-L6-v2, `label` kind,
+cosine to the dev document vectors already cached from section 8.
+
+**Arms.**
+
+1. **Label-name alone** — score every dev document against every label title;
+   a third shortlist generator.
+2. **k-NN + zero-shot rescue** — keep the k-NN scores for labels with at least
+   one train example; replace the scores of the 89 zero-shot labels with their
+   label-name cosine. This tests the targeted use of the arm without changing
+   the seen-label ranking.
+3. **Untuned equal-weight fusion** (secondary) — per-row z-score the k-NN and
+   label-name matrices and add them. No weight is tuned; it is a read on
+   whether label names help beyond the rescue.
+
+**Metrics.** The same primary and secondary set as section 8 (R@50,
+R-precision, nDCG@10; recall@5/10/20/100; nDCG@50; coverage@50; bucket
+recall@50). The **unseen bucket** is the headline this time. For the
+label-name arm, a **zero-shot-only ranking** is added: restricted to the 89
+zero-shot labels, for the 87 dev documents that carry one, rank only those
+labels and report recall@5/10/50. That separates "the title signal exists"
+from "it survives the full 4,197-label ranking".
+
+**Pre-registered reading.**
+
+- **The zero-shot route must be non-zero.** Label-name alone must reach a
+  non-zero unseen-bucket recall@50 (any positive value); 0.0000 means the
+  titles carry no usable signal for the labels with no examples.
+- **The rescue must not cost the seen ranking.** Its overall R@50 must stay
+  within **0.01** of the k-NN's 0.9168 (section 8, all dev) and its
+  unseen-bucket recall@50 must be positive.
+- **The untuned fusion earns a follow-up only if** it beats the k-NN's R@50 by
+  at least **0.01**; otherwise it is a null and the next step is the
+  dictionary-as-feature fusion (step 3), not this one.
+- **No auto-adopt.** The numbers are the evidence; the reviewer decides.
+
+**Cost.** 4,197 title embeddings (seconds), the cached dev document vectors,
+one matrix product, the k-NN scores (seconds). No LLM, no new model, no
+re-embedding of documents.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-labelname/metrics.json` (run `eurlex-labelname`, 25 s;
+4,197 title embeddings, 6,000 cached document vectors, no LLM). The label
+space is the same 4,197 train+dev labels; the zero-shot set is the **89 dev
+labels** with no train example, carrying **96 gold assignments** across **87
+documents**.
+
+**Overall metrics (all dev):**
+
+| method | R@50 | R-precision | nDCG@10 | unseen R@50 | coverage@50 |
+|---|---:|---:|---:|---:|---:|
+| frequency prior | 0.3203 | 0.0769 | 0.1037 | 0.0000 | 0.6867 |
+| embedding k-NN | **0.9168** | 0.5715 | 0.7070 | 0.0000 | 0.9978 |
+| label-name alone | 0.2148 | 0.0543 | 0.0802 | **0.1042** | 0.6698 |
+| k-NN + zero-shot rescue | 0.9168 (−0.00002) | 0.5715 | 0.7070 | 0.0104 | 0.9978 |
+| k-NN + label-name fusion (untuned) | 0.8806 (−0.0362) | **0.5754** | **0.7113** | 0.0104 | 0.9977 |
+
+**Label-name alone, zero-shot-only ranking** (89 labels, 87 documents with an
+unseen gold label): R@5 0.3563, R@10 0.4770, R@20 0.6322, **R@50 0.8678**,
+R@100 1.0; R-precision 0.1264; nDCG@10 0.2888, nDCG@50 0.3792; coverage@50
+0.8736.
+
+**The bars, read out.**
+
+- **The zero-shot route is non-zero: passed.** Label-name alone reaches
+  **0.1042** unseen-bucket R@50 in the full 4,197-label ranking, and
+  **0.8678** when restricted to the 89 zero-shot labels. The titles carry a
+  real signal — the only signal any of these arms has for those labels.
+- **The rescue does not cost the seen ranking, but is practically a null.**
+  Its overall R@50 is 0.9168 (−0.00002), so the “within 0.01” bar is passed; its
+  unseen-bucket R@50 is positive (0.0104), so the letter of the bar is passed
+  too. But **1 of 96** unseen gold assignments enters the full top-50. The raw
+  label-name cosine is not calibrated to the k-NN’s vote scale: the unseen
+  scores are too small to displace the seen labels’ k-NN scores.
+- **The untuned fusion is not a win.** It gains a little ordering (R-precision
+  +0.0039, nDCG@10 +0.0043) but loses **0.0362 R@50**, well short of the
+  +0.01 bar. The equal-weight z-score fusion is a breadth loss.
+- **Label-name alone is not a third general shortlist generator**: 0.2148 R@50,
+  below the frequency prior’s 0.3203. It is a **zero-shot specialist**, not a
+  replacement for the k-NN.
+
+**Reading.** The title signal is real but **scale-bound**: within the
+zero-shot labels it ranks well (0.868 R@50), but in the full ranking its
+cosine scores sit below the k-NN’s vote scores, so the naive rescue finds one
+unseen label in 96. The next step, if the reviewer wants the zero-shot route,
+is a **calibrated** zero-shot channel — map the unseen labels’ title scores
+into the seen score distribution (rank/quantile mapping) instead of replacing
+raw cosines. The untuned fusion does not earn a follow-up; the dictionary-as-
+feature fusion (step 3) remains the next real pack step.
