@@ -108,6 +108,7 @@ is the map.
 | TC-13 | **Cross-encoder rerank of the lexical top-50** (menu item 7) — ms-marco MiniLM L-6 (primary) / L-12 (secondary), rerank within the top-50 | **null (strong negative)**: `family_new` nDCG@10 **0.6902 → 0.4360** (Δ **−0.2543 [−0.2626, −0.2463]**) and R-precision −0.2276 with L-6; L-12 is worse (**−0.3783**); R@50 unchanged (0.9138) — the rerank destroys the ordering, it does not improve it | `results/eurlex-cross-encoder-rerank/metrics.json` | §19 | this commit |
 | TC-14 | **Learned candidate pack** (menu item 8) — out-of-fold train candidates, 11 features, HistGB; union of embedding/lexical/frequency top-50 | **win**: `family_new` R@50 **0.9278** vs lexical 0.9138 (Δ **+0.0141 [+0.0119, +0.0163]**), R-precision +0.0404, nDCG@10 +0.0440, tail 0.5404 → 0.5681; also beats RRF (Δ +0.0113); the z-scored dictionary arms were not features (scope) | `results/eurlex-candidate-pack/metrics.json` | §20 | this commit |
 | TC-15 | **Cluster routing / label pruning** (menu item 9) — MiniBatchKMeans K=500 on train docs, route dev to the C nearest clusters, rank their labels first | **efficiency_only (primary)**: C=3 ranks ~250 of 4,197 labels (5.96 %) at `family_new` R@50 −0.0005 [−0.0025, +0.0014], R-precision +0.0073, nDCG@10 +0.0069, tail 0.5447; C=1 (2.38 % space, 91.4 % coverage) loses 0.0294 R@50 | `results/eurlex-cluster-routing/metrics.json` | §21 | this commit |
+| TC-16 | **Hard-negative discipline** (menu item 10) — the pack trained with family-grouped folds (A) vs random folds (B) | **null**: B puts a same-family sibling in 27.7 % of documents' indices (A: 0 %), yet A beats B on `family_new` R@50 by only **+0.0006 [+0.00003, +0.0011]** — the discipline is not measurably needed, and the pack's gain is not template leakage (it is kept as the leak-free construction) | `results/eurlex-hard-negative-discipline/metrics.json` | §22 | this commit |
 
 ## 5. What we learned
 
@@ -194,6 +195,12 @@ is the map.
   unchanged (R@50 −0.0005) and a small ordering gain (+0.007); a single
   cluster (2.4 % of the space) loses 0.029 R@50. Useful for a label-side
   budget, not a new best.
+- **The hard-negative discipline is a null (and the pack is not template
+  leakage).** Training the pack with 27.7 % of documents seeing a same-family
+  sibling in their retrieval index moves `family_new` R@50 by 0.0006; if the
+  model had leaned on the template it would have inflated the training rows and
+  collapsed on `family_new`. The family-grouped split stays as the leak-free
+  construction. Hard negatives for a fine-tune are untested.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -290,7 +297,14 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      removing globally popular but irrelevant labels.
    - **Evaluate:** R@50 and cost against the full ranking.
    - **Cost:** cheap–medium.
-10. **Hard-negative mining.**
+10. **Hard-negative mining.** — **TC-16 executed 2026-11-13: NULL.** The TC-14 pack
+    already uses the family-disjoint split, so the item became the discipline's
+    ablation: the same pack trained with **random** folds (27.7 % of documents get a
+    same-family sibling in their index) is only **0.0006 R@50** behind on
+    `family_new` — far below the 0.01 bar. The discipline is not measurably needed at
+    this feature set, but it is kept as the leak-free construction, and the pack's
+    gain is **not** template leakage. Hard negatives for a fine-tune (item 11) remain
+    untested (§22).
     - **What:** use near-duplicate/template families as hard negatives for the
       pack (item 8), the cross-encoder (item 7) or the fine-tune (item 11);
       build a family-disjoint training split.
@@ -359,7 +373,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
   **null**; item 5: **win**, zero-shot quota; item 6: **win (primary), base-dependent**;
   item 7: **null (strong negative)**; item 8: **win**, the track's best shortlist;
-  item 9: **efficiency_only**; items 10–12 open): menu items 3–12.
+  item 9: **efficiency_only**; item 10: **null**, the discipline is not needed;
+  items 11–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -410,8 +425,12 @@ lexical k-NN by +0.0141 R@50, +0.0404 R-precision and +0.0440 nDCG@10, with the
 tail up (0.5404 → 0.5681). It is the track's best shortlist so far, but it is a
 dev-tuned model and not adopted. **TC-15 = menu item 9** (cluster routing) is also
 executed and is an **`efficiency_only`** result: 3-cluster routing ranks ~6 % of
-the labels with the shortlist unchanged (R@50 −0.0005) and +0.007 ordering. The
-next change set is the reviewer's choice; menu item 10 is not queued.
+the labels with the shortlist unchanged (R@50 −0.0005) and +0.007 ordering.
+**TC-16 = menu item 10** (hard-negative discipline) is also executed and is a
+**null**: training the pack with random folds (27.7 % template exposure) costs only
+0.0006 R@50 on `family_new`, so the family-disjoint split is not measurably needed
+— but it is kept, and the pack's gain is not template leakage. The next change set
+is the reviewer's choice; menu item 11 (fine-tune) needs explicit approval.
 
 ## 10. The durable deliverable
 
@@ -435,7 +454,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
   `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`,
   `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`,
-  `results/eurlex-cluster-routing/`.
+  `results/eurlex-cluster-routing/`, `results/eurlex-hard-negative-discipline/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

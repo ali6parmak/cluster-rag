@@ -2264,3 +2264,128 @@ change set.
 **What the result does not say.** Nothing about `test`; nothing about other K,
 other C, TF-IDF/HDBSCAN clustering, a support threshold on the cluster label
 sets, or routing inside the pack.
+
+## 22. Hard-negative discipline — TC-16 (pre-registered 2026-11-13, before the run)
+
+**Question.** Item 10 of the menu is "use near-duplicate/template families as
+hard negatives for the pack …; build a family-disjoint training split". The
+learned pack of TC-14 **already** uses that construction: each train
+document's candidates come from the other four **family-grouped** folds, so its
+near-duplicate siblings are never in its retrieval index. The item therefore
+reduces to a question the track has not measured: **does the family-disjoint
+split actually matter for the pack?** Train the same pack twice — (A) the
+TC-14 family-grouped folds, (B) random-document folds, where siblings often
+*are* in the index — and compare on the honest slice.
+
+**Mechanism (fixed before the run).**
+
+- **Two arms, one model, one evaluation.**
+  - **Arm A (the discipline, control):** 5 folds grouped by the title
+    skeleton, exactly TC-14's construction.
+  - **Arm B (no discipline, the treatment):** 5 folds by **random document
+    assignment** (`numpy.random.default_rng(42)`, a shuffled split), so a
+    document's same-family siblings are usually in its retrieval index.
+- **Everything else identical:** the 11 features, `HistGradientBoosting`
+  parameters, the dev candidate build against the full train index, the pack
+  ranking (ties by RRF rank), and the eval slices. The dev features are built
+  **once** and shared, so the only difference is the training folds.
+- **Template exposure (the manipulation check):** for every train document,
+  whether at least one document with the **same title-skeleton family** is in
+  its own retrieval index. Expected **0** for arm A (family-grouped) and
+  **high** for arm B; the mean exposure per arm is reported beside the
+  metrics.
+- **No new model, no LLM, no GPU.**
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764), plus `family_seen` (1,740) — the slice where arm B's template
+exposure can express itself on dev. Test is never read.
+
+**Metrics.** The pack's primary (R@50, R-precision, nDCG@10) and secondary
+(R@5/10/20/100, nDCG@50) per slice for both arms, plus the paired bootstrap
+over documents of **A − B**. Diagnostics: coverage@50 and bucket recall@50.
+
+**Pre-registered reading.**
+
+- **`discipline_matters`:** arm A beats arm B on `family_new` **R@50 by at
+  least 0.01**, with the paired 95 % interval excluding 0, and no
+  R-precision/nDCG@10 loss beyond 0.01. (The discipline is validated: training
+  without it overfits the template.)
+- **`discipline_hurts`:** arm B beats arm A on `family_new` R@50 by at least
+  0.01 with the interval excluding 0 — the construction costs more than it
+  buys, and TC-14's good number is not attributable to it.
+- **`null`:** the difference is smaller than 0.01 or its interval includes 0 —
+  the family-disjoint split is not measurably needed at this feature set and
+  model. (It would still be kept, since it is the leak-free construction;
+  "not needed" is not "harmful".)
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** Two pack trainings (the TC-14 run: ~5 folds × 84 s per arm, the
+HistGB fit and the dev scoring), the same cached retrievals, ~20 min on CPU.
+No GPU, no LLM, no model download.
+
+**Not tested here.** Hard negatives for the fine-tune (item 11), the
+cross-encoder (item 7 was refuted), a text-cosine near-duplicate exposure
+measure (the title-skeleton family is the audit's cheap proxy), and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-hard-negative-discipline/metrics.json` (run
+`eurlex-hard-negative-discipline`, **1,047.6 s**, no LLM; document cache 51,000
+hits). Two packs, identical features/model/dev build: **A** = family-grouped
+folds (the TC-14 construction), **B** = random-document folds. Manipulation
+check: **template exposure 0.0000** (0 of 45,000 train documents) for A and
+**0.2769** (12,460 documents) for B — the random split really does put
+same-family siblings into a document's own retrieval index.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| slice | A — family-grouped | B — random folds |
+|---|---|---|
+| all_dev | **0.9422 / 0.6488 / 0.7861** | 0.9417 / 0.6483 / 0.7849 |
+| family_new | **0.9278 / 0.5818 / 0.7343** | 0.9273 / 0.5814 / 0.7338 |
+| family_seen | **0.9773 / 0.8126 / 0.9128** | 0.9771 / 0.8120 / 0.9099 |
+| family_new_clean | **0.9218 / 0.5710 / 0.7229** | 0.9212 / 0.5705 / 0.7224 |
+
+A reproduces the TC-14 pack exactly (0.9278 / 0.5818 / 0.7343 on
+`family_new`), which is the expected control.
+
+**Paired bootstrap over documents (A − B, 2,000 resamples):**
+
+| slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|
+| all_dev | +0.0005 [+0.00005, +0.0009] | +0.0005 | +0.0012 |
+| family_new | **+0.0006 [+0.00003, +0.0011]** | +0.0004 | +0.0005 |
+| family_seen | +0.0002 [−0.0002, +0.0007] | +0.0007 | +0.0029 |
+| family_new_clean | +0.0006 [+0.00001, +0.0012] | +0.0005 | +0.0005 |
+
+**The pre-registered reading, read out.**
+
+- **`discipline_matters`: not met.** A's advantage on `family_new` is
+  **+0.0006** R@50, far below the +0.01 bar. The interval just excludes zero
+  (barely), so the sign is consistent, but the size is negligible.
+- **`discipline_hurts`: not met.** B is not ahead on any slice.
+- **`outcome`: null** — the family-disjoint training split is **not
+  measurably needed** at this feature set and model.
+- Against the lexical comparator both arms behave like TC-14: A +0.0141 and
+  B +0.0135 R@50 on `family_new`.
+
+**Reading.** The hard-negative discipline is a **null** — and an informative
+one: training the pack with **27.7 %** of its documents seeing a same-family
+sibling in their retrieval index changes the honest-slice result by
+**0.0006** R@50. The pack's gain is therefore not an artifact of template
+leakage: if the model had learned to lean on near-duplicate neighbours, arm B
+would have *inflated* the training rows and then *deflated* on `family_new`
+(no dev family-new document has any sibling in train). It did neither.
+
+Why so small: the pack's features are mostly **retriever scores**, and a
+near-duplicate sibling already shows up there as a high-similarity neighbour;
+whether that sibling is inside or outside the *training* index changes the
+rows' difficulty but not the learned mapping much. The discipline remains the
+correct construction (it is the leak-free one); "not needed here" is not
+"harmful", and it is kept.
+
+**What the result does not say.** Nothing about `test`; nothing about
+hard-negative mining for a **fine-tune** (menu item 11, which is where mined
+negatives would matter most) or for the cross-encoder (TC-13 was refuted); and
+nothing about a text-cosine near-duplicate exposure measure (the title-skeleton
+family is the audit's cheap proxy — 2,056 families, 12,371 documents).
