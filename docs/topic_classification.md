@@ -1607,3 +1607,165 @@ the embedding base is the one that clears all three conditions.
 insertion ranker, a quota inside the top-10, other `N` grids, or a quota for
 labels beyond the 89 zero-shot ones; and nothing about whether the tail loss can
 be recovered by combining the quota with the lexical arm's stronger tail.
+
+## 18. Cardinality / threshold calibration — TC-12 (pre-registered 2026-11-13, before the run)
+
+**Question.** Every item so far scores a **shortlist**; the product needs a
+**label set**. The gold cardinality varies (mean 5.07, max 16 on dev), so a
+fixed top-k forces the same set size on every document. Does a global score
+threshold — calibrated to the train split's mean cardinality, so the set size
+adapts per document — beat fixed top-5 on micro-F1 at the same average
+cardinality?
+
+**Mechanism (fixed before the run).**
+
+- **Primary base — embedding k-NN:** the whole-document MiniLM view, `k = 100`,
+  power 1.0, re-scored from the warm `eurlex-4k-v1` cache. The TF-IDF k-NN and
+  the TC-9 RRF fusion are **exploratory** bases; they do not decide the item.
+- **Gold:** the dev gold matrix over the 4,197 train+dev labels (the same space
+  as every section since 8).
+- **Control — top-5:** the five highest-scoring labels per document. This is
+  the fixed-cardinality operating point at the train mean (5.074 labels/doc).
+- **Treatment — global score threshold:** for a set of calibration documents,
+  the predicted-cell budget is `round(5.074 × n)` (the **train** split's mean
+  cardinality), and `tau` is the score at that global rank in the calibration
+  scores; every label with `score >= tau` is predicted for its document. Ties at
+  `tau` are all predicted, so the realised mean is reported, not assumed.
+- **Threshold selection:** 5-fold group cross-validation on dev, folds grouped
+  by the title skeleton (whole families held out). Each fold's `tau` is
+  calibrated on the other four folds' documents and applied to the held-out
+  documents; the pooled decision matrix is evaluated once. The full-dev
+  calibration is reported beside it as **tuned**.
+- **No per-document or per-bucket thresholds** in this change set; the plan
+  allows "global (or per-bucket)" and this pre-registration fixes the global
+  form only. No new model, no LLM.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764). Test is never read.
+
+**Metrics.** Primary: **micro-F1** of the decision matrix (the product metric).
+Secondary: macro-F1, sample-F1, micro precision and micro recall. Diagnostics:
+predicted cardinality (mean, median, mean absolute error against the gold
+cardinality), and label-level precision/recall of the predicted sets by
+head / torso / tail / unseen. The shortlist **R@50 is reported unchanged** (the
+decision does not touch the ranking). A **paired bootstrap over documents**
+(2,000 resamples) gives the interval of the threshold-minus-top-5 micro-F1 and
+micro-recall differences, recomputing the pooled TP/FP/FN counts on each
+resample.
+
+**Pre-registered bar.**
+
+- A **win** requires the threshold to improve `family_new` **micro-F1 by at
+  least 0.01** over top-5, with the paired 95 % interval **excluding 0**, and
+  **micro-recall not to drop by more than 0.01**. The realised `all_dev` mean
+  cardinality must land within **±0.25** of the 5.074 target; if the
+  calibration misses its own target, the reading is a null regardless of the F1.
+- Otherwise it is a **null**: record it and do not proceed to menu item 7.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** Re-scored cached embeddings, three base rankings, the threshold
+calibration (a partition per fold), the decision metrics and the bootstrap.
+Minutes on CPU; no model download, no LLM.
+
+**Not tested here.** Per-bucket or per-document thresholds, a learned
+cardinality predictor, F1-optimal threshold selection (the calibration targets
+the **cardinality**, not the metric), and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-threshold-calibration/metrics.json` (run
+`eurlex-threshold-calibration`, **167.4 s**, no LLM; embedding cache 51,000
+hits / 0 misses). Target cardinality = the train mean **5.0738** labels/doc.
+Thresholds: embedding ~**17.74–17.91** (per fold), lexical ~**6.73–6.80**,
+RRF **0.0301**. The base rankings and their shortlist R@50 are unchanged
+(embedding 0.9168 / 0.8944 / 0.8862 on the three slices; the decision never
+touches the ranking).
+
+**Primary metrics — embedding k-NN (top-5 control vs calibrated threshold):**
+
+| slice | decision | micro P | micro R | **micro F1** | macro F1 | sample F1 | cardinality | MAE |
+|---|---|---|---|---|---|---|---|---|
+| all_dev | top-5 | 0.5363 | 0.5321 | 0.5342 | 0.1600 | 0.5326 | 5.000 | 1.291 |
+| all_dev | **threshold** | 0.5608 | 0.5643 | **0.5625** | 0.1457 | 0.5331 | 5.071 | 1.992 |
+| family_new | top-5 | 0.4752 | 0.4602 | 0.4675 | 0.1558 | 0.4663 | 5.000 | 1.267 |
+| family_new | **threshold** | 0.5081 | 0.4667 | **0.4865** | 0.1360 | 0.4546 | 4.742 | 2.125 |
+| family_new_clean | top-5 | 0.4621 | 0.4500 | 0.4560 | 0.1559 | 0.4553 | 5.000 | 1.247 |
+| family_new_clean | **threshold** | 0.4998 | 0.4482 | **0.4726** | 0.1362 | 0.4426 | 4.604 | 2.133 |
+
+**Exploratory bases, family_new (micro F1 / precision / recall / cardinality):**
+
+| base | top-5 | threshold | Δ F1 |
+|---|---|---|---|
+| lexical k-NN | **0.5192** / 0.5277 / 0.5110 / 5.000 | 0.4946 / 0.5339 / 0.4607 / 4.454 | **−0.0246** |
+| RRF fusion | 0.5249 / 0.5335 / 0.5166 / 5.000 | **0.5311** / 0.5385 / 0.5239 / 5.023 | +0.0062 |
+
+**Per-bucket label-level micro-F1, embedding base, family_new:**
+
+| decision | head | torso | tail | unseen |
+|---|---|---|---|---|
+| top-5 | 0.5190 | 0.2982 | 0.0000 | 0.0000 |
+| threshold | **0.5470** | 0.2559 | 0.0000 | 0.0000 |
+
+**Full-dev grid (`family_new` micro-F1 by target cardinality):**
+
+| target | embedding | lexical |
+|---:|---:|---:|
+| 2 | 0.3387 | 0.2873 |
+| 3 | 0.4308 | 0.4029 |
+| 4 | 0.4729 | 0.4670 |
+| **5** | **0.4862** | 0.4937 |
+| 6 | 0.4855 | **0.4982** |
+| 7 | 0.4748 | 0.4940 |
+| 8 | 0.4612 | 0.4821 |
+| 10 | 0.4299 | 0.4525 |
+
+**Paired bootstrap over documents (threshold − top-5):**
+
+| base | slice | Δ micro-F1 [95 % CI] | Δ micro-recall |
+|---|---|---|---|
+| embedding | all_dev | **+0.0283 [+0.0248, +0.0318]** | +0.0322 |
+| embedding | family_new | **+0.0190 [+0.0150, +0.0233]** | +0.0065 |
+| embedding | family_new_clean | **+0.0167 [+0.0122, +0.0211]** | −0.0018 |
+| lexical | family_new | −0.0246 [−0.0297, −0.0195] | −0.0504 |
+| RRF | family_new | +0.0062 [+0.0032, +0.0090] | +0.0073 |
+
+**The bar, read out.**
+
+- **Micro-F1 gain ≥ 0.01: passed.** **+0.0190** on `family_new` (+0.0283
+  `all_dev`), interval entirely above zero.
+- **Interval excluding 0: passed.**
+- **Micro-recall loss ≤ 0.01: passed.** Recall **rises** by +0.0065 on
+  `family_new`; it is flat on the clean slice (−0.0018).
+- **Realised cardinality within ±0.25 of 5.074: passed on `all_dev`** (5.071).
+  On `family_new` the realised cardinality is **4.742**: the fold calibrations
+  see the easier family-seen documents and the threshold then predicts fewer
+  labels on the harder new families. That is reported, not hidden; the bar's
+  calibration condition was pre-registered on `all_dev`.
+- **`outcome`: win** on the primary (embedding) base. The lexical base is
+  **negative** (−0.0246: its top-5 is already the better set) and the RRF base
+  gains **+0.0062**, below the 0.01 bar — both null.
+
+**Reading.** The calibrated threshold beats top-5 on the embedding base, and
+the mechanism is visible: it **reallocates** the set size rather than adding
+signal. Precision rises (0.475 → 0.508 on `family_new`) while recall is roughly
+flat, so micro-F1 gains **+0.019**; on new-family documents the same threshold
+yields 4.74 labels/doc instead of 5. But the gain is **micro-level only**: the
+per-document numbers fall (sample-F1 0.4663 → 0.4546, macro-F1 0.1558 →
+0.1360) and the cardinality error rises (MAE 1.267 → 2.125) because the
+threshold gives some documents larger sets and others smaller. The tail still
+gets **zero** predictions from the embedding base — the threshold at ~5
+labels/doc cannot reach labels whose scores sit far below the cut.
+
+The exploratory bases split the lesson: on the stronger lexical ranking, fixed
+top-5 is the better set predictor at every cardinality in the grid (the
+threshold only redistributes an already-good ranking and loses 0.025 F1); on
+the RRF ranking the threshold edges up +0.006, not enough to clear the bar. So
+**the decision rule interacts with the base**, and "which set predictor to
+ship" is not settled by this item — the embedding threshold wins its own
+comparison, while the lexical top-5 remains the best `family_new` set
+(0.5192) and the RRF threshold the best absolute micro-F1 (0.5311).
+
+**What the result does not say.** Nothing about `test`; nothing about
+per-bucket or per-document thresholds, a learned cardinality predictor, or an
+F1-optimal threshold (the calibration targets the **cardinality**); and nothing
+about recovering the tail, which no ~5-label operating point reaches.

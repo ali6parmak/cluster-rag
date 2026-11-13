@@ -104,6 +104,7 @@ is the map.
 | TC-9 | **Lexical k-NN + RRF** (menu item 3) — TF-IDF (word 1–2 gram) k-NN fused with the embedding k-NN | **win**: fusion family_new **0.9165** vs 0.8944 (Δ **+0.0222 [+0.0195, +0.0250]**), R-precision +0.0560, nDCG@10 +0.0633; but the **lexical arm alone is 0.9138** (Δ +0.0194) with tail **0.5404** vs the fusion's 0.4830 — the fusion adds only +0.0028 over lexical and dilutes its tail | `results/eurlex-lexical-rrf/metrics.json` | §15 | this commit |
 | TC-10 | **Label co-occurrence smoothing** (menu item 4) — top-10 labels vote for their train-only co-occurrence neighbours, α by family-grouped CV | **null**: the embedding base's CV selects **α=0 in all 5 folds** (Δ 0.0000); the grid falls monotonically (0.8944 → 0.8536 at α=1); the lexical base's best α=0.05 buys +0.0007 (CI touches 0) and loses ordering; the tail never rises | `results/eurlex-cooccurrence/metrics.json` | §16 | this commit |
 | TC-11 | **Zero-shot quota** (menu item 5) — reserve the bottom-5 slots of the top-50 for the best zero-shot labels by title cosine | **win**: unseen **34/96 (0.3542)** vs 0/96 for every seen-label arm, with all_dev R@50 −0.0060 and family_new −0.0081 (both inside the 0.01 cap); R-precision/nDCG@10 unchanged by construction; the lexical/RRF bases reach 47/96 at N=10 but fail the family_new guard (0.0121/0.0124) | `results/eurlex-zero-shot-quota/metrics.json` | §17 | this commit |
+| TC-12 | **Cardinality / threshold calibration** (menu item 6) — global score threshold at the train mean cardinality vs fixed top-5 | **win (primary), base-dependent**: embedding threshold micro-F1 **0.4865 vs 0.4675** (Δ **+0.0190 [+0.0150, +0.0233]**), all_dev +0.0283, cardinality 5.071; the gain is micro-level (sample-F1/macro-F1 fall, tail stays 0); lexical top-5 beats its threshold (−0.0246) and RRF gains only +0.0062 (below bar) | `results/eurlex-threshold-calibration/metrics.json` | §18 | this commit |
 
 ## 5. What we learned
 
@@ -160,6 +161,14 @@ is the map.
   and 0.0081 `family_new` R@50 (inside the 0.01 cap) and leaves R-precision
   and nDCG@10 untouched; the price is the tail (0.4011 → 0.3617). The
   stronger lexical base reaches 47/96 but breaches the `family_new` cap.
+- **The cardinality threshold helps the embedding output, but only at the micro
+  level, and it is base-dependent.** A global threshold at the train mean
+  (5.074) lifts `family_new` micro-F1 **+0.019** over top-5 on the embedding
+  base (all_dev +0.028), at 5.071 labels/doc, but sample-F1 and macro-F1 fall
+  and the per-document cardinality error grows (MAE 1.27 → 2.13); the tail
+  still gets zero predictions. On the lexical ranking fixed top-5 is better
+  (−0.025), and RRF gains only +0.006. The decision rule interacts with the
+  ranking; no single set predictor is chosen.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -219,7 +228,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      survive the full ranking (TC-6 null).
    - **Evaluate:** unseen hits / 96; overall R@50 loss ≤ 0.01.
    - **Cost:** minutes.
-6. **Cardinality / threshold calibration.**
+6. **Cardinality / threshold calibration.** — **TC-12 executed 2026-11-13: WIN (primary), base-dependent.** A global threshold at the train mean cardinality (5.074) beats top-5 on the embedding base: `family_new` micro-F1 **0.4865 vs 0.4675** (Δ **+0.0190 [+0.0150, +0.0233]**), all_dev +0.0283, realised cardinality 5.071. It is a **micro-level** gain (sample-F1 0.466 → 0.455, macro-F1 0.156 → 0.136, cardinality MAE 1.27 → 2.13, tail still 0), and it does not generalise across bases: the lexical top-5 beats its threshold (−0.0246) and RRF gains only +0.0062. Not adopted; the reviewer chooses (§18).
    - **What:** turn scores into predicted label sets at a global (or
      per-bucket) threshold tuned to ~5 labels/doc; report precision, recall
      and predicted cardinality.
@@ -321,7 +330,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M5 — representation** (item 1: **null**; item 2: primary **null**, rank
   fusion **secondary win**, not adopted): menu items 1–2.
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
-  **null**; items 5–12 open): menu items 3–12.
+  **null**; item 5: **win**, zero-shot quota; item 6: **win (primary), base-dependent**;
+  items 7–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -357,8 +367,11 @@ retriever and the fusion adds only +0.0028 over it while diluting the tail. The
 falls monotonically with α. **TC-11 = menu item 5** (zero-shot quota) is also
 executed and **wins**: the bottom-5 quota puts **34/96** unseen assignments on the
 shortlist at an all-dev R@50 cost of 0.0060 and a `family_new` cost of 0.0081,
-inside the 0.01 cap. The next change set is the reviewer's choice; menu item 6 is
-not queued.
+inside the 0.01 cap. **TC-12 = menu item 6** (cardinality / threshold calibration)
+is also executed and **wins on the primary base**: the global threshold lifts
+`family_new` micro-F1 by **+0.019** over top-5 (all_dev +0.028) at 5.071
+labels/doc, but the gain is micro-level and does not generalise to the lexical
+base. The next change set is the reviewer's choice; menu item 7 is not queued.
 
 ## 10. The durable deliverable
 
@@ -380,7 +393,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
   `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
-  `results/eurlex-zero-shot-quota/`.
+  `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
