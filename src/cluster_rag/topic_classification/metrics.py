@@ -193,18 +193,25 @@ def label_recall_at_k(
     }
 
 
-def evaluate_ranking(
-    scores: np.ndarray,
+def evaluate_ranked(
+    ranked: np.ndarray,
     gold: Sequence[set[int]],
     bucket_of_label: Mapping[int, str],
     *,
     recall_ks: Sequence[int] = DEFAULT_RECALL_KS,
     ndcg_ks: Sequence[int] = DEFAULT_NDCG_KS,
 ) -> dict[str, Any]:
-    """All primary and secondary metrics for one score matrix."""
-    matrix = np.asarray(scores)
-    ranked = ranked_labels(matrix)
-    _validate(gold, matrix.shape[0], matrix.shape[1])
+    """All primary and secondary metrics for an already-ranked label matrix.
+
+    The pipeline's shortlist operations (thresholding, a quota, a reranker) can
+    change the order directly instead of producing new scores, so the metrics
+    take a ranked matrix as well. ``evaluate_ranking`` is this function after
+    ``ranked_labels``.
+    """
+    ranked = np.asarray(ranked)
+    if ranked.ndim != 2:
+        raise ValueError(f"ranked must be 2-D (n_documents, n_labels); got {ranked.shape}")
+    _validate(gold, ranked.shape[0], ranked.shape[1])
     coverage = float(
         np.mean(
             [
@@ -214,8 +221,8 @@ def evaluate_ranking(
         )
     )
     return {
-        "documents": int(matrix.shape[0]),
-        "labels": int(matrix.shape[1]),
+        "documents": int(ranked.shape[0]),
+        "labels": int(ranked.shape[1]),
         "primary": {
             "recall@50": round(recall_at_k(ranked, gold, 50), 6),
             "r_precision": round(r_precision(ranked, gold), 6),
@@ -234,3 +241,23 @@ def evaluate_ranking(
             "label_recall@50": label_recall_at_k(ranked, gold, bucket_of_label, 50),
         },
     }
+
+
+def evaluate_ranking(
+    scores: np.ndarray,
+    gold: Sequence[set[int]],
+    bucket_of_label: Mapping[int, str],
+    *,
+    recall_ks: Sequence[int] = DEFAULT_RECALL_KS,
+    ndcg_ks: Sequence[int] = DEFAULT_NDCG_KS,
+) -> dict[str, Any]:
+    """All primary and secondary metrics for one score matrix."""
+    matrix = np.asarray(scores)
+    ranked = ranked_labels(matrix)
+    return evaluate_ranked(
+        ranked,
+        gold,
+        bucket_of_label,
+        recall_ks=recall_ks,
+        ndcg_ks=ndcg_ks,
+    )

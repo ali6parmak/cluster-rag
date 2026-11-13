@@ -103,6 +103,7 @@ is the map.
 | TC-8 | **Multi-view embedding** (menu item 2) — the four fields as separate k-NN views; vector mean vs rank fusion | **primary null / secondary win**: view mean family_new 0.8942 vs 0.8944 (Δ −0.0002 [−0.0032, +0.0029]); **rank fusion 0.9055** (Δ **+0.0112 [+0.0080, +0.0145]**), R-precision +0.0220, nDCG@10 +0.0241, tail +0.05; `secondary_win_only`, **not adopted** | `results/eurlex-multiview/metrics.json` | §14 | this commit |
 | TC-9 | **Lexical k-NN + RRF** (menu item 3) — TF-IDF (word 1–2 gram) k-NN fused with the embedding k-NN | **win**: fusion family_new **0.9165** vs 0.8944 (Δ **+0.0222 [+0.0195, +0.0250]**), R-precision +0.0560, nDCG@10 +0.0633; but the **lexical arm alone is 0.9138** (Δ +0.0194) with tail **0.5404** vs the fusion's 0.4830 — the fusion adds only +0.0028 over lexical and dilutes its tail | `results/eurlex-lexical-rrf/metrics.json` | §15 | this commit |
 | TC-10 | **Label co-occurrence smoothing** (menu item 4) — top-10 labels vote for their train-only co-occurrence neighbours, α by family-grouped CV | **null**: the embedding base's CV selects **α=0 in all 5 folds** (Δ 0.0000); the grid falls monotonically (0.8944 → 0.8536 at α=1); the lexical base's best α=0.05 buys +0.0007 (CI touches 0) and loses ordering; the tail never rises | `results/eurlex-cooccurrence/metrics.json` | §16 | this commit |
+| TC-11 | **Zero-shot quota** (menu item 5) — reserve the bottom-5 slots of the top-50 for the best zero-shot labels by title cosine | **win**: unseen **34/96 (0.3542)** vs 0/96 for every seen-label arm, with all_dev R@50 −0.0060 and family_new −0.0081 (both inside the 0.01 cap); R-precision/nDCG@10 unchanged by construction; the lexical/RRF bases reach 47/96 at N=10 but fail the family_new guard (0.0121/0.0124) | `results/eurlex-zero-shot-quota/metrics.json` | §17 | this commit |
 
 ## 5. What we learned
 
@@ -152,6 +153,13 @@ is the map.
   only dilutes: family-grouped CV selects α = 0 on the embedding base, and the
   grid falls monotonically with α; the tail does not rise at any α. A PMI
   matrix or a learned combiner is untested, but the cheap additive form is out.
+- **The zero-shot quota solves the zero-shot shortlist.** Reserving the bottom 5
+  slots of the top-50 for the best zero-shot titles puts **34/96** dev
+  assignments on the shortlist (0.3542), against 0/96 for every seen-label
+  arm and 9/96 for the best calibrated blend. It costs 0.0060 all-dev R@50
+  and 0.0081 `family_new` R@50 (inside the 0.01 cap) and leaves R-precision
+  and nDCG@10 untouched; the price is the tail (0.4011 → 0.3617). The
+  stronger lexical base reaches 47/96 but breaches the `family_new` cap.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -203,7 +211,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      tail-oriented.
    - **Evaluate:** all slices, with the tail bucket called out.
    - **Cost:** minutes.
-5. **Calibrated zero-shot channel.**
+5. **Calibrated zero-shot channel.** — **TC-11 executed 2026-11-13: WIN (the quota).** Reserving the bottom **5** of the top-50 for the best zero-shot titles puts **34/96** unseen assignments on the shortlist (0.3542) at an all_dev R@50 cost of 0.0060 and a `family_new` cost of 0.0081 — inside the 0.01 cap, with R-precision/nDCG@10 unchanged by construction. The lexical/RRF bases reach 47/96 at N=10 but cost 0.0121/0.0124 on `family_new` and are not wins. Not adopted; the reviewer chooses (see `docs/topic_classification.md` §17).
    - **What:** a **quota** (reserve N shortlist slots for zero-shot labels
      ranked by title cosine) or a learned calibrator — a different insertion
      rule than the raw replacement and quantile mapping that already failed.
@@ -292,8 +300,10 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   against the lexical arm alone (§15).
 - Can a learned candidate pack beat the k-NN despite the one-parameter fusion
   null? If so, which features carry the signal?
-- Can zero-shot labels be solved by a **quota** or a learned calibrator, or is
-  the title signal fundamentally too weak at 4,271 labels?
+- The **quota** answers the zero-shot question for the shortlist (34/96, §17);
+  is a learned calibrator or a learned insertion ranker worth it, and can the
+  quota's tail cost (0.4011 → 0.3617 on `family_new`) be recovered without
+  giving back the unseen gain?
 - Is `family_new` the final evaluation protocol, and what is the one **test**
   shot for an adopted config?
 - The vocabulary has **titles only** (no descriptions or hierarchy). Is a
@@ -306,8 +316,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M1 — audit** (done): dataset, label space, leakage.
 - **M2 — cheap shortlist baselines** (done): dictionary vs k-NN, metrics.
 - **M3 — trustworthy evaluation** (done): family-held-out and clean slices.
-- **M4 — zero-shot attempts** (done): label-name and calibrated channel, both
-  nulls.
+- **M4 — zero-shot attempts** (done): label-name and calibrated channel nulls;
+  the **quota wins** (34/96, §17).
 - **M5 — representation** (item 1: **null**; item 2: primary **null**, rank
   fusion **secondary win**, not adopted): menu items 1–2.
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
@@ -344,8 +354,11 @@ the decomposition shows the lexical arm alone (0.9138) is the strongest single
 retriever and the fusion adds only +0.0028 over it while diluting the tail. The
 **TC-10 = menu item 4** (label co-occurrence smoothing) is also executed and is a
 **null**: the family-grouped CV selects α = 0 on the embedding base and the grid
-falls monotonically with α. The next change set is the reviewer's choice; menu
-item 5 is not queued.
+falls monotonically with α. **TC-11 = menu item 5** (zero-shot quota) is also
+executed and **wins**: the bottom-5 quota puts **34/96** unseen assignments on the
+shortlist at an all-dev R@50 cost of 0.0060 and a `family_new` cost of 0.0081,
+inside the 0.01 cap. The next change set is the reviewer's choice; menu item 6 is
+not queued.
 
 ## 10. The durable deliverable
 
@@ -366,7 +379,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-family-heldout/`, `results/eurlex-labelname/`,
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
-  `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`.
+  `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
+  `results/eurlex-zero-shot-quota/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

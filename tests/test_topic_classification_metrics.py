@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from cluster_rag.topic_classification.metrics import (
+    evaluate_ranked,
     evaluate_ranking,
     label_recall_at_k,
     ndcg_at_k,
@@ -73,6 +74,31 @@ def test_evaluate_ranking_shape() -> None:
     assert result["primary"]["recall@50"] == 1.0
     assert result["primary"]["r_precision"] == 0.75
     assert result["diagnostics"]["coverage@50"] == 1.0
+
+
+def test_evaluate_ranked_matches_evaluate_ranking() -> None:
+    scores = np.array([[0.9, 0.8, 0.1, 0.0], [0.0, 0.1, 0.8, 0.9]])
+    gold = [{0, 2}, {2, 3}]
+    buckets = {0: "head", 2: "tail", 3: "head"}
+    assert evaluate_ranked(ranked_labels(scores), gold, buckets) == evaluate_ranking(
+        scores, gold, buckets
+    )
+
+
+def test_evaluate_ranked_accepts_a_modified_order() -> None:
+    # A quota-style change in the order must change the metrics: label 59 sits
+    # outside the base top-50 and is moved into it.
+    scores = np.zeros((1, 60), dtype=np.float32)
+    scores[0, :50] = 1.0
+    scores[0, 59] = 0.5
+    ranked = ranked_labels(scores)
+    gold = [{59}]
+    before = evaluate_ranked(ranked, gold, {59: "tail"})
+    moved = ranked.copy()
+    moved[0, :2] = [59, 0]
+    after = evaluate_ranked(moved, gold, {59: "tail"})
+    assert before["primary"]["recall@50"] == 0.0
+    assert after["primary"]["recall@50"] == 1.0
 
 
 def test_per_document_recall_matches_the_macro_average() -> None:

@@ -1445,3 +1445,165 @@ remain untested — but this cheap additive form does not license menu item 5.
 **What the result does not say.** Nothing about `test`; nothing about PMI or
 other normalisations, other `M`, per-bucket alphas, or a learned combiner; and
 nothing about whether co-occurrence helps a *reranker* rather than a shortlist.
+
+## 17. Zero-shot quota — TC-11 (pre-registered 2026-11-13, before the run)
+
+**Question.** TC-6 showed the title signal is real but does not survive the full
+ranking when it is *blended* into the k-NN scores: the calibrated channel found
+9 of 96 unseen assignments (0.0938) and missed the 0.10 bar by one hit. A
+**quota** is a different insertion rule: instead of competing on the score
+scale, reserve N shortlist slots for the N best zero-shot labels by title
+cosine. Does that put zero-shot labels on the shortlist without costing the
+overall R@50?
+
+**Mechanism (fixed before the run).**
+
+- **Primary base — embedding k-NN:** the whole-document MiniLM view, `k = 100`,
+  power 1.0, re-scored from the warm `eurlex-4k-v1` cache. The TF-IDF k-NN and
+  the TC-9 RRF fusion are **exploratory** secondary bases; they do not decide
+  the item.
+- **Zero-shot set:** the **89** dev labels with zero train support (96 gold
+  assignments across 87 dev documents). The label-title vectors are the cached
+  `eurlex-4k-label-v1` embeddings; each dev document is scored by cosine to
+  those 89 titles only, and the candidates are ranked per document by that
+  cosine.
+- **Insertion rule (the quota):** reserve the **bottom N slots of the top-50** —
+  the N reserved labels replace the base ranking's weakest entries (positions
+  `50-N+1 .. 50`), and the displaced entries move to positions `51 .. 50+N`.
+  A candidate already ranked inside the top-50 is skipped (it is already on the
+  shortlist). The reserved labels are the top-N by title cosine.
+- **Why the bottom:** by construction a reserved label can never enter
+  R-precision (`k = |gold| ≈ 5`) or the nDCG@10 window, so the quota can only
+  cost the documents whose gold sat in the displaced positions, and it can only
+  help the unseen bucket. This is the minimal-cost placement, not a reranker.
+- **Quota selection:** `N ∈ {0, 1, 2, 3, 5, 8, 10, 15, 20}`, selected by
+  **5-fold group cross-validation on dev**, folds grouped by the title skeleton
+  (whole families held out). On each fold's training documents the selected N
+  **maximises the unseen-bucket R@50 subject to an all-dev R@50 loss ≤ 0.01**
+  against the base; ties go to the smaller N, and if no N qualifies the fold
+  selects 0. Each dev document is then scored by its held-out fold's N and the
+  pooled matrix is evaluated once. The full-dev grid is reported as tuned.
+- **No new model, no LLM**; the vectors are cached.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764). Test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / **unseen** — the unseen bucket (hits / 96 on `all_dev`)
+is the headline. A paired bootstrap over documents (2,000 resamples) gives the
+quota-minus-base R@50 difference on each slice.
+
+**Pre-registered bar.**
+
+- A **win** requires, on the pooled CV matrix: the **unseen-bucket R@50 ≥
+  0.10** (at least 10 of the 96 `all_dev` assignments), with an **`all_dev`
+  R@50 loss ≤ 0.01** *and* a **`family_new` R@50 loss ≤ 0.01** against the
+  base. A quota that buys the unseen bucket by damaging the honest slice is not
+  a win.
+- Otherwise it is a **null**: record it and do not proceed to menu item 6.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** The cached title and document vectors, the 6,000 × 89 cosine matrix
+(seconds), the quota insertion over the grid (a few minutes on CPU), the
+5-fold selection, and the bootstrap. No model download, no LLM.
+
+**Not tested here.** A quota on the group/classifier labels beyond the 89
+zero-shot ones, a learned insertion ranker, other `N` grids, a quota that
+inserts inside the top-10, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-zero-shot-quota/metrics.json` (run
+`eurlex-zero-shot-quota`, **133.9 s**, no LLM). Vectors: documents 51,000 cache
+hits / 0 misses (`eurlex-4k-v1`), label titles 4,197 hits / 0 misses
+(`eurlex-4k-label-v1`). The base rankings reproduce their sections: embedding
+0.9168, lexical 0.9317, RRF 0.9337 `all_dev` R@50; every base scores **0/96** on
+the unseen bucket before the quota.
+
+**Selected quotas (5-fold family-grouped CV):** the embedding base selects
+**5** in all five folds; the lexical and RRF bases select **10** in all five.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| base | slice | before quota | after quota (CV) |
+|---|---|---|---|
+| embedding | all_dev | 0.9168 / 0.5715 / 0.7070 | 0.9108 / 0.5715 / 0.7070 |
+| embedding | family_new | 0.8944 / 0.4869 / 0.6364 | 0.8862 / 0.4869 / 0.6364 |
+| embedding | family_new_clean | 0.8862 / 0.4744 / 0.6241 | 0.8778 / 0.4744 / 0.6241 |
+| lexical | all_dev | 0.9317 / 0.6152 / 0.7517 | 0.9227 / 0.6152 / 0.7517 |
+| lexical | family_new | 0.9138 / 0.5415 / 0.6902 | 0.9016 / 0.5415 / 0.6902 |
+| RRF | all_dev | 0.9337 / 0.6164 / 0.7581 | 0.9241 / 0.6164 / 0.7581 |
+| RRF | family_new | 0.9165 / 0.5428 / 0.6997 | 0.9041 / 0.5428 / 0.6997 |
+
+R-precision and nDCG@10 are **identical** before and after: the reserved labels
+sit at positions 46–50, outside both windows. R@5, R@10 and R@20 are identical
+too; only R@50, R@100, nDCG@50 and coverage move.
+
+**Diagnostics (coverage@50; label-level recall@50 by head / torso / tail /
+unseen; the unseen column is hits / assignments):**
+
+| base | slice | coverage@50 | head | torso | tail | unseen |
+|---|---|---|---|---|---|---|
+| embedding | all_dev | 0.9978 → **0.9980** | 0.9614 → 0.9573 | 0.8068 → 0.7893 | 0.4093 → 0.3718 | **0/96 → 34/96 (0.3542)** |
+| embedding | family_new | 0.9972 → 0.9972 | 0.9489 → 0.9434 | 0.7995 → 0.7803 | 0.4011 → 0.3617 | **0/88 → 31/88 (0.3523)** |
+| embedding | family_new_clean | 0.9968 → 0.9968 | 0.9441 → 0.9381 | 0.7872 → 0.7673 | 0.3868 → 0.3464 | **0/86 → 31/86 (0.3605)** |
+| lexical | all_dev | 0.9985 → 0.9983 | 0.9682 → 0.9613 | 0.8475 → 0.8269 | 0.5414 → 0.4813 | **0/96 → 47/96 (0.4896)** |
+| RRF | all_dev | 0.9987 → 0.9988 | 0.9720 → 0.9649 | 0.8454 → 0.8227 | 0.4862 → 0.4290 | **0/96 → 47/96 (0.4896)** |
+
+**Full-dev grid (tuned; `family_new` R@50 and the unseen bucket):**
+
+| N | embedding: unseen | embedding: all_dev / family_new R@50 | lexical: unseen | lexical: family_new R@50 |
+|---:|---:|---|---:|---:|
+| 0 | 0/96 | 0.9168 / 0.8944 | 0/96 | 0.9138 |
+| 1 | 12/96 | 0.9158 / 0.8930 | 12/96 | 0.9131 |
+| 2 | 17/96 | 0.9144 / 0.8911 | 17/96 | 0.9125 |
+| 3 | 27/96 | 0.9132 / 0.8895 | 27/96 | 0.9115 |
+| **5** | **34/96** | **0.9108 / 0.8862** | 34/96 | 0.9094 |
+| 8 | 41/96 | 0.9064 / 0.8805 | 41/96 | 0.9055 |
+| 10 | 47/96 | 0.9017 / 0.8743 | 47/96 | 0.9016 |
+| 15 | 58/96 | 0.8931 / 0.8637 | 58/96 | 0.8924 |
+| 20 | 62/96 | 0.8783 / 0.8443 | 62/96 | 0.8790 |
+
+**Paired bootstrap over documents (quota − base R@50, 2,000 resamples):**
+
+| base | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| embedding (the bar) | −0.0060 [−0.0071, −0.0049] | −0.0081 [−0.0096, −0.0067] | −0.0085 [−0.0102, −0.0069] |
+| lexical (exploratory) | −0.0090 [−0.0104, −0.0077] | −0.0121 [−0.0140, −0.0103] | −0.0128 [−0.0148, −0.0109] |
+| RRF (exploratory) | −0.0096 [−0.0109, −0.0082] | −0.0124 [−0.0143, −0.0106] | −0.0128 [−0.0147, −0.0108] |
+
+**The bar, read out.**
+
+- **Unseen R@50 ≥ 0.10: passed, with room.** **34 of 96** unseen assignments
+  enter the shortlist on `all_dev` (0.3542) — against 0/96 for the base and
+  9/96 for the best calibrated blend (TC-6). 31 of 88 within `family_new`
+  (0.3523) and 31 of 86 on the clean slice (0.3605).
+- **`all_dev` R@50 loss ≤ 0.01: passed.** It costs **0.0060** (0.9168 →
+  0.9108), interval inside the cap.
+- **`family_new` R@50 loss ≤ 0.01: passed.** It costs **0.0081** (0.8944 →
+  0.8862), inside the cap — the guard I added to the bar is what the
+  exploratory bases fail: the lexical and RRF bases find **47/96** with
+  `N = 10`, but their `family_new` losses are **0.0121** and **0.0124**,
+  outside the 0.01 cap, so they are **not** wins.
+- **`outcome`: win** on the primary (embedding) base.
+
+**Reading.** The quota works where blending failed. TC-4/TC-6 tried to make the
+title cosine compete on the seen-label score scale and found 1/96 and 9/96; the
+quota does not compete — it **reserves** — and finds **34/96** while staying
+inside the loss cap. The placement is the whole trick: the reserved labels sit
+at positions 46–50, so R-precision and nDCG@10 are untouched and the cost is
+confined to the weakest shortlist entries; the price shows up as 0.6–0.9 points
+of R@50 and ~4 points of tail recall (0.4011 → 0.3617 on `family_new`), not as
+an ordering loss. The zero-shot labels are no longer unsolved: **a third of
+their dev assignments now reach the shortlist**.
+
+The exploratory bases are instructive: the stronger lexical base can reach
+47/96, but at a `family_new` cost of 0.0121 — the quota simply consumes more of
+its (already better) shortlist. The pre-registered guard stops that trade, and
+the embedding base is the one that clears all three conditions.
+
+**What the result does not say.** Nothing about `test`; nothing about a learned
+insertion ranker, a quota inside the top-10, other `N` grids, or a quota for
+labels beyond the 89 zero-shot ones; and nothing about whether the tail loss can
+be recovered by combining the quota with the lexical arm's stronger tail.
