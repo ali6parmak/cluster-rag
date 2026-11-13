@@ -102,6 +102,7 @@ is the map.
 | TC-7 | **Chunk-mean document embedding** (menu item 1) — 200-word non-overlapping chunks, mean-pooled, same k-NN | **null (negative)**: family_new R@50 **0.8887 vs 0.8944** (Δ **−0.0057 [−0.0094, −0.0020]**), R-precision −0.0192, nDCG@10 −0.0220; worse on every slice; 42% of 200-word chunks still exceed 256 tokens | `results/eurlex-embed-chunkmean/metrics.json` | §13 | this commit |
 | TC-8 | **Multi-view embedding** (menu item 2) — the four fields as separate k-NN views; vector mean vs rank fusion | **primary null / secondary win**: view mean family_new 0.8942 vs 0.8944 (Δ −0.0002 [−0.0032, +0.0029]); **rank fusion 0.9055** (Δ **+0.0112 [+0.0080, +0.0145]**), R-precision +0.0220, nDCG@10 +0.0241, tail +0.05; `secondary_win_only`, **not adopted** | `results/eurlex-multiview/metrics.json` | §14 | this commit |
 | TC-9 | **Lexical k-NN + RRF** (menu item 3) — TF-IDF (word 1–2 gram) k-NN fused with the embedding k-NN | **win**: fusion family_new **0.9165** vs 0.8944 (Δ **+0.0222 [+0.0195, +0.0250]**), R-precision +0.0560, nDCG@10 +0.0633; but the **lexical arm alone is 0.9138** (Δ +0.0194) with tail **0.5404** vs the fusion's 0.4830 — the fusion adds only +0.0028 over lexical and dilutes its tail | `results/eurlex-lexical-rrf/metrics.json` | §15 | this commit |
+| TC-10 | **Label co-occurrence smoothing** (menu item 4) — top-10 labels vote for their train-only co-occurrence neighbours, α by family-grouped CV | **null**: the embedding base's CV selects **α=0 in all 5 folds** (Δ 0.0000); the grid falls monotonically (0.8944 → 0.8536 at α=1); the lexical base's best α=0.05 buys +0.0007 (CI touches 0) and loses ordering; the tail never rises | `results/eurlex-cooccurrence/metrics.json` | §16 | this commit |
 
 ## 5. What we learned
 
@@ -146,6 +147,11 @@ is the map.
   the lexical arm, and it *lowers* the tail to 0.4830 — equal-weight fusion
   favours the labels both views agree on, i.e. the head. On EURLEX, as on UPR,
   the words carry most of the shortlist signal.
+- **Label co-occurrence smoothing is a null.** The train-only co-occurrence
+  matrix's top-10 boost is a weaker ranking than the k-NN's own, so adding it
+  only dilutes: family-grouped CV selects α = 0 on the embedding base, and the
+  grid falls monotonically with α; the tail does not rise at any α. A PMI
+  matrix or a learned combiner is untested, but the cheap additive form is out.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -190,7 +196,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      good as embeddings; cheap.
    - **Evaluate:** RRF vs k-NN on all slices; report whether it helps the tail.
    - **Cost:** minutes.
-4. **Label co-occurrence smoothing.**
+4. **Label co-occurrence smoothing.** — **TC-10 executed 2026-11-13: NULL.** The family-grouped CV selects **α = 0 in every fold** on the embedding base; the full-dev grid falls monotonically with α (`family_new` 0.8944 → 0.8536 at α = 1), and the stronger lexical base's best α (0.05) buys +0.0007 R@50 (interval touches 0) while losing ordering and tail recall. The z-scored co-occurrence boost is a weaker version of the k-NN's own ranking (see `docs/topic_classification.md` §16).
    - **What:** train a label co-occurrence matrix; after the k-NN score, add
      `α · co-occurrence(top labels)`; tune α by family-grouped CV.
    - **Why:** labels co-occur; a strong head label can lift its neighbours;
@@ -304,8 +310,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   nulls.
 - **M5 — representation** (item 1: **null**; item 2: primary **null**, rank
   fusion **secondary win**, not adopted): menu items 1–2.
-- **M6 — candidate quality / rerank** (item 3 executed: **win**, lexical arm strongest;
-  items 4–12 open): menu items 3–12.
+- **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
+  **null**; items 5–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -336,7 +342,10 @@ adopted** without the reviewer. **TC-9 = menu item 3** (lexical k-NN + RRF) is a
 executed and **wins its bar** (`family_new` +0.0222 R@50 [+0.0195, +0.0250]), but
 the decomposition shows the lexical arm alone (0.9138) is the strongest single
 retriever and the fusion adds only +0.0028 over it while diluting the tail. The
-next change set is the reviewer's choice; menu item 4 is not queued.
+**TC-10 = menu item 4** (label co-occurrence smoothing) is also executed and is a
+**null**: the family-grouped CV selects α = 0 on the embedding base and the grid
+falls monotonically with α. The next change set is the reviewer's choice; menu
+item 5 is not queued.
 
 ## 10. The durable deliverable
 
@@ -357,7 +366,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-family-heldout/`, `results/eurlex-labelname/`,
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
-  `results/eurlex-lexical-rrf/`.
+  `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

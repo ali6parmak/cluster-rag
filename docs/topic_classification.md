@@ -1293,3 +1293,155 @@ decomposition (lexical alone vs fusion) is the decision that matters.
 proper, other n-gram ranges/vocabulary caps, other `top_k`/`offset` values or
 weighted fusion; nothing about a lexical-plus-embedding learned combiner; and
 nothing about the tail dilution as a fixable weighting problem.
+
+## 16. Label co-occurrence smoothing — TC-10 (pre-registered 2026-11-13, before the run)
+
+**Question.** The k-NN votes label by label; a label with many neighbours votes
+for itself and nothing for the labels that normally travel with it. EURLEX
+documents carry ~5 labels each, and some labels co-occur far more than chance.
+Does adding a **train-only label co-occurrence boost** to the k-NN scores
+improve the shortlist — and does it help the tail, as the plan expects?
+
+**Mechanism (fixed before the run).**
+
+- **Primary base — embedding k-NN:** the whole-document MiniLM view, `k = 100`,
+  power 1.0, re-scored from the warm `eurlex-4k-v1` cache. This is the track's
+  standing baseline and the base the pre-registered bar is read on.
+- **Secondary bases (exploratory):** the TF-IDF k-NN of TC-9 and the TC-9
+  RRF(embedding, lexical) scores, smoothed by the same rule. They are reported
+  because the lexical arm is the stronger retriever (§15), but they **do not**
+  decide the item.
+- **Co-occurrence matrix (train only):** `C[a, b]` = the number of train
+  documents carrying both labels `a` and `b`, `a != b` (zero diagonal), and
+  `P[b | a] = C[a, b] / sum_b C[a, b]` (row-conditional). A label with no train
+  example keeps an all-zero row, so the smoothing cannot invent a zero-shot
+  candidate.
+- **Boost:** for each document, take its **top `M = 10`** labels by base score;
+  their non-negative base scores are renormalised to sum 1 and used as weights
+  over the co-occurrence rows: `boost = sum_a w_a * P[., a]`. A document whose
+  top-10 scores are all zero gets an all-zero boost.
+- **Smoothing:** per-row z-score the base and the boost (the TC-5 `row_zscore`
+  convention), then `smoothed = z(base) + alpha * z(boost)`. At `alpha = 0`
+  the ranking is exactly the base's.
+- **Alpha selection:** `alpha ∈ {0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0}`,
+  selected by **5-fold group cross-validation on dev**, folds grouped by the
+  title skeleton (whole families held out), exactly as TC-5. Each dev document
+  is scored by its held-out fold's alpha, and the pooled matrix is evaluated
+  once. The full-dev grid is reported beside the CV number as tuned.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764). Test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / unseen, with the **tail** called out. A paired bootstrap
+over documents (2,000 resamples) gives the smoothed-minus-base R@50 difference
+on each slice for each base.
+
+**Pre-registered bar.**
+
+- A **win** requires the primary (embedding) base's cross-validated smoothed
+  scores to improve `family_new` **R@50 by at least 0.01**, with the paired
+  95 % interval **excluding 0**, and to lose **R-precision and nDCG@10 by no
+  more than 0.01** on `family_new`.
+- A collapse on any bucket (head / torso / tail / unseen) is reported even if
+  the pooled number rises.
+- Otherwise it is a **null**: record it and do not proceed to menu item 5.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** The co-occurrence matrix from the train labels (seconds), three
+boosts (top-10 × dense matrix, ~15 s each), the 5-fold × 8-alpha grid on dev
+(~2 min), the metrics and bootstrap. No new model, no re-embedding pass beyond
+the cache, no LLM.
+
+**Not tested here.** PMI or other co-occurrence normalisations, other `M`
+values, a learned combiner over co-occurrence features, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-cooccurrence/metrics.json` (run `eurlex-cooccurrence`,
+**178.2 s**, no LLM; embedding cache 51,000 hits / 0 misses). The train-only
+co-occurrence matrix has **4,107** labels with a row (of 4,197), **224,424**
+directed non-zero pairs. The 89 dev zero-shot labels have no row (zero train
+support), and one train label appears only in a single-label document, so 90 of
+the 4,197 labels cannot be boosted by construction. All three bases were
+re-scored in the run and reproduce their sections: embedding
+0.8944, lexical 0.9138, RRF 0.9165 `family_new` R@50.
+
+**Selected alphas (5-fold family-grouped CV, one per fold):**
+
+| base | fold alphas | CV-smoothed family_new R@50 vs base |
+|---|---|---|
+| embedding k-NN (primary) | **0, 0, 0, 0, 0** | 0.8944 vs 0.8944 (Δ **0.0000**) |
+| lexical k-NN (exploratory) | 0.05, 0.05, 0.05, 0.05, 0.05 | 0.9144 vs 0.9138 (Δ +0.0007) |
+| RRF fusion (exploratory) | 0, 0.05, 0, 0, 0 | 0.9162 vs 0.9165 (Δ −0.0003) |
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| base | slice | unsmoothed | CV-smoothed |
+|---|---|---|---|
+| embedding | all_dev | 0.9168 / 0.5715 / 0.7070 | 0.9168 / 0.5715 / 0.7070 |
+| embedding | family_new | 0.8944 / 0.4869 / 0.6364 | 0.8944 / 0.4869 / 0.6364 |
+| embedding | family_new_clean | 0.8862 / 0.4744 / 0.6241 | 0.8862 / 0.4744 / 0.6241 |
+| lexical | all_dev | 0.9317 / 0.6152 / 0.7517 | 0.9327 / 0.6125 / 0.7491 |
+| lexical | family_new | 0.9138 / 0.5415 / 0.6902 | 0.9144 / 0.5383 / 0.6869 |
+| lexical | family_new_clean | 0.9065 / 0.5293 / 0.6771 | 0.9071 / 0.5260 / 0.6736 |
+| RRF | all_dev | 0.9337 / 0.6164 / 0.7581 | 0.9336 / 0.6107 / 0.7528 |
+| RRF | family_new | 0.9165 / 0.5428 / 0.6997 | 0.9162 / 0.5386 / 0.6941 |
+| RRF | family_new_clean | 0.9094 / 0.5317 / 0.6882 | 0.9090 / 0.5278 / 0.6825 |
+
+**Full-dev R@50 grid on `family_new` (tuned on dev, reported for shape):**
+
+| alpha | embedding | lexical | RRF |
+|---:|---:|---:|---:|
+| 0 | **0.8944** | 0.9138 | **0.9165** |
+| 0.05 | 0.8906 | **0.9144** | 0.9164 |
+| 0.1 | 0.8878 | 0.9137 | 0.9161 |
+| 0.2 | 0.8831 | 0.9102 | 0.9154 |
+| 0.3 | 0.8786 | 0.9064 | 0.9144 |
+| 0.5 | 0.8719 | 0.8998 | 0.9124 |
+| 0.75 | 0.8610 | 0.8918 | 0.9100 |
+| 1.0 | 0.8536 | 0.8838 | 0.9076 |
+
+**Tail bucket (`family_new` label-level recall@50):** embedding **0.4011 →
+0.4011** (α = 0); lexical **0.5404 → 0.5330**; RRF **0.4830 → 0.4819**. At
+larger α the tail falls with the rest; there is no α in the grid where it rises.
+
+**Paired bootstrap over documents (CV-smoothed − base R@50, 2,000 resamples):**
+
+| base | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| embedding | 0.0000 [0.0000, 0.0000] | 0.0000 [0.0000, 0.0000] | 0.0000 [0.0000, 0.0000] |
+| lexical | +0.0009 [+0.0003, +0.0016] | +0.0007 [−0.0001, +0.0015] | +0.0006 [−0.0003, +0.0015] |
+| RRF | −0.0001 [−0.0004, +0.0001] | −0.0003 [−0.0006, −0.0001] | −0.0003 [−0.0007, −0.0001] |
+
+**The bar, read out.**
+
+- **R@50 gain ≥ 0.01 on the primary base: not met.** The CV selects **α = 0 in
+  every fold**, so the smoothed embedding scores are the baseline exactly (the
+  delta is 0 by construction, not a rounding artifact).
+- **Interval excluding 0: not met** (the interval is [0, 0]).
+- **The grid explains the selection.** For the embedding base, R@50 falls
+  monotonically from 0.9168 at α = 0 to 0.8856 at α = 1 (all dev), and
+  `family_new` from 0.8944 to 0.8536. There is no interior optimum: the boost
+  is not aligned with the k-NN's ranking, only a weaker version of it.
+- **The stronger bases do not rescue it.** Lexical's best α (0.05) buys
+  +0.0007 `family_new` R@50 with an interval touching zero, and costs
+  R-precision (−0.0032) and nDCG@10 (−0.0033); the RRF base is slightly
+  *negative*. Both are exploratory and neither passes the bar.
+- **The tail hypothesis fails.** The plan expected a head label to lift its
+  tail neighbours; instead the tail falls at every non-zero α on the lexical
+  base (0.5404 → 0.5330) and is flat on the embedding base (α = 0).
+
+**Reading.** Co-occurrence smoothing is a **null**. At 4,197 labels the
+co-occurrence matrix is broad and head-dominated, and its z-scored boost mostly
+re-weights labels the k-NN already found: the boost's own ranking is weaker
+than the k-NN's, so adding it can only dilute. The 5-fold family-grouped CV
+recognises this and selects α = 0, which is the honest outcome rather than a
+knob to force. The co-occurrence idea is not refuted in every form — a PMI
+matrix, a per-bucket alpha, or a learned combiner over co-occurrence features
+remain untested — but this cheap additive form does not license menu item 5.
+
+**What the result does not say.** Nothing about `test`; nothing about PMI or
+other normalisations, other `M`, per-bucket alphas, or a learned combiner; and
+nothing about whether co-occurrence helps a *reranker* rather than a shortlist.
