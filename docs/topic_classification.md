@@ -1919,3 +1919,196 @@ item 11, which needs explicit approval.
 task-fitted reranker or a listwise/LLM reranker; nothing about reranking the
 embedding or RRF top-50 instead of the lexical one (unlikely to rescue an
 off-distribution scorer); nothing about a shorter query view.
+
+## 20. Learned candidate pack — TC-14 (pre-registered 2026-11-13, before the run)
+
+**Question.** Every cheap *global* combination so far has been a null (TC-5's
+one-parameter fusion, TC-10's co-occurrence boost), and the cross-encoder
+rerank was destructive (TC-13). Does a **learned per-candidate model** — trained
+on train candidates and applied to dev — order the shortlist better than the
+strongest single retriever? The UPR precedent is that the dictionary's value
+lived inside a learned pack, not a global weight.
+
+**Mechanism (fixed before the run).**
+
+- **Candidate union (per document):** the union of the **top-50** lists from
+  (a) the embedding k-NN, (b) the lexical TF-IDF k-NN, and (c) the train
+  frequency prior. The union is ≤ 150 labels per document.
+- **Features (11, identical at train and dev time):**
+  1. `embedding_score` — the k-NN vote sum;
+  2. `lexical_score` — the TF-IDF k-NN vote sum;
+  3. `rrf_score` — reciprocal-rank fusion of the two rankings (top-50,
+     offset 60), the TC-9 signal;
+  4. `label_rate` — the label's document frequency **divided by the index
+     size** (so the out-of-fold train index and the full train index are on
+     one scale);
+  5. `label_cosine` — the document vector's cosine to the label title
+     (cached embeddings, titles only);
+  6. `doc_words` — the document's length in words;
+  7–9. `bucket_head` / `bucket_torso` / `bucket_tail` — one-hot train-support
+     bucket;
+  10–11. `rank_embedding` / `rank_lexical` — the candidate's rank in each
+     retriever, clipped at 50.
+- **Deliberate omission — the dictionary arms.** The menu lists the z-scored
+  dictionary among the features. A **leak-free, fold-specific** dictionary for
+  the 45,000 train candidates is not affordable with the current scorer (the
+  dev-only scoring already costs ~15 min per arm; a five-fold train scoring is
+  hours). The frequency prior (feature 4) is the dictionary's cheap count arm;
+  the z-scored arms are **not** in this pack. This is a scope decision recorded
+  before the run, not a result.
+- **Training data — the leak-free cross-fit.** The train split is split into
+  **5 folds grouped by the title skeleton** (whole families held out). For each
+  fold, the index is the **other four folds**: the embedding k-NN, the TF-IDF
+  (refitted on the index), and the frequency prior are built from the index
+  only, and the held-out documents' candidates/features are generated from it.
+  A train document therefore never retrieves from its own family, and its
+  features never see its own labels. The target is "the candidate is one of
+  the document's gold labels". The model is fitted once on the pooled
+  out-of-fold rows.
+- **Dev data:** the same features computed against the **full train index**
+  (the pipeline's normal retrieval). No dev label enters any feature or the
+  training set.
+- **Model:** `HistGradientBoostingClassifier` with fixed parameters
+  (`max_iter=200`, `learning_rate=0.1`, `max_leaf_nodes=31`,
+  `min_samples_leaf=100`, `early_stopping=False`, `random_state=42`). No
+  hyper-parameter search.
+- **Pack ranking:** the dev document's candidates sorted by the model score
+  (ties by the candidate's RRF rank), followed by the labels outside the union
+  in RRF order.
+- **Comparators:** the **lexical k-NN** (the strongest single retriever,
+  `family_new` 0.9138 R@50 / 0.5415 R-precision / 0.6902 nDCG@10) is the
+  primary comparator; the **RRF fusion** (0.9165 / 0.5428 / 0.6997) is
+  reported beside it, and the embedding k-NN is the reference baseline.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764). Test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / unseen. A paired bootstrap over documents (2,000
+resamples) gives the pack-minus-comparator intervals.
+
+**Pre-registered bar.**
+
+- **Shortlist win:** the pack must improve `family_new` **R@50 by at least
+  0.01** over the **lexical** comparator, with the paired 95 % interval
+  excluding 0, and lose **R-precision and nDCG@10 by no more than 0.01**.
+- **Ordering win (secondary):** if R@50 does not move but nDCG@10 improves by
+  at least **0.01** with the interval excluding 0 and R@50 loses no more than
+  0.01, the outcome is `ordering_win_only` — an ordering gain, not a shortlist
+  win.
+- Otherwise it is a **null**: record it and do not proceed to menu item 9.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** Five out-of-fold retrievals (TF-IDF refits ~40 s each; sparse cosine
+~1 min each; embedding k-NN ~30 s each), the feature rows (~5 M candidate rows),
+the HistGB fit, and the dev scoring. Roughly 20–30 min on CPU; no GPU, no LLM,
+no model download.
+
+**Not tested here.** The z-scored dictionary arms, co-occurrence features, a
+logistic variant (the plan allows logistic or HistGB; HistGB is fixed here),
+hyper-parameter search, a candidate set drawn from the dev folds, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-candidate-pack/metrics.json` (run
+`eurlex-candidate-pack`, **543.5 s**, no LLM; document cache 51,000 hits, label
+cache 4,197). Training: five out-of-fold folds, **4,746,172 candidate rows**
+(4.51 % positive, ~105.4 candidates/document), 84 s per fold. Dev: **632,709
+candidate rows** (105.45 per document). The comparator rankings reproduce their
+sections exactly (lexical `family_new` 0.9138 / 0.5415 / 0.6902; RRF 0.9165 /
+0.5428 / 0.6997).
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| embedding k-NN (reference) | 0.9168 / 0.5715 / 0.7070 | 0.8944 / 0.4869 / 0.6364 | 0.8862 / 0.4744 / 0.6241 |
+| lexical k-NN (primary comparator) | 0.9317 / 0.6152 / 0.7517 | 0.9138 / 0.5415 / 0.6902 | 0.9065 / 0.5293 / 0.6771 |
+| RRF fusion (secondary comparator) | 0.9337 / 0.6164 / 0.7581 | 0.9165 / 0.5428 / 0.6997 | 0.9094 / 0.5317 / 0.6882 |
+| **candidate pack (HistGB)** | **0.9422 / 0.6488 / 0.7861** | **0.9278 / 0.5818 / 0.7343** | **0.9218 / 0.5710 / 0.7229** |
+
+**Secondary metrics by slice (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | lexical | 0.6054 | 0.7684 | 0.8678 | **0.9512** | 0.8178 |
+| all_dev | RRF | 0.6112 | 0.7764 | 0.8740 | 0.9481 | 0.8220 |
+| all_dev | **pack** | **0.6398** | **0.8049** | **0.8950** | 0.9494 | **0.8427** |
+| family_new | lexical | 0.5366 | 0.7068 | 0.8304 | **0.9390** | 0.7739 |
+| family_new | RRF | 0.5435 | 0.7187 | 0.8397 | 0.9355 | 0.7800 |
+| family_new | **pack** | **0.5786** | **0.7546** | **0.8670** | 0.9370 | **0.8058** |
+| family_new_clean | lexical | 0.5272 | 0.6936 | 0.8181 | **0.9344** | 0.7628 |
+| family_new_clean | RRF | 0.5360 | 0.7075 | 0.8298 | 0.9299 | 0.7697 |
+| family_new_clean | **pack** | **0.5708** | **0.7429** | **0.8574** | 0.9314 | **0.7964** |
+
+**Diagnostics (coverage@50; label-level recall@50 by head / torso / tail /
+unseen):**
+
+| slice | method | coverage@50 | head | torso | tail | unseen |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | lexical | 0.9985 | 0.9682 | 0.8475 | 0.5414 | 0.0 |
+| all_dev | RRF | 0.9987 | 0.9720 | 0.8454 | 0.4862 | 0.0 |
+| all_dev | **pack** | **0.9988** | **0.9759** | **0.8637** | **0.5690** | 0.0 |
+| family_new | lexical | 0.9981 | 0.9578 | 0.8426 | 0.5404 | 0.0 |
+| family_new | RRF | 0.9984 | 0.9633 | 0.8403 | 0.4830 | 0.0 |
+| family_new | **pack** | **0.9986** | **0.9689** | **0.8605** | **0.5681** | 0.0 |
+| family_new_clean | lexical | 0.9979 | 0.9541 | 0.8312 | 0.5208 | 0.0 |
+| family_new_clean | RRF | 0.9981 | 0.9598 | 0.8284 | 0.4642 | 0.0 |
+| family_new_clean | **pack** | **0.9984** | **0.9661** | **0.8504** | **0.5508** | 0.0 |
+
+The unseen bucket stays 0.0 for every arm — the pack's candidates are all
+seen labels (the union's retrievers cannot score a label with no train
+example); the zero-shot quota (TC-11) remains the separate route.
+
+**Paired bootstrap over documents (2,000 resamples):**
+
+| comparator | slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|---|
+| lexical | all_dev | **+0.0104 [+0.0089, +0.0121]** | +0.0336 | +0.0343 |
+| lexical | family_new | **+0.0141 [+0.0119, +0.0163]** | **+0.0404** | **+0.0440** |
+| lexical | family_new_clean | **+0.0153 [+0.0129, +0.0177]** | +0.0417 | +0.0458 |
+| RRF | all_dev | +0.0085 [+0.0071, +0.0100] | +0.0324 | +0.0279 |
+| RRF | family_new | **+0.0113 [+0.0094, +0.0132]** | +0.0390 | +0.0346 |
+
+**The bar, read out.**
+
+- **R@50 gain ≥ 0.01 over the lexical k-NN: passed.** **+0.0141** on
+  `family_new` (0.9278 vs 0.9138), interval entirely above zero; +0.0104 on
+  `all_dev` and +0.0153 on the clean slice.
+- **Interval excluding 0: passed.**
+- **R-precision and nDCG@10 loss ≤ 0.01: passed on the upside** — both
+  **improve** (+0.0404 and +0.0440 on `family_new`).
+- **Ordering bar: passed too** (nDCG@10 +0.0440, interval excluding 0).
+- **`outcome`: win** — the first arm to beat the strongest single retriever on
+  **both breadth and ordering**, and the tail rises as well (0.5404 → 0.5681
+  on `family_new`).
+- Against the RRF fusion the pack also wins (+0.0113 R@50, +0.0390
+  R-precision, +0.0346 nDCG@10 on `family_new`).
+
+**Reading.** The learned pack works where the global combinations failed
+(TC-5, TC-10): a per-candidate model can use the retrievers' **disagreement**
+— a label that the lexical ranking ranks low but the embedding ranks high, or
+that the frequency prior knows is common, is worth promoting — and the label
+metadata (name cosine, bucket) tells it when. The gain is large and consistent
+across every slice and every metric: +0.014 R@50, +0.040 R-precision, +0.044
+nDCG@10 on `family_new`. The tail improves too (the pack's top-50 now reaches
+0.568 of tail assignments vs 0.540 for lexical), because the candidate union
+and the features give rare labels a second chance.
+
+Two honest qualifications. First, the pack is trained on **out-of-fold train
+candidates** (the 4/5 index) and evaluated on dev candidates from the **full
+train index**: the features are on a slightly different index scale, and the
+`label_rate` feature is normalised by the index size exactly to keep that
+comparable. Second, the menu's **z-scored dictionary arms are not in the pack**
+(the pre-registered scope decision): the pack's gain comes from the two
+retrievers, the frequency prior and the label metadata — not from the
+dictionary. A dictionary-in-pack variant would need the fold-specific scoring
+this change set could not afford.
+
+**What the result does not say.** Nothing about `test`; nothing about the
+dictionary arms as features, co-occurrence features, a logistic variant or any
+hyper-parameter search; nothing about refitting the pack for a production
+snapshot; and nothing about the zero-shot labels, which still need the quota.
+The pack is a **dev-tuned model**, so the final test shot (menu item 13) is
+still a separate decision.

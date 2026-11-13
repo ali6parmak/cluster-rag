@@ -106,6 +106,7 @@ is the map.
 | TC-11 | **Zero-shot quota** (menu item 5) — reserve the bottom-5 slots of the top-50 for the best zero-shot labels by title cosine | **win**: unseen **34/96 (0.3542)** vs 0/96 for every seen-label arm, with all_dev R@50 −0.0060 and family_new −0.0081 (both inside the 0.01 cap); R-precision/nDCG@10 unchanged by construction; the lexical/RRF bases reach 47/96 at N=10 but fail the family_new guard (0.0121/0.0124) | `results/eurlex-zero-shot-quota/metrics.json` | §17 | this commit |
 | TC-12 | **Cardinality / threshold calibration** (menu item 6) — global score threshold at the train mean cardinality vs fixed top-5 | **win (primary), base-dependent**: embedding threshold micro-F1 **0.4865 vs 0.4675** (Δ **+0.0190 [+0.0150, +0.0233]**), all_dev +0.0283, cardinality 5.071; the gain is micro-level (sample-F1/macro-F1 fall, tail stays 0); lexical top-5 beats its threshold (−0.0246) and RRF gains only +0.0062 (below bar) | `results/eurlex-threshold-calibration/metrics.json` | §18 | this commit |
 | TC-13 | **Cross-encoder rerank of the lexical top-50** (menu item 7) — ms-marco MiniLM L-6 (primary) / L-12 (secondary), rerank within the top-50 | **null (strong negative)**: `family_new` nDCG@10 **0.6902 → 0.4360** (Δ **−0.2543 [−0.2626, −0.2463]**) and R-precision −0.2276 with L-6; L-12 is worse (**−0.3783**); R@50 unchanged (0.9138) — the rerank destroys the ordering, it does not improve it | `results/eurlex-cross-encoder-rerank/metrics.json` | §19 | this commit |
+| TC-14 | **Learned candidate pack** (menu item 8) — out-of-fold train candidates, 11 features, HistGB; union of embedding/lexical/frequency top-50 | **win**: `family_new` R@50 **0.9278** vs lexical 0.9138 (Δ **+0.0141 [+0.0119, +0.0163]**), R-precision +0.0404, nDCG@10 +0.0440, tail 0.5404 → 0.5681; also beats RRF (Δ +0.0113); the z-scored dictionary arms were not features (scope) | `results/eurlex-candidate-pack/metrics.json` | §20 | this commit |
 
 ## 5. What we learned
 
@@ -178,6 +179,15 @@ is the map.
   document as query, the short label as passage) is the plausible cause. A
   task-fitted reranker (NLI or fine-tuned) is a different pre-registration;
   menu item 11 (fine-tune) needs approval.
+- **The learned candidate pack is the track's best shortlist.** A per-candidate
+  HistGB over 11 features (embedding / lexical / RRF scores, label rate,
+  label-name cosine, document length, bucket, retriever ranks), trained on
+  out-of-fold train candidates, reaches **0.9278 R@50 / 0.5818 R-precision /
+  0.7343 nDCG@10** on `family_new` — +0.0141 R@50, +0.0404 R-precision and
+  +0.0440 nDCG@10 over the strongest single retriever, with the tail rising
+  too (0.5404 → 0.5681). Unlike the global combinations (TC-5, TC-10), the
+  learned pack can use the retrievers' disagreement. The dictionary arms are
+  not in it (cost); a dictionary-in-pack ablation is the open follow-up.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -254,7 +264,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      point, and the top-100 recall is 0.9473, so the shortlist ceiling is high.
    - **Evaluate:** rerank vs k-NN on the same shortlist.
    - **Cost:** 6k × 50 pairs; CPU minutes–hours.
-8. **Learned candidate pack.**
+8. **Learned candidate pack.** — **TC-14 executed 2026-11-13: WIN.** The HistGB pack trained on out-of-fold train candidates beats the lexical k-NN on `family_new` by **+0.0141 R@50** (0.9278 vs 0.9138, interval excluding 0), **+0.0404 R-precision** and **+0.0440 nDCG@10**, and lifts the tail 0.5404 → 0.5681; it also beats the RRF fusion (+0.0113 R@50). The menu's z-scored dictionary arms are **not** features (the pre-registered scope decision); the pack's gain comes from the two retrievers, the frequency prior and the label metadata. Not adopted; the reviewer chooses (§20).
    - **What:** union of the k-NN and dictionary top-50; features = k-NN score,
      dictionary arms, label frequency, label-name cosine, label co-occurrence,
      document length (and the cross-encoder score if item 7 exists); train a
@@ -316,8 +326,10 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   term in a learned pack) keep the lexical tail gain while adding the
   embedding's breadth? TC-9's equal-weight RRF loses 0.057 tail recall
   against the lexical arm alone (§15).
-- Can a learned candidate pack beat the k-NN despite the one-parameter fusion
-  null? If so, which features carry the signal?
+- The learned pack **does** beat the k-NN by the shortlist bar (§20). Which
+  features carry its gain (the retriever scores, the label rate, the name cosine,
+  the ranks) is **not measured yet** — a feature ablation is the open follow-up,
+  as is a dictionary-in-pack variant (the z-scored arms were omitted for cost).
 - The **quota** answers the zero-shot question for the shortlist (34/96, §17);
   is a learned calibrator or a learned insertion ranker worth it, and can the
   quota's tail cost (0.4011 → 0.3617 on `family_new`) be recovered without
@@ -340,7 +352,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   fusion **secondary win**, not adopted): menu items 1–2.
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
   **null**; item 5: **win**, zero-shot quota; item 6: **win (primary), base-dependent**;
-  item 7: **null (strong negative)**; items 8–12 open): menu items 3–12.
+  item 7: **null (strong negative)**; item 8: **win**, the track's best shortlist;
+  items 9–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -384,7 +397,12 @@ base. **TC-13 = menu item 7** (cross-encoder rerank) is also executed and is a
 **strong negative**: ms-marco halves the ordering (nDCG@10 0.6902 → 0.4360 with
 L-6, worse with L-12) while leaving R@50 unchanged, so the off-the-shelf
 web-relevance model is not a usable reranker in this role assignment. The next
-change set is the reviewer's choice; menu item 8 is not queued.
+change set is the reviewer's choice. **TC-14 = menu item 8** (learned candidate
+pack) is also executed and **wins**: the out-of-fold HistGB pack reaches
+**0.9278 R@50 / 0.5818 R-precision / 0.7343 nDCG@10** on `family_new`, beating the
+lexical k-NN by +0.0141 R@50, +0.0404 R-precision and +0.0440 nDCG@10, with the
+tail up (0.5404 → 0.5681). It is the track's best shortlist so far, but it is a
+dev-tuned model and not adopted. Menu item 9 is not queued.
 
 ## 10. The durable deliverable
 
@@ -407,7 +425,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
   `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
   `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`,
-  `results/eurlex-cross-encoder-rerank/`.
+  `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
