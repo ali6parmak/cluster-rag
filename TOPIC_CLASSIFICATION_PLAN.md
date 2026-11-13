@@ -105,6 +105,7 @@ is the map.
 | TC-10 | **Label co-occurrence smoothing** (menu item 4) — top-10 labels vote for their train-only co-occurrence neighbours, α by family-grouped CV | **null**: the embedding base's CV selects **α=0 in all 5 folds** (Δ 0.0000); the grid falls monotonically (0.8944 → 0.8536 at α=1); the lexical base's best α=0.05 buys +0.0007 (CI touches 0) and loses ordering; the tail never rises | `results/eurlex-cooccurrence/metrics.json` | §16 | this commit |
 | TC-11 | **Zero-shot quota** (menu item 5) — reserve the bottom-5 slots of the top-50 for the best zero-shot labels by title cosine | **win**: unseen **34/96 (0.3542)** vs 0/96 for every seen-label arm, with all_dev R@50 −0.0060 and family_new −0.0081 (both inside the 0.01 cap); R-precision/nDCG@10 unchanged by construction; the lexical/RRF bases reach 47/96 at N=10 but fail the family_new guard (0.0121/0.0124) | `results/eurlex-zero-shot-quota/metrics.json` | §17 | this commit |
 | TC-12 | **Cardinality / threshold calibration** (menu item 6) — global score threshold at the train mean cardinality vs fixed top-5 | **win (primary), base-dependent**: embedding threshold micro-F1 **0.4865 vs 0.4675** (Δ **+0.0190 [+0.0150, +0.0233]**), all_dev +0.0283, cardinality 5.071; the gain is micro-level (sample-F1/macro-F1 fall, tail stays 0); lexical top-5 beats its threshold (−0.0246) and RRF gains only +0.0062 (below bar) | `results/eurlex-threshold-calibration/metrics.json` | §18 | this commit |
+| TC-13 | **Cross-encoder rerank of the lexical top-50** (menu item 7) — ms-marco MiniLM L-6 (primary) / L-12 (secondary), rerank within the top-50 | **null (strong negative)**: `family_new` nDCG@10 **0.6902 → 0.4360** (Δ **−0.2543 [−0.2626, −0.2463]**) and R-precision −0.2276 with L-6; L-12 is worse (**−0.3783**); R@50 unchanged (0.9138) — the rerank destroys the ordering, it does not improve it | `results/eurlex-cross-encoder-rerank/metrics.json` | §19 | this commit |
 
 ## 5. What we learned
 
@@ -169,6 +170,14 @@ is the map.
   still gets zero predictions. On the lexical ranking fixed top-5 is better
   (−0.025), and RRF gains only +0.006. The decision rule interacts with the
   ranking; no single set predictor is chosen.
+- **An off-the-shelf cross-encoder is not a usable reranker here.** Reranking the
+  lexical top-50 with ms-marco MiniLM **halves** the top-10 hit rate: nDCG@10
+  0.6902 → 0.4360 (`family_new`, Δ −0.2543), R-precision −0.2276, and the
+  larger L-12 is worse (−0.3783). The candidate set does not move (R@50
+  0.9138), so the failure is purely ordering, and the role mismatch (the long
+  document as query, the short label as passage) is the plausible cause. A
+  task-fitted reranker (NLI or fine-tuned) is a different pre-registration;
+  menu item 11 (fine-tune) needs approval.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -238,7 +247,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 
 ### Medium
 
-7. **Cross-encoder rerank of the top-50.**
+7. **Cross-encoder rerank of the top-50.** — **TC-13 executed 2026-11-13: NULL (strong negative).** The lexical top-50 reranked by ms-marco MiniLM loses **0.2543 nDCG@10** on `family_new` (0.6902 → 0.4360, interval entirely below zero) and 0.2276 R-precision; the bigger L-12 is worse (−0.3783). R@50 is unchanged by construction. The off-the-shelf web-relevance cross-encoder is unusable in the document-as-query / label-as-passage role assignment (see `docs/topic_classification.md` §19); a task-fitted reranker would be a new, more expensive pre-registration.
    - **What:** rerank the k-NN top-50 with a cross-encoder (cached ms-marco
      MiniLM or a legal-domain model) over (document, label title) pairs.
    - **Why:** target R-precision / nDCG@10; the k-NN ordering is the weak
@@ -331,7 +340,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   fusion **secondary win**, not adopted): menu items 1–2.
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
   **null**; item 5: **win**, zero-shot quota; item 6: **win (primary), base-dependent**;
-  items 7–12 open): menu items 3–12.
+  item 7: **null (strong negative)**; items 8–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -371,7 +380,11 @@ inside the 0.01 cap. **TC-12 = menu item 6** (cardinality / threshold calibratio
 is also executed and **wins on the primary base**: the global threshold lifts
 `family_new` micro-F1 by **+0.019** over top-5 (all_dev +0.028) at 5.071
 labels/doc, but the gain is micro-level and does not generalise to the lexical
-base. The next change set is the reviewer's choice; menu item 7 is not queued.
+base. **TC-13 = menu item 7** (cross-encoder rerank) is also executed and is a
+**strong negative**: ms-marco halves the ordering (nDCG@10 0.6902 → 0.4360 with
+L-6, worse with L-12) while leaving R@50 unchanged, so the off-the-shelf
+web-relevance model is not a usable reranker in this role assignment. The next
+change set is the reviewer's choice; menu item 8 is not queued.
 
 ## 10. The durable deliverable
 
@@ -393,7 +406,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
   `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
-  `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`.
+  `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`,
+  `results/eurlex-cross-encoder-rerank/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

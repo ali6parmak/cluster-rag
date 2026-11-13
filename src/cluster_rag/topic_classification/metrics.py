@@ -49,41 +49,55 @@ def _validate(gold: Sequence[set[int]], n_documents: int, n_labels: int) -> None
             raise ValueError(f"gold label index outside [0, {n_labels})")
 
 
-def recall_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> float:
-    """Macro recall@k: mean over documents of ``|top-k ∩ gold| / |gold|``."""
-    if k < 1:
-        raise ValueError(f"k must be positive, got {k}")
-    recalls = []
+def per_document_r_precision(ranked: np.ndarray, gold: Sequence[set[int]]) -> np.ndarray:
+    """Per-document precision at ``k = |gold|`` (the paired bootstrap's unit)."""
+    ranked = np.asarray(ranked)
+    if len(gold) != ranked.shape[0]:
+        raise ValueError(f"{len(gold)} gold sets for {ranked.shape[0]} ranked rows")
+    values = np.empty(len(gold), dtype=np.float64)
     for row, labels in enumerate(gold):
-        top = set(ranked[row, : min(k, ranked.shape[1])].tolist())
-        recalls.append(len(top & labels) / len(labels))
-    return float(np.mean(recalls))
-
-
-def r_precision(ranked: np.ndarray, gold: Sequence[set[int]]) -> float:
-    """Macro R-precision: mean precision at ``k = |gold|`` over documents."""
-    values = []
-    for row, labels in enumerate(gold):
+        if not labels:
+            raise ValueError("every document must have at least one gold label")
         k = min(len(labels), ranked.shape[1])
         top = set(ranked[row, :k].tolist())
-        values.append(len(top & labels) / len(labels))
-    return float(np.mean(values))
+        values[row] = len(top & labels) / len(labels)
+    return values
 
 
-def ndcg_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> float:
-    """Macro nDCG@k with binary relevance and the standard log2 discount."""
+def per_document_ndcg_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> np.ndarray:
+    """Per-document nDCG@k with binary relevance (the paired bootstrap's unit)."""
     if k < 1:
         raise ValueError(f"k must be positive, got {k}")
-    values = []
+    ranked = np.asarray(ranked)
+    if len(gold) != ranked.shape[0]:
+        raise ValueError(f"{len(gold)} gold sets for {ranked.shape[0]} ranked rows")
+    values = np.empty(len(gold), dtype=np.float64)
     for row, labels in enumerate(gold):
+        if not labels:
+            raise ValueError("every document must have at least one gold label")
         top = ranked[row, : min(k, ranked.shape[1])].tolist()
         dcg = sum(
             1.0 / np.log2(position + 2) for position, label in enumerate(top) if label in labels
         )
         ideal = min(k, len(labels))
         idcg = sum(1.0 / np.log2(position + 2) for position in range(ideal))
-        values.append(dcg / idcg if idcg else 0.0)
-    return float(np.mean(values))
+        values[row] = dcg / idcg if idcg else 0.0
+    return values
+
+
+def recall_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> float:
+    """Macro recall@k: mean over documents of ``|top-k ∩ gold| / |gold|``."""
+    return float(np.mean(per_document_recall_at_k(ranked, gold, k)))
+
+
+def r_precision(ranked: np.ndarray, gold: Sequence[set[int]]) -> float:
+    """Macro R-precision: mean precision at ``k = |gold|`` over documents."""
+    return float(np.mean(per_document_r_precision(ranked, gold)))
+
+
+def ndcg_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> float:
+    """Macro nDCG@k with binary relevance and the standard log2 discount."""
+    return float(np.mean(per_document_ndcg_at_k(ranked, gold, k)))
 
 
 def per_document_recall_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: int) -> np.ndarray:

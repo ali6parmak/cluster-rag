@@ -11,6 +11,8 @@ from cluster_rag.topic_classification.metrics import (
     label_recall_at_k,
     ndcg_at_k,
     paired_bootstrap_ci,
+    per_document_ndcg_at_k,
+    per_document_r_precision,
     per_document_recall_at_k,
     r_precision,
     ranked_labels,
@@ -99,6 +101,16 @@ def test_evaluate_ranked_accepts_a_modified_order() -> None:
     after = evaluate_ranked(moved, gold, {59: "tail"})
     assert before["primary"]["recall@50"] == 0.0
     assert after["primary"]["recall@50"] == 1.0
+
+
+def test_per_document_r_precision_and_ndcg_match_the_macro_averages() -> None:
+    scores = np.array([[0.9, 0.8, 0.1, 0.0], [0.0, 0.1, 0.8, 0.9]])
+    ranked = ranked_labels(scores)
+    gold = [{0, 2}, {2, 3}]
+    assert per_document_r_precision(ranked, gold).mean() == pytest.approx(r_precision(ranked, gold))
+    assert per_document_ndcg_at_k(ranked, gold, 2).mean() == pytest.approx(
+        ndcg_at_k(ranked, gold, 2)
+    )
 
 
 def test_per_document_recall_matches_the_macro_average() -> None:

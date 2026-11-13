@@ -1769,3 +1769,153 @@ comparison, while the lexical top-5 remains the best `family_new` set
 per-bucket or per-document thresholds, a learned cardinality predictor, or an
 F1-optimal threshold (the calibration targets the **cardinality**); and nothing
 about recovering the tail, which no ~5-label operating point reaches.
+
+## 19. Cross-encoder rerank of the lexical top-50 — TC-13 (pre-registered 2026-11-13, before the run)
+
+**Question.** The lexical TF-IDF k-NN is the strongest single ranking on the
+honest slice (0.9138 R@50 on `family_new`), but its **ordering** is the weak
+point: R-precision 0.5415 and nDCG@10 0.6902. The top-50 is already ~91 %
+complete, so the remaining gain is not breadth — it is putting the right labels
+first. Does a cross-encoder rerank of the lexical top-50 improve the ordering?
+
+**Mechanism (fixed before the run).**
+
+- **Base — lexical k-NN:** the TC-9 arm — TF-IDF word 1–2 grams, `min_df = 2`,
+  `max_features = 200,000`, sublinear TF, cosine, `k = 100`, power 1.0 — fitted
+  on train and recomputed in this run. The rerank is compared with **this same
+  base**, not with the embedding k-NN.
+- **Candidates:** the base's **top-50** per dev document.
+- **Pair:** query = the document's `full_text` (the same title + header +
+  recitals + main_body view as every section), document = the candidate
+  **label title**. The pair is truncated at the model's 512-token budget; the
+  client records how many inputs it truncated.
+- **Primary model:** `cross-encoder/ms-marco-MiniLM-L-6-v2`, revision
+  `c5ee24cb16019beea0893ab7796b1df96625c6b8`, the existing `cross_encoder`
+  kind (sigmoid of the classification logit), `float32`, `max_length = 512`,
+  `batch_size = 128`, `device = cuda`.
+- **Secondary model:** `cross-encoder/ms-marco-MiniLM-L-12-v2`, revision
+  `7b0235231ca2674cb8ca8f022859a6eba2b1c968`, same settings except
+  `batch_size = 64`. It is a **secondary** read with the same bar; a win on
+  L-12 alone is recorded as `secondary_win_only` and is not adopted.
+- **Rerank:** sort the 50 candidates by cross-encoder score descending, ties
+  broken by the base rank; positions 51+ keep the base order. **R@50 is
+  unchanged by construction** (the candidate set is the same); the targets are
+  nDCG@10 and R-precision.
+- **Scores** are cached in the rerankers' own cache (`cache/rerank/`, separate
+  from the embedding cache). No LLM, no test data.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764).
+
+**Metrics.** Primary: **nDCG@10** (ordering). Guard: **R-precision** (must not
+fall by more than 0.005). Check: **R@50 identical** to the base (within
+1e-9). Secondary: R@5, R@10, R@20, R@100, nDCG@50. Diagnostics: coverage@50
+and label-level recall@50 by head / torso / tail / unseen. A **paired bootstrap
+over documents** (2,000 resamples) gives the intervals of the nDCG@10 and
+R-precision differences.
+
+**Pre-registered bar.**
+
+- A **win** requires the L-6 rerank to improve `family_new` **nDCG@10 by at
+  least 0.01**, with the paired 95 % interval **excluding 0**, and to lose
+  **R-precision by no more than 0.005** on `family_new`.
+- **R@50 must be unchanged**; any change means the candidate set moved and the
+  reading is void.
+- The L-12 read uses the same bar. If only L-12 wins, the outcome is
+  `secondary_win_only`.
+- Otherwise it is a **null**: record it and do not proceed to menu item 8.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** 300,000 pairs per model. Measured on this machine's GPU (RTX 4070 Ti
+Super, 16 GB): ~850 pairs/s at 512 tokens → **~6 min per model**; the base,
+slices, evaluation and bootstrap add ~10 min CPU. The run needs GPU device
+access, which the command sandbox's private `/dev` does not provide by default.
+No model download (both cross-encoders are already in the local HF cache).
+
+**Not tested here.** Other bases (the embedding or RRF top-50), other candidate
+depths, other reranker families (listwise, LLM yes/no), a fine-tuned
+cross-encoder, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-cross-encoder-rerank/metrics.json` (run
+`eurlex-cross-encoder-rerank`, **1,157 s**, no LLM). Both rerankers ran on the
+GPU (RTX 4070 Ti Super): L-6 **405 s**, L-12 **661 s** for 300,000 pairs each
+(peak 1,184 MB; **174,779 of 300,000 pairs** — 58 % — truncated at 512 tokens;
+6,000 cache misses and 0 hits per model on the first scoring pass). The base
+ranking reproduces TC-9 exactly: lexical `all_dev` 0.9317 R@50 / 0.7517
+nDCG@10 / 0.6152 R-precision; `family_new` 0.9138 / 0.6902 / 0.5415. R@50,
+coverage and the bucket recalls are **identical** before and after both
+reranks — the candidate set is unchanged, so the whole effect is the ordering
+inside the top-50.
+
+**Primary metrics by slice (nDCG@10 / R-precision / R@50):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| baseline — lexical top-50 | **0.7517 / 0.6152 / 0.9317** | **0.6902 / 0.5415 / 0.9138** | **0.6771 / 0.5293 / 0.9065** |
+| L-6 rerank (primary) | 0.4872 / 0.3563 / 0.9317 | 0.4360 / 0.3139 / 0.9138 | 0.4329 / 0.3111 / 0.9065 |
+| L-12 rerank (secondary) | 0.3199 / 0.2234 / 0.9317 | 0.3119 / 0.2207 / 0.9138 | 0.3093 / 0.2184 / 0.9065 |
+
+**Secondary metrics by slice (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | **0.6054** | **0.7684** | **0.8678** | 0.9512 | **0.8178** |
+| all_dev | L-6 | 0.3691 | 0.5409 | 0.7248 | 0.9512 | 0.6383 |
+| all_dev | L-12 | 0.2307 | 0.3622 | 0.5615 | 0.9512 | 0.5280 |
+| family_new | baseline | **0.5366** | **0.7068** | **0.8304** | 0.9390 | **0.7739** |
+| family_new | L-6 | 0.3199 | 0.4880 | 0.6855 | 0.9390 | 0.6012 |
+| family_new | L-12 | 0.2230 | 0.3558 | 0.5624 | 0.9390 | 0.5193 |
+| family_new_clean | baseline | **0.5272** | **0.6936** | **0.8181** | 0.9344 | **0.7628** |
+| family_new_clean | L-6 | 0.3178 | 0.4842 | 0.6797 | 0.9344 | 0.5963 |
+| family_new_clean | L-12 | 0.2211 | 0.3540 | 0.5590 | 0.9344 | 0.5141 |
+
+**Paired bootstrap over documents (rerank − baseline):**
+
+| model | slice | Δ nDCG@10 [95 % CI] | Δ R-precision [95 % CI] |
+|---|---|---|---|
+| L-6 | all_dev | **−0.2646 [−0.2712, −0.2577]** | −0.2588 [−0.2659, −0.2519] |
+| L-6 | family_new | **−0.2543 [−0.2626, −0.2463]** | −0.2276 [−0.2363, −0.2192] |
+| L-6 | family_new_clean | −0.2442 [−0.2527, −0.2355] | −0.2182 [−0.2270, −0.2089] |
+| L-12 | family_new | **−0.3783 [−0.3872, −0.3692]** | −0.3207 [−0.3292, −0.3124] |
+| L-12 | all_dev | −0.4319 [−0.4396, −0.4240] | −0.3918 [−0.3997, −0.3837] |
+
+**The bar, read out.**
+
+- **nDCG@10 gain ≥ 0.01: not met — it is a loss of 0.254.** The interval is
+  entirely below zero; the rerank more than a third of the baseline's nDCG@10
+  on `family_new`.
+- **R-precision loss ≤ 0.005: not met.** It loses **0.2276** (L-6) and
+  **0.3207** (L-12).
+- **R@50 unchanged: passed** (0.9138 exactly; the candidate set is fixed).
+- **Both models are null**, and the larger model is *worse* (L-12 −0.378 vs
+  L-6 −0.254): the failure is not capacity.
+- **`outcome`: null.**
+
+**Reading.** This is not a neutral rerank — it is **destructive**. The lexical
+base puts a gold label in the top 10 for 0.71 of documents; after the ms-marco
+rerank that falls to **0.49** (L-6) and **0.36** (L-12), while the top-50 still
+contains the same 91 % of gold. The model is reordering a nearly complete
+candidate set into a much worse order.
+
+The most plausible mechanism is the **role mismatch the pre-registration
+flagged**: ms-marco is trained for a short query → long passage; here the
+document is the query and the label title is the passage, and the scores are
+near-uniform (the smoke pass returned ~0.004 for generic titles). A bigger
+ms-marco does not fix that — it makes it worse. The 58 % truncation at 512
+tokens also means the query side sees only the document's front, but the
+lexical base reads the whole text, so truncation alone does not explain a
+collapse.
+
+The item is therefore answered for the plan's cheap option: **an off-the-shelf
+web-relevance cross-encoder is not a usable reranker for EUROVOC labels in this
+role assignment.** A task-fitted reranker (an NLI/entailment model scoring
+"this text is about {label}", or a cross-encoder fine-tuned on EURLEX pairs)
+would be a different, more expensive pre-registration — and fine-tuning is menu
+item 11, which needs explicit approval.
+
+**What the result does not say.** Nothing about `test`; nothing about a
+task-fitted reranker or a listwise/LLM reranker; nothing about reranking the
+embedding or RRF top-50 instead of the lexical one (unlikely to rescue an
+off-distribution scorer); nothing about a shorter query view.
