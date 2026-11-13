@@ -381,3 +381,134 @@ label-holdout mask; nothing about the decision model; nothing about label-name
 embeddings (titles are available but this arm does not use them); nothing about
 chunked embeddings (the MiniLM context is 256 tokens). The next step is the
 reviewer's.
+
+## 9. Family-held-out evaluation (pre-registered 2026-11-13, before the run)
+
+**Question.** The random dev split has 26.1% of documents with a train near
+neighbour at TF-IDF cosine ≥ 0.90, and its families are not held out. Does the
+embedding k-NN still beat the dictionary on documents whose **title-skeleton
+family never appears in the train index**, and how much of the 0.9168 R@50 is
+family memorisation?
+
+**Family definition.** The audit's title skeleton, unchanged: lowercase, digits
+→ `#`, punctuation removed, whitespace collapsed (`title_skeleton` in
+`experiments_topic_classification/audit_eurlex.py`). The evaluation slice is
+every dev document whose skeleton is **absent from train** — a family never in
+the index. The complement (family seen in train) is reported separately so the
+family effect is visible.
+
+**Slices.**
+
+- `all_dev` — all 6,000 dev documents (the 0.9168 comparator).
+- `family_new` — dev documents whose family is absent from train.
+- `family_seen` — the complement.
+- `family_new_clean` — `family_new` ∩ the audit's near-duplicate clean slice
+  (best train TF-IDF cosine < 0.90); the strongest "new document" view.
+- `family_new_seen_labels` — `family_new`, restricted to gold labels that have
+  at least one train example (the zero-shot labels removed), so family
+  generalisation is not confused with label absence.
+
+**Methods.** The same three dictionary arms (`sum_zscore_positive`,
+`sum_logodds`, `support_count`), the same MiniLM k-NN (k=100, power 1.0, cached
+vectors) and the frequency prior. No re-embedding; no new model.
+
+**Metrics.** The same primary and secondary set as section 8 (recall@50,
+R-precision, nDCG@10; recall@5/10/20/100; nDCG@50; coverage@50; label-level
+recall@50 by bucket), computed per slice.
+
+**Pre-registered reading.**
+
+- **Family effect.** If `kNN R@50(all_dev) − kNN R@50(family_new)` is at least
+  **0.05**, the random-split number is materially family-driven, and the
+  `family_new` number becomes the headline for the new-family claim.
+- **Embedding vs dictionary on new families.** The embedding is a clear winner
+  on `family_new` if its R@50 exceeds the best dictionary arm's by at least
+  **0.10**; a smaller gap makes the dictionary a viable new-family
+  alternative. The same comparison is read on `family_new_clean` and on
+  R-precision / nDCG@10.
+- **Zero-shot share.** If `family_new_seen_labels` exceeds `family_new` by more
+  than **0.05** R@50, label absence (not family overlap) is a material part of
+  the family-new drop; report both.
+- **No auto-adopt.** The numbers are the evidence; the reviewer decides the
+  next step.
+
+**Cost.** Dictionary rebuild (~34 s) + scoring the 6,000 dev documents on the
+three arms (the dominant cost, ~15 min) + cached MiniLM vectors + the k-NN
+(~15 s) + the near-duplicate slice (~30 s). No LLM, no new embedding pass.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-family-heldout/metrics.json` (run
+`eurlex-family-heldout`, 990 s; the MiniLM cache had 51,000 hits / 0 misses, no
+LLM). The slice is an **evaluation filter**, not a resplit: the index is still
+the original train split, and `family_new` is the dev documents whose title
+skeleton is absent from it.
+
+**Slice sizes.**
+
+| slice | documents | notes |
+|---|---:|---|
+| all dev | 6,000 | the 0.9168 comparator |
+| family_new | 4,260 | family absent from train |
+| family_seen | 1,740 | family present in train |
+| family_new_clean | 3,764 | family_new ∩ near-dup clean slice |
+| family_new_seen_labels | 4,260 | family_new, zero-shot gold labels removed |
+
+The family-new slice carries 21,994 gold assignments; only **88 (0.4%)** are
+zero-shot labels, so label absence is not the story. The seen-label view has
+the same 4,260 documents.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all dev | family_new | family_seen | family_new_clean |
+|---|---|---|---|---|
+| frequency prior | 0.3203 / 0.0769 / 0.1037 | 0.2420 / 0.0262 / 0.0524 | 0.5122 / 0.2011 / 0.2292 | 0.2347 / 0.0252 / 0.0505 |
+| dictionary `sum_zscore_positive` | 0.5388 / 0.3810 / 0.4835 | 0.4784 / 0.3023 / 0.4033 | 0.6868 / 0.5737 / 0.6798 | 0.4638 / 0.2867 / 0.3845 |
+| dictionary `sum_logodds` | 0.6714 / 0.3569 / 0.4571 | 0.5906 / 0.2732 / 0.3640 | 0.8693 / 0.5620 / 0.6850 | 0.5723 / 0.2586 / 0.3470 |
+| dictionary `support_count` | 0.8171 / 0.3376 / 0.4508 | 0.7668 / 0.3276 / 0.4295 | 0.9404 / 0.3621 / 0.5032 | 0.7443 / 0.3112 / 0.4095 |
+| embedding k-NN | 0.9168 / 0.5715 / 0.7070 | **0.8944 / 0.4869 / 0.6364** | **0.9718 / 0.7786 / 0.8797** | **0.8862 / 0.4744 / 0.6241** |
+
+**Family effect (R@50).**
+
+| method | all dev − family_new | family_seen − family_new |
+|---|---:|---:|
+| frequency prior | 0.0784 | 0.2702 |
+| dictionary `sum_zscore_positive` | 0.0604 | 0.2084 |
+| dictionary `sum_logodds` | 0.0808 | 0.2787 |
+| dictionary `support_count` | 0.0503 | 0.1736 |
+| embedding k-NN | **0.0224** | **0.0774** |
+
+**The bars, read out.**
+
+- **Pre-registered family effect: not met on the all-dev average.** The k-NN's
+  `all_dev − family_new` is **0.0224**, below the 0.05 bar. But the direct
+  family comparison is larger: **family_seen 0.9718 vs family_new 0.8944 =
+  0.0774**. The all-dev average is diluted because 71% of dev documents are
+  already family-new. So the random-split 0.9168 overstates the new-family
+  number by ~0.022; the **new-family R@50 is 0.8944**, and the
+  new-family-and-clean number is **0.8862**.
+- **Embedding vs dictionary on new families: clear winner.** The best
+  dictionary arm (`support_count`, R@50 0.7668) is **0.1276** behind the
+  embedding on family_new and **0.1420** behind on family_new_clean — both past
+  the 0.10 bar. On R-precision the gap is 0.1593 (0.4869 vs 0.3276); on
+  nDCG@10 it is 0.2069 (0.6364 vs 0.4295). The dictionary is not a substitute
+  on genuinely new families.
+- **The dictionary is more family-sensitive than the embedding.** Its all-dev
+  − family_new drop is 0.0503–0.0808 (versus the embedding's 0.0224), and its
+  family_seen − family_new gap is 0.17–0.28 (versus 0.077). The count arm's
+  family_new tail recall is **0.112**, still head-heavy; `sum_logodds` is the
+  most balanced dictionary arm (tail 0.539) but far below the embedding on
+  R-precision and nDCG.
+- **Zero-shot label absence is not the driver.** It is 0.4% of family-new
+  assignments; removing those labels changes the k-NN by +0.0027 R@50
+  (0.8970 seen-label vs 0.8944 overall), the z-scored dictionary by +0.0013,
+  and the count arm by +0.0019.
+
+**Reading.** The 0.917 random-split number is **not** mostly family
+memorisation: on documents whose family was never in the index the embedding
+still reaches **0.8944 R@50, 0.4869 R-precision, 0.6364 nDCG@10** (0.8862 /
+0.4744 / 0.6241 on the clean slice). That is the number to quote for the
+new-family claim. The embedding remains clearly ahead of the dictionary, and
+the dictionary's shortlist degrades more when the family is new. The next step
+is the reviewer's; the zero-shot label-name arm and the fusion/pack step are
+still open.
