@@ -2112,3 +2112,155 @@ hyper-parameter search; nothing about refitting the pack for a production
 snapshot; and nothing about the zero-shot labels, which still need the quota.
 The pack is a **dev-tuned model**, so the final test shot (menu item 13) is
 still a separate decision.
+
+## 21. Cluster routing / label pruning — TC-15 (pre-registered 2026-11-13, before the run)
+
+**Question.** The full ranking scores all **4,197** labels for every document.
+If a document is first routed to its nearest clusters of **train documents**,
+and only the labels those clusters actually carry are ranked, does the
+shortlist stay as good (or improve, by removing globally popular but
+irrelevant head labels) while the label space shrinks? The item is explicitly
+about **R@50 and cost against the full ranking**.
+
+**Mechanism (fixed before the run).**
+
+- **Base ranking:** the lexical TF-IDF k-NN (TC-9), the strongest single
+  retriever — `all_dev` 0.9317 R@50 / 0.6152 R-precision / 0.7517 nDCG@10;
+  `family_new` 0.9138 / 0.5415 / 0.6902. The learned pack (TC-14) is the
+  current best overall but is **not** the base here: routing is measured
+  against the full ranking of the same retriever, and combining routing with
+  the pack would be a separate change set.
+- **Clustering:** MiniLM whole-document vectors (cached), **MiniBatchKMeans**
+  with `K = 500` clusters on the 45,000 train vectors (`batch_size=4096`,
+  `n_init=3`, `max_iter=100`, `random_state=42`).
+- **Cluster label sets:** a cluster's labels are the labels carried by **at
+  least one** train document assigned to it (no support threshold).
+- **Routing:** a dev document is routed to the **C** clusters whose centroids
+  have the highest cosine to the document vector. **C = 3 is the primary**;
+  **C = 1 is a secondary**, more aggressive read. No C is tuned.
+- **Pruned ranking:** the union of the routed clusters' labels is the
+  **routed label set**; the ranking places those labels first, ordered by the
+  lexical score, then the remaining labels ordered by the lexical score. (The
+  ranking stays a full permutation, so every metric is comparable; the
+  pruning is a mask on what can enter the shortlist.)
+- **No new model, no LLM, no GPU**; the embeddings are cached.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260), `family_new_clean`
+(3,764). Test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50, label-level recall@50 by head /
+torso / tail / unseen, and — the routing-specific ones — the **routed label
+space** (mean and median labels per document, and its share of 4,197) and
+**routing recall** (the share of the document's gold labels that are in the
+routed set). A paired bootstrap over documents (2,000 resamples) gives the
+routed-minus-full intervals.
+
+**Pre-registered reading.**
+
+- **Shortlist win:** the C = 3 routed ranking must improve `family_new`
+  **R@50 by at least 0.01** with the paired 95 % interval excluding 0, lose
+  R-precision and nDCG@10 by no more than 0.01, **and** the mean routed label
+  space must be **at most 50 %** of the 4,197 labels (otherwise it is not
+  pruning).
+- **`efficiency_only`:** no shortlist win, but the `family_new` R@50 loss is
+  **≤ 0.005** with a mean routed label space **≤ 25 %** — a practical pruning
+  result, not a metric win.
+- The C = 1 read uses the same win conditions; if only C = 1 wins, the outcome
+  is `secondary_win_only`.
+- Otherwise it is a **null**: record it and do not proceed to menu item 10.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** MiniBatchKMeans on 45,000 × 384 (~1–3 min), the cluster label sets
+(seconds), the routing and the two pruned rankings (seconds), the cached
+lexical base and the metrics (~5 min). Minutes total; no GPU, no LLM, no model
+download.
+
+**Not tested here.** Other K, other C, other clusterings (TF-IDF, HDBSCAN,
+label-space clustering), routing combined with the learned pack, a support
+threshold on the cluster label sets, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-cluster-routing/metrics.json` (run
+`eurlex-cluster-routing`, **99.0 s**, no LLM; document cache 51,000 hits).
+MiniBatchKMeans K=500 on the 45,000 train vectors: **5.4 s** (inertia 8,017.5),
+cluster sizes 3–427, cluster label sets **3–619 labels** (mean 77.8). Routing
+6,000 dev documents: **0.1 s**. The full lexical base reproduces TC-9 exactly
+(`family_new` 0.9138 / 0.5415 / 0.6902).
+
+**Routed label space and routing recall:**
+
+| route | mean labels | median | share of 4,197 | routing recall (all_dev, micro) | family_new | family_new_clean |
+|---|---:|---:|---:|---:|---:|---:|
+| C = 1 | 99.8 | 74 | **2.38 %** | 0.9141 | 0.8905 | 0.8798 |
+| C = 3 | 250.1 | 206 | **5.96 %** | **0.9636** | 0.9534 | 0.9488 |
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| full lexical ranking | **0.9317 / 0.6152 / 0.7517** | **0.9138 / 0.5415 / 0.6902** | **0.9065 / 0.5293 / 0.6771** |
+| routed, C = 3 (primary) | 0.9315 / 0.6209 / 0.7572 | 0.9132 / 0.5488 / 0.6971 | 0.9058 / 0.5373 / 0.6843 |
+| routed, C = 1 (secondary) | 0.9100 / 0.6240 / 0.7597 | 0.8843 / 0.5514 / 0.6995 | 0.8738 / 0.5393 / 0.6859 |
+
+**Secondary metrics, C = 3 vs full (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | full | 0.6054 | 0.7684 | 0.8678 | **0.9512** | 0.8178 |
+| all_dev | routed C=3 | **0.6116** | **0.7748** | **0.8711** | 0.9487 | **0.8206** |
+| family_new | full | 0.5366 | 0.7068 | 0.8304 | **0.9390** | 0.7739 |
+| family_new | routed C=3 | **0.5441** | **0.7150** | **0.8342** | 0.9349 | **0.7773** |
+
+**Diagnostics (C = 3 vs full; coverage@50 and label-level recall@50 by bucket,
+`family_new`):**
+
+| method | coverage@50 | head | torso | tail | unseen |
+|---|---|---:|---:|---:|---:|
+| full | 0.9981 | 0.9578 | 0.8426 | 0.5404 | 0.0 |
+| routed C=3 | 0.9981 | 0.9573 | 0.8392 | **0.5447** | 0.0 |
+
+**Paired bootstrap over documents (routed − full):**
+
+| route | slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|---|
+| C = 3 | all_dev | −0.0002 [−0.0017, +0.0013] | +0.0057 | +0.0055 |
+| C = 3 | family_new | **−0.0005 [−0.0025, +0.0014]** | +0.0073 | +0.0069 |
+| C = 3 | family_new_clean | −0.0007 [−0.0028, +0.0014] | +0.0080 | +0.0072 |
+| C = 1 | family_new | **−0.0294 [−0.0332, −0.0255]** | +0.0099 | +0.0092 |
+
+**The pre-registered reading, read out.**
+
+- **Shortlist win: not met.** C = 3's R@50 change is **−0.0005**, far below
+  the +0.01 bar, and the interval straddles zero. The ordering does not reach
+  the +0.01 ordering bar either (+0.0069 nDCG@10).
+- **`efficiency_only`: met.** The `family_new` R@50 loss is **0.0005 ≤ 0.005**
+  and the routed space is **5.96 % ≤ 25 %**. The primary outcome is
+  **`efficiency_only`**.
+- **C = 1 is a null.** Routing to a single cluster keeps only 2.4 % of the
+  label space, covers 91.4 % of gold, and loses **0.0294 R@50** — too
+  aggressive, even though its R-precision and nDCG@10 rise (+0.0099 / +0.0092).
+- **The routing recall is the ceiling.** C = 3 ranks 96.4 % of gold
+  assignments (95.3 % on `family_new`); the routed R@50 (0.9132) sits just
+  below the full ranking, so the coverage ceiling is not the binding factor at
+  depth 50.
+
+**Reading.** Cluster routing is a **cost lever, not a metric lever**. At C = 3
+it ranks about **250 of 4,197 labels per document** (a 17× reduction) with the
+shortlist unchanged to the fourth decimal and a small ordering gain
+(+0.007 R-precision/nDCG@10), and the tail slightly improves (0.5404 → 0.5447)
+because pruning removes globally popular head labels rather than rare ones.
+C = 1 shows where the lever breaks: 2.4 % of the space and 91.4 % coverage cost
+0.029 R@50.
+
+The practical value is label-side: a product ranking only the routed labels
+sorts ~6 % of the columns; the k-NN's own score computation is unchanged, so
+the end-to-end saving is on the label side, not on retrieval. The result is not
+a shortlist win and is not adopted; combining routing with the learned pack
+(the current best, which ranks the union of retrievers) would be a separate
+change set.
+
+**What the result does not say.** Nothing about `test`; nothing about other K,
+other C, TF-IDF/HDBSCAN clustering, a support threshold on the cluster label
+sets, or routing inside the pack.

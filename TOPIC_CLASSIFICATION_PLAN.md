@@ -107,6 +107,7 @@ is the map.
 | TC-12 | **Cardinality / threshold calibration** (menu item 6) — global score threshold at the train mean cardinality vs fixed top-5 | **win (primary), base-dependent**: embedding threshold micro-F1 **0.4865 vs 0.4675** (Δ **+0.0190 [+0.0150, +0.0233]**), all_dev +0.0283, cardinality 5.071; the gain is micro-level (sample-F1/macro-F1 fall, tail stays 0); lexical top-5 beats its threshold (−0.0246) and RRF gains only +0.0062 (below bar) | `results/eurlex-threshold-calibration/metrics.json` | §18 | this commit |
 | TC-13 | **Cross-encoder rerank of the lexical top-50** (menu item 7) — ms-marco MiniLM L-6 (primary) / L-12 (secondary), rerank within the top-50 | **null (strong negative)**: `family_new` nDCG@10 **0.6902 → 0.4360** (Δ **−0.2543 [−0.2626, −0.2463]**) and R-precision −0.2276 with L-6; L-12 is worse (**−0.3783**); R@50 unchanged (0.9138) — the rerank destroys the ordering, it does not improve it | `results/eurlex-cross-encoder-rerank/metrics.json` | §19 | this commit |
 | TC-14 | **Learned candidate pack** (menu item 8) — out-of-fold train candidates, 11 features, HistGB; union of embedding/lexical/frequency top-50 | **win**: `family_new` R@50 **0.9278** vs lexical 0.9138 (Δ **+0.0141 [+0.0119, +0.0163]**), R-precision +0.0404, nDCG@10 +0.0440, tail 0.5404 → 0.5681; also beats RRF (Δ +0.0113); the z-scored dictionary arms were not features (scope) | `results/eurlex-candidate-pack/metrics.json` | §20 | this commit |
+| TC-15 | **Cluster routing / label pruning** (menu item 9) — MiniBatchKMeans K=500 on train docs, route dev to the C nearest clusters, rank their labels first | **efficiency_only (primary)**: C=3 ranks ~250 of 4,197 labels (5.96 %) at `family_new` R@50 −0.0005 [−0.0025, +0.0014], R-precision +0.0073, nDCG@10 +0.0069, tail 0.5447; C=1 (2.38 % space, 91.4 % coverage) loses 0.0294 R@50 | `results/eurlex-cluster-routing/metrics.json` | §21 | this commit |
 
 ## 5. What we learned
 
@@ -188,6 +189,11 @@ is the map.
   too (0.5404 → 0.5681). Unlike the global combinations (TC-5, TC-10), the
   learned pack can use the retrievers' disagreement. The dictionary arms are
   not in it (cost); a dictionary-in-pack ablation is the open follow-up.
+- **Cluster routing is a cost lever, not a metric lever.** Routing to the 3
+  nearest clusters ranks ~6 % of the labels with the `family_new` shortlist
+  unchanged (R@50 −0.0005) and a small ordering gain (+0.007); a single
+  cluster (2.4 % of the space) loses 0.029 R@50. Useful for a label-side
+  budget, not a new best.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -276,7 +282,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      agreed bar.
    - **Cost:** medium; needs its own pre-registration and a leak-free
      train-candidate construction.
-9. **Cluster routing / label pruning.**
+9. **Cluster routing / label pruning.** — **TC-15 executed 2026-11-13: `efficiency_only` (not a shortlist win).** Routing to the **3** nearest clusters ranks ~250 of 4,197 labels (5.96 %) with the `family_new` shortlist unchanged (R@50 −0.0005 [−0.0025, +0.0014]) and a small ordering gain (R-precision +0.0073, nDCG@10 +0.0069); the tail rises 0.5404 → 0.5447. C=1 (2.38 % of the space, 91.4 % gold coverage) loses 0.0294 R@50. A cost lever, not a metric lever; not adopted (§21).
    - **What:** cluster train documents; route a dev document to its nearest
      clusters and rank only the labels represented there (or prune labels by
      cluster).
@@ -353,7 +359,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M6 — candidate quality / rerank** (item 3: **win**, lexical arm strongest; item 4:
   **null**; item 5: **win**, zero-shot quota; item 6: **win (primary), base-dependent**;
   item 7: **null (strong negative)**; item 8: **win**, the track's best shortlist;
-  items 9–12 open): menu items 3–12.
+  item 9: **efficiency_only**; items 10–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -402,7 +408,10 @@ pack) is also executed and **wins**: the out-of-fold HistGB pack reaches
 **0.9278 R@50 / 0.5818 R-precision / 0.7343 nDCG@10** on `family_new`, beating the
 lexical k-NN by +0.0141 R@50, +0.0404 R-precision and +0.0440 nDCG@10, with the
 tail up (0.5404 → 0.5681). It is the track's best shortlist so far, but it is a
-dev-tuned model and not adopted. Menu item 9 is not queued.
+dev-tuned model and not adopted. **TC-15 = menu item 9** (cluster routing) is also
+executed and is an **`efficiency_only`** result: 3-cluster routing ranks ~6 % of
+the labels with the shortlist unchanged (R@50 −0.0005) and +0.007 ordering. The
+next change set is the reviewer's choice; menu item 10 is not queued.
 
 ## 10. The durable deliverable
 
@@ -425,7 +434,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
   `results/eurlex-lexical-rrf/`, `results/eurlex-cooccurrence/`,
   `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`,
-  `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`.
+  `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`,
+  `results/eurlex-cluster-routing/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
