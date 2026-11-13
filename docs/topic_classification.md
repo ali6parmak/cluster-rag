@@ -962,3 +962,179 @@ representation thread continues.
 **What the result does not say.** Nothing about `test`; nothing about other
 chunk sizes, overlap or pooling rules; nothing about longer-context models;
 nothing about multi-view embeddings (menu item 2).
+
+## 14. Multi-view document embedding — TC-8 (pre-registered 2026-11-13, before the run)
+
+**Question.** The whole-document view concatenates four fields of very different
+quality: a short clean `title` + `header` and long noisy `recitals` +
+`main_body`. MiniLM's 256-token window is filled mostly by title+header+the
+start of the recitals, so the fields are not weighted, they are *truncated into
+place*. Does embedding the fields separately and combining them improve the
+k-NN shortlist on `family_new`?
+
+**Mechanism (fixed before the run).**
+
+- **Views:** four per document, embedded as-is — `title`, `header`, `recitals`,
+  and `main_body` (paragraphs joined by newlines). This is the same source text
+  the baseline's `full_text` joins; only the packaging differs. A view longer
+  than the model's 256-token context (typically the recitals) is truncated by
+  the model, not chunked.
+- **Embedding:** MiniLM-L6-v2 (revision
+  `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`), the cached model, `document`
+  kind, cache version **`eurlex-4k-views-v1`** (one entry per distinct field
+  text).
+- **Blank views:** two dataset documents have empty recitals. A blank view is
+  **absent**: it is excluded from the mean, casts no k-NN votes and adds no RRF
+  rank.
+- **Treatment A — view mean (pre-registered primary):** L2-normalize each
+  present view vector, take the arithmetic mean, L2-normalize the mean, and run
+  the shared k-NN (`k = 100`, power 1.0) exactly as the baseline does.
+- **Treatment B — rank fusion (secondary):** one k-NN per view (same
+  `k = 100`, power 1.0), then **reciprocal-rank fusion** with `top_k = 100`
+  (each view's top-100 labels contribute) and `offset = 60` (rank `r`
+  contributes `1/(60 + r)`). No weight is tuned. The rank rule matters because
+  the views' vote sums are not on a comparable scale.
+- **Best single view (diagnostic only):** the four single-view k-NNs are
+  reported to show which field carries the signal. They are **not** competing
+  treatments, and no post-hoc selection of the best view is licensed by this
+  run.
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260) and `family_new_clean`
+(3,764), exactly as sections 9 and 13. The baseline is re-scored in the same run
+from the warm `eurlex-4k-v1` cache and reported beside both treatments; test is
+never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / unseen. A **paired bootstrap over documents** (2,000
+resamples, percentile 95 % interval) gives the treatment-minus-baseline R@50
+difference on each slice, with the same resampled rows for both methods.
+
+**Pre-registered bar.** The **view mean** is the arm that decides the item:
+
+- A **win** requires the view mean to improve `family_new` **R@50 by at least
+  0.01**, with the paired 95 % interval **excluding 0**, and to lose
+  **R-precision and nDCG@10 by no more than 0.01** on `family_new`.
+- The **rank fusion** is read against the same bar as a secondary arm. A win on
+  the fusion alone is recorded as **`secondary_win_only`**: it does not adopt
+  the method without the reviewer, because the primary arm is the registered
+  decision.
+- Otherwise the item is a **null**: record it and do not proceed to menu item 3.
+
+**Cost.** 204,000 view embeddings (4 views × 51,000 documents, deduplicated by
+text in the cache), a MiniLM CPU pass of roughly 15–30 min: title/header/
+main_body are short, the recitals are truncated at 256 tokens. Then six k-NN
+passes (baseline + 4 views + view mean; ~2 min), the RRF fusion (seconds), the
+evaluation and the bootstrap. No new model, no LLM.
+
+**Not tested here.** Other combination rules (max, weighted mean), other view
+sets, chunking inside a view, a longer-context model (the other half of menu
+item 1), and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-multiview/metrics.json` (run `eurlex-multiview`, no
+LLM). Provenance: the first pass embedded **199,010 view texts in 907.2 s**
+(4,988 cache hits) and crashed **after** the evaluation on a reporting bug, so
+it wrote no artifact; the final run is the same deterministic computation on
+the now-warm view cache (**203,998 hits / 0 misses, 134.9 s**). The baseline is
+re-scored in the run from `eurlex-4k-v1` (**51,000 hits / 0 misses**) and
+reproduces section 9 exactly. 203,998 view vectors (4 views × 51,000 documents,
+deduplicated by text); two documents have blank recitals (absent view). Train =
+45,000-document index, dev = 6,000 evaluated; test unread.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| baseline — whole document | 0.9168 / 0.5715 / 0.7070 | **0.8944** / 0.4869 / 0.6364 | 0.8862 / 0.4744 / 0.6241 |
+| view mean (primary) | 0.9168 / 0.5727 / 0.7092 | 0.8942 / 0.4894 / 0.6397 | 0.8863 / 0.4776 / 0.6272 |
+| **rank fusion (secondary)** | **0.9253 / 0.5891 / 0.7277** | **0.9055 / 0.5089 / 0.6605** | **0.8980 / 0.4958 / 0.6464** |
+
+**Secondary metrics by slice (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | 0.5623 | 0.7230 | 0.8306 | 0.9473 | 0.7838 |
+| all_dev | view mean | 0.5645 | 0.7253 | 0.8309 | 0.9477 | 0.7850 |
+| all_dev | **rank fusion** | **0.5833** | **0.7508** | **0.8528** | **0.9500** | **0.7979** |
+| family_new | baseline | 0.4839 | 0.6524 | 0.7843 | 0.9342 | 0.7323 |
+| family_new | view mean | 0.4865 | 0.6552 | 0.7844 | 0.9343 | 0.7343 |
+| family_new | **rank fusion** | **0.5083** | **0.6849** | **0.8120** | **0.9371** | **0.7492** |
+| family_new_clean | baseline | 0.4742 | 0.6408 | 0.7721 | 0.9287 | 0.7210 |
+| family_new_clean | view mean | 0.4775 | 0.6432 | 0.7723 | 0.9285 | 0.7231 |
+| family_new_clean | **rank fusion** | **0.4981** | **0.6714** | **0.7988** | **0.9313** | **0.7371** |
+
+**Diagnostics (coverage@50; label-level recall@50 by head / torso / tail /
+unseen):**
+
+| slice | method | coverage@50 | head | torso | tail | unseen |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | 0.9978 | 0.9614 | 0.8068 | 0.4093 | 0.0 |
+| all_dev | view mean | 0.9975 | 0.9622 | 0.7993 | 0.4201 | 0.0 |
+| all_dev | **rank fusion** | **0.9980** | **0.9685** | **0.8161** | **0.4566** | 0.0 |
+| family_new | baseline | 0.9972 | 0.9489 | 0.7995 | 0.4011 | 0.0 |
+| family_new | view mean | 0.9967 | 0.9501 | 0.7913 | 0.4085 | 0.0 |
+| family_new | **rank fusion** | **0.9974** | **0.9588** | **0.8086** | **0.4511** | 0.0 |
+| family_new_clean | baseline | 0.9968 | 0.9441 | 0.7872 | 0.3868 | 0.0 |
+| family_new_clean | view mean | 0.9963 | 0.9454 | 0.7795 | 0.3926 | 0.0 |
+| family_new_clean | **rank fusion** | **0.9971** | **0.9551** | **0.7954** | **0.4353** | 0.0 |
+
+**Single-view k-NN diagnostics on `family_new` (R@50 / R-precision /
+nDCG@10)** — the fields are not competing treatments, only a read on where the
+signal is:
+
+| view | family_new | alone vs whole document |
+|---|---|---|
+| whole document (baseline) | **0.8944 / 0.4869 / 0.6364** | — |
+| title | 0.8739 / 0.4794 / 0.6264 | −0.0205 R@50 |
+| header | 0.8701 / 0.4731 / 0.6162 | −0.0243 R@50 |
+| recitals | 0.8820 / 0.4574 / 0.6053 | −0.0123 R@50 |
+| main_body | 0.7889 / 0.3779 / 0.4982 | −0.1055 R@50 |
+
+**Paired bootstrap over documents (treatment − baseline R@50, 2,000
+resamples):**
+
+| treatment | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| view mean | +0.00001 [−0.0022, +0.0023] | −0.0002 [−0.0032, +0.0029] | +0.0001 [−0.0032, +0.0036] |
+| rank fusion | **+0.0085 [+0.0060, +0.0110]** | **+0.0112 [+0.0080, +0.0145]** | **+0.0117 [+0.0082, +0.0153]** |
+
+**The bar, read out.**
+
+- **Primary (view mean): null.** `family_new` R@50 changes by **−0.0002**, far
+  below the +0.01 bar, with the interval straddling zero. It does not lose
+  R-precision (+0.0025) or nDCG@10 (+0.0032) — a tiny ordering gain, but not a
+  shortlist gain. On `all_dev` and clean it is flat to four decimals.
+- **Secondary (rank fusion): the bar is met.** `family_new` R@50 **+0.0112**
+  with the interval entirely above zero; R-precision **+0.0220** and nDCG@10
+  **+0.0241** both improve (no loss). The same direction holds on `all_dev`
+  (+0.0085) and clean (+0.0117). The preregistered outcome is
+  **`secondary_win_only`**: by the pre-registration this does **not** adopt the
+  method without the reviewer, because the primary arm decides the item.
+- **No bucket collapses.** The fusion improves every bucket: head 0.9489 →
+  0.9588, torso 0.7995 → 0.8086, tail **0.4011 → 0.4511** on `family_new`.
+  The unseen bucket stays 0.0 (no arm can retrieve labels with no train
+  example). Coverage@50 rises slightly (0.9972 → 0.9974).
+
+**Reading.** Combining the views by **averaging their vectors** is a flat null —
+the same failure mode as TC-7: a unit-weight mean dilutes whichever view is
+confident. Combining them by **fusing their rankings** works: each field is
+individually worse than the concatenated document (title 0.8739, recitals
+0.8820, header 0.8701, main_body 0.7889 R@50 on `family_new` against 0.8944),
+yet their rank fusion reaches **0.9055** — so the gain is **complementarity, not
+one strong view**. The fusion keeps each view's own top-100, and the different
+views disagree in a way that covers more of the tail: the tail recall rises by
+0.05, the largest bucket move.
+
+This is the first positive result of the track, and it is a **secondary-arm
+win**: +0.0112 R@50 / +0.022 R-precision / +0.024 nDCG@10 on the honest
+`family_new` slice, with a paired interval excluding zero. It does not license
+menu item 3 by itself, and it does not license adopting rank fusion without the
+reviewer: the pre-registered primary (view mean) is a null.
+
+**What the result does not say.** Nothing about `test`; nothing about other
+fusion rules (weighted RRF, score z-scoring), other `top_k`/`offset` values
+(fixed here, not tuned), other view sets, chunking inside a view, or a
+longer-context model. The four single-view numbers are diagnostics — no
+post-hoc view selection is licensed.

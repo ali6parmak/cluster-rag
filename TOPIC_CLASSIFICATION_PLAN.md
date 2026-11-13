@@ -87,7 +87,7 @@ is the map.
 | experiments | `experiments_topic_classification/` |
 | artifacts (gitignored) | `results/eurlex-*` |
 | run ids | `eurlex-<detail>` (e.g. `eurlex-shortlist`, `eurlex-fusion`) |
-| embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; chunk view `eurlex-4k-chunk200-v1`; labels `eurlex-4k-label-v1`) |
+| embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; chunk view `eurlex-4k-chunk200-v1`; field views `eurlex-4k-views-v1`; labels `eurlex-4k-label-v1`) |
 
 ## 4. What has been tried (executed change sets)
 
@@ -100,6 +100,7 @@ is the map.
 | TC-5 | **Dictionary as a feature** — one-parameter z-score fusion | primary CV R@50 0.9171 vs 0.9168, **+0.0003** (CI includes 0), R-precision **−0.0204**, nDCG **−0.0190**; log-odds +0.0029/+0.0037; count +0.0010; stage 2 not licensed | `results/eurlex-fusion/metrics.json` (+ `scores/`) | §11 | `8bf5d5d` |
 | TC-6 | **Calibrated zero-shot channel** — rank/quantile-map the title scores | **null**: best α=1 gives 9/96 unseen (0.0938) and −0.00046 overall; CV selects α=0; zero-shot unsolved | `results/eurlex-zeroshot-calibrated/metrics.json` | §12 | `235a3ac` |
 | TC-7 | **Chunk-mean document embedding** (menu item 1) — 200-word non-overlapping chunks, mean-pooled, same k-NN | **null (negative)**: family_new R@50 **0.8887 vs 0.8944** (Δ **−0.0057 [−0.0094, −0.0020]**), R-precision −0.0192, nDCG@10 −0.0220; worse on every slice; 42% of 200-word chunks still exceed 256 tokens | `results/eurlex-embed-chunkmean/metrics.json` | §13 | this commit |
+| TC-8 | **Multi-view embedding** (menu item 2) — the four fields as separate k-NN views; vector mean vs rank fusion | **primary null / secondary win**: view mean family_new 0.8942 vs 0.8944 (Δ −0.0002 [−0.0032, +0.0029]); **rank fusion 0.9055** (Δ **+0.0112 [+0.0080, +0.0145]**), R-precision +0.0220, nDCG@10 +0.0241, tail +0.05; `secondary_win_only`, **not adopted** | `results/eurlex-multiview/metrics.json` | §14 | this commit |
 
 ## 5. What we learned
 
@@ -128,6 +129,14 @@ is the map.
   nDCG@10. The 200-word chunk is itself above the model's 256-token context on
   42% of inputs, so it does not even fully remove the truncation; the mean also
   dilutes the front-loaded title/header. The whole-document baseline stands.
+- **Rank fusion of views is the first positive shortlist result, but it is a
+  secondary-arm win.** The four fields are each worse alone than the
+  concatenated document, yet fusing their rankings reaches `family_new`
+  **0.9055 R@50** (+0.0112, interval excluding 0), +0.022 R-precision and
+  +0.024 nDCG@10, and lifts the tail 0.4011 → 0.4511. Averaging the view
+  vectors instead is flat — the same dilution failure as TC-7. Because the
+  pre-registered primary (view mean) is a null, the item is
+  `secondary_win_only` and the method is **not adopted** without the reviewer.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -156,7 +165,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      representation is the most likely lever.
    - **Evaluate:** dev / `family_new` / clean; R@50, R-precision, nDCG@10.
    - **Cost:** chunk-mean ~20–30 min CPU; a longer-context model 1–2 h CPU.
-2. **Multi-view embedding.**
+2. **Multi-view embedding.** — **TC-8 executed 2026-11-13: PRIMARY NULL, SECONDARY WIN (`secondary_win_only`).** Averaging the four view vectors is flat (family_new Δ R@50 −0.0002); **rank fusion** of the four per-view k-NNs reaches **0.9055 R@50** (Δ **+0.0112 [+0.0080, +0.0145]**), R-precision +0.0220 and nDCG@10 +0.0241, with the tail bucket +0.05. It is not adopted without the reviewer because the pre-registered primary arm failed (see `docs/topic_classification.md` §14).
    - **What:** embed title, header, recitals and main_body separately; combine
      them (mean or max) into one document vector, or keep separate k-NN views
      and fuse their rankings.
@@ -259,6 +268,9 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   or a front-loaded title view) improve the **0.894** new-family baseline? The
   **chunked** half is answered — 200-word chunk-mean is a null (§13); the
   longer-context half is still open.
+- Does the multi-view **rank-fusion** gain survive a different fusion rule,
+  other `top_k`/`offset` values, or a different view set — and which views
+  drive it? TC-8 is a secondary-arm win, not an adopted method (§14).
 - Can a learned candidate pack beat the k-NN despite the one-parameter fusion
   null? If so, which features carry the signal?
 - Can zero-shot labels be solved by a **quota** or a learned calibrator, or is
@@ -277,8 +289,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - **M3 — trustworthy evaluation** (done): family-held-out and clean slices.
 - **M4 — zero-shot attempts** (done): label-name and calibrated channel, both
   nulls.
-- **M5 — representation** (item 1 executed: **null**; item 2 open): menu items
-  1–2.
+- **M5 — representation** (item 1: **null**; item 2: primary **null**, rank
+  fusion **secondary win**, not adopted): menu items 1–2.
 - **M6 — candidate quality / rerank** (open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
@@ -302,9 +314,12 @@ For every item:
 The current baseline to beat (from §5) is the k-NN on `family_new`: **0.8944
 R@50 / 0.4869 R-precision / 0.6364 nDCG@10**. The first change set, **TC-7 =
 menu item 1** (better document embedding), is **executed and null** (§13):
-chunk-mean at 200 words loses 0.0057 R@50 on `family_new`. The next change set
-is the reviewer's choice — menu item 2 (multi-view embedding) only if they say
-so; do not queue it.
+chunk-mean at 200 words loses 0.0057 R@50 on `family_new`. **TC-8 = menu item 2**
+(multi-view embedding) is also executed: vector mean is flat, but **rank fusion**
+clears the bar on `family_new` (+0.0112 R@50 [+0.0080, +0.0145], +0.022
+R-precision, +0.024 nDCG@10) and is recorded as `secondary_win_only` — **not
+adopted** without the reviewer. The next change set is the reviewer's choice;
+menu item 3 is not queued.
 
 ## 10. The durable deliverable
 
@@ -324,7 +339,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
 - Artifacts: `results/eurlex-stats/`, `results/eurlex-shortlist/`,
   `results/eurlex-family-heldout/`, `results/eurlex-labelname/`,
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
-  `results/eurlex-embed-chunkmean/`.
+  `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
