@@ -710,3 +710,100 @@ could still be worth a separate experiment, but it is not licensed by this
 gate, and the evidence here says the dictionary's value is not a one-parameter
 re-ranking of the k-NN. The calibrated zero-shot channel remains the other
 open follow-up.
+
+## 12. Calibrated zero-shot channel (pre-registered 2026-11-13, before the run)
+
+**Question.** The label-name signal exists but is scale-bound: raw title cosine
+does not enter the k-NN’s top-50 (section 10: 1 of 96 unseen gold assignments).
+Can a **rank/quantile calibration** put the zero-shot labels on the k-NN score
+scale without hurting the seen labels?
+
+**The calibration.** For each dev document:
+
+1. Compute the label-title cosine for all 4,197 labels (seen and zero-shot).
+2. For each zero-shot label, take `q` = the percentile of its title cosine
+   **among all 4,197 label-title cosines of that document**.
+3. Map `q` to the document’s k-NN score distribution: `calibrated =
+   quantile(seen-label k-NN scores, q)`.
+4. Blend into the k-NN scores with a single strength `α`:
+   `final = kNN + α · calibrated` on the zero-shot columns only; seen labels
+   are unchanged. `α = 0` is the k-NN baseline; `α = 1` is the full calibration.
+
+This is the rank/quantile mapping suggested by section 10, not a raw cosine
+replacement.
+
+**Selection and evaluation.** `α ∈ {0, 0.1, 0.25, 0.5, 0.75, 1.0}`, selected by
+5-fold group CV on dev (whole title-skeleton families held out); every document
+is scored by the weight of its held-out fold, and the pooled matrix is
+evaluated once. The full-dev grid is reported beside the CV number. The
+family_new and family_new_clean slices of section 9 are reported too.
+
+**Metrics.** The same primary and secondary set, with the **unseen bucket** as
+the headline. Report the unseen hits at 50 (of 96 assignments), the seen-bucket
+recalls, and the overall R@50 / R-precision / nDCG@10. A paired bootstrap over
+documents gives the 95 % interval of the overall R@50 difference from the
+k-NN; the unseen-bucket count is reported directly (96 assignments, so it is
+read as a count, not a precise rate).
+
+**Pre-registered reading.**
+
+- **Zero-shot win:** unseen-bucket R@50 **≥ 0.10** (at least the label-name
+  alone’s 0.1042) with an overall R@50 loss **≤ 0.01**. If the calibration
+  costs more than 0.01 overall, it is not a net win, even if the unseen bucket
+  rises.
+- **Overall win:** CV R@50 improvement **≥ 0.01** over the k-NN; a smaller
+  change is not a shortlist win.
+- **A null:** if the selected `α` is 0, or the unseen bucket stays below 0.10,
+  the calibrated channel does not ship; report the null.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** The cached title and document vectors, the cached k-NN scores
+(seconds), the quantile mapping (seconds). No dictionary rebuild, no LLM, no
+new model.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-zeroshot-calibrated/metrics.json` (run
+`eurlex-zeroshot-calibrated`, 55 s; cached vectors, cached k-NN, no LLM).
+
+**Full-dev grid (calibration strength α):**
+
+| α | overall R@50 | unseen hits / 96 | unseen R@50 | head R@50 | tail R@50 |
+|---:|---:|---:|---:|---:|---:|
+| 0 (k-NN) | 0.9168 | 0 | 0.0000 | 0.9614 | 0.4093 |
+| 0.1 | 0.9168 | 0 | 0.0000 | 0.9614 | 0.4093 |
+| 0.25 | 0.9168 | 0 | 0.0000 | 0.9613 | 0.4093 |
+| 0.5 | 0.9167 | 2 | 0.0208 | 0.9613 | 0.4083 |
+| 0.75 | 0.9164 | 6 | 0.0625 | 0.9612 | 0.4034 |
+| 1.0 | 0.9163 | 9 | 0.0938 | 0.9611 | 0.4024 |
+
+**Grouped CV:** R@50 0.9167, Δ vs k-NN **−0.00009 [−0.0002, 0.0000]**; pooled
+unseen hits **0**; selected α = 0, 0, 0, 0, 0.5 across the five folds. The
+full-dev grid also selects α = 0 on overall R@50.
+
+**The bars, read out.**
+
+- **Zero-shot win: not met, by one hit.** At full strength (α = 1) the
+  calibration puts **9 of 96** unseen gold assignments in the top 50
+  (unseen R@50 0.0938), just below the pre-registered **0.10** bar and slightly
+  below the raw label-name alone (10 of 96, 0.1042 in section 10). The overall
+  R@50 cost is small (0.9163 vs 0.9168, −0.00046), so the loss condition
+  passes; the unseen-bucket condition does not.
+- **Overall win: not met.** No α improves overall R@50; the grid’s best is
+  α = 0.
+- **The CV selects the k-NN.** Because the overall R@50 effect is tiny and
+  slightly negative, four of five folds choose α = 0; the pooled CV unseen
+  hits are 0. The calibration is not stable enough to be selected.
+- **The calibration does not beat the raw label-name arm.** Raw replacement
+  gave 0.1042 unseen; quantile calibration at full strength gives 0.0938 and
+  costs 0.00046 overall. The rank mapping does not add signal beyond the raw
+  cosine — it only moves the competition from the title scale to the k-NN
+  scale.
+
+**Reading.** The calibrated zero-shot channel is a **null**. The title signal
+is real (section 10), but neither raw replacement nor this quantile calibration
+makes it survive the 4,197-label ranking strongly enough to clear the 0.10
+unseen bar; the best full-strength arm misses by one hit and is slightly worse
+than label-name alone. The zero-shot labels remain unsolved in the current
+shortlist methods. A different insertion rule (a quota or a learned
+calibrator) would be a new pre-registration, not a continuation of this one.
