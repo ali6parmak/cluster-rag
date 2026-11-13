@@ -122,32 +122,125 @@ is the map.
   evaluation.** `family_new` is the main honest slice; clean is reported beside
   it.
 
-## 6. Open options (prioritised)
+## 6. What we are going to try (the ordered menu)
 
-1. **Better document embedding** — the current MiniLM truncates at 256 tokens;
-   the median document is ~447 words. Try a longer-context model, a
-   **chunk-mean** embedding, or a multi-view (title/header/recitals/body)
-   embedding. Highest expected gain.
-2. **Lexical/BM25 k-NN + reciprocal-rank fusion** — a different error profile;
-   cheap and the UPR lexical route was strong.
-3. **Cross-encoder rerank of the top-50** — target R-precision / nDCG@10, not
-   R@50. A small cached ms-marco MiniLM or a legal-domain reranker.
-4. **Learned candidate pack** — union of k-NN and dictionary top-50, features
-   (k-NN score, dictionary scores, label frequency, label-name cosine, label
-   co-occurrence, doc length), trained on train candidates with family-grouped
-   cross-fit. The one-parameter gate failed, so this needs its own
-   pre-registration and a separate justification.
-5. **Label co-occurrence smoothing** — boost labels that co-occur with the
-   top-scoring labels; cheap, tail-oriented.
-6. **Zero-shot quota or learned calibrator** — a different insertion rule than
-   raw replacement or quantile mapping; the title signal exists but does not
-   survive the full ranking.
-7. **Fine-tune the embedding** — contrastive training with train labels and
-   hard negatives; likely the biggest gain, but a real training run.
-8. **Cluster routing / label pruning / threshold calibration** — efficiency and
-   product output; less likely to move R@50.
-9. **Ship the current k-NN** — 0.894 new-family R@50 is already strong; the
-   remaining work is marginal unless the product needs the tail or zero-shot.
+This is the agreed order. The next session starts at **item 1** and does not
+skip ahead. Each item is one change set: pre-register it (mechanism, metric,
+falsification, cost), run it, write the artifact and the doc section, run
+`ruff` + `pytest`, commit, report, stop. Every item is compared with the
+current k-NN on `all_dev`, `family_new` and `family_new_clean`:
+
+> **Baseline to beat:** k-NN `family_new` **0.8944 R@50 / 0.4869 R-precision /
+> 0.6364 nDCG@10**; clean **0.8862 / 0.4744 / 0.6241**.
+
+### Cheap / quick
+
+1. **Better document embedding.**
+   - **What:** replace the 256-token MiniLM whole-document view with a
+     **chunk-mean** embedding (split into ~200-word chunks, embed each,
+     mean-pool, normalize) or a longer-context model (e5-base 512 tokens,
+     bge-m3 / nomic 8k). Start with chunk-mean MiniLM — it uses the existing
+     model and cache.
+   - **Why:** the current model truncates the median 447-word document; the
+     representation is the most likely lever.
+   - **Evaluate:** dev / `family_new` / clean; R@50, R-precision, nDCG@10.
+   - **Cost:** chunk-mean ~20–30 min CPU; a longer-context model 1–2 h CPU.
+2. **Multi-view embedding.**
+   - **What:** embed title, header, recitals and main_body separately; combine
+     them (mean or max) into one document vector, or keep separate k-NN views
+     and fuse their rankings.
+   - **Why:** the title/header are clean topic signals; the body carries the
+     detail; the current truncated view mixes them.
+   - **Evaluate:** same slices; compare with item 1.
+   - **Cost:** cheap with cached MiniLM; needs its own cache version.
+3. **Lexical / BM25 k-NN + reciprocal-rank fusion.**
+   - **What:** build a TF-IDF/BM25 k-NN over train, take its top-50, and
+     combine it with the embedding k-NN by **reciprocal-rank fusion** (no
+     weight to tune).
+   - **Why:** a different error profile; the UPR lexical route was nearly as
+     good as embeddings; cheap.
+   - **Evaluate:** RRF vs k-NN on all slices; report whether it helps the tail.
+   - **Cost:** minutes.
+4. **Label co-occurrence smoothing.**
+   - **What:** train a label co-occurrence matrix; after the k-NN score, add
+     `α · co-occurrence(top labels)`; tune α by family-grouped CV.
+   - **Why:** labels co-occur; a strong head label can lift its neighbours;
+     tail-oriented.
+   - **Evaluate:** all slices, with the tail bucket called out.
+   - **Cost:** minutes.
+5. **Calibrated zero-shot channel.**
+   - **What:** a **quota** (reserve N shortlist slots for zero-shot labels
+     ranked by title cosine) or a learned calibrator — a different insertion
+     rule than the raw replacement and quantile mapping that already failed.
+   - **Why:** the title signal exists (0.868 zero-shot-only R@50) but does not
+     survive the full ranking (TC-6 null).
+   - **Evaluate:** unseen hits / 96; overall R@50 loss ≤ 0.01.
+   - **Cost:** minutes.
+6. **Cardinality / threshold calibration.**
+   - **What:** turn scores into predicted label sets at a global (or
+     per-bucket) threshold tuned to ~5 labels/doc; report precision, recall
+     and predicted cardinality.
+   - **Why:** product output; the shortlist is not the final label set.
+   - **Evaluate:** predicted cardinality and set metrics; R@50 is unchanged.
+   - **Cost:** minutes.
+
+### Medium
+
+7. **Cross-encoder rerank of the top-50.**
+   - **What:** rerank the k-NN top-50 with a cross-encoder (cached ms-marco
+     MiniLM or a legal-domain model) over (document, label title) pairs.
+   - **Why:** target R-precision / nDCG@10; the k-NN ordering is the weak
+     point, and the top-100 recall is 0.9473, so the shortlist ceiling is high.
+   - **Evaluate:** rerank vs k-NN on the same shortlist.
+   - **Cost:** 6k × 50 pairs; CPU minutes–hours.
+8. **Learned candidate pack.**
+   - **What:** union of the k-NN and dictionary top-50; features = k-NN score,
+     dictionary arms, label frequency, label-name cosine, label co-occurrence,
+     document length (and the cross-encoder score if item 7 exists); train a
+     logistic / HistGB model on **train candidates** with a family-grouped
+     cross-fit.
+   - **Why:** the UPR “dictionary column” lived inside a learned pack, not a
+     global weight; the TC-5 null does not rule out a learned combination.
+   - **Evaluate:** held-out dev / `family_new`; must beat the k-NN by the
+     agreed bar.
+   - **Cost:** medium; needs its own pre-registration and a leak-free
+     train-candidate construction.
+9. **Cluster routing / label pruning.**
+   - **What:** cluster train documents; route a dev document to its nearest
+     clusters and rank only the labels represented there (or prune labels by
+     cluster).
+   - **Why:** efficiency at 4,271 labels; may improve tail precision by
+     removing globally popular but irrelevant labels.
+   - **Evaluate:** R@50 and cost against the full ranking.
+   - **Cost:** cheap–medium.
+10. **Hard-negative mining.**
+    - **What:** use near-duplicate/template families as hard negatives for the
+      pack (item 8), the cross-encoder (item 7) or the fine-tune (item 11);
+      build a family-disjoint training split.
+    - **Why:** makes the learned models learn the label, not the template; the
+      audit already flags 26.1% near-duplicates.
+    - **Evaluate:** as part of the model it feeds, not as a standalone
+      shortlist.
+    - **Cost:** medium.
+
+### Expensive
+
+11. **Fine-tune the embedding.**
+    - **What:** contrastive training on train labels with hard negatives;
+      evaluate on `family_new`.
+    - **Why:** likely the biggest gain; the current model is generic.
+    - **Evaluate:** same slices; one test shot later.
+    - **Cost:** GPU / training run; needs explicit approval.
+12. **LLM rerank / zero-shot label assignment.**
+    - **What:** an LLM reranks the top-50 or picks labels from the titles.
+    - **Why:** strongest ordering; handles ambiguity.
+    - **Evaluate:** R-precision / nDCG and cost; latency reported.
+    - **Cost:** high; needs explicit approval.
+
+### Also valid
+
+13. **Ship the current k-NN.** The 0.894 new-family baseline is strong; if the
+    product does not need the tail or the zero-shot labels, stop and ship it.
 
 ## 7. Open questions
 
@@ -171,23 +264,30 @@ is the map.
 - **M3 — trustworthy evaluation** (done): family-held-out and clean slices.
 - **M4 — zero-shot attempts** (done): label-name and calibrated channel, both
   nulls.
-- **M5 — representation experiment** (open): longer-context / chunked /
-  multi-view embedding.
-- **M6 — rerank or pack** (open): cross-encoder or learned candidate combiner.
-- **M7 — final test shot** (open): one adopted config, test once.
+- **M5 — representation** (open): menu items 1–2.
+- **M6 — candidate quality / rerank** (open): menu items 3–12.
+- **M7 — ship / final test** (open): menu item 13, then one test shot.
 
-## 9. Next change sets (not queued)
+## 9. How the next session should proceed
 
-- **TC-7 — representation:** pre-register a longer-context or chunk-mean
-  embedding, evaluate on dev / `family_new` / clean, same metrics. This is the
-  highest expected gain.
-- **TC-8 — rerank:** cross-encoder on the top-50, measure R-precision/nDCG and
-  the cost.
-- **TC-9 — pack:** learned candidate combiner, only with a new pre-registration
-  and a clear rationale after TC-5's null.
-- **TC-10 — test:** one shot for the adopted config.
+The menu in **§6 is the order**. Start at **item 1**; do not skip ahead and do
+not queue several items.
 
-Each starts only on the reviewer's word; one change set per commit.
+For every item:
+
+1. Write the pre-registration in `docs/topic_classification.md`: the mechanism,
+   the shape of the number, the falsification conditions, the cost, and the
+   slices (`all_dev`, `family_new`, `family_new_clean`) it will be read on.
+2. Run the experiment; write `results/eurlex-<detail>/metrics.json`.
+3. Append the result table and the verdict to the same doc section.
+4. Run `ruff check`, `ruff format --check`, and `pytest`; commit with one clear
+   message; report and **stop**.
+5. If the item is a null, record it and wait for the reviewer's word before the
+   next item.
+
+The current baseline to beat (from §5) is the k-NN on `family_new`: **0.8944
+R@50 / 0.4869 R-precision / 0.6364 nDCG@10**. The first change set is
+**TC-7 = menu item 1** (better document embedding).
 
 ## 10. The durable deliverable
 
