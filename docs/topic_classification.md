@@ -1138,3 +1138,158 @@ fusion rules (weighted RRF, score z-scoring), other `top_k`/`offset` values
 (fixed here, not tuned), other view sets, chunking inside a view, or a
 longer-context model. The four single-view numbers are diagnostics — no
 post-hoc view selection is licensed.
+
+## 15. Lexical k-NN + reciprocal-rank fusion — TC-9 (pre-registered 2026-11-13, before the run)
+
+**Question.** The embedding k-NN is the current shortlist generator (0.8944
+R@50 on `family_new`). A lexical k-NN over the same text has a different error
+profile — exact word overlap rather than a 384-dimensional semantic space. Does
+fusing the two rankings improve the shortlist, and does it help the tail?
+
+**Mechanism (fixed before the run).**
+
+- **Baseline — embedding k-NN:** the whole-document MiniLM view, `k = 100`,
+  similarity-weighted votes (power 1.0), served from the warm `eurlex-4k-v1`
+  cache and re-scored in this run. This is the comparator, not a treatment.
+- **Lexical view:** the same `full_text` (title + header + recitals +
+  main_body) as the embedding baseline. TF-IDF with word 1–2 grams,
+  `min_df = 2`, `max_features = 200,000`, `sublinear_tf = True`,
+  `lowercase = True`, L2-normalized rows. Fitted on **train only** and applied
+  to train and dev. This is the TF-IDF stand-in for BM25 that needs no new
+  dependency (scikit-learn is already a core dependency); BM25 proper is not
+  tested here.
+- **Lexical k-NN:** cosine similarity (the dot product of unit rows), the same
+  `k = 100` and power 1.0, and the **same voting rule** as the embedding k-NN
+  (stable descending sort, similarities clipped at 0), applied to the
+  batch-wise similarity block because the 45,000 × 200,000 TF-IDF matrix cannot
+  be densified.
+- **Fusion (the treatment): reciprocal-rank fusion** of the embedding ranking
+  and the lexical ranking — equal weight, `top_k = 50` per view (the plan's
+  "take its top-50"), `offset = 60` (rank `r` contributes `1/(60 + r)`). No
+  weight is tuned. The fused candidate pool is the union of the two top-50
+  lists, so R@100 is capped by that union; R@50 is the primary and is not
+  affected by the cap.
+- **No new model, no re-embedding, no LLM.**
+
+**Slices.** `all_dev` (6,000), `family_new` (4,260) and `family_new_clean`
+(3,764), exactly as sections 9, 13 and 14. Test is never read.
+
+**Metrics.** Primary: R@50, R-precision, nDCG@10. Secondary: R@5, R@10, R@20,
+R@100, nDCG@50. Diagnostics: coverage@50 and label-level recall@50 by
+head / torso / tail / unseen. The **lexical k-NN alone** is reported as a
+diagnostic — its error profile and tail recall are the reason the fusion is
+interesting, but it is **not** a competing treatment. A paired bootstrap over
+documents (2,000 resamples) gives the fusion-minus-baseline R@50 difference on
+each slice.
+
+**Pre-registered bar.**
+
+- A **win** requires the fusion to improve `family_new` **R@50 by at least
+  0.01**, with the paired 95 % interval **excluding 0**, and to lose
+  **R-precision and nDCG@10 by no more than 0.01** on `family_new`.
+- Otherwise it is a **null**: record it and do not proceed to menu item 4.
+- **No auto-adopt.** Even a win is a result for the reviewer, not an adoption.
+
+**Cost.** TF-IDF fit and transform over 51,000 documents (~1–3 min), the
+6,000 × 45,000 sparse cosine in batches (~2–5 min), the metrics and bootstrap
+(~2 min). Minutes total; no GPU, no LLM, no model download.
+
+**Not tested here.** BM25 proper, other n-gram ranges or vocabulary sizes,
+other `top_k`/`offset` values, weighted fusion, and `test`.
+
+### Result (2026-11-13)
+
+Artifact: `results/eurlex-lexical-rrf/metrics.json` (run `eurlex-lexical-rrf`,
+**108.8 s**, no LLM). The embedding baseline was re-scored from the warm
+`eurlex-4k-v1` cache (51,000 hits / 0 misses) and reproduces section 9 exactly.
+TF-IDF: vocabulary **200,000** (the `max_features` cap binds), **23,170,645**
+train non-zeros and **3,023,996** dev non-zeros, `min_df=2`, word 1–2 grams,
+sublinear TF. Train = 45,000-document index, dev = 6,000 evaluated; test unread.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| baseline — embedding k-NN | 0.9168 / 0.5715 / 0.7070 | 0.8944 / 0.4869 / 0.6364 | 0.8862 / 0.4744 / 0.6241 |
+| lexical TF-IDF k-NN (diagnostic) | 0.9317 / 0.6152 / 0.7517 | 0.9138 / 0.5415 / 0.6902 | 0.9065 / 0.5293 / 0.6771 |
+| **RRF fusion (treatment)** | **0.9337 / 0.6164 / 0.7581** | **0.9165 / 0.5428 / 0.6997** | **0.9094 / 0.5317 / 0.6882** |
+
+**Secondary metrics by slice (R@5 / R@10 / R@20 / R@100 / nDCG@50):**
+
+| slice | method | R@5 | R@10 | R@20 | R@100 | nDCG@50 |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | 0.5623 | 0.7230 | 0.8306 | 0.9473 | 0.7838 |
+| all_dev | lexical | 0.6054 | 0.7684 | 0.8678 | **0.9512** | 0.8178 |
+| all_dev | **fusion** | **0.6112** | **0.7764** | **0.8740** | 0.9481 | **0.8220** |
+| family_new | baseline | 0.4839 | 0.6524 | 0.7843 | 0.9342 | 0.7323 |
+| family_new | lexical | 0.5366 | 0.7068 | 0.8304 | **0.9390** | 0.7739 |
+| family_new | **fusion** | **0.5435** | **0.7187** | **0.8397** | 0.9355 | **0.7800** |
+| family_new_clean | baseline | 0.4742 | 0.6408 | 0.7721 | 0.9287 | 0.7210 |
+| family_new_clean | lexical | 0.5272 | 0.6936 | 0.8181 | **0.9344** | 0.7628 |
+| family_new_clean | **fusion** | **0.5360** | **0.7075** | **0.8298** | 0.9299 | **0.7697** |
+
+The fusion's R@100 is below the other two arms by construction: the fused
+candidate pool is the union of the two top-50 lists, so it cannot reach a label
+that neither view ranked in its top 50.
+
+**Diagnostics (coverage@50; label-level recall@50 by head / torso / tail /
+unseen):**
+
+| slice | method | coverage@50 | head | torso | tail | unseen |
+|---|---|---:|---:|---:|---:|---:|
+| all_dev | baseline | 0.9978 | 0.9614 | 0.8068 | 0.4093 | 0.0 |
+| all_dev | lexical | 0.9985 | 0.9682 | 0.8475 | **0.5414** | 0.0 |
+| all_dev | **fusion** | **0.9987** | **0.9720** | 0.8454 | 0.4862 | 0.0 |
+| family_new | baseline | 0.9972 | 0.9489 | 0.7995 | 0.4011 | 0.0 |
+| family_new | lexical | 0.9981 | 0.9578 | **0.8426** | **0.5404** | 0.0 |
+| family_new | **fusion** | **0.9984** | **0.9633** | 0.8403 | 0.4830 | 0.0 |
+| family_new_clean | baseline | 0.9968 | 0.9441 | 0.7872 | 0.3868 | 0.0 |
+| family_new_clean | lexical | 0.9979 | 0.9541 | **0.8312** | **0.5208** | 0.0 |
+| family_new_clean | **fusion** | **0.9981** | **0.9598** | 0.8284 | 0.4642 | 0.0 |
+
+**Paired bootstrap over documents (2,000 resamples):**
+
+| comparison | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| fusion − embedding (the bar) | **+0.0169 [+0.0149, +0.0189]** | **+0.0222 [+0.0195, +0.0250]** | **+0.0231 [+0.0202, +0.0260]** |
+| lexical − embedding (diagnostic) | +0.0149 [+0.0121, +0.0177] | +0.0194 [+0.0157, +0.0231] | +0.0203 [+0.0161, +0.0243] |
+| fusion − lexical (post-hoc) | +0.0019 [+0.0002, +0.0037] | +0.0028 [+0.0004, +0.0053] | +0.0028 [+0.0001, +0.0055] |
+
+**The bar, read out.**
+
+- **All four conditions are met.** `family_new` R@50 **+0.0222** with the
+  interval entirely above zero; R-precision **+0.0560** and nDCG@10 **+0.0633**
+  both improve (no loss). The same direction holds on `all_dev` (+0.0169) and
+  clean (+0.0231).
+- **The lexical arm is not a weak add-on — it is the stronger single
+  retriever.** On `family_new` it reaches **0.9138** R@50, **+0.0194** over the
+  embedding baseline, and **0.5404** tail recall against the embedding's
+  **0.4011**. Its R-precision (+0.055) and nDCG@10 (+0.054) are also ahead. The
+  fusion's win over the baseline is mostly this arm.
+- **RRF adds a little over its stronger arm.** Fusion − lexical is **+0.0028
+  R@50 [+0.0004, +0.0053]** on `family_new` (small but positive), +0.0014
+  R-precision and +0.0095 nDCG@10. The extra is mostly ordering, not breadth.
+- **The fusion does not help the tail relative to the lexical arm.** The
+  lexical tail is **0.5404**; the fusion's is **0.4830** (−0.057). Equal-weight
+  RRF rewards labels both views agree on, which are disproportionately head
+  labels, so it dilutes the lexical arm's tail advantage. Against the
+  *embedding* baseline the fusion still improves the tail (+0.082).
+
+**Reading.** The plan asked whether a lexical k-NN fused by RRF helps, and
+whether it helps the tail. The answer is **yes against the embedding baseline**
+— the fusion clears the pre-registered bar on every slice, driven by a much
+stronger honest-slice and tail signal — but the honest decomposition is more
+interesting than the fused number: **the TF-IDF k-NN alone beats the embedding
+k-NN on `family_new`** (0.9138 vs 0.8944, +0.0194) and roughly doubles its tail
+recall (0.5404 vs 0.4011), and RRF adds only **+0.0028** R@50 over it while
+*reducing* the tail to 0.4830. On EURLEX, as on UPR, the words carry most of the
+shortlist signal; the embedding's advantage is not where the track assumed.
+
+This is the first change set that **wins its pre-registered bar outright**. It
+is not an adoption: the reviewer decides what to take forward, and the
+decomposition (lexical alone vs fusion) is the decision that matters.
+
+**What the result does not say.** Nothing about `test`; nothing about BM25
+proper, other n-gram ranges/vocabulary caps, other `top_k`/`offset` values or
+weighted fusion; nothing about a lexical-plus-embedding learned combiner; and
+nothing about the tail dilution as a fixable weighting problem.

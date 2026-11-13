@@ -101,12 +101,14 @@ is the map.
 | TC-6 | **Calibrated zero-shot channel** — rank/quantile-map the title scores | **null**: best α=1 gives 9/96 unseen (0.0938) and −0.00046 overall; CV selects α=0; zero-shot unsolved | `results/eurlex-zeroshot-calibrated/metrics.json` | §12 | `235a3ac` |
 | TC-7 | **Chunk-mean document embedding** (menu item 1) — 200-word non-overlapping chunks, mean-pooled, same k-NN | **null (negative)**: family_new R@50 **0.8887 vs 0.8944** (Δ **−0.0057 [−0.0094, −0.0020]**), R-precision −0.0192, nDCG@10 −0.0220; worse on every slice; 42% of 200-word chunks still exceed 256 tokens | `results/eurlex-embed-chunkmean/metrics.json` | §13 | this commit |
 | TC-8 | **Multi-view embedding** (menu item 2) — the four fields as separate k-NN views; vector mean vs rank fusion | **primary null / secondary win**: view mean family_new 0.8942 vs 0.8944 (Δ −0.0002 [−0.0032, +0.0029]); **rank fusion 0.9055** (Δ **+0.0112 [+0.0080, +0.0145]**), R-precision +0.0220, nDCG@10 +0.0241, tail +0.05; `secondary_win_only`, **not adopted** | `results/eurlex-multiview/metrics.json` | §14 | this commit |
+| TC-9 | **Lexical k-NN + RRF** (menu item 3) — TF-IDF (word 1–2 gram) k-NN fused with the embedding k-NN | **win**: fusion family_new **0.9165** vs 0.8944 (Δ **+0.0222 [+0.0195, +0.0250]**), R-precision +0.0560, nDCG@10 +0.0633; but the **lexical arm alone is 0.9138** (Δ +0.0194) with tail **0.5404** vs the fusion's 0.4830 — the fusion adds only +0.0028 over lexical and dilutes its tail | `results/eurlex-lexical-rrf/metrics.json` | §15 | this commit |
 
 ## 5. What we learned
 
-- **The embedding k-NN is the shortlist generator.** The random-split 0.917 is
-  largely real: on genuinely new families it is **0.894 R@50**, and on the
-  clean new-family slice **0.886**. That is the baseline to beat.
+- **The embedding k-NN was the first shortlist generator — and the baseline to
+  beat.** The random-split 0.917 is largely real: on genuinely new families it
+  is **0.894 R@50**, and on the clean new-family slice **0.886**. TC-9's lexical
+  k-NN later beats it on the honest slice (§15).
 - **The dictionary is weak alone and does not add through a global weight.**
   Its count arm reaches 0.817 R@50 but is head-heavy (tail 0.122); the primary
   z-scored arm is 0.539. The one-parameter fusion is a null for R@50 and costs
@@ -137,6 +139,13 @@ is the map.
   vectors instead is flat — the same dilution failure as TC-7. Because the
   pre-registered primary (view mean) is a null, the item is
   `secondary_win_only` and the method is **not adopted** without the reviewer.
+- **The lexical k-NN is the stronger single shortlist generator.** On the honest
+  `family_new` slice TF-IDF reaches **0.9138 R@50** against the embedding's
+  0.8944 (+0.0194) and **0.5404** tail recall against 0.4011; RRF with the
+  embedding gives **0.9165** (+0.0222 over the embedding) but only +0.0028 over
+  the lexical arm, and it *lowers* the tail to 0.4830 — equal-weight fusion
+  favours the labels both views agree on, i.e. the head. On EURLEX, as on UPR,
+  the words carry most of the shortlist signal.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -173,7 +182,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
      detail; the current truncated view mixes them.
    - **Evaluate:** same slices; compare with item 1.
    - **Cost:** cheap with cached MiniLM; needs its own cache version.
-3. **Lexical / BM25 k-NN + reciprocal-rank fusion.**
+3. **Lexical / BM25 k-NN + reciprocal-rank fusion.** — **TC-9 executed 2026-11-13: WIN.** The RRF fusion clears the bar on every slice (`family_new` R@50 **0.9165**, Δ **+0.0222 [+0.0195, +0.0250]**, R-precision +0.0560, nDCG@10 +0.0633). The decomposition matters: the **TF-IDF k-NN alone is 0.9138** on `family_new` (above the embedding's 0.8944) with tail **0.5404** vs 0.4011, and the fusion adds only **+0.0028** R@50 over it while **reducing the tail to 0.4830** (see `docs/topic_classification.md` §15). Not adopted; the reviewer chooses.
    - **What:** build a TF-IDF/BM25 k-NN over train, take its top-50, and
      combine it with the embedding k-NN by **reciprocal-rank fusion** (no
      weight to tune).
@@ -271,6 +280,10 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 - Does the multi-view **rank-fusion** gain survive a different fusion rule,
   other `top_k`/`offset` values, or a different view set — and which views
   drive it? TC-8 is a secondary-arm win, not an adopted method (§14).
+- Can a tail-aware fusion (weighted RRF, a view-specific weight, or a lexical
+  term in a learned pack) keep the lexical tail gain while adding the
+  embedding's breadth? TC-9's equal-weight RRF loses 0.057 tail recall
+  against the lexical arm alone (§15).
 - Can a learned candidate pack beat the k-NN despite the one-parameter fusion
   null? If so, which features carry the signal?
 - Can zero-shot labels be solved by a **quota** or a learned calibrator, or is
@@ -291,7 +304,8 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   nulls.
 - **M5 — representation** (item 1: **null**; item 2: primary **null**, rank
   fusion **secondary win**, not adopted): menu items 1–2.
-- **M6 — candidate quality / rerank** (open): menu items 3–12.
+- **M6 — candidate quality / rerank** (item 3 executed: **win**, lexical arm strongest;
+  items 4–12 open): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -318,8 +332,11 @@ chunk-mean at 200 words loses 0.0057 R@50 on `family_new`. **TC-8 = menu item 2*
 (multi-view embedding) is also executed: vector mean is flat, but **rank fusion**
 clears the bar on `family_new` (+0.0112 R@50 [+0.0080, +0.0145], +0.022
 R-precision, +0.024 nDCG@10) and is recorded as `secondary_win_only` — **not
-adopted** without the reviewer. The next change set is the reviewer's choice;
-menu item 3 is not queued.
+adopted** without the reviewer. **TC-9 = menu item 3** (lexical k-NN + RRF) is also
+executed and **wins its bar** (`family_new` +0.0222 R@50 [+0.0195, +0.0250]), but
+the decomposition shows the lexical arm alone (0.9138) is the strongest single
+retriever and the fusion adds only +0.0028 over it while diluting the tail. The
+next change set is the reviewer's choice; menu item 4 is not queued.
 
 ## 10. The durable deliverable
 
@@ -339,7 +356,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
 - Artifacts: `results/eurlex-stats/`, `results/eurlex-shortlist/`,
   `results/eurlex-family-heldout/`, `results/eurlex-labelname/`,
   `results/eurlex-fusion/`, `results/eurlex-zeroshot-calibrated/`,
-  `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`.
+  `results/eurlex-embed-chunkmean/`, `results/eurlex-multiview/`,
+  `results/eurlex-lexical-rrf/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
