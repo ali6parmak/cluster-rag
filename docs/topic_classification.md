@@ -3023,3 +3023,220 @@ reranker; and nothing about combining the LLM score with the pack features
 1 failed), so the label-prior reading above is an inference from the metric
 shape, not a measured control. This is the **second** off-the-shelf reranker to
 collapse the ordering after TC-13; the pack remains the track's best shortlist.
+
+## 26. The embeddinggemma-300m embedding — TC-20 (pre-registered 2026-11-14, before the run)
+
+**Question.** The MiniLM embedding k-NN is behind the lexical k-NN on the
+honest slice (**0.8944** vs **0.9138** R@50) and the pack consumes its score
+(TC-14 **0.9278**, TC-17 fine-tuned **0.9341**). MiniLM truncates at **256
+tokens**, while the median dev document is ~**553** tokens and the p95 ~**1,526**.
+`google/embeddinggemma-300m` is a 300M retrieval model with a **2,048-token**
+window and a **768-d** output. Does it close the gap to the words **zero-shot**,
+and does **fine-tuning it** (TC-17's recipe) lift the pack past 0.9341?
+
+**Model (fixed before the run).** `google/embeddinggemma-300m`, revision
+**`57c266a740f537b4dc058e1b0cda161fd15afa75`** (the gated snapshot, downloaded
+2026-11-14 with the account `ali6parmak`; 19 files, ~1.27 GB; `model.safetensors`
+1,211,486,072 bytes). Architecture by the downloaded config: Gemma3 text, 24
+layers, hidden **768**, `max_position_embeddings` **2,048**, sliding window 512;
+the sentence-transformers modules are mean pooling → Dense 768→3072 → Dense
+3072→768 → Normalize, so the served embedding is **768-d, unit-norm**. No
+`trust_remote_code` (ST 6.1 loads it natively; `config_sentence_transformers.json`
+was written by ST 5.1.0).
+
+**Prompts (fixed; from the downloaded `config_sentence_transformers.json`).**
+
+- **Documents:** `title: none | text: {content}` (the model's `document` prompt;
+  `title: none` because the dataset's title is already the first line of
+  `full_text` — the alternative, injecting the real title into the prompt, is
+  untested).
+- **Titles (labels):** `task: search result | query: {content}` (the model's
+  `query` prompt; the classification prompt `task: classification | query: ` is
+  the untested alternative).
+- Applied through the `PrefixesConfig` template mechanism (the prefix is part of
+  the cache key), so the prompts are recorded in the artifact.
+
+**Texts and maximum length (fixed).** The same `full_text` as every other arm,
+`max_seq_length = 1024` for **both** arms: it removes the 256-token handicap
+(median 553, p90 ~1,404) and covers ~88 % of the dev documents; the tail above
+1,024 tokens is truncated and the count is recorded. The model's full 2,048
+window is **not** used, to bound the training cost. The zero-shot arm and the
+fine-tuned arm share the same length.
+
+**Zero-shot arm (diagnostic).** Encode the **51,000** train+dev documents and
+the **4,197** label titles with the model (new cache version
+`eurlex-4k-embeddinggemma-v1`, keyed by the prompt prefixes), run the **same**
+k-NN as every arm (`k = 100`, `power = 1.0`, cosine votes), and evaluate
+`all_dev` / `family_new` / `family_new_clean`. Rebuild the **TC-14 11-feature
+pack** with the embedding channel = embeddinggemma (train rows from the five
+out-of-fold folds, dev from the full train index; `label_cosine` from the
+model's document/title embeddings; the seven lexical/frequency features
+unchanged). Comparators: lexical **0.9138**, MiniLM **0.8944**, TC-14 pack
+**0.9278**.
+
+**Fine-tuned arm (primary).** TC-17's recipe, on the new model:
+
+- **Five fold models + one full-train model.** The train split is split into
+  the same five folds grouped by title skeleton; model `f` trains on the four
+  folds other than `f` and embeds its held-out fold (so a document's pack
+  features come from a model that never saw it); the full-train model supplies
+  the dev side. Two encodings per model side: all train documents (for the
+  index and the held-out queries) and the 4,197 titles.
+- **Pairs.** One sample per training document per epoch: a gold title drawn
+  uniformly (seeded) as the positive, and one hard negative drawn uniformly
+  from the document's mined pool.
+- **Hard negatives.** Top-10 non-gold labels by the **zero-shot embeddinggemma
+  k-NN** from the document's **four-fold family-disjoint index** (the same
+  out-of-fold rows the pack uses), plus up to **5** labels of same-family train
+  siblings; one negative per sample.
+- **Loss / schedule / seed.** Multiple-negatives cross-entropy over the batch's
+  positives + the hard negative, **scale 20.0**; **3 epochs**; **batch 32**;
+  **AdamW, lr 1e-5**, weight decay 0.01; linear warmup **10 %**, linear decay;
+  **bf16** autocast (loss in float32); grad clip 1.0; **seed 42**; no dev
+  tuning, no early stopping. The 300M model needs the lower lr and batch than
+  TC-17's 22M MiniLM; both are fixed here.
+- **Pack.** TC-14's 11 features, with `embedding_score`, `rrf_score`,
+  `rank_embedding` and `label_cosine` recomputed from the fine-tuned channel
+  (documents document prompt, titles query prompt); the other seven features
+  unchanged; the same `HistGradientBoostingClassifier` parameters, folds and dev
+  candidate rows. The pack's train rows use the fold models and the dev rows the
+  full model (the same slight scale mismatch TC-14/TC-17 record).
+
+**Slices and metrics.** `all_dev` (6,000), `family_new` (4,260),
+`family_new_clean` (3,764); R@50, R-precision, nDCG@10 primary; R@5/10/20/100,
+nDCG@50, coverage@50 and label-level recall@50 by head / torso / tail / unseen
+secondary; paired bootstrap over documents (2,000 resamples). Test is never
+read.
+
+**Pre-registered bar.**
+
+- **Primary:** the pack with the **fine-tuned** embeddinggemma must beat the
+  **TC-17 pack** on `family_new` **R@50 by at least 0.01** (0.9341 → 0.9441),
+  with the paired 95 % interval excluding 0, and lose **R-precision / nDCG@10
+  by no more than 0.01**. Otherwise the item is a **null**.
+- **Secondary readings (not the bar):** the zero-shot embeddinggemma k-NN
+  against the lexical **0.9138**; the zero-shot pack against the TC-14 **0.9278**;
+  the fine-tuned k-NN against the zero-shot k-NN; all three slices and the
+  head / torso / tail buckets; coverage.
+- **Paired baselines:** the primary paired comparison uses the **TC-17 pack's
+  exported dev ranking** (`results/eurlex-embed-finetune/ranked_dev.npz`, the
+  TC-18 export: 0.934035 / 0.617230 / 0.766950 on `family_new`, deltas
+  −0.00003 / −0.00090 / −0.00223 against the TC-17 artifact — the GPU
+  regeneration is not bit-exact); the artifact records those deltas and the
+  TC-17 artifact's numbers as context. The zero-shot-vs-fine-tuned comparisons
+  are paired within the run.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost and the stop rule.** The zero-shot embedding (51,000 documents + 4,197
+titles at 1,024 tokens) plus six candidate builds is ~20–30 min GPU + ~20 min
+CPU. The six fine-tunes are the cost: the 300M model is ~14× MiniLM's compute,
+so the projection is **4–8 h GPU** against a **hard cap of 6 h**. The run
+therefore starts with a **~2-minute throughput benchmark** (load, encode rate
+at 1,024 tokens, training step at batch 32); if the projection exceeds the cap,
+the run **stops before the fine-tunes** and reports a reduced-budget proposal
+(e.g., 512 tokens or a fold-count change) instead of silently shrinking the
+design. No LLM calls, no new model download beyond the approved snapshot.
+
+**Not tested here.** The 2,048-token window (1,024 is fixed), the
+title-in-the-document-prompt variant, the classification prompt for titles,
+Matryoshka truncation (512/256/128), other lrs/epochs/batch sizes or a
+hyper-parameter search, label descriptions/parents in the titles, a
+cross-encoder, and `test`.
+
+### Pre-run amendment (2026-11-14, before the zero-shot run)
+
+The GPU feasibility benchmark (required by the cost plan above) measured the
+fine-tuned arm at the pre-registered settings: **307.6M parameters**, bf16
+weights + frozen token embeddings + gradient checkpointing needed to fit the
+16 GB card (batch 32 and even batch 16 **OOM** without them; peak 2.98 GB with
+them), **1.2 s per training step** (batch 16, 1,024-token anchors), **86
+docs/s** encode rate. The six fine-tunes project to **14.1 h** (unbucketed) +
+~1.1 h encodings — **outside the 6 h cap**. The tokenizer's own counts on dev
+are mean **866**, median **657**, p90 **1,581**, p95 **2,204**: at 1,024 tokens
+**23.0 %** of dev documents truncate (the earlier ~88 % coverage estimate was
+word-based and is corrected here), at 768 **38.7 %**, at 512 **76.2 %**.
+
+**Reviewer's decision:** run the **zero-shot arm only** now and defer the
+fine-tuned arm to a separate, separately-approved change set.
+
+- **This run executes the zero-shot arm** at `max_seq_length = 1024`: the
+  embeddinggemma k-NN (same k=100/power 1.0) and the TC-14 11-feature pack with
+  the embeddinggemma channel on the three slices, with the lexical arm and the
+  MiniLM/TC-14 artifact numbers as comparators. Artifact:
+  `results/eurlex-embeddinggemma-zeroshot/metrics.json`.
+- **The primary bar is not evaluated here** (no fine-tuned pack is trained);
+  the results are the pre-registered **secondary readings** — the zero-shot
+  k-NN against the lexical **0.9138** and MiniLM **0.8944**, the zero-shot pack
+  against the TC-14 **0.9278**.
+- **The fine-tuned arm is deferred, not cancelled.** If approved later, its
+  length/epochs/batch/optimizer settings must be amended here (with the
+  measured cost) before its run.
+
+### Result — the zero-shot arm (2026-11-14)
+
+Artifact: `results/eurlex-embeddinggemma-zeroshot/metrics.json` (run
+`eurlex-embeddinggemma-zeroshot`, **1,584.9 s** ≈ 26.4 min, GPU; **no LLM**).
+The model loaded at the pinned revision; the context override 1,024 applied
+(the discovered 2,048 is recorded). **55,197 inputs** encoded (51,000 documents
++ 4,197 titles, 768-d, unit-norm; 0 cache hits — a fresh cache). The tokenizer's
+own counts over the 51,000 documents: mean **880.3**, median **668**, p90
+**1,635**, p95 **2,244**; **12,116 (23.76 %)** exceed 1,024 tokens and were
+truncated. The five out-of-fold candidate builds: **4,702,490** rows (4.57 %
+positive), 84–87 s each.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| embeddinggemma k-NN (zero-shot) | 0.9318 / 0.6001 / 0.7372 | **0.9145 / 0.5220 / 0.6754** | 0.9081 / 0.5109 / 0.6643 |
+| lexical TF-IDF k-NN (control) | 0.9317 / 0.6152 / 0.7517 | 0.9138 / 0.5415 / 0.6902 | 0.9065 / 0.5293 / 0.6771 |
+| **zero-shot pack (embeddinggemma channel)** | **0.9482 / 0.6668 / 0.8033** | **0.9357 / 0.6023 / 0.7555** | **0.9304 / 0.5923 / 0.7457** |
+
+**Diagnostics, `family_new`:** tail **0.5809** (lexical 0.5404, MiniLM 0.4011),
+head 0.9746, coverage@50 0.9988; the zero-shot pack's tail is already at the
+TC-17 pack's level (0.5819).
+
+**Paired bootstrap over documents (2,000 resamples):**
+
+| comparison | slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|---|
+| pack − embeddinggemma k-NN | all_dev | +0.0164 [+0.0146, +0.0181] | +0.0667 | +0.0661 |
+| pack − embeddinggemma k-NN | family_new | +0.0211 [+0.0189, +0.0236] | +0.0804 | +0.0801 [+0.0758, +0.0848] |
+| k-NN − lexical | all_dev | +0.00004 [−0.0023, +0.0025] | −0.0151 | −0.0145 |
+| k-NN − lexical | family_new | **+0.0008 [−0.0029, +0.0041]** | −0.0195 | −0.0149 [−0.0198, −0.0099] |
+| pack − lexical | family_new | +0.0219 [+0.0195, +0.0244] | +0.0609 | +0.0653 [+0.0615, +0.0691] |
+
+**The pre-registered readings, read out** (there is no bar in this change set —
+the fine-tuned arm is deferred):
+
+- **The longer context closes the gap to the words.** The zero-shot
+  embeddinggemma k-NN reaches **0.9145** on `family_new` against lexical
+  **0.9138** (Δ **+0.0008**, interval crossing zero) and MiniLM **0.8944**
+  (**+0.0202**). The embedding channel moves from **19 points behind** the
+  words to **statistical parity on breadth** — but it stays **behind on
+  ordering** (R-precision −0.0195, nDCG@10 −0.0149 vs lexical) and the tail
+  (0.4479 vs 0.5404).
+- **The zero-shot pack is a strong pack.** With the TC-14 11 features and the
+  embeddinggemma channel it reaches **0.9357 / 0.6023 / 0.7555** on
+  `family_new`, **+0.0078 R@50 / +0.0205 R-precision / +0.0212 nDCG@10** over
+  the TC-14 pack (0.9278 / 0.5818 / 0.7343), and **+0.0219 R@50** over the
+  lexical arm (interval excluding zero). Against the **TC-17 fine-tuned pack**
+  (0.9341 / 0.6181 / 0.7692) it is **+0.0016 R@50 but −0.0158 R-precision and
+  −0.0137 nDCG@10** — a tie on breadth, behind on ordering, with no training at
+  all.
+- **The primary (fine-tuned) bar is not evaluated.** No fine-tuned
+  embeddinggemma model was trained: the benchmark measured the six fine-tunes
+  at **14.1 h** (1,024 tokens, 3 epochs, batch 16, bf16 weights + frozen
+  embeddings + checkpointing; 2.98 GB peak; 1.2 s/step), outside the 6 h cap.
+  The fine-tuned arm remains the open question — the zero-shot pack's 0.9357
+  R@50 is a promising base for it.
+
+**Cost.** 1,584.9 s (~26.4 min) on the RTX 4070 Ti Super; 55,197 encodes +
+4,702,490 candidate rows on CPU; no LLM, no training.
+
+**What the result does not say.** Nothing about `test`; nothing about the
+fine-tuned embeddinggemma (deferred; its settings must be amended before its
+run), the model's full 2,048-token window, the real-title document prompt or
+the classification prompt for titles, Matryoshka truncation, other k-NN
+settings, or a learned combination of the embeddinggemma and lexical channels.
+The zero-shot pack is **not adopted**; the reviewer decides.

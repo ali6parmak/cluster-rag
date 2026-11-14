@@ -91,6 +91,7 @@ is the map.
 | label catalog (EUROVOC broader terms) | `catalogs/eurlex_labels.jsonl` (+ `.meta.json`; built from the official SKOS, TC-19) |
 | fine-tuned embedding (TC-17) | `results/eurlex-embed-finetune/model/full/` (dev-tuned, not adopted) |
 | TC-17 candidate ranking (TC-18) | `results/eurlex-embed-finetune/ranked_dev.npz` (the pack's top-64, exported deterministically) |
+| embeddinggemma-300m snapshot (TC-20) | HF cache, revision `57c266a740f537b4dc058e1b0cda161fd15afa75` (gated; downloaded 2026-11-14) |
 
 ## 4. What has been tried (executed change sets)
 
@@ -114,6 +115,7 @@ is the map.
 | TC-16 | **Hard-negative discipline** (menu item 10) — the pack trained with family-grouped folds (A) vs random folds (B) | **null**: B puts a same-family sibling in 27.7 % of documents' indices (A: 0 %), yet A beats B on `family_new` R@50 by only **+0.0006 [+0.00003, +0.0011]** — the discipline is not measurably needed, and the pack's gain is not template leakage (it is kept as the leak-free construction) | `results/eurlex-hard-negative-discipline/metrics.json` | §22 | this commit |
 | TC-17 | **Fine-tune the embedding** (menu item 11) — five family-grouped fold models + one full-train MiniLM contrastive fine-tune (in-batch + base-kNN/family hard negatives); TC-14's pack with the fine-tuned embedding channel | **`ordering_win_only`**: the pack reaches `family_new` **0.9341 / 0.6181 / 0.7692** vs the control's 0.9278 / 0.5818 / 0.7343 — R@50 **+0.0062 [+0.0045, +0.0080]** (below the +0.01 bar), R-precision **+0.0363**, nDCG@10 **+0.0349**, tail 0.5681 → 0.5819; the fine-tuned k-NN is 0.9104 (beats the base MiniLM by +0.0160, still behind the lexical 0.9138); the control reproduces TC-14 exactly; 900 s GPU | `results/eurlex-embed-finetune/metrics.json` | §24 | this commit |
 | TC-18 | **LLM rerank** (menu item 12) — one `tev1` decision call per dev document scoring the TC-17 pack's top-64 as `noul` questions, reranked within the 64 | **null (strong negative)**: `family_new` nDCG@10 **0.7670 → 0.5667** (Δ **−0.2002 [−0.2072, −0.1937]**), R-precision **−0.1940**, R@50 −0.0017; R@100 and coverage@64 are unchanged, so the failure is **ordering** — the second off-the-shelf reranker to collapse after TC-13; Stage 2 (label-blind) not run per the stop rule; 1.9 h, 6,000 calls | `results/eurlex-llm-rerank/metrics.json` | §25 | this commit |
+| TC-20 (part 1) | **embeddinggemma-300m, zero-shot** (off-menu) — the longer-context model's k-NN and the TC-14 pack with its channel at 1,024 tokens | **gap closed / strong pack (not the bar)**: k-NN `family_new` **0.9145** vs lexical 0.9138 (Δ +0.0008, interval crossing 0; MiniLM 0.8944); zero-shot pack **0.9357 / 0.6023 / 0.7555** (+0.0078 R@50 / +0.0205 / +0.0212 over TC-14; +0.0016 R@50 but −0.0158 R-precision / −0.0137 nDCG vs TC-17); 23.8 % of documents truncate; 26.4 min GPU; the fine-tuned arm is **deferred** (benchmark 14.1 h > 6 h cap) | `results/eurlex-embeddinggemma-zeroshot/metrics.json` | §26 | this commit |
 | TC-19 | **EUROVOC parent channel** (off-menu) — the four immediate-`skos:broader` features (support, subtree rate, parent-title cosine, consistency) from the pinned official SKOS in the TC-14 pack (11 → 15), plus a parent-aware zero-shot quota | **null**: `family_new` R@50 **0.9287 vs 0.9278** (Δ **+0.0009 [+0.0003, +0.0015]**, far below the +0.01 bar), R-precision **+0.0123**, nDCG@10 **+0.00945** (just under the +0.01 ordering bar), tail 0.5681 → 0.5723; the **quota leg gains** **34 → 37/96** at an all-dev R@50 loss of 0.0060 (secondary, does not decide); catalog reproduces §23's join exactly; CPU 568 s | `results/eurlex-parent-channel/metrics.json` | §23 | this commit |
 
 ## 5. What we learned
@@ -238,6 +240,17 @@ is the map.
   breadth/title shape more than the document. The pre-registered label-blind
   control was **not run** because the bar failed. The pack's own ordering
   remains the best.
+- **The longer-context zero-shot model closes the words gap.** embeddinggemma
+  at 1,024 tokens (23.8 % of documents truncated) lifts the embedding k-NN
+  from MiniLM's **0.8944** to **0.9145** on `family_new` — statistical parity
+  with the lexical arm's 0.9138 (Δ +0.0008, interval crossing zero), though
+  still behind it on ordering (R-precision −0.0195, nDCG@10 −0.0149) and the
+  tail (0.4479 vs 0.5404). In the pack it is strong without any training: the
+  TC-14 11 features + the embeddinggemma channel reach **0.9357 / 0.6023 /
+  0.7555** (+0.0078 R@50 / +0.0205 / +0.0212 over TC-14), a **tie on breadth
+  with the TC-17 fine-tuned pack** (0.9341) but **below it on ordering**
+  (−0.0158 R-precision, −0.0137 nDCG). The fine-tuned arm (the section's
+  primary bar) is deferred; its benchmark measured 14.1 h against the 6 h cap.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -370,7 +383,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 13. **Ship the current k-NN.** The 0.894 new-family baseline is strong; if the
     product does not need the tail or the zero-shot labels, stop and ship it.
 
-### Off-menu (pre-registered, not run)
+### Off-menu
 
 **TC-19 — the EUROVOC parent channel** (pre-registered 2026-11-14, detailed in
 `docs/topic_classification.md` §23). Add the official EUROVOC `skos:broader`
@@ -384,12 +397,33 @@ otherwise null. LLM-free (the English definitions are recorded but unused),
 ~20 min CPU. **Status: executed 2026-11-14 — null** (R@50 +0.0009, nDCG@10
 +0.00945, both under the 0.01 bars; the quota leg gains 34 → 37/96). §23.
 
+**TC-20 — the embeddinggemma-300m embedding** (pre-registered 2026-11-14,
+detailed in `docs/topic_classification.md` §26). Replace the document embedding
+with `google/embeddinggemma-300m` (768-d, 2,048-token card) and test it
+zero-shot and fine-tuned (TC-17's recipe). **Part 1 (zero-shot) executed: the
+longer context closes the gap to the words** — the k-NN reaches `family_new`
+**0.9145** vs lexical 0.9138 (Δ +0.0008, interval crossing zero; MiniLM
+0.8944) — and the zero-shot pack reaches **0.9357 / 0.6023 / 0.7555**
+(+0.0078 R@50 / +0.0205 R-precision / +0.0212 nDCG over TC-14; +0.0016 R@50
+but −0.0158 R-precision / −0.0137 nDCG vs TC-17), with the tail at TC-17's
+level (0.5809). At 1,024 tokens 23.8 % of documents truncate; the run was
+26.4 min GPU. **Part 2 (the fine-tuned arm) is deferred**: the benchmark
+measured the six fine-tunes at **14.1 h** (1.2 s/step, bf16 + frozen
+embeddings + checkpointing), outside the 6 h cap; its length/epochs/batch must
+be amended before its run. §26.
+
 ## 7. Open questions
 
 - Does a longer-context model (or a chunk size that fits the 256-token context,
   or a front-loaded title view) improve the **0.894** new-family baseline? The
   **chunked** half is answered — 200-word chunk-mean is a null (§13); the
-  longer-context half is still open.
+  **longer-context half is answered by TC-20's zero-shot arm**: embeddinggemma
+  at 1,024 tokens reaches 0.9145, parity with the words (§26).
+- **The embeddinggemma fine-tune is the open lever.** The zero-shot pack
+  already ties the TC-17 pack on breadth (0.9357 vs 0.9341) with no training;
+  can the fine-tune clear the +0.01 bar (0.9441), and at which
+  length/epochs/batch does it fit a sane budget (1,024 tokens × 3 epochs
+  measured 14.1 h; 768 × 2 is ~8 h, 512 × 2 ~5.8 h)?
 - Does the multi-view **rank-fusion** gain survive a different fusion rule,
   other `top_k`/`offset` values, or a different view set — and which views
   drive it? TC-8 is a secondary-arm win, not an adopted method (§14).
@@ -440,8 +474,9 @@ otherwise null. LLM-free (the English definitions are recorded but unused),
   item 9: **efficiency_only**; item 10: **null**, the discipline is not needed;
   item 11: **`ordering_win_only`**, the fine-tune sharpens ordering but misses
   the shortlist bar; item 12: **null**, the decision model collapses the
-  ordering; off-menu TC-19: **null**, the parent channel is precision-only):
-  menu items 3–12.
+  ordering; off-menu TC-19: **null**, the parent channel is precision-only;
+  off-menu TC-20 part 1: **gap closed / strong pack**, the fine-tuned half
+  deferred): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -510,11 +545,20 @@ parent-aware quota gains 34 → 37/96 as a positive secondary, §23).
 **TC-18 = menu item 12** (the LLM rerank) is also executed and is a **null
 (strong negative)**: `tev1` collapses the TC-17 pack's ordering (nDCG@10
 0.7670 → 0.5667, R-precision −0.1940), with the candidate set unchanged — the
-pre-registered label-blind Stage 2 was not run. The menu is now exhausted
-except **item 13: ship / final test**, which is the reviewer's decision: choose
-the final config (the TC-17 pack is the best shortlist; the TC-11 quota is the
-zero-shot route), then pre-register the **one** test shot and run it. The test
-split has never been read.
+pre-registered label-blind Stage 2 was not run. **TC-20 (off-menu, the
+embeddinggemma-300m embedding)** is executed as **part 1 only** (zero-shot): the
+longer-context k-NN closes the gap to the words (0.9145 vs 0.9138, interval
+crossing zero) and the zero-shot pack reaches **0.9357 / 0.6023 / 0.7555** —
++0.0078 R@50 over TC-14, a tie on breadth with the TC-17 pack but behind it on
+ordering (§26). **Part 2 (the fine-tuned arm) is deferred**: the benchmark
+measured 14.1 h for the six fine-tunes, over the 6 h cap; a reduced design
+(768 tokens × 2 epochs ≈ 8 h, or 512 × 2 ≈ 5.8 h) needs the reviewer's budget
+approval and a pre-run amendment. The menu is otherwise exhausted except
+**item 13: ship / final test**, which is the reviewer's decision: choose the
+final config (the TC-17 pack is the best shortlist, with the TC-20 zero-shot
+pack the strongest no-training alternative; the TC-11 quota is the zero-shot
+route), then pre-register the **one** test shot and run it. The test split has
+never been read.
 
 ## 10. The durable deliverable
 
@@ -540,7 +584,7 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`,
   `results/eurlex-cluster-routing/`, `results/eurlex-hard-negative-discipline/`,
   `results/eurlex-embed-finetune/`, `results/eurlex-parent-channel/`,
-  `results/eurlex-llm-rerank/`.
+  `results/eurlex-llm-rerank/`, `results/eurlex-embeddinggemma-zeroshot/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
