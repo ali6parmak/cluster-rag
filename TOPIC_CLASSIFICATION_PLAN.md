@@ -90,6 +90,7 @@ is the map.
 | embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; chunk view `eurlex-4k-chunk200-v1`; field views `eurlex-4k-views-v1`; labels `eurlex-4k-label-v1`) |
 | label catalog (EUROVOC broader terms) | `catalogs/eurlex_labels.jsonl` (+ `.meta.json`; built from the official SKOS, TC-19) |
 | fine-tuned embedding (TC-17) | `results/eurlex-embed-finetune/model/full/` (dev-tuned, not adopted) |
+| TC-17 candidate ranking (TC-18) | `results/eurlex-embed-finetune/ranked_dev.npz` (the pack's top-64, exported deterministically) |
 
 ## 4. What has been tried (executed change sets)
 
@@ -112,6 +113,7 @@ is the map.
 | TC-15 | **Cluster routing / label pruning** (menu item 9) — MiniBatchKMeans K=500 on train docs, route dev to the C nearest clusters, rank their labels first | **efficiency_only (primary)**: C=3 ranks ~250 of 4,197 labels (5.96 %) at `family_new` R@50 −0.0005 [−0.0025, +0.0014], R-precision +0.0073, nDCG@10 +0.0069, tail 0.5447; C=1 (2.38 % space, 91.4 % coverage) loses 0.0294 R@50 | `results/eurlex-cluster-routing/metrics.json` | §21 | this commit |
 | TC-16 | **Hard-negative discipline** (menu item 10) — the pack trained with family-grouped folds (A) vs random folds (B) | **null**: B puts a same-family sibling in 27.7 % of documents' indices (A: 0 %), yet A beats B on `family_new` R@50 by only **+0.0006 [+0.00003, +0.0011]** — the discipline is not measurably needed, and the pack's gain is not template leakage (it is kept as the leak-free construction) | `results/eurlex-hard-negative-discipline/metrics.json` | §22 | this commit |
 | TC-17 | **Fine-tune the embedding** (menu item 11) — five family-grouped fold models + one full-train MiniLM contrastive fine-tune (in-batch + base-kNN/family hard negatives); TC-14's pack with the fine-tuned embedding channel | **`ordering_win_only`**: the pack reaches `family_new` **0.9341 / 0.6181 / 0.7692** vs the control's 0.9278 / 0.5818 / 0.7343 — R@50 **+0.0062 [+0.0045, +0.0080]** (below the +0.01 bar), R-precision **+0.0363**, nDCG@10 **+0.0349**, tail 0.5681 → 0.5819; the fine-tuned k-NN is 0.9104 (beats the base MiniLM by +0.0160, still behind the lexical 0.9138); the control reproduces TC-14 exactly; 900 s GPU | `results/eurlex-embed-finetune/metrics.json` | §24 | this commit |
+| TC-18 | **LLM rerank** (menu item 12) — one `tev1` decision call per dev document scoring the TC-17 pack's top-64 as `noul` questions, reranked within the 64 | **null (strong negative)**: `family_new` nDCG@10 **0.7670 → 0.5667** (Δ **−0.2002 [−0.2072, −0.1937]**), R-precision **−0.1940**, R@50 −0.0017; R@100 and coverage@64 are unchanged, so the failure is **ordering** — the second off-the-shelf reranker to collapse after TC-13; Stage 2 (label-blind) not run per the stop rule; 1.9 h, 6,000 calls | `results/eurlex-llm-rerank/metrics.json` | §25 | this commit |
 | TC-19 | **EUROVOC parent channel** (off-menu) — the four immediate-`skos:broader` features (support, subtree rate, parent-title cosine, consistency) from the pinned official SKOS in the TC-14 pack (11 → 15), plus a parent-aware zero-shot quota | **null**: `family_new` R@50 **0.9287 vs 0.9278** (Δ **+0.0009 [+0.0003, +0.0015]**, far below the +0.01 bar), R-precision **+0.0123**, nDCG@10 **+0.00945** (just under the +0.01 ordering bar), tail 0.5681 → 0.5723; the **quota leg gains** **34 → 37/96** at an all-dev R@50 loss of 0.0060 (secondary, does not decide); catalog reproduces §23's join exactly; CPU 568 s | `results/eurlex-parent-channel/metrics.json` | §23 | this commit |
 
 ## 5. What we learned
@@ -227,6 +229,15 @@ is the map.
   only evidence — the zero-shot quota — it does add **3/96** unseen
   assignments (34 → 37) at an all-dev R@50 loss of 0.0060; that is a positive
   secondary, not an adoption.
+- **An off-the-shelf decision model is not a reranker here either.** `tev1` on
+  the TC-17 pack's top-64 collapses `family_new` nDCG@10 **0.7670 → 0.5667**
+  (Δ **−0.2002**) and R-precision **−0.1940** while R@50 barely moves
+  (−0.0017) and R@100 is identical: the shortlist is unchanged, the ordering is
+  destroyed — the same signature as TC-13's cross-encoder. The 4B binary
+  decision model has no topical-ranking training; its probability tracks label
+  breadth/title shape more than the document. The pre-registered label-blind
+  control was **not run** because the bar failed. The pack's own ordering
+  remains the best.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -348,7 +359,7 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
     - **Why:** likely the biggest gain; the current model is generic.
     - **Evaluate:** same slices; one test shot later.
     - **Cost:** GPU / training run; needs explicit approval.
-12. **LLM rerank / zero-shot label assignment.**
+12. **LLM rerank / zero-shot label assignment.** — **TC-18 executed 2026-11-14: null (strong negative).** `tev1` re-scored the TC-17 pack's top-64, one call per document: `family_new` nDCG@10 **0.7670 → 0.5667** (Δ **−0.2002 [−0.2072, −0.1937]**), R-precision **−0.1940**, R@50 −0.0017 — the candidate set is unchanged (R@100 identical), so it is a pure ordering failure, the same signature as TC-13. The pre-registered label-blind Stage 2 was not run (the bar failed). Not adopted; the reviewer decides (§25).
     - **What:** an LLM reranks the top-50 or picks labels from the titles.
     - **Why:** strongest ordering; handles ambiguity.
     - **Evaluate:** R-precision / nDCG and cost; latency reported.
@@ -399,6 +410,10 @@ otherwise null. LLM-free (the English definitions are recorded but unused),
   adopt a GPU-trained embedding, and would more training (more epochs, hard
   negatives mined with the fine-tuned model, a larger base model) clear the
   +0.01 shortlist bar — or is the pack's remaining breadth lexical?
+- **Two off-the-shelf rerankers collapse the pack's ordering** (TC-13's
+  cross-encoder, TC-18's `tev1`). Is the top of the pack's ranking improvable at
+  all by a zero-shot scorer, or would it need a reranker fine-tuned on
+  (document, label) pairs — and is that worth a GPU run?
 - Is `family_new` the final evaluation protocol, and what is the one **test**
   shot for an adopted config?
 - The vocabulary ships **titles only**. **TC-19** tested the official EUROVOC
@@ -424,8 +439,9 @@ otherwise null. LLM-free (the English definitions are recorded but unused),
   item 7: **null (strong negative)**; item 8: **win**, the track's best shortlist;
   item 9: **efficiency_only**; item 10: **null**, the discipline is not needed;
   item 11: **`ordering_win_only`**, the fine-tune sharpens ordering but misses
-  the shortlist bar; item 12 open; off-menu TC-19: **null**, the parent channel
-  is precision-only): menu items 3–12.
+  the shortlist bar; item 12: **null**, the decision model collapses the
+  ordering; off-menu TC-19: **null**, the parent channel is precision-only):
+  menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
 
 ## 9. How the next session should proceed
@@ -490,12 +506,15 @@ the pack with the fine-tuned embedding reaches **0.9341 / 0.6181 / 0.7692** on
 the reviewer's choice; menu item 12 (LLM rerank) needs explicit cost approval.
 **TC-19** (off-menu, the EUROVOC parent channel) is also executed and is a
 **null** (`family_new` R@50 +0.0009, nDCG@10 +0.00945 — both bars miss; the
-parent-aware quota gains 34 → 37/96 as a positive secondary, §23). The next
-change set is **TC-18 = menu item 12** (the LLM rerank), whose candidate set is
-the **TC-17 fine-tuned pack's top-64** (0.9341 on `family_new`, above TC-19's
-0.9287 and TC-14's 0.9278); it needs explicit cost approval before any call.
-The final test shot (menu item 13) stays gated on the reviewer's chosen
-config.
+parent-aware quota gains 34 → 37/96 as a positive secondary, §23).
+**TC-18 = menu item 12** (the LLM rerank) is also executed and is a **null
+(strong negative)**: `tev1` collapses the TC-17 pack's ordering (nDCG@10
+0.7670 → 0.5667, R-precision −0.1940), with the candidate set unchanged — the
+pre-registered label-blind Stage 2 was not run. The menu is now exhausted
+except **item 13: ship / final test**, which is the reviewer's decision: choose
+the final config (the TC-17 pack is the best shortlist; the TC-11 quota is the
+zero-shot route), then pre-register the **one** test shot and run it. The test
+split has never been read.
 
 ## 10. The durable deliverable
 
@@ -520,7 +539,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-zero-shot-quota/`, `results/eurlex-threshold-calibration/`,
   `results/eurlex-cross-encoder-rerank/`, `results/eurlex-candidate-pack/`,
   `results/eurlex-cluster-routing/`, `results/eurlex-hard-negative-discipline/`,
-  `results/eurlex-embed-finetune/`, `results/eurlex-parent-channel/`.
+  `results/eurlex-embed-finetune/`, `results/eurlex-parent-channel/`,
+  `results/eurlex-llm-rerank/`.
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.

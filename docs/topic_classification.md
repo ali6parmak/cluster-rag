@@ -2833,3 +2833,193 @@ the base model); nothing about fine-tuning on the zero-shot labels (they have
 no training documents, so their titles were never positives); and nothing about
 a task-fitted reranker. The fine-tuned model is a dev-tuned artifact: the final
 test shot (menu item 13) is still a separate decision.
+
+## 25. LLM rerank of the best pack's shortlist — TC-18 (pre-registered 2026-11-14, before the run)
+
+**Question.** The ordering metrics are the pack's weak side: the TC-17 pack reaches
+**0.9341 R@50 / 0.6181 R-precision / 0.7692 nDCG@10** on `family_new`, but the
+shortlist is a flat set and the retrievers disagree about the top. A zero-shot
+**decision model** (`tev1`, the UPR track's instrument) can read the document and
+the 64 candidate titles together and re-score them. Does that improve the
+ordering of the best pack, and if it does, is the gain **label-driven** or just
+the model's label prior? The item is **not adopted** by this run; the reviewer
+decides.
+
+**The model (fixed before the run).** `tev1:latest` — Together AI's Qwen3.5-4B
+decision model, **4.61 GB, local, pinned digest
+`7954dce22bc6c29c3b119656207681d12cb34434fed7caa086bfbc919bef0740`** (the
+`/v1/systemone` endpoint reads and checks the digest; a mismatch fails the run).
+Ollama 0.40.4 or later, no download. Its card's limits are fixed here: **1–64
+questions per call**, a **~2,500-token measured input budget** (the repo's
+`TEV1_MAX_INPUT_TOKENS`, verified against the server in UPR), and no sampling
+(one forward pass, probabilities only).
+
+**The candidate set (fixed before the run).** The **TC-17 fine-tuned pack's dev
+top-64**, i.e. the pack ranking's first 64 labels per document. The pack is the
+track's best (0.9341 / 0.6181 / 0.7692 on `family_new`); the top-64 is the
+model's own question cap and gives the reranker a **14-label promotion margin**
+over the depth-50 evaluation. The ranking is exported deterministically
+(`experiments_topic_classification/export_tc17_ranking.py`, the same seeds,
+folds, features and parameters as TC-17). The candidate set is identical in both
+stages; the pack's ranking is the baseline.
+
+**Pre-run clarification (2026-11-14, before any call).** The export is not
+bit-exact: the five fine-tunes run on the GPU, so cuBLAS reductions move the
+regenerated pack slightly. The first export measured **0.934141 / 0.616847 /
+0.767174** on `family_new` against the TC-17 artifact's 0.934064 / 0.618127 /
+0.769181 — deltas **+0.00008 R@50, −0.00128 R-precision, −0.00201 nDCG@10**.
+The reproduction guard is therefore **|Δ| ≤ 0.005** on each metric (not 1e-9),
+and the export records its deltas. **Every comparison's baseline is the
+regenerated pack's own ranking** (whose metrics the artifact reports); the
+TC-17 artifact's numbers are context. This amendment was written before the
+first decision call; no LLM call had been made.
+
+**The prompt (fixed before the run).**
+
+- **State:** the document's `full_text` (title + header + recitals + main body —
+  the same text the retrievers see), in the **paragraph shape**
+  (`{"paragraph": ...}`).
+- **Questions:** **64 `noul` questions**, one per candidate, each rendered as
+  `Question: <label title>\n\nIs the document about the following topic?`.
+  The question is the label's own EUROVOC title; no description, no parent, no
+  gold information.
+- **Truncation:** the call planner (`plan_calls`, `max_input_tokens = 2500`,
+  3.5 chars/token) truncates **only the document** to fit the budget — never a
+  question or the task — and the artifact records how many documents were cut.
+- **One call per document:** 6,000 calls for the full dev split; the answer's
+  `noul` value is the candidate's score.
+
+**The rerank (fixed before the run).** For each document, its 64 candidates are
+ordered by the model's probability descending (ties by the pack's own order);
+the labels outside the 64 keep the pack's order from rank 65. The resulting
+ranking is evaluated exactly like every other arm.
+
+**Slices and metrics.** `all_dev` (6,000), `family_new` (4,260),
+`family_new_clean` (3,764); R@50, R-precision, nDCG@10 primary; R@5/10/20/100,
+nDCG@50, coverage@50 and label-level recall@50 by head / torso / tail / unseen
+secondary; the **coverage@64** ceiling of the candidate set is reported. A
+paired bootstrap over documents (2,000 resamples) gives the rerank-minus-pack
+intervals. Test is never read.
+
+**The pre-registered bar (Stage 1).**
+
+- **Ordering win:** `family_new` **nDCG@10 improves by at least 0.01** over the
+  TC-17 pack (0.7692 → 0.7792), with the paired 95 % interval excluding 0, and
+  **R@50 loses no more than 0.01**.
+- **Shortlist reading (secondary, does not decide):** the R@50 change is
+  reported with its interval; a gain of at least +0.005 with the interval
+  excluding 0 is recorded as `shortlist_gain` beside the ordering result.
+- **Stage 1 does not clear the ordering bar → `null`; stop, no Stage 2.**
+
+**Stage 2 (conditional, fixed before the run): the label-blind counterpart.**
+Runs **only if Stage 1 clears the ordering bar**, because the control exists to
+interpret a positive. Same 6,000 calls, same 64 questions per document, same
+prompt — but the **state is another document's text**: a seeded derangement of
+the 6,000 dev documents (`numpy.random.default_rng(42)`, a permutation with no
+fixed point, applied as a cyclic shift of the seeded permutation). The blind
+scores are applied to the **same candidate set** and evaluated the same way.
+- **Certification:** the win is certified only if the blind arm **does not
+  reproduce** the gain — blind Δ nDCG@10 (vs the pack) **below half** the real
+  Δ, **or** its paired interval includes 0.
+- **If the blind arm reproduces the gain**, the "gain" is a label-level prior
+  (the model likes broad/common labels or short titles), and the item is a
+  **null** after all.
+
+**Cost.** 6,000 calls ≈ **1–1.5 h** at the UPR-measured ~100 calls/min, plus
+the analysis (~10 min); Stage 2 another ~1–1.5 h **only on a positive**. Every
+call is cached (the decision cache's own root), so a re-read is free and the
+two stages never share answers (the state is part of the key). No new model
+download; the digest is pinned.
+
+**Leakage.** The pack was fitted on train only; dev is evaluation only. The
+model is zero-shot — it carries no EURLEX or EUROVOC training — and the prompts
+contain only the document text and the candidate **titles** being scored, never
+a gold indication; the 64 candidates are the pack's own output. The blind
+counterpart removes only the pairing.
+
+**Not tested here.** `test`; other decision models or `laya`; `choice`/`score`
+question types; pairwise (document, label) calls; all 4,197 labels per document;
+description- or parent-augmented questions; a fine-tuned reranker; a learned
+combination of the LLM score with the pack features; and the zero-shot labels
+(the candidate set is the pack's top-64, which contains no unseen label — the
+TC-11 quota remains the separate route).
+
+### Result (2026-11-14)
+
+Artifact: `results/eurlex-llm-rerank/metrics.json` (run `eurlex-llm-rerank`,
+**6,832.2 s** wall ≈ 1.9 h, **6,000 calls**, no GPU; **5,961 real calls** + 39
+cache hits, **321,551,660 input tokens**, 0 output, **1,271 documents
+truncated** (21.2 %) at the ~2,500-token budget; ~53 calls/min). The
+candidate-set export (`export_tc17_ranking.py`, 1,850.8 s) regenerated the
+pack's ranking with the recorded deltas (+0.00003 R@50, −0.0009 R-precision,
+−0.0022 nDCG@10 against TC-17; the pre-run tolerance 0.005). Coverage@64 of
+the candidate set is **0.9988**. An aborted first assembly over-split the plan
+(31,993 calls) and was stopped after **440 calls** — cached, unused, and
+reported here rather than hidden.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| pack (baseline) | 0.9471 / 0.6770 / 0.8110 | 0.9340 / 0.6172 / 0.7670 | 0.9285 / 0.6078 / 0.7572 |
+| **LLM rerank (tev1, top-64)** | 0.9446 / 0.4430 / 0.5878 | **0.9323 / 0.4232 / 0.5667** | 0.9269 / 0.4216 / 0.5659 |
+
+**Secondary metrics and diagnostics, `family_new`:**
+
+| method | R@5 | R@10 | R@20 | R@100 | nDCG@50 | head | torso | tail | unseen |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| pack | 0.6132 | 0.7862 | 0.8831 | 0.9411 | 0.8284 | 0.9727 | 0.8726 | 0.5830 | 0.0 |
+| **LLM rerank** | 0.4235 | 0.6006 | 0.7978 | 0.9411 | 0.7011 | 0.9712 | 0.8713 | 0.5840 | 0.0 |
+
+R@100 is identical (the candidate set does not move), coverage@50 is 0.9986
+for both, and the tail rises by 0.001 while the head and torso fall — the
+model's top ranks drift toward the broader labels.
+
+**Paired bootstrap over documents (rerank − pack, 2,000 resamples):**
+
+| slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|
+| all_dev | −0.0026 [−0.0037, −0.0015] | −0.2340 | −0.2232 [−0.2291, −0.2174] |
+| family_new | **−0.0017 [−0.0032, −0.0003]** | **−0.1940** | **−0.2002 [−0.2072, −0.1937]** |
+| family_new_clean | −0.0016 [−0.0032, −0.0001] | −0.1863 | −0.1913 [−0.1986, −0.1839] |
+
+**The pre-registered bar, read out.**
+
+- **Ordering win: not met — the ordering moves the wrong way.** nDCG@10 loses
+  **0.2002** on `family_new` (0.7670 → 0.5667, interval entirely below zero),
+  R-precision loses **0.1940**, and R@50 loses 0.0017 (inside the 0.01 guard,
+  but the ordering bar needed a gain).
+- **`outcome`: null.** The shortlist reading is null too (no R@50 gain).
+- **Stage 2: not run**, exactly as pre-registered — the label-blind counterpart
+  only interprets a positive.
+
+**Reading.** The `tev1` probability is not a usable ordering signal for
+(document, EUROVOC title) relevance. The candidate set is unchanged (R@100
+identical, coverage@64 0.9988), so this is **purely an ordering failure**, the
+same signature as TC-13's cross-encoder collapse: the shortlist is the same 64
+labels, but the model's top ranks are worse than the pack's. The model is a 4B
+binary decision model fine-tuned on yes/no QA, policy and routing decisions;
+nothing in its training says which of two EUROVOC concepts a long EU document is
+more about. The slight tail gain and head/torso loss suggest its probability
+tracks label breadth or title shape more than the document's content — which is
+the label-prior hypothesis the blind control would have tested; the
+pre-registered stop rule means that test was not bought.
+
+Two qualifications. The 64-question call re-reads the state per question
+(321.6M input tokens for 6,000 calls ≈ 53.6k tokens/call), so the price is
+real; and 21.2 % of the documents were truncated to fit the budget, though the
+truncated front matter (title, header, opening recitals) is the most topical
+part. Neither changes the direction of the result.
+
+**Cost.** 6,832.2 s wall (~1.9 h) + the 1,850.8 s export; 6,000 calls
+(+440 from the aborted assembly); 321.6M input tokens; no GPU, no LLM training,
+no model download.
+
+**What the result does not say.** Nothing about `test`; nothing about `laya` or
+a larger/generative LLM; nothing about `choice`/`score` question types, the
+pair shape, description- or parent-augmented questions, or a task-fitted
+reranker; and nothing about combining the LLM score with the pack features
+(rather than replacing the ordering). The blind counterpart was not run (Stage
+1 failed), so the label-prior reading above is an inference from the metric
+shape, not a measured control. This is the **second** off-the-shelf reranker to
+collapse the ordering after TC-13; the pack remains the track's best shortlist.
