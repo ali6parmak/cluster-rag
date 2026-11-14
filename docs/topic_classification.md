@@ -2499,6 +2499,103 @@ and the quota leg (minutes). CPU only; no GPU, no LLM, no new model.
 the **top-level domain** instead of the immediate parent, a hierarchical
 classifier, a description-based cross-encoder, fine-tuning, and `test`.
 
+### Result (2026-11-14)
+
+Artifact: `results/eurlex-parent-channel/metrics.json` (run
+`eurlex-parent-channel`, **567.8 s** CPU, no LLM, no GPU; document cache 51,000
+hits, label cache 5,098). The pinned source verified: zip sha256
+`91bdb24e…`, RDF sha256 `6c362f79…`, 60,691,531 bytes. The catalog
+`catalogs/eurlex_labels.jsonl` reproduces §23's join **exactly**: **4,271/4,271**
+labels matched, **3,850** with at least one immediate parent, **421** parentless,
+**214** with 2–9 parents, **660** English `skos:definition`s + **119**
+`skos:scopeNote`s (recorded only), max 9 parents. Over the pack's 4,197-label
+space: **1,159** unique parents, **3,780** labels with a parent.
+
+**Training.** Same five family-grouped folds, **4,746,172** candidate rows
+(4.5125 % positive, identical to TC-14), ~87 s each. The control reproduces
+TC-14 exactly (0.927834 / 0.58184 / 0.734284 on `family_new`).
+
+**The parent features' coverage (train rows; dev in the artifact):**
+
+| feature | mean | nonzero share |
+|---|---:|---:|
+| `parent_support` | 0.00117 | 3.9 % |
+| `parent_rate` | 0.04964 | 88.7 % |
+| `parent_cosine` | 0.18345 | 88.7 % |
+| `parent_consistency` | 0.01988 | 11.9 % |
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| A — control (11 features) | 0.9422 / 0.6488 / 0.7861 | 0.9278 / 0.5818 / 0.7343 | 0.9218 / 0.5710 / 0.7229 |
+| **B — + parent features (15)** | **0.9428 / 0.6590 / 0.7932** | **0.9287 / 0.5942 / 0.7437** | **0.9226 / 0.5827 / 0.7325** |
+
+**Secondary metrics and diagnostics, `family_new`:**
+
+| method | R@5 | R@10 | R@20 | R@100 | nDCG@50 | head | torso | tail | unseen |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A — control | 0.5786 | 0.7546 | 0.8670 | 0.9370 | 0.8058 | 0.9689 | 0.8605 | 0.5681 | 0.0 |
+| **B — parents** | **0.5904** | **0.7642** | **0.8695** | **0.9371** | **0.8115** | **0.9693** | **0.8623** | **0.5723** | 0.0 |
+
+Coverage@50 is 0.9986 for both; the unseen bucket stays 0.0.
+
+**Paired bootstrap over documents (B − A, 2,000 resamples):**
+
+| slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|
+| all_dev | +0.0006 [+0.0001, +0.0011] | +0.0103 | +0.0072 [+0.0056, +0.0088] |
+| family_new | **+0.0009 [+0.0003, +0.0015]** | **+0.0123** | **+0.00945 [+0.0074, +0.0114]** |
+| family_new_clean | +0.0008 [+0.0002, +0.0015] | +0.0118 | +0.00957 [+0.0074, +0.0117] |
+
+**The quota leg (N = 5, the same bottom-of-top-50 insertion; base = the
+embedding k-NN):**
+
+| candidate order | unseen hits | unseen R@50 | all_dev R@50 | all_dev loss | family_new R@50 |
+|---|---:|---:|---:|---:|---:|
+| no quota (base) | 0/96 | 0.0000 | 0.9168 | — | 0.8944 |
+| own-title cosine (TC-11 control) | 34/96 | 0.3542 | 0.9108 | 0.00600 | 0.8862 |
+| **max(own title, parent) cosine** | **37/96** | **0.3854** | **0.9108** | **0.00596** | **0.8864** |
+
+**The pre-registered bar, read out.**
+
+- **Shortlist win: not met.** R@50 rises **+0.0009**, far below the +0.01 bar
+  (the interval excludes zero, but the size is a rounding error against the
+  bar).
+- **Ordering win (secondary): not met by a hair.** nDCG@10 rises **+0.009451**,
+  below the +0.01 ordering bar (the interval [+0.0074, +0.0114] excludes zero).
+- **`outcome`: null** — the parent channel does not clear either bar.
+- **Quota leg: met** — **37/96** unseen hits against the 34 baseline, at an
+  all-dev R@50 loss of **0.005958** (inside the 0.01 cap). Per the
+  pre-registration this is reported and **does not affect the item's outcome**.
+
+**Reading.** The hierarchy is a **precision/ordering feature, not a breadth
+feature**: +0.0123 R-precision and +0.00945 nDCG@10 on `family_new`, with the
+tail 0.5681 → 0.5723, but only **+0.0009** R@50 and no change in coverage
+(0.9986 both arms). That is the expected shape — a document whose shortlist
+already contains a parent tends to contain its children too, so knowing the
+parent mostly **re-ranks** labels the retriever already found; the four
+features carry little information the 11 base features did not (the parent
+signal is mostly the subtree frequency, `parent_rate`, nonzero on 89 % of rows
+and nearly constant in mean). Where the parent *is* the only evidence — the
+zero-shot quota, whose labels have no train examples at all — the parent title
+adds **3 of 96** unseen assignments (34 → 37), the one place the channel
+changes which labels are reachable. The two arms' candidate sets are identical,
+so the null is about the features, not about a wider shortlist.
+
+**Cost.** Catalog build 0.8 s (parse) + the verified download; the run 567.8 s
+(~9.5 min) on CPU; no GPU, no LLM, no model download. The parent-title
+embeddings were 901 new cache entries (5,098 label-cache hits total).
+
+**What the result does not say.** Nothing about `test`; nothing about the
+English definitions as a feature, the full ancestry, the top-level domain, a
+hierarchical classifier, a parent-aware fusion of the two packs (TC-19's pack
+uses the base embeddings, not TC-17's fine-tuned channel — combining them is a
+new change set), or the quota's 3-hit gain as an adopted component (it would
+need its own pre-registration). The candidate set for a follow-up rerank is
+the **TC-17 fine-tuned pack** (0.9341 on `family_new`), which is still above
+TC-19's 0.9287.
+
 ## 24. Fine-tuning the embedding — TC-17 (pre-registered 2026-11-14, before the run)
 
 **Question.** The honest-slice shortlist is led by the **lexical TF-IDF k-NN**
