@@ -2498,3 +2498,241 @@ and the quota leg (minutes). CPU only; no GPU, no LLM, no new model.
 **Not tested here.** The English definitions as a feature, the full ancestry,
 the **top-level domain** instead of the immediate parent, a hierarchical
 classifier, a description-based cross-encoder, fine-tuning, and `test`.
+
+## 24. Fine-tuning the embedding — TC-17 (pre-registered 2026-11-14, before the run)
+
+**Question.** The honest-slice shortlist is led by the **lexical TF-IDF k-NN**
+(`family_new` **0.9138** R@50), the embedding k-NN is behind it (**0.8944**),
+and the learned pack sits on top of both (**0.9278**, TC-14). The embedding is
+the off-the-shelf `all-MiniLM-L6-v2`, which has never seen a EUROVOC concept.
+Does contrastive fine-tuning on (document, its gold label titles) move (a) the
+embedding retriever's honest-slice shortlist, and (b) the pack that consumes the
+embedding score? The item is **not adopted** by this run; the reviewer decides.
+
+**Model and data (fixed before the run).**
+
+- **Base model:** `sentence-transformers/all-MiniLM-L6-v2` at revision
+  `c9745ed1d9f207416be6d2e6f8de32d1f16199bf` (the local snapshot the cache
+  already uses, no download), `max_seq_length = 256` (the cached baseline's
+  context), no task prefixes (MiniLM has none).
+- **Anchors:** the **45,000 train** documents' `full_text` (title + header +
+  recitals + main body — exactly the text the cached embeddings use).
+  **Positives:** the titles of the document's gold labels, from the same
+  4,271-row vocabulary the pack uses. Dev is **never** a training pair.
+
+**Pairs and hard negatives (fixed before the run).**
+
+- **One sample per train document per epoch:** one gold title drawn uniformly
+  from the document's gold labels (seeded), one hard negative drawn uniformly
+  from that document's mined pool (seeded).
+- **Hard-negative pool per train document:**
+  1. **Retrieval negatives** — the **top-10 non-gold labels** by the *base*
+     MiniLM k-NN vote score (`k = 100`, `power = 1.0`), computed against the
+     **full train index with the document's own title-skeleton family masked
+     out** (no sibling or self-retrieval). The embedding is the cached baseline;
+     no fine-tuned model is used to mine its own negatives.
+  2. **Family-sibling negatives** — up to **5 labels** held by the document's
+     same-family train siblings (title-skeleton groups) that are not the
+     document's own gold labels.
+- **In-batch negatives:** every other sample's positive in the batch is a
+  negative (the standard multiple-negatives construction).
+
+**Leak-free folds (fixed before the run).**
+
+- The train split is split into the **same 5 folds grouped by title skeleton**
+  as TC-14 (`GroupKFold`, no family is split across folds).
+- **Five fold models:** model `f` is trained on the four folds other than `f`;
+  its embeddings of the held-out fold become the **train-side features** of the
+  pack for those documents (the query documents were never seen by `f`; the
+  index documents are `f`'s own training examples). This is the same
+  index/query construction as TC-14 and TC-16, applied to the embedding model.
+- **One full-train model:** trained on all 45,000 train documents, it supplies
+  the **dev-side** embedding arm and the dev pack features (dev is disjoint
+  from its training data). The train rows use the fold models and the dev rows
+  the full model — the same slight scale mismatch TC-14 already lives with
+  (its out-of-fold index vs the full train index), recorded here.
+
+**Training hyper-parameters (fixed; no tuning, no early stopping, no dev
+checkpoint selection).**
+
+| parameter | value |
+|---|---|
+| loss | multiple-negatives cross-entropy over the batch's positives + hard negatives, scale 20.0 |
+| epochs | 3 |
+| batch size | 64 samples |
+| learning rate | 2e-5, AdamW, weight decay 0.01 |
+| schedule | linear warmup 10 % of steps, linear decay to 0 |
+| precision | bf16 autocast (loss in float32) |
+| grad clip | 1.0 |
+| seed | 42 (numpy, random, torch, cuDNN) |
+| pooling / normalisation | the model's own mean pooling; embeddings L2-normalised |
+
+The training loop is the experiment script's own (tokenise, embed anchor /
+positive / negative, normalise, cross-entropy) so the exact loss is auditable;
+it is mathematically `MultipleNegativesRankingLoss`.
+
+**The two evaluations (fixed before the run).**
+
+- **(a) The embedding arm** — the full-train fine-tuned model's whole-document
+  k-NN, **the same k-NN as every other arm** (`k = 100`, `power = 1.0`, cosine
+  votes), on `all_dev` / `family_new` / `family_new_clean`. Comparators: the
+  **lexical k-NN** (`family_new` **0.9138 / 0.5415 / 0.6902** — the strongest
+  single retriever) and the **base MiniLM k-NN** (**0.8944 / 0.4869 / 0.6364**).
+  This leg is a diagnostic: does fine-tuning move the retriever itself?
+- **(b) The pack with the fine-tuned embedding** — TC-14's **11 features**,
+  where the four embedding-derived features are recomputed from the fine-tuned
+  model: `embedding_score`, `rrf_score`, `rank_embedding` and `label_cosine`
+  (document and title embeddings both fine-tuned). The other seven features
+  (`lexical_score`, `label_rate`, `doc_words`, the three bucket flags,
+  `rank_lexical`) are unchanged. Training rows: the five out-of-fold folds with
+  the fold models' embeddings; dev rows: the full model. The **same**
+  `HistGradientBoostingClassifier` parameters, folds and dev candidate rows as
+  TC-14.
+- **The control is retrained in the same script:** the TC-14 pack on the base
+  MiniLM embeddings, identical construction. It must reproduce **0.9278 /
+  0.5818 / 0.7343** on `family_new`; if it does not, the run is void.
+
+**Slices and metrics.** `all_dev` (6,000), `family_new` (4,260),
+`family_new_clean` (3,764); R@50, R-precision, nDCG@10 primary; R@5/10/20/100,
+nDCG@50 secondary; coverage@50 and label-level recall@50 by head / torso / tail
+/ unseen. A paired bootstrap over documents (2,000 resamples) gives the
+treatment-minus-control intervals. Test is never read.
+
+**Pre-registered bar.**
+
+- **Primary (the pack):** the fine-tuned pack improves `family_new` **R@50 by
+  at least 0.01** over the retrained TC-14 control, with the paired 95 %
+  interval excluding 0, and loses **R-precision and nDCG@10 by no more than
+  0.01**. Otherwise the item is a **null**.
+- **Ordering win (secondary):** if R@50 does not reach +0.01 but nDCG@10
+  improves by at least 0.01 with the interval excluding 0 and R@50 loses no
+  more than 0.01, the outcome is `ordering_win_only`.
+- **Retriever reading (secondary, does not decide the item):** the fine-tuned
+  k-NN against the lexical arm — `retriever_win` if it gains +0.01 R@50 with
+  the interval excluding 0; otherwise reported as context. The bar is **not**
+  against the base MiniLM (that would be too weak a question).
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** Six MiniLM fine-tunes (5 × 36,000 documents × 3 epochs + 1 × 45,000 ×
+3 epochs), their corpus encodings (45,000 + 6,000 documents per model side),
+the hard-negative mining (one 45,000 × 45,000 base-embedding k-NN pass), two
+pack builds (TC-16 measured ~17 min for two arms) and the evaluation. Budget
+**≤ 90 min GPU** (RTX 4070 Ti Super, 16 GB) and ~30 min CPU; no LLM, no new
+model download.
+
+**Not tested here.** Other base models (L-12, e5, bge), other losses
+(triplet-margin, supervised-contrastive with the multi-label structure), more
+epochs or hyper-parameter search, hard-negative mining with the fine-tuned
+model (it mines with the base model only), the zero-shot labels (their titles
+are not training positives), a fine-tuned reranker, and `test`.
+
+### Result (2026-11-14)
+
+Artifact: `results/eurlex-embed-finetune/metrics.json` (run
+`eurlex-embed-finetune`, **1,940.5 s** wall, **900.1 s GPU**; no LLM; document
+cache 51,000 hits, label cache 4,197). Device: **NVIDIA GeForce RTX 4070 Ti
+Super** (torch 2.14.1+cu130). Six models trained (five fold models on 36,000
+documents each, 1,689 steps / 3 epochs, and one full-train model on 45,000,
+2,112 steps): fold training **115.0–120.2 s** each, full model **143.9 s**;
+epoch losses fell 2.70 / 2.28 / 2.18 (fold) and 2.64 / 2.21 / 2.13 (full). The
+hard-negative pools covered **45,000/45,000** train documents. The five fold
+encodings (45,000 documents each) took 27.2–29.8 s and the full side 30.9 s;
+all remaining time was CPU (the ten out-of-fold candidate builds, the two pack
+fits, the dev rows and the evaluation). The saved full-train model is under
+`results/eurlex-embed-finetune/model/full/`.
+
+**Implementation note (disclosed, not hidden).** The retrieval hard negatives
+were mined from the **four-fold out-of-fold index** (the TC-14 construction)
+rather than the literal full train index with family masking: a document's own
+title-skeleton family is never in its fold's index in either construction, and
+the four-fold index is the one the fold model trains on and the pack's train
+rows use. This is the only mechanism detail that differs from the
+pre-registration paragraph; dev is not involved.
+
+**Control reproduction.** The retrained control (TC-14 construction on the base
+embeddings) reproduces the TC-14 artifact **exactly**: `family_new` **0.927834 /
+0.58184 / 0.734284**, all deltas 0.0 against
+`results/eurlex-candidate-pack/metrics.json` — the run is valid.
+
+**Primary metrics by slice (R@50 / R-precision / nDCG@10):**
+
+| method | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| base MiniLM k-NN (reference) | 0.9168 / 0.5715 / 0.7070 | 0.8944 / 0.4869 / 0.6364 | 0.8862 / 0.4744 / 0.6241 |
+| lexical k-NN (strongest single retriever) | 0.9317 / 0.6152 / 0.7517 | 0.9138 / 0.5415 / 0.6902 | 0.9065 / 0.5293 / 0.6771 |
+| RRF(base embedding, lexical) (context) | 0.9337 / 0.6164 / 0.7581 | 0.9165 / 0.5428 / 0.6997 | 0.9094 / 0.5317 / 0.6882 |
+| **fine-tuned k-NN (arm a)** | 0.9291 / 0.6022 / 0.7395 | **0.9104 / 0.5243 / 0.6773** | 0.9036 / 0.5135 / 0.6667 |
+| RRF(fine-tuned embedding, lexical) | 0.9388 / 0.6323 / 0.7704 | 0.9234 / 0.5617 / 0.7150 | 0.9173 / 0.5527 / 0.7045 |
+| control pack (TC-14, base embeddings) | 0.9422 / 0.6488 / 0.7861 | 0.9278 / 0.5818 / 0.7343 | 0.9218 / 0.5710 / 0.7229 |
+| **fine-tuned pack (arm b)** | **0.9471 / 0.6780 / 0.8131** | **0.9341 / 0.6181 / 0.7692** | **0.9286 / 0.6083 / 0.7595** |
+
+**Secondary metrics and diagnostics, `family_new`:**
+
+| method | R@5 | R@10 | R@20 | R@100 | nDCG@50 | head | torso | tail | unseen |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| control pack | 0.5786 | 0.7546 | 0.8670 | 0.9370 | 0.8058 | 0.9689 | 0.8605 | 0.5681 | 0.0 |
+| **fine-tuned pack** | **0.6143** | **0.7862** | **0.8833** | **0.9411** | **0.8307** | **0.9730** | **0.8723** | **0.5819** | 0.0 |
+
+Both packs cover 0.9986 of gold at depth 50; the unseen bucket stays 0.0 (no
+training title exists for those labels — the TC-11 quota remains the separate
+route).
+
+**Paired bootstrap over documents (2,000 resamples):**
+
+| comparison | slice | Δ R@50 [95 % CI] | Δ R-precision | Δ nDCG@10 |
+|---|---|---|---|---|
+| fine-tuned pack − control pack | all_dev | +0.0049 [+0.0037, +0.0062] | +0.0292 | +0.0270 |
+| fine-tuned pack − control pack | family_new | **+0.0062 [+0.0045, +0.0080]** | **+0.0363** | **+0.0349** |
+| fine-tuned pack − control pack | family_new_clean | +0.0068 [+0.0049, +0.0087] | +0.0373 | +0.0366 |
+| fine-tuned k-NN − lexical k-NN | family_new | −0.0034 [−0.0069, +0.0002] | −0.0171 | −0.0130 |
+| fine-tuned k-NN − base MiniLM k-NN | family_new | **+0.0160 [+0.0132, +0.0190]** | +0.0374 | +0.0408 |
+
+**The bar, read out.**
+
+- **Shortlist win (primary): not met.** The fine-tuned pack's `family_new`
+  R@50 gain over the control is **+0.0062**, below the +0.01 bar, although the
+  paired interval lies entirely above zero. It does not lose R-precision or
+  nDCG@10 (both **gain**, +0.0363 and +0.0349).
+- **Ordering win (secondary): met.** nDCG@10 improves **+0.0349** with the
+  interval excluding 0 and R@50 gains rather than loses. Per the
+  pre-registration the outcome is **`ordering_win_only`** — the channel
+  sharpens the top of the ranking but does not add enough breadth to clear the
+  shortlist bar.
+- **Retriever reading (diagnostic): `retriever_not_established`.** The
+  fine-tuned k-NN beats the base MiniLM by **+0.0160 R@50** (0.9104 vs 0.8944,
+  interval excluding 0) — the fine-tune clearly teaches the embedding the
+  label space — but it is still **0.0034 behind the lexical k-NN** (0.9104 vs
+  0.9138, interval touching zero), and its R-precision (−0.0171) and nDCG@10
+  (−0.0130) are below the lexical arm's. Fine-tuning improves the embedding
+  channel but does not make it the strongest single retriever.
+- **No auto-adopt.** The reviewer decides.
+
+**Reading.** Two effects are real and consistent across every slice. First, the
+fine-tune is a genuine representation gain: the embedding arm rises **+0.016
+R@50**, **+0.037 R-precision** and **+0.041 nDCG@10** over the off-the-shelf
+MiniLM on `family_new`, and the gains grow on the cleaner slice (+0.0173
+R@50), so it is not a near-duplicate effect. Second, the pack that consumes the
+fine-tuned score improves **every** metric — +0.0062 R@50, +0.0363
+R-precision, +0.0349 nDCG@10 on `family_new`, and the tail rises 0.5681 →
+0.5819 — but the R@50 gain is **less than half of TC-14's own +0.0141** over
+the lexical arm. The learned pack was already extracting most of the
+shortlist value from the retrievers' disagreement; a better embedding channel
+mostly reorders the head (where the pack's weakness was: nDCG@10), not the
+tail or the breadth.
+
+The lexical arm remains the shortlist's strongest single retriever (0.9138)
+and the fine-tuned embedding does not pass it (0.9104). The fine-tuned RRF does
+beat the base RRF (+0.0069 on `family_new`: 0.9234 vs 0.9165), so on the pack's
+own feature set the embedding channel is a better partner, not a replacement.
+
+**Cost.** GPU **900.1 s** (~15 min: 729.2 s training + 170.9 s encoding),
+wall 1,940.5 s (~32 min) including the CPU candidate builds and pack fits; no
+LLM, no new model download.
+
+**What the result does not say.** Nothing about `test`; nothing about the
+other base models, other losses, more epochs or hyper-parameter search; nothing
+about mining hard negatives with the fine-tuned model (the negatives came from
+the base model); nothing about fine-tuning on the zero-shot labels (they have
+no training documents, so their titles were never positives); and nothing about
+a task-fitted reranker. The fine-tuned model is a dev-tuned artifact: the final
+test shot (menu item 13) is still a separate decision.
