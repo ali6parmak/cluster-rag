@@ -88,6 +88,7 @@ is the map.
 | artifacts (gitignored) | `results/eurlex-*` |
 | run ids | `eurlex-<detail>` (e.g. `eurlex-shortlist`, `eurlex-fusion`) |
 | embedding cache | `cache/` (MiniLM, version `eurlex-4k-v1`; chunk view `eurlex-4k-chunk200-v1`; field views `eurlex-4k-views-v1`; labels `eurlex-4k-label-v1`) |
+| label catalog (EUROVOC broader terms) | `catalogs/eurlex_labels.jsonl` (+ `.meta.json`; built from the official SKOS, TC-19) |
 
 ## 4. What has been tried (executed change sets)
 
@@ -333,6 +334,19 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
 13. **Ship the current k-NN.** The 0.894 new-family baseline is strong; if the
     product does not need the tail or the zero-shot labels, stop and ship it.
 
+### Off-menu (pre-registered, not run)
+
+**TC-19 — the EUROVOC parent channel** (pre-registered 2026-11-14, detailed in
+`docs/topic_classification.md` §23). Add the official EUROVOC `skos:broader`
+hierarchy to the pack as four features — parent support, subtree rate,
+parent-title cosine and parent consistency — through a committed
+`catalogs/eurlex_labels.jsonl`; a secondary leg ranks the zero-shot quota by
+parent evidence (baseline 34/96). Two arms, same folds: TC-14's 11-feature pack
+vs the same pack + 4 parent features. A win needs `family_new` R@50 +0.01 over
+the 11-feature pack, interval excluding 0, no R-precision/nDCG loss beyond 0.01;
+otherwise null. LLM-free (the English definitions are recorded but unused),
+~20 min CPU. **Status: pre-registered, not run.**
+
 ## 7. Open questions
 
 - Does a longer-context model (or a chunk size that fits the 256-token context,
@@ -356,8 +370,11 @@ current k-NN on `all_dev`, `family_new` and `family_new_clean`:
   giving back the unseen gain?
 - Is `family_new` the final evaluation protocol, and what is the one **test**
   shot for an adopted config?
-- The vocabulary has **titles only** (no descriptions or hierarchy). Is a
-  EUROVOC parent/description source worth adding, or is that out of scope?
+- The vocabulary ships **titles only**. The official EUROVOC SKOS supplies the
+  hierarchy (90 % of the 4,271 labels have a broader term) and sparse
+  definitions (15 %); **TC-19** (pre-registered, §23) tests the hierarchy. The
+  description channel stays open: official definitions cover 15 %, and an
+  LLM-written catalog (UPR CS-11 style) would need approval.
 - The dev-evaluable label space is 4,197; the dataset union is 4,271. Keep the
   74 test-only labels excluded from dev, or include them as floored columns?
 
@@ -431,6 +448,9 @@ the labels with the shortlist unchanged (R@50 −0.0005) and +0.007 ordering.
 0.0006 R@50 on `family_new`, so the family-disjoint split is not measurably needed
 — but it is kept, and the pack's gain is not template leakage. The next change set
 is the reviewer's choice; menu item 11 (fine-tune) needs explicit approval.
+**TC-19** (off-menu, the EUROVOC parent channel) is **pre-registered**
+(2026-11-14, `docs/topic_classification.md` §23) and awaits the reviewer's
+go-ahead to run; it would be the next change set if chosen.
 
 ## 10. The durable deliverable
 

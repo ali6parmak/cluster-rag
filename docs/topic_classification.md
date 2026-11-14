@@ -2389,3 +2389,112 @@ hard-negative mining for a **fine-tune** (menu item 11, which is where mined
 negatives would matter most) or for the cross-encoder (TC-13 was refuted); and
 nothing about a text-cosine near-duplicate exposure measure (the title-skeleton
 family is the audit's cheap proxy — 2,056 families, 12,371 documents).
+
+## 23. The EUROVOC parent channel — TC-19 (pre-registered 2026-11-14, before the run)
+
+**Question.** The pack's only label-side text is a short title ("euro area"), and
+its only label-side statistics are the retrievers' scores and the label rate. The
+official EUROVOC thesaurus gives every concept its **broader term(s)** — a
+coarser category ("currency area", "monetary relations"). Does adding that
+hierarchy to the pack improve the honest-slice shortlist, and can parent
+evidence rank the zero-shot candidates better than their own titles?
+
+**Source and catalog (fixed before the run).**
+
+- **Source:** the official EUROVOC SKOS, core concepts, downloaded from the
+  Publications Office's EU Vocabularies handler:
+  `https://op.europa.eu/o/opportal-service/euvoc-download-handler?cellarURI=http%3A%2F%2Fpublications.europa.eu%2Fresource%2Fcellar%2F9f2bd600-ae7b-11e7-837e-01aa75ed71a1.0001.09%2FDOC_1&fileName=eurovoc_in_skos_core_concepts.zip`
+  — zip sha256 `91bdb24e833ba431707f3980a19f475434ea8dcddb2b4d5e32e79e9fc1a0ca2f`,
+  RDF sha256 `6c362f79ad03e325ba1b4818f1ca3a847bb6167c2a8f7167e2e4df91305b6620`
+  (60,691,531 bytes; zip entry date 2026-07-07; downloaded 2026-11-14).
+- **Catalog:** `catalogs/eurlex_labels.jsonl`, one row per label used by the
+  splits (the **4,271** union; no test *document* is read — these are public
+  label metadata). Fields:
+  - `id` — the dataset's label ID;
+  - `name` — the dataset vocabulary title;
+  - `parents` — the immediate `skos:broader` IDs (0–9);
+  - `ancestors` — the full transitive `skos:broader` chain (used only by the
+    `parent_consistency` exclusion rule);
+  - `parent_names` — the English `skos:prefLabel` of each parent from the
+    thesaurus;
+  - `definition` — the English `skos:definition` or `skos:scopeNote` if present,
+    else `null`; `definition_kind` — `"definition"` / `"scope_note"` / `null`.
+    **The definitions are recorded but are NOT features in this change set.**
+- **Join (measured before the run):** 4,271/4,271 labels match the thesaurus
+  (including the alphanumeric `c_…` IDs); **3,850** have at least one parent,
+  **421** are parentless top concepts, **214** have 2–9 parents; **660** have an
+  English definition (recorded only).
+- **Provenance:** `catalogs/eurlex_labels.meta.json` records the URL, both
+  hashes, the bytes, the download date, the parser script, the row/join counts,
+  the rules, and this pre-registration as the reviewer's decision.
+
+**Parent definition (fixed before the run).** The **immediate** `skos:broader`
+only (no full ancestry). A parentless label gets **0** for every parent feature
+(fixed zeros, never NaN). Multi-parent labels aggregate: `max` for
+`parent_support`, `parent_cosine` and `parent_consistency`; `mean` for
+`parent_rate`.
+
+**The four features (added to TC-14's 11; all computed from the existing base
+signals).** For a candidate label `c` and a document whose base signals are the
+TC-14 ones (embedding / lexical / RRF scores; train features from the
+out-of-fold index, dev from the full train index):
+
+1. **`parent_support`** — the RRF score of a parent `p` of `c` if `p` is among
+   the document's **top-10 voters** (the top-10 labels by the base RRF score),
+   else 0; maximum over `p`.
+2. **`parent_rate`** — mean over parents `p` of the share of **train** documents
+   carrying `p` **or any label whose parent is `p`** (the subtree rate; `p`
+   itself may sit outside the 4,197 evaluation labels). Parentless → 0.
+3. **`parent_cosine`** — maximum over parents `p` of the cosine between the
+   document embedding and the **parent title** embedding (the thesaurus's
+   English `prefLabel` of `p`, embedded with the cached MiniLM). Parentless → 0.
+4. **`parent_consistency`** — the share of the document's top-10 voters
+   (**excluding `c` itself and its ancestors**) whose parent set contains `p`,
+   maximum over `p`; 0 voters → 0.
+
+No description feature, no text of the documents beyond the existing embedding,
+and no label statistic beyond the train subtree rate are used.
+
+**The experiment (fixed before the run).**
+
+- **Two arms, same folds and same dev rows:** **A** = the TC-14 11-feature pack
+  (control); **B** = the same pack plus the four parent features (15). Both are
+  trained on the TC-14 out-of-fold candidates (5 folds grouped by title
+  skeleton), with the same `HistGradientBoostingClassifier` parameters, and
+  evaluated on the same dev candidate rows.
+- **Primary comparator:** **B vs A** on `family_new` — the channel's incremental
+  value, not B against the lexical base. The lexical and TC-14 numbers are
+  reported as context.
+- **Secondary leg (exploratory, does not decide the item):** the TC-11 quota
+  with its candidate order replaced by
+  `max(own-title cosine, parent_cosine)` (parentless labels: own title);
+  `N = 5` fixed from TC-11, the same bottom-of-top-50 insertion, the same
+  slices. The baseline to beat is TC-11's **34/96** unseen hits.
+
+**Slices and metrics.** `all_dev` (6,000), `family_new` (4,260),
+`family_new_clean` (3,764); R@50, R-precision, nDCG@10 (primary), R@5/10/20/100,
+nDCG@50 (secondary), coverage@50 and label-level recall@50 by head / torso /
+tail / unseen. A paired bootstrap over documents (2,000 resamples) gives the
+B-minus-A intervals.
+
+**Pre-registered bar.**
+
+- **Shortlist win:** B improves `family_new` **R@50 by at least 0.01** over A,
+  with the paired 95 % interval excluding 0, and loses R-precision / nDCG@10 by
+  no more than 0.01.
+- **Ordering win (secondary):** if R@50 does not move but nDCG@10 improves by at
+  least 0.01 over A with the interval excluding 0 and R@50 loses no more than
+  0.01, the outcome is `ordering_win_only`.
+- **Quota leg:** a gain requires **strictly more than 34/96** unseen hits with an
+  `all_dev` R@50 loss of no more than 0.01; otherwise it is reported as a null
+  and does not affect the item's outcome.
+- Otherwise the item is a **null**: record it and do not proceed to menu item 11.
+- **No auto-adopt.** The reviewer decides.
+
+**Cost.** The catalog build (a few minutes), two pack trainings (TC-16 measured
+~7 min per arm), the parent embeddings (cached MiniLM over the parent titles),
+and the quota leg (minutes). CPU only; no GPU, no LLM, no new model.
+
+**Not tested here.** The English definitions as a feature, the full ancestry,
+the **top-level domain** instead of the immediate parent, a hierarchical
+classifier, a description-based cross-encoder, fine-tuning, and `test`.
