@@ -3640,6 +3640,123 @@ Nothing here says anything about `test`.
   arm and **the sub-task-2 transfer hybrid** (recomputed in-run with the same
   fixed settings).
 
+### Result — sub-task 3, Arm B (2026-11-16)
+
+Artifact: `results/eurlex-label-sparse-clusters/metrics.json` (run
+`eurlex-label-sparse-clusters`, **590.6 s**; 51,000 document cache hits, no LLM,
+no GPU). The train-text TF-IDF (45,000 documents, no labels) has **200,000
+terms / 23,170,645 non-zeros**; the three MiniBatchKMeans fits: K = 200 in
+126.4 s (inertia 32,109.58; cluster sizes 1–5,765), K = 100 in 60.7 s (sizes
+7–5,418), K = 300 in 183.8 s (sizes 1–4,537). Primary settings: K = 200, the
+label text = title + parents.
+
+**The standalone cluster arm and the cluster hybrid, `family_new` (mean ± SD
+across seeds; R@50 / R-precision / nDCG@10; unseen and seen micro recall@50;
+coverage@50):**
+
+| config | R@50 | R-precision | nDCG@10 | unseen R@50 | seen R@50 | coverage |
+|---|---:|---:|---:|---:|---:|---:|
+| cluster arm, K=100, +parents | 0.1594 | 0.0319 | 0.0438 | 0.0980 | 0.1957 | 0.4786 |
+| cluster arm, K=200, title | 0.1709 | 0.0381 | 0.0584 | 0.1449 | 0.1823 | 0.5136 |
+| cluster arm, K=200, +parents | 0.1796 | 0.0448 | 0.0589 | 0.1121 | 0.2184 | 0.5397 |
+| cluster arm, K=200, +definition | 0.1486 | 0.0408 | 0.0526 | 0.1029 | 0.1729 | 0.4911 |
+| cluster arm, K=300, +parents | 0.2161 | 0.0419 | 0.0588 | 0.1350 | 0.2571 | 0.6157 |
+| **hybrid, K=100, +parents** | 0.2846 ± 0.0098 | 0.1064 | 0.1440 | 0.0923 | 0.3793 | 0.7056 |
+| **hybrid, K=200, title** | 0.3301 ± 0.0077 | 0.1200 | 0.1664 | 0.1336 | 0.4218 | 0.7673 |
+| **hybrid, K=200, +parents (primary)** | **0.2908 ± 0.0109** | **0.1096** | **0.1479** | **0.1082** | **0.3803** | **0.7157** |
+| **hybrid, K=200, +definition** | 0.2840 ± 0.0091 | 0.1032 | 0.1391 | 0.1008 | 0.3728 | 0.7021 |
+| **hybrid, K=300, +parents** | 0.2998 ± 0.0088 | 0.0941 | 0.1328 | 0.1285 | 0.3821 | 0.7339 |
+
+The controls on the same rows: lexical k-NN **0.4400 / 0.1764 / 0.2370**
+(unseen 0.0000, seen 0.6632, coverage 0.8536); title + parents text **0.2753 /
+0.0738 / 0.1058** (unseen 0.2185, seen 0.2873, coverage 0.7404); the sub-task-2
+transfer hybrid **0.2749 / 0.1298 / 0.1725** (unseen 0.0729, seen 0.3717).
+
+**The pre-registered cluster-level diagnostic, K = 200 (share of gold
+assignments whose label home cluster is in the document's top-3 clusters):**
+
+| slice | all gold | seen gold | unseen gold | chance |
+|---|---:|---:|---:|---:|
+| all_dev | 0.2312 | 0.2354 ± 0.0040 | 0.2212 ± 0.0092 | 0.0150 |
+| family_new | 0.2336 | 0.2455 ± 0.0046 | 0.2113 ± 0.0076 | 0.0150 |
+| family_new_clean | 0.2338 | 0.2470 ± 0.0059 | 0.2099 ± 0.0095 | 0.0150 |
+
+The clusters recover a real topic-area signal — **15.6× chance** on
+`family_new` — but the pre-registered reading puts it far below the 0.75
+"usable topic map" line and below even 0.50: roughly **77 %** of the gold
+labels' home clusters lie outside the document's three largest membership
+clusters.
+
+**Paired within-seed comparisons, primary hybrid on `family_new` (mean Δ; seeds
+whose interval is entirely above / below zero):**
+
+| comparison | Δ R@50 | Δ R-precision | Δ nDCG@10 | Δ unseen macro R@50 |
+|---|---|---|---|---|
+| hybrid − lexical k-NN | **−0.1492 (0/5)** | −0.0668 (0/5) | −0.0891 (0/5) | **+0.1212 (5/0)** |
+| hybrid − title + parents | +0.0155 (4/0) | **+0.0358 (5/0)** | **+0.0421 (5/0)** | **−0.1138 (0/5)** |
+| hybrid − raw title | +0.0813 (5/0) | +0.0500 (5/0) | +0.0638 (5/0) | −0.0625 (0/5) |
+| hybrid − sub-task-2 transfer hybrid | +0.0159 (5/0) | −0.0202 (0/5) | −0.0246 (0/5) | +0.0345 (5/0) |
+
+**The pre-registered bar, read out.**
+
+- **Unseen gain ≥ +0.05 over the best label-text variant: failed.** The primary
+  hybrid reaches **0.1082** unseen micro R@50 against the reference's
+  **0.2185** — a **−0.1103** gap. The sensitivity variants are −0.0849 (K = 200,
+  title), −0.0900 (K = 300), −0.1177 (K = 200, + definition), −0.1262 (K = 100);
+  none is close.
+- **Interval excluding zero in ≥ 4/5 seeds: failed** (0/5 for every config, in
+  the losing direction).
+- **`family_new` R@50 no more than 0.01 below the lexical k-NN: failed** —
+  **0.1492** below.
+- **`outcome`: null.** The arm is not licensed. The cluster diagnostic is
+  reported but is not a win condition.
+
+**Reading.**
+
+1. **The soft cluster bridge reaches every label but the bridge is weaker than
+   the label's own text.** Standalone (no retrieval side), the best cluster
+   arm reaches unseen **0.1449** (K = 200, title text) and 0.1350 (K = 300,
+   + parents), against the direct title + parents cosine's **0.2185**. So the
+   word clusters genuinely carry topic-area information for labels with no
+   example — the bridge is not vacuous — but the direct text comparison is
+   still the stronger zero-shot signal.
+2. **In the cluster space the plain title beats title + parents, the opposite
+   of the direct embedding space.** Standalone and hybrid unseen are both
+   higher for the title text (0.1449 / 0.1336) than for title + parents
+   (0.1121 / 0.1082), and the definition variant is lower again (0.1029 /
+   0.1008). The document-fitted TF-IDF vocabulary gives the generic parent
+   names and the long definitions a lot of shared mass, so they dilute the
+   label's specific affinity; in the MiniLM embedding space the same parents
+   *help* (+0.0513 unseen). The label-text enrichment is representation-dependent,
+   not universally positive.
+3. **The hybrid repeats Arm A's placement failure, slightly less severely.**
+   The primary hybrid gains **+0.1212** unseen macro over the lexical k-NN
+   (5/5) but drops seen micro 0.6632 → 0.3803 and `family_new` R@50
+   0.4400 → 0.2908 (−0.1492, 0/5); R-precision and nDCG follow. The cluster
+   z-block is denser than Arm A's transfer block, so the displacement is
+   smaller (transfer's R@50 loss was 0.1651) and the cluster hybrid beats the
+   transfer hybrid on R@50 (+0.0159) and unseen macro (+0.0345), but it is
+   still below the pure text arm on the unseen view. The equal-scale z
+   competition between a weak dense unseen channel and a strong seen retrieval
+   is the recurring failure; a placed insertion (quota) remains the untested
+   mechanism.
+4. **The cluster diagnostic says why the bridge is weak.** Only **23.4 %** of
+   `family_new` gold assignments have their home cluster in the document's
+   top-3 (15.6× chance, but far below the registered 0.75 usable-topic-map
+   line). The 200 word clusters are legal-register clusters as much as topic
+   clusters: the document's top membership mass is spread, and a label's
+   argmax cluster is a coarse summary. A K = 300 run improves the standalone
+   arm's R@50 (0.2161) and unseen (0.1350) but not the bar.
+
+**Honest qualifications.** The cluster space is TF-IDF, which is register-heavy
+on this corpus (the track's TC-15 routing also used word/embedding clusters for
+efficiency, not topic alignment); a semantic cluster space is untested. The
+home-cluster diagnostic is a strict single-argmax reading of a label that may
+legitimately span several clusters. The hybrid rule is the pre-registered one,
+not tuned; a quota insertion or a calibrated cross-block scale is future work,
+and nothing here claims it would clear the bar. Nothing here says anything
+about `test`.
+
 ### 27.5 What is not tested here
 
 - `test` (never read); any LLM; any GPU run; any new model download;

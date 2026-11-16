@@ -119,6 +119,7 @@ is the map.
 | TC-19 | **EUROVOC parent channel** (off-menu) — the four immediate-`skos:broader` features (support, subtree rate, parent-title cosine, consistency) from the pinned official SKOS in the TC-14 pack (11 → 15), plus a parent-aware zero-shot quota | **null**: `family_new` R@50 **0.9287 vs 0.9278** (Δ **+0.0009 [+0.0003, +0.0015]**, far below the +0.01 bar), R-precision **+0.0123**, nDCG@10 **+0.00945** (just under the +0.01 ordering bar), tail 0.5681 → 0.5723; the **quota leg gains** **34 → 37/96** at an all-dev R@50 loss of 0.0060 (secondary, does not decide); catalog reproduces §23's join exactly; CPU 568 s | `results/eurlex-parent-channel/metrics.json` | §23 | this commit |
 | TC-21 (part 1) | **The label-sparse harness + baselines** (off-menu) — 240 labelled train documents (seeds 42–46) over the full 4,197-label space; lexical k-NN, embedding k-NN, the TC-14 pack on out-of-fold candidates from the 240, and three label-text scorers (title / +parents / +definition) | **the regime is measured; the pack is the best arm**: 539–599 seen labels (28.7–30.5 % of dev gold assignments unseen); `family_new` R@50 lexical **0.4400 ± 0.0099**, embedding **0.3729 ± 0.0121**, pack **0.4452 ± 0.0086** (+0.0052 R@50, +0.0514 R-precision, +0.0637 nDCG vs lexical), unseen micro R@50 **0** for all three; label text title **0.1728** unseen, +parents **0.2185** (+0.0513 macro, 5/5 seeds), +definition **0.2162** (better ordering, not unseen); the parent-enriched text is the unseen reference (bar 0.2685) | `results/eurlex-label-sparse/metrics.json` | §27 | this commit |
 | TC-21 (part 2) | **Arm A: the label-text k-NN transfer** (off-menu) — each unseen label borrows the lexical retrieval scores of its top-k seen label-text-TF-IDF neighbours; the fixed hybrid keeps the retrieval z-score for seen labels and the transfer z-score for unseen labels | **null (the premise fails and the z-rule over-amplifies the unseen side)**: unseen-only micro R@50 **0.0960** (below the direct title+parents **0.2185**); the primary hybrid reaches unseen **0.0729**, **−0.1457** against the reference (0/5 seeds), and loses **0.1651** `family_new` R@50 against the lexical k-NN (0/5) while gaining **+0.0866** unseen macro; all six sensitivity configs null; against the text-only arm the hybrid ties R@50 and gains **+0.0560 R-precision / +0.0667 nDCG** (5/5) — the channels are complementary, the unseen placement and the borrowed signal are not | `results/eurlex-label-sparse-transfer/metrics.json` | §27 | this commit |
+| TC-21 (part 3) | **Arm B: the soft word-cluster bridge** (off-menu) — MiniBatchKMeans (K = 200; 100/300 sensitivity) on the 45,000 document train-text TF-IDF with **no labels**; documents and label texts are soft-assigned to the centroids, the score is their overlap; the same fixed hybrid as Arm A | **null (real topic-area signal, too weak and mis-placed)**: the standalone cluster arm reaches unseen **0.1121** (K=200) / **0.1449** (K=200, title) / **0.1350** (K=300) — above zero, below the direct text **0.2185**; the primary hybrid reaches unseen **0.1082** (−0.1103 vs the reference, 0/5) and loses **0.1492** `family_new` R@50 against the lexical k-NN (0/5) while gaining **+0.1212** unseen macro; the top-3 cluster diagnostic is **0.2336** of `family_new` gold assignments vs **0.0150** chance (15.6×, but below the 0.75 usable-topic-map line); all five configs null; the cluster hybrid beats Arm A's transfer hybrid on R@50 (+0.0159) and unseen (+0.0345) but not the bar | `results/eurlex-label-sparse-clusters/metrics.json` | §27 | this commit |
 
 ## 5. What we learned
 
@@ -284,6 +285,26 @@ is the map.
   TC-11 quota lesson) and a stronger borrowed signal, neither of which is
   claimed here. All six sensitivity configs (k = 5/10/20, title / +definition,
   embedding evidence) are null.
+- **The word-cluster bridge is also a null, and its diagnostic is the finding.**
+  A label-free K = 200 MiniBatchKMeans on the train-text TF-IDF gives every
+  label a soft cluster score; standalone it reaches unseen **0.1121** (K = 200,
+  + parents), **0.1449** (K = 200, title) and **0.1350** (K = 300) — a real
+  signal, but below the direct text's **0.2185**. The hybrid repeats Arm A's
+  placement failure: unseen macro **+0.1212** over the lexical k-NN but
+  `family_new` R@50 **0.4400 → 0.2908** (Δ **−0.1492**, 0/5), seen micro
+  0.6632 → 0.3803; all five configs null. The top-3 cluster diagnostic is
+  **0.2336** of `family_new` gold assignments against **0.0150** chance —
+  **15.6×** chance, but far below the registered 0.75 usable-topic-map line,
+  so the 200 word clusters are register clusters as much as topic clusters.
+  Two interactions matter: in the cluster space the **plain title** beats
+  title + parents (0.1449 vs 0.1121 standalone), the opposite of the MiniLM
+  space where parents help (+0.0513) — the document-fitted TF-IDF gives the
+  generic parent names shared mass and dilutes the label's affinity; and the
+  cluster hybrid beats the transfer hybrid on R@50 (+0.0159) and unseen macro
+  (+0.0345) because its unseen block is dense rather than zero-inflated, but
+  still not the text reference. Both unseen arms point to the same conclusion:
+  the **placement rule** (equal-scale z) is as much the failure as the channel,
+  and the untested fix is the TC-11-style reserved-slot insertion.
 
 ## 6. What we are going to try (the ordered menu)
 
@@ -447,12 +468,16 @@ may read train **text** for the label-free clustering only. Test is never read;
 no LLM, no GPU, no new download. The pre-registered bar for Arms A/B is **+0.05
 absolute unseen micro recall@50 over the title cosine**, interval excluding zero
 in ≥ 4/5 seeds, with `family_new` R@50 no more than 0.01 below the lexical
-k-NN. **Status: sub-tasks 1–2 executed 2026-11-16** — the pack is the best arm
-at 0.4452 `family_new` R@50, the parent-enriched label text is the unseen
-reference at 0.2185, and **Arm A is a null**: the transfer hybrid reaches
-unseen 0.0729 (reference 0.2185) and loses 0.1651 `family_new` R@50 against the
-lexical k-NN, with all six sensitivity configs null. Sub-task 3 (the
-word-cluster bridge) is pending.
+k-NN. **Status: all three sub-tasks executed 2026-11-16 — the study is a
+measurement with two nulls.** The pack is the best arm at **0.4452**
+`family_new` R@50; the parent-enriched label text is the unseen reference at
+**0.2185**; **Arm A** (transfer) reaches unseen 0.0729 and loses 0.1651
+`family_new` R@50 against the lexical k-NN; **Arm B** (word-cluster bridge)
+reaches unseen 0.1082 and loses 0.1492, with the top-3 cluster diagnostic at
+0.2336 vs 0.0150 chance. No arm clears the +0.05 unseen bar, and none beats
+the lexical k-NN on the overall shortlist. The *placement rule* (equal-scale
+per-block z between a weak unseen channel and a strong seen retrieval) is the
+shared failure; the TC-11 reserved-slot insertion is the untested fix.
 
 **TC-20 — the embeddinggemma-300m embedding** (pre-registered 2026-11-14,
 detailed in `docs/topic_classification.md` §26). Replace the document embedding
@@ -515,6 +540,19 @@ be amended before its run. §26.
   approval; is a description feature worth testing on the 660 covered labels?
 - The dev-evaluable label space is 4,197; the dataset union is 4,271. Keep the
   74 test-only labels excluded from dev, or include them as floored columns?
+- **The label-sparse regime is now measured, and the placement question is the
+  live one.** At 240 labelled documents the lexical k-NN is **0.4400**
+  `family_new` R@50, the pack **0.4452**, the direct parent-enriched text
+  **0.2185** on the unseen class, and both unseen mechanisms (label-text
+  transfer, word clusters) are nulls. The shared failure is the equal-scale
+  per-block z: a weak unseen channel floods the top-50 and costs 0.15–0.17
+  R@50 of seen assignments. Does a **placed** unseen insertion (the TC-11
+  quota's bottom slots, or a calibrated cross-block scale) recover the unseen
+  reach without the seen loss — and does it beat the text-only baseline at all?
+  The same study also leaves open a **semantic** neighbour/cluster space
+  (MiniLM title vectors, not TF-IDF) and the 120-document/2,000-label point
+  (this study used 240/4,197; the per-label density matches, the label-space
+  size does not). None of these is pre-registered yet.
 
 ## 8. Milestones
 
@@ -535,6 +573,11 @@ be amended before its run. §26.
   off-menu TC-20 part 1: **gap closed / strong pack**, the fine-tuned half
   deferred): menu items 3–12.
 - **M7 — ship / final test** (open): menu item 13, then one test shot.
+- **M8 — the label-sparse regime** (executed 2026-11-16, TC-21): 240 labelled
+  documents over 4,197 labels, five seeds. The regime is measured (lexical
+  0.4400, pack 0.4452, parent-enriched text 0.2185 unseen), and both unseen
+  mechanisms are **nulls** (transfer 0.0729, clusters 0.1082); the shared
+  failure is the equal-scale unseen block placement. No test number.
 
 ## 9. How the next session should proceed
 
@@ -624,8 +667,19 @@ and the parent-enriched label text is the unseen reference at **0.2185**.
 the transfer hybrid reaches unseen **0.0729** against the reference's 0.2185,
 loses **0.1651** `family_new` R@50 against the lexical k-NN, and fails all six
 sensitivity settings — the borrowed evidence is weaker than the direct text and
-the fixed z-rule over-amplifies the unseen block. The word-cluster bridge
-(sub-task 3) is the last commit.
+the fixed z-rule over-amplifies the unseen block. **Sub-task 3** (Arm B, the
+word-cluster bridge) is also executed and is a **null**: the standalone cluster
+arm reaches unseen **0.1121–0.1449** (a real but weaker signal than the direct
+text's 0.2185), the primary hybrid **0.1082** with a **0.1492** `family_new`
+R@50 loss against the lexical k-NN, and the top-3 cluster diagnostic is
+**0.2336** of gold assignments vs 0.0150 chance. The study's deliverable is
+therefore the **regime's measured shape**, not a new best: at 240 labelled
+documents the retrieval shortlist halves, the TC-14 pack still leads, the
+parent-enriched label text is the best zero-shot channel, and both word-based
+transfer mechanisms fail on signal quality *and* on the unseen block's
+placement. The next step is the reviewer's: a **placed unseen insertion**
+(quota) or a semantic neighbour/cluster space as a new pre-registration, or
+the one **test** shot for an adopted full-data config (TC-17/TC-20/TC-11).
 
 ## 10. The durable deliverable
 
@@ -652,8 +706,8 @@ A **shortlist generator for 4,271 labels** with a trustworthy evaluation:
   `results/eurlex-cluster-routing/`, `results/eurlex-hard-negative-discipline/`,
   `results/eurlex-embed-finetune/`, `results/eurlex-parent-channel/`,
   `results/eurlex-llm-rerank/`, `results/eurlex-embeddinggemma-zeroshot/`,
-  `results/eurlex-label-sparse/`, `results/eurlex-label-sparse-transfer/`
-  (TC-21; `-clusters` follows).
+  `results/eurlex-label-sparse/`, `results/eurlex-label-sparse-transfer/`,
+  `results/eurlex-label-sparse-clusters/` (TC-21).
 - The old text-processing track (UPR/OMCT) is separate: `TEXT_PROCESSING_PLAN.md`
   and `docs/experiments_text_processing.md`. Do not mix its numbers with
   EURLEX.
