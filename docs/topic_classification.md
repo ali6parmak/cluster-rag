@@ -3393,9 +3393,11 @@ labels** of 4,197, **28.7–30.5 %** of dev gold assignments on unseen labels, a
 | label text, title + parents (d-ii) | 0.2708 / 0.0697 / 0.1011 | 0.2753 / 0.0738 / 0.1058 | 0.2720 / 0.0737 / 0.1058 |
 | label text, + definition (d-iii) | 0.2784 / 0.0906 / 0.1274 | 0.2776 / 0.0815 / 0.1156 | 0.2743 / 0.0801 / 0.1138 |
 
-The label-text rows have SD = 0: they read no train label, so the five seeds
-give the same ranking. The pack is **not** weak at this size — it is the best
-arm on every slice and every primary metric.
+The label-text rows have SD = 0 on the overall metrics: they read no train
+label, so the five seeds give the same score matrix. The unseen/seen columns
+vary slightly across seeds only because the seen/unseen class split varies (the
+unseen reference's seed-to-seed range is 0.208–0.229). The pack is **not** weak
+at this size — it is the best arm on every slice and every primary metric.
 
 **Unseen / seen and support-bucket readout, `family_new` (micro over gold
 assignments; coverage@50):**
@@ -3504,7 +3506,7 @@ sub-tasks. The five seeds sample corpora, not annotators.
 ### Result — sub-task 2, Arm A (2026-11-16)
 
 Artifact: `results/eurlex-label-sparse-transfer/metrics.json` (run
-`eurlex-label-sparse-transfer`, **186.7 s**; 51,000 document cache hits, no LLM,
+`eurlex-label-sparse-transfer`, **186.1 s**; 51,000 document cache hits, no LLM,
 no GPU). The label-text spaces: 6,699 (title) / 10,150 (title + parents) /
 20,898 (title + parents + definition) TF-IDF terms over the 4,197 labels.
 Primary settings: title + parents, k = 10, lexical k-NN evidence.
@@ -3648,7 +3650,9 @@ no GPU). The train-text TF-IDF (45,000 documents, no labels) has **200,000
 terms / 23,170,645 non-zeros**; the three MiniBatchKMeans fits: K = 200 in
 126.4 s (inertia 32,109.58; cluster sizes 1–5,765), K = 100 in 60.7 s (sizes
 7–5,418), K = 300 in 183.8 s (sizes 1–4,537). Primary settings: K = 200, the
-label text = title + parents.
+label text = title + parents. The standalone cluster rows have SD = 0 on the
+overall metrics (the cluster score reads no train label); their unseen/seen
+columns vary across seeds only through the class split.
 
 **The standalone cluster arm and the cluster hybrid, `family_new` (mean ± SD
 across seeds; R@50 / R-precision / nDCG@10; unseen and seen micro recall@50;
