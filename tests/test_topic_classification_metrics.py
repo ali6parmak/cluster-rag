@@ -14,9 +14,11 @@ from cluster_rag.topic_classification.metrics import (
     per_document_ndcg_at_k,
     per_document_r_precision,
     per_document_recall_at_k,
+    per_document_subset_recall_at_k,
     r_precision,
     ranked_labels,
     recall_at_k,
+    subset_recall_at_k,
 )
 
 
@@ -150,3 +152,30 @@ def test_paired_bootstrap_zero_difference_interval_contains_zero() -> None:
 def test_paired_bootstrap_rejects_empty_input() -> None:
     with pytest.raises(ValueError):
         paired_bootstrap_ci(np.array([]))
+
+
+def test_subset_recall_counts_only_the_class_and_skips_empty_documents() -> None:
+    # doc 0: gold {0, 2}, allowed {2}; top-2 = {0, 1} -> the allowed label misses.
+    # doc 1: gold {1}, no allowed label -> NaN (contributes to nothing).
+    scores = np.array([[0.9, 0.8, 0.1, 0.0], [0.9, 0.8, 0.1, 0.0]])
+    ranked = ranked_labels(scores)
+    gold = [{0, 2}, {1}]
+    values = per_document_subset_recall_at_k(ranked, gold, {2}, 2)
+    assert values[0] == pytest.approx(0.0)
+    assert np.isnan(values[1])
+    assert subset_recall_at_k(ranked, gold, {2}, 2) == pytest.approx(0.0)
+
+
+def test_subset_recall_hits_the_allowed_label() -> None:
+    scores = np.array([[0.1, 0.8, 0.9, 0.0]])
+    ranked = ranked_labels(scores)
+    gold = [{0, 2}]
+    values = per_document_subset_recall_at_k(ranked, gold, {2}, 1)
+    assert values[0] == pytest.approx(1.0)
+    assert subset_recall_at_k(ranked, gold, {2}, 1) == pytest.approx(1.0)
+
+
+def test_subset_recall_validates_k() -> None:
+    ranked = ranked_labels(np.array([[0.9, 0.1]]))
+    with pytest.raises(ValueError):
+        per_document_subset_recall_at_k(ranked, [{1}], {1}, 0)

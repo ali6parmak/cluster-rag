@@ -3282,9 +3282,9 @@ subsection below). Test is never read. No LLM, no GPU, no new model download.
   label-level: **micro recall@k over gold assignments** (k = 5/10/20/50/100) and
   the **macro per-document recall@50** over documents carrying at least one gold
   label of that class. These are reported **overall and separately for the seen
-  and unseen label classes**, plus micro recall@50 by **support bucket** on the
-  240 (`1`, `2–4`, `≥5`, `unseen`) and by the track's full-train bucket
-  (`head ≥100`, `torso 10–99`, `tail 1–9`, `unseen 0`) for comparability.
+  and unseen label classes**, plus micro recall@50 by **support bucket computed
+  on the 240** (`1`, `2–4`, `≥5`, `unseen`) — the only support statistic that
+  reads no label of the other 44,760 documents.
 - **A full ranking for every arm.** Every arm returns a score for every one of
   the 4,197 labels. The seen-only arms (k-NN, pack) score unseen labels 0; ties
   break by label column order (the track's stable convention), so the ranking is
@@ -3324,7 +3324,10 @@ Four arms, each evaluated per seed on the three slices:
   candidates from the 240 only**: 5 `GroupKFold` folds grouped by title
   skeleton (~48 held-out documents each), the candidate union of the embedding /
   lexical / frequency top-50 from the fold's remaining ~192 documents. Dev
-  candidates come from the same 240 as the index. No tuning: the arm is expected
+  candidates come from the same 240 as the index. The three bucket one-hots are
+  the **240-support** buckets (`head` = support ≥ 5, `torso` = 2–4, `tail` = 1;
+  unseen carries all three at 0): the full-train support would read the other
+  documents' label counts and is forbidden here. No tuning: the arm is expected
   to be weak at this size; it is reported, not tuned.
 - **(d) Label-text scorers (zero-shot, all 4,197 labels).** The document
   embedding (cached MiniLM, `eurlex-4k-v1`) against the label text embedding;
@@ -3360,6 +3363,110 @@ Four arms, each evaluated per seed on the three slices:
   unseen macro recall@50) and every arm minus the **title cosine** (same
   metrics). The intervals are per seed; the cross-seed reading is the count of
   seeds with the interval entirely above/below zero.
+
+### Result — sub-task 1 (2026-11-16)
+
+Artifact: `results/eurlex-label-sparse/metrics.json` (run `eurlex-label-sparse`,
+**124.4 s**; 51,000 document cache hits, 4,197 title hits, 8,394 enriched-label
+hits; no LLM, no GPU). The five samples are genuinely sparse: **539–599 seen
+labels** of 4,197, **28.7–30.5 %** of dev gold assignments on unseen labels, and
+**3,900–4,065** dev documents carrying at least one unseen gold label.
+
+**The five sampled corpora (per seed):**
+
+| seed | seen labels | unseen labels | unseen assignments / 30,240 | share | documents with unseen |
+|---:|---:|---:|---:|---:|---:|
+| 42 | 588 | 3,609 | 8,746 | 0.2892 | 4,030 |
+| 43 | 567 | 3,630 | 8,945 | 0.2958 | 4,065 |
+| 44 | 539 | 3,658 | 9,238 | 0.3055 | 4,039 |
+| 45 | 599 | 3,598 | 8,678 | 0.2870 | 4,008 |
+| 46 | 562 | 3,635 | 8,746 | 0.2892 | 3,900 |
+
+**Primary metrics (mean ± SD across the five seeds; R@50 / R-precision / nDCG@10):**
+
+| arm | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| lexical k-NN (a) | 0.5204 ± 0.0061 / 0.2456 / 0.3182 | 0.4400 ± 0.0099 / 0.1764 / 0.2370 | 0.4293 ± 0.0096 / 0.1686 / 0.2275 |
+| embedding k-NN (b) | 0.4554 ± 0.0099 / 0.1267 / 0.1711 | 0.3729 ± 0.0121 / 0.0756 / 0.1092 | 0.3640 ± 0.0109 / 0.0720 / 0.1055 |
+| small pack (c) | **0.5230 ± 0.0054 / 0.3018 / 0.3855** | **0.4452 ± 0.0086 / 0.2278 / 0.3007** | **0.4349 ± 0.0079 / 0.2198 / 0.2911** |
+| label text, title (d-i) | 0.2148 / 0.0543 / 0.0802 | 0.2095 / 0.0596 / 0.0840 | 0.2068 / 0.0594 / 0.0843 |
+| label text, title + parents (d-ii) | 0.2708 / 0.0697 / 0.1011 | 0.2753 / 0.0738 / 0.1058 | 0.2720 / 0.0737 / 0.1058 |
+| label text, + definition (d-iii) | 0.2784 / 0.0906 / 0.1274 | 0.2776 / 0.0815 / 0.1156 | 0.2743 / 0.0801 / 0.1138 |
+
+The label-text rows have SD = 0: they read no train label, so the five seeds
+give the same ranking. The pack is **not** weak at this size — it is the best
+arm on every slice and every primary metric.
+
+**Unseen / seen and support-bucket readout, `family_new` (micro over gold
+assignments; coverage@50):**
+
+| arm | unseen R@50 | seen R@50 | support 1 | support 2–4 | support 5+ | coverage@50 |
+|---|---:|---:|---:|---:|---:|---:|
+| lexical k-NN | 0.0000 | 0.6632 | 0.2285 | 0.7005 | 0.9558 | 0.8536 |
+| embedding k-NN | 0.0000 | 0.5600 | 0.0002 | 0.5932 | 0.9543 | 0.8068 |
+| small pack | 0.0000 | 0.6706 | 0.1712 | 0.7450 | 0.9708 | 0.8669 |
+| label text, title | 0.1728 | 0.2105 | 0.2157 | 0.2457 | 0.1673 | 0.6514 |
+| label text, + parents | **0.2185** | 0.2873 | **0.2839** | **0.3424** | 0.2283 | 0.7404 |
+| label text, + definition | 0.2162 | 0.2868 | 0.2829 | 0.3342 | 0.2375 | 0.7592 |
+
+Unseen micro recall@5 / @10 / @20 / @100 for the three text variants:
+title 0.0465 / 0.0733 / 0.1065 / 0.2495; + parents 0.0618 / 0.0913 / 0.1348 /
+0.2976; + definition 0.0650 / 0.0925 / 0.1343 / 0.2946.
+
+**Paired within-seed comparisons (mean Δ across seeds; seeds whose 95 % interval
+is entirely above / below zero):**
+
+| comparison | slice | Δ R@50 | Δ R-precision | Δ nDCG@10 | Δ unseen macro R@50 |
+|---|---|---|---|---|---|
+| embedding − lexical | family_new | −0.0671 (0/5) | −0.1008 (0/5) | −0.1277 (0/5) | 0.0000 |
+| pack − lexical | family_new | **+0.0052 (4/0)** | **+0.0514 (5/0)** | **+0.0637 (5/0)** | 0.0000 |
+| title − lexical | family_new | −0.2305 (0/5) | −0.1168 (0/5) | −0.1529 (0/5) | **+0.1837 (5/0)** |
+| + parents − title | family_new | **+0.0658 (5/0)** | +0.0142 (5/0) | +0.0218 (5/0) | **+0.0513 (5/0)** |
+| + definition − title | family_new | **+0.0681 (5/0)** | +0.0219 (5/0) | +0.0315 (5/0) | **+0.0507 (5/0)** |
+| + parents − lexical | family_new | −0.1646 (0/5) | — | −0.1312 (0/5) | **+0.2350 (5/0)** |
+
+**The pre-registered readings, read out.**
+
+- **B1 passed.** The three seen-only arms score every unseen label 0; their
+  unseen micro recall@50 is exactly **0.0000** on every slice and seed, so the
+  harness is not leaking an unseen signal into the retrievers.
+- **B2 — the baseline to beat at 240 documents.** Seen-only retrieval collapses
+  from its 45,000-document level (TC-14's lexical 0.9138) to **0.4400** R@50 on
+  `family_new`, and the embedding k-NN to **0.3729** (its worst relative showing
+  in the track: −0.0671 R@50 against the words). The **pack still helps**: with
+  five ~48-document folds it beats the lexical k-NN on R@50 by +0.0052 (4 of 5
+  seeds' intervals above zero), **R-precision by +0.0514** and **nDCG@10 by
+  +0.0637**, and it is the best arm overall on all three slices. The pack was
+  pre-registered as "expected weak — report, do not tune"; at this size it is
+  instead the strongest arm, which is itself a result: the TC-14 features carry
+  signal at ~240 documents, not only at 45,000.
+- **B3 — the label text is the only unseen channel, and parents help.** The
+  title cosine reaches **0.1728** unseen R@50; adding the immediate parent
+  names raises it to **0.2185** (+0.0513 macro, interval above zero in all five
+  seeds) and lifts `family_new` R@50 from 0.2095 to **0.2753** (+0.0658). The
+  official definition/scope note adds **ordering** (R-precision 0.0738 → 0.0815,
+  nDCG@10 0.1058 → 0.1156) but is a wash on unseen (0.2162; the +0.05 gain over
+  the raw title is 5/0, but it is −0.0023 against + parents). The
+  **title + parents** text is carried forward as the unseen reference for
+  sub-tasks 2–3, exactly as §27.2 B3 pre-registered: **0.2185**, so the
+  pre-registered bar is **0.2685** unseen micro recall@50.
+- **The two channels are complementary, and neither arm uses the other yet.**
+  The retrieval arms own the seen labels (seen micro 0.66–0.67) and score zero
+  on unseen; the text arms are the reverse (unseen 0.22, seen 0.21–0.29). The
+  support buckets make the crossover concrete: on **singleton** labels the
+  parent-enriched text (0.2839) already beats the lexical k-NN (0.2285), and on
+  unseen labels it is the only arm with any reach; on **5+** labels the
+  retrieval is far ahead (0.9558 vs 0.2283). That is the gap Arms A and B are
+  built to close, and why sub-task 1 is only the harness.
+- **No arm is adopted; this sub-task only fixes the reference.** The pack's
+  result is a description of the 240-document regime, not a production pick;
+  the text variants are metadata-only baselines.
+
+**What the result does not say.** Nothing about `test`; nothing about the
+deployment's subjective labels; nothing about whether the pack's win survives a
+different fold count or the full 4,197-label candidate union; and nothing about
+the unseen labels beyond the text cosine — Arm A and Arm B are the next
+sub-tasks. The five seeds sample corpora, not annotators.
 
 ### 27.3 Sub-task 2 — Arm A: the label-text k-NN transfer (artifact `eurlex-label-sparse-transfer`)
 

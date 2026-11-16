@@ -20,7 +20,7 @@ column order (a stable descending sort), so the result is deterministic.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from typing import Any
 
 import numpy as np
@@ -129,6 +129,62 @@ def per_document_recall_at_k(ranked: np.ndarray, gold: Sequence[set[int]], k: in
         top = set(ranked[row, : min(k, ranked.shape[1])].tolist())
         values[row] = len(top & labels) / len(labels)
     return values
+
+
+def per_document_subset_recall_at_k(
+    ranked: np.ndarray,
+    gold: Sequence[set[int]],
+    allowed: Set[int],
+    k: int,
+) -> np.ndarray:
+    """Per-document recall@k restricted to the gold labels inside ``allowed``.
+
+    The label-sparse regime restricts the unseen/seen reading to a label class:
+    only the document's gold labels in ``allowed`` count in the numerator and
+    the denominator. A document with no gold label in ``allowed`` gets ``NaN``
+    (it carries no information about that class); callers average with
+    ``numpy.nanmean`` or mask on ``isfinite`` for a paired bootstrap.
+
+    Args:
+        ranked: ``(n_documents, n_labels)`` label indices, best first.
+        gold: One set of gold label indices per document.
+        allowed: The label-class columns to count.
+        k: Cut-off.
+
+    Returns:
+        The ``(n_documents,)`` float64 recall values, ``NaN`` where the
+        document has no gold label in ``allowed``.
+
+    Raises:
+        ValueError: If ``k`` is not positive or a document has no gold label.
+    """
+    if k < 1:
+        raise ValueError(f"k must be positive, got {k}")
+    ranked = np.asarray(ranked)
+    if len(gold) != ranked.shape[0]:
+        raise ValueError(f"{len(gold)} gold sets for {ranked.shape[0]} ranked rows")
+    values = np.full(len(gold), np.nan, dtype=np.float64)
+    for row, labels in enumerate(gold):
+        if not labels:
+            raise ValueError("every document must have at least one gold label")
+        relevant = labels & allowed
+        if not relevant:
+            continue
+        top = set(ranked[row, : min(k, ranked.shape[1])].tolist())
+        values[row] = len(top & relevant) / len(relevant)
+    return values
+
+
+def subset_recall_at_k(
+    ranked: np.ndarray,
+    gold: Sequence[set[int]],
+    allowed: Set[int],
+    k: int,
+) -> float:
+    """Mean of :func:`per_document_subset_recall_at_k` over documents with a class label."""
+    values = per_document_subset_recall_at_k(ranked, gold, allowed, k)
+    finite = values[np.isfinite(values)]
+    return float(finite.mean()) if finite.size else 0.0
 
 
 def paired_bootstrap_ci(
