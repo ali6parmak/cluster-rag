@@ -3501,6 +3501,108 @@ sub-tasks. The five seeds sample corpora, not annotators.
 - **Comparators.** The lexical k-NN, the title cosine, and the embedding k-NN,
   recomputed in-run so the paired bootstrap is exact.
 
+### Result — sub-task 2, Arm A (2026-11-16)
+
+Artifact: `results/eurlex-label-sparse-transfer/metrics.json` (run
+`eurlex-label-sparse-transfer`, **186.7 s**; 51,000 document cache hits, no LLM,
+no GPU). The label-text spaces: 6,699 (title) / 10,150 (title + parents) /
+20,898 (title + parents + definition) TF-IDF terms over the 4,197 labels.
+Primary settings: title + parents, k = 10, lexical k-NN evidence.
+
+**The primary hybrid, by slice (mean ± SD across seeds; R@50 / R-precision /
+nDCG@10):**
+
+| arm | all_dev | family_new | family_new_clean |
+|---|---|---|---|
+| lexical k-NN (control) | 0.5204 ± 0.0061 / 0.2456 / 0.3182 | 0.4400 ± 0.0099 / 0.1764 / 0.2370 | 0.4293 / 0.1686 / 0.2275 |
+| label text, + parents (unseen reference) | 0.2708 / 0.0697 / 0.1011 | 0.2753 / 0.0738 / 0.1058 | 0.2720 / 0.0737 / 0.1058 |
+| **transfer hybrid, k = 10, lexical** | 0.3433 ± 0.0159 / 0.1727 / 0.2193 | 0.2749 ± 0.0179 / 0.1298 / 0.1725 | 0.2664 ± 0.0167 / 0.1249 / 0.1666 |
+
+The hybrid's unseen/seen micro recall@50 on `family_new`: **0.0729 / 0.3717**
+(the lexical control's 0.0000 / 0.6632; the label-text reference's 0.2185 /
+0.2873); coverage@50 0.6961. It is a **null on every pre-registered condition**.
+
+**The fixed sensitivity grid (`family_new`; R@50 / R-precision / nDCG@10; unseen
+micro recall@50):**
+
+| config | R@50 | R-precision | nDCG@10 | unseen R@50 | unseen-only R@50 |
+|---|---:|---:|---:|---:|---:|
+| title+parents, k=10, lexical (**primary**) | 0.2749 ± 0.0179 | 0.1298 | 0.1725 | 0.0729 | 0.0960 ± 0.0134 |
+| title+parents, k=5, lexical | 0.2606 ± 0.0195 | 0.1187 | 0.1624 | 0.0694 | 0.0895 ± 0.0155 |
+| title+parents, k=20, lexical | 0.2961 ± 0.0196 | 0.1498 | 0.1991 | 0.0727 | 0.0953 ± 0.0150 |
+| title, k=10, lexical | 0.2823 ± 0.0238 | 0.1001 | 0.1374 | 0.0827 | 0.1032 ± 0.0142 |
+| title+parents+definition, k=10, lexical | 0.2767 ± 0.0165 | 0.1279 | 0.1724 | 0.0681 | 0.0919 ± 0.0117 |
+| title+parents, k=10, **embedding** | 0.1713 ± 0.0256 | 0.0460 | 0.0654 | 0.0546 | 0.0772 ± 0.0104 |
+
+The "unseen-only R@50" column is the transfer arm's own readout: the unseen
+labels ranked alone by the borrowed evidence (macro over documents with an
+unseen gold label; the transfer-only micro recall@50 is 0.0960 and its
+R-precision/nDCG@10 are 0.0084 / 0.0200, so the unseen-only ranking is diffuse).
+
+**Paired within-seed comparisons, primary hybrid on `family_new` (mean Δ; seeds
+with the interval entirely above / below zero):**
+
+| comparison | Δ R@50 | Δ R-precision | Δ nDCG@10 | Δ unseen macro R@50 |
+|---|---|---|---|---|
+| hybrid − lexical k-NN | **−0.1651 (0/5)** | −0.0466 (0/5) | −0.0644 (0/5) | **+0.0866 (5/0)** |
+| hybrid − title + parents | −0.0005 (1/1) | **+0.0560 (5/0)** | **+0.0667 (5/0)** | **−0.1484 (0/5)** |
+| hybrid − raw title | +0.0653 (5/0) | +0.0702 (5/0) | +0.0885 (5/0) | −0.0970 (0/5) |
+
+Every sensitivity config is the same story on the unseen view: the mean
+unseen-macro difference against title + parents is **−0.142 to −0.169**, with
+**0 of 5** seeds' intervals above zero.
+
+**The pre-registered bar, read out.**
+
+- **Unseen gain ≥ +0.05 over the best label-text variant: failed.** The primary
+  hybrid reaches **0.0729** unseen micro R@50 against the reference's
+  **0.2185** — a **−0.1457** gap. All six configs fail; none is close.
+- **Interval excluding zero in ≥ 4/5 seeds: failed** (0/5, and in the losing
+  direction).
+- **`family_new` R@50 no more than 0.01 below the lexical k-NN: failed** — it is
+  **0.1651** below.
+- **`outcome`: null.** The arm is not licensed.
+
+**Reading — the mechanism fails in two distinct places, and the decomposition
+says which is which.**
+
+1. **The borrowed evidence is weaker than the label's own text.** Ranked by the
+   transfer score alone, the unseen labels reach only **0.0960** micro R@50;
+   the direct title + parents cosine reaches **0.2185** on the full ranking.
+   The transfer is indirect: an unseen label inherits the retrieval scores of
+   its top-10 *label-text* neighbours, and those neighbours are lexical
+   relatives (shared words such as "policy", "trade", "financing"), not topic
+   twins. The direct text comparison is a stronger zero-shot signal than the
+   neighbour borrow, so the primary premise of Arm A is not supported at k =
+   5/10/20 or in the title/definition variants.
+2. **The fixed z-rule makes the unseen channel louder than its evidence
+   deserves.** The unseen z-scores come from a 3,6xx-column block in which most
+   labels have transfer 0: the block's small SD gives the few non-zero borrowed
+   scores very large z values, and they flood the top-50. The seen ordering is
+   monotone under the seen-block z-score, so the seen side is unchanged — yet
+   seen micro recall falls 0.6632 → 0.3717 because unseen labels displace
+   correct seen shortlist entries. The unseen gain over the lexical control
+   (+0.0866 unseen macro) is real but costs **0.1651** R@50 of seen
+   assignments. This is the TC-11 quota lesson in reverse: an unseen channel
+   needs a *placed* insertion (bottom slots), not an equal-scale z competition.
+3. **What the hybrid does buy is ordering on the seen side.** Against the
+   text-only reference it ties on R@50 (−0.0005) while gaining **+0.0560
+   R-precision** and **+0.0667 nDCG@10** (5/5) — the hybrid is a better ordered
+   full ranking than the pure text scorer because its seen labels keep the
+   retrieval order. That is not the bar and not a usable unseen route, but it
+   confirms the two channels are complementary; the failure is the unseen
+   channel's placement and quality, not the seen side.
+
+**Honest qualifications.** The label-text neighbour space was fixed as TF-IDF
+by the pre-registration; a semantic neighbour space (the cached MiniLM title
+vectors) is untested and would be a different change set. The hybrid rule was
+fixed in advance and is not tuned here; a quota-style insertion, or ranking the
+seen and unseen blocks by a common calibrated scale rather than per-block
+z-scores, is the obvious next mechanism, and neither is claimed to work. The
+embedding-evidence variant is markedly worse (unseen 0.0546), so the lexical
+retrieval remains the better evidence source even though its transfer is weak.
+Nothing here says anything about `test`.
+
 ### 27.4 Sub-task 3 — Arm B: the word-cluster bridge (artifact `eurlex-label-sparse-clusters`)
 
 - **The clustering (no labels).** TF-IDF (word 1–2 grams, `min_df=2`,
