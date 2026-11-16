@@ -3240,3 +3240,213 @@ run), the model's full 2,048-token window, the real-title document prompt or
 the classification prompt for titles, Matryoshka truncation, other k-NN
 settings, or a learned combination of the embeddinggemma and lexical channels.
 The zero-shot pack is **not adopted**; the reviewer decides.
+
+## 27. The label-sparse regime — TC-21 (pre-registered 2026-11-16, before any run)
+
+**Question.** The product will have ~120 expert-labelled documents over ~2,000
+labels (subjective labels, experts disagree). The EURLEX benchmark is the wrong
+regime: 45,000 labelled train documents over 4,271 labels. Scale both sides by
+2 and the deployment regime is **240 labelled documents over the 4,197-label
+EURLEX space** — 120/2,000 ≈ 0.06 and 240/4,197 ≈ 0.057 documents per label.
+What works when **almost every label has no example**? This is not a bid to beat
+the 0.9341 pack; it is a measurement of the arms under a total labelled-data cap.
+
+**This section pre-registers all three sub-tasks once, before any of their
+runs.** Each sub-task is one change set (one commit, its own artifact and result
+subsection below). Test is never read. No LLM, no GPU, no new model download.
+
+### 27.1 The design (fixed before any run)
+
+- **The labelled corpus — total restriction.** For each seed in **42, 43, 44,
+  45, 46**, draw **240 distinct train documents** with
+  `numpy.random.default_rng(seed).choice(45_000, 240, replace=False)`, sorted
+  ascending. These 240 are the **entire labelled corpus for every arm**: no arm
+  reads the records (text or labels) of the other 44,760 train documents. The
+  word-cluster arm is the single pre-authorised exception: it may read **train
+  text without labels** for the clustering fit (sub-task 3 states exactly what
+  it reads). No dev document is used to fit anything; dev labels are used only
+  for evaluation.
+- **Label space.** The full **4,197** labels (the sorted union of the train and
+  dev label IDs; the 74 test-only labels are excluded and test is never read).
+  **Seen** = the label occurs in at least one of the 240; **unseen** = the rest.
+  Each seed reports its seen count and the share of dev gold assignments that
+  fall on unseen labels.
+- **Evaluation.** The full dev split (6,000 documents) on the track's fixed
+  slices: `all_dev` (6,000), `family_new` (dev documents whose title-skeleton
+  family is absent from the **full** 45,000-document train split) and
+  `family_new_clean` (`family_new` ∩ best train TF-IDF cosine < 0.90). The
+  slice definitions are the track's existing ones, kept fixed for comparability
+  with TC-3 — the sampled 240 do **not** redefine `family_new`.
+- **Metrics.** Primary, per slice: **R@50, R-precision, nDCG@10**. Secondary:
+  R@5, R@10, R@20, R@100, nDCG@50, coverage@50. The unseen/seen readout is
+  label-level: **micro recall@k over gold assignments** (k = 5/10/20/50/100) and
+  the **macro per-document recall@50** over documents carrying at least one gold
+  label of that class. These are reported **overall and separately for the seen
+  and unseen label classes**, plus micro recall@50 by **support bucket** on the
+  240 (`1`, `2–4`, `≥5`, `unseen`) and by the track's full-train bucket
+  (`head ≥100`, `torso 10–99`, `tail 1–9`, `unseen 0`) for comparability.
+- **A full ranking for every arm.** Every arm returns a score for every one of
+  the 4,197 labels. The seen-only arms (k-NN, pack) score unseen labels 0; ties
+  break by label column order (the track's stable convention), so the ranking is
+  complete and deterministic. A zero score is a valid score.
+- **Seeds, pooling, uncertainty.** Five seeds; **per-seed numbers and the mean ±
+  sample SD (ddof = 1) across seeds** (plus min/max) are reported. The paired
+  bootstrap (2,000 resamples, unit = document, 95 % percentile interval, seed =
+  the sampling seed) is run **within each seed**; a cross-seed reading is
+  "mean Δ ± SD across seeds" plus **the count of seeds whose interval excludes
+  0**. Because every seed evaluates the same 6,000 dev documents, the pooled
+  mean equals the mean of the per-seed means; the SD is the seed-to-seed spread
+  and is the honest uncertainty here (5 seeds is small).
+- **Artifacts.** `results/eurlex-label-sparse/metrics.json`,
+  `results/eurlex-label-sparse-transfer/metrics.json`,
+  `results/eurlex-label-sparse-clusters/metrics.json`. Every number in this
+  section's result subsections comes from one of them.
+
+### 27.2 Sub-task 1 — the harness and the baselines (artifact `eurlex-label-sparse`)
+
+Four arms, each evaluated per seed on the three slices:
+
+- **(a) Lexical k-NN over the 240.** The track's TF-IDF config (word 1–2 grams,
+  `min_df=2`, `max_features=200,000`, `sublinear_tf=True`, lowercase,
+  `float32`), fitted on the **240 documents only**; cosine similarity; the
+  track's vote rule `score(q,l) = Σ_{j∈topk} max(cos,0)^1 · 1[l∈labels(j)]`
+  with `k = 100` (clamped to the 240) and `power = 1.0`.
+- **(b) Embedding k-NN over the 240.** The cached MiniLM `all-MiniLM-L6-v2`
+  whole-document vectors (cache `eurlex-4k-v1`), the same k = 100 / power 1.0
+  vote rule. The 45,000-document embedding cache is read, but **only the 240
+  sampled rows enter the index**.
+- **(c) The small pack.** TC-14's **11 features** (embedding score, lexical
+  score, RRF score, label rate, label-title cosine, document words, three
+  bucket one-hots, two retriever ranks) and the same
+  `HistGradientBoostingClassifier` parameters (`max_iter=200`,
+  `learning_rate=0.1`, `max_leaf_nodes=31`, `min_samples_leaf=100`,
+  `early_stopping=False`, `random_state=42`), trained on **out-of-fold
+  candidates from the 240 only**: 5 `GroupKFold` folds grouped by title
+  skeleton (~48 held-out documents each), the candidate union of the embedding /
+  lexical / frequency top-50 from the fold's remaining ~192 documents. Dev
+  candidates come from the same 240 as the index. No tuning: the arm is expected
+  to be weak at this size; it is reported, not tuned.
+- **(d) Label-text scorers (zero-shot, all 4,197 labels).** The document
+  embedding (cached MiniLM, `eurlex-4k-v1`) against the label text embedding;
+  the score is their cosine. Three fixed variants:
+  - **(i) title only** — the raw vocabulary title (cache `eurlex-4k-label-v1`,
+    the track's existing title embedding);
+  - **(ii) title + immediate parent names** — `"{title} | {p1} | {p2}…"` from
+    the committed `catalogs/eurlex_labels.jsonl` (order and de-duplication as in
+    the catalog; 3,780 of the 4,197 labels have at least one parent);
+  - **(iii) title + parents + the official definition/scope note** — variant
+    (ii) plus `" | {definition}"` where the catalog's `definition` field is the
+    official `skos:definition` or `skos:scopeNote` (763 of the 4,197 labels have
+    one; the other labels are identical to (ii) and the coverage is recorded).
+  - (ii) and (iii) use a **new label-text cache version**
+    `eurlex-4k-label-v2`; the text is the cache key, so the three variants
+    coexist. The embeddinggemma model is **not** used in this section (no new
+    download is needed, but the arm is not required and it would be a second
+    model on CPU); it stays the TC-20 open lever.
+
+**Pre-registered readings for sub-task 1** (descriptive; nothing is adopted):
+
+- **B1:** the seen-only arms (a–c) score unseen labels 0 and cannot reach an
+  unseen gold label; their unseen micro recall@50 must be 0 (a non-zero value is
+  a harness bug, checked before the numbers are read).
+- **B2:** the baseline table — each arm's `all_dev` / `family_new` /
+  `family_new_clean` R@50, R-precision, nDCG@10 and its unseen/seen micro
+  recall@50 — is the reference that sub-tasks 2 and 3 must beat.
+- **B3:** the title cosine is the **unseen reference**: the three label-text
+  variants' unseen micro recall@50 and their `family_new` overall metrics. The
+  best variant on unseen is carried forward as the reference for sub-tasks 2–3.
+- **Paired comparisons within each seed, against two references:** every arm
+  minus the **lexical k-NN** (family_new R@50 / R-precision / nDCG@10 and the
+  unseen macro recall@50) and every arm minus the **title cosine** (same
+  metrics). The intervals are per seed; the cross-seed reading is the count of
+  seeds with the interval entirely above/below zero.
+
+### 27.3 Sub-task 2 — Arm A: the label-text k-NN transfer (artifact `eurlex-label-sparse-transfer`)
+
+- **Mechanism.** For each **unseen** label `u`, find its **top-k seen labels by
+  label-text TF-IDF cosine**. The label-text TF-IDF is fitted on the 4,197 label
+  texts of the **primary variant (ii, title + parents)** only (word 1–2 grams,
+  `min_df=1`, `max_features=200,000`, `sublinear_tf=True`, lowercase,
+  `float32`); cosine similarity between labels; ties break by seen-label column
+  order. The unseen label borrows the document evidence of its neighbours:
+  `transfer(d,u) = mean_{j ∈ top-k seen(u)} retrieval(d,j)`.
+- **Which retrieval supplies the evidence.** Primary: the **lexical k-NN of
+  sub-task 1 (a)** on the 240. Secondary reading: the **embedding k-NN (b)**.
+- **The fixed hybrid.** Per document, z-score the retrieval ranking over the
+  **seen** columns and the transfer ranking over the **unseen** columns
+  separately (population SD; a zero-variance set becomes zeros), then
+  `hybrid(d,l) = z(retrieval)(d,l)` for seen `l` and
+  `z(transfer)(d,l)` for unseen `l`. No weight, no tuning.
+- **Fixed sensitivity grid** (not tuned): k = 5, 10, 20 for the primary variant,
+  and variants (i) and (iii) at k = 10. The primary arm is **variant (ii),
+  k = 10, lexical evidence**.
+- **Readings.** The transfer arm's own readout is the **unseen-only ranking**:
+  rank the 3,6xx unseen labels by `transfer` and report the unseen micro
+  recall@5/10/20/50/100 and the macro per-document unseen recall@50, beside the
+  title-cosine same readout. The hybrid is evaluated as a full 4,197-label
+  ranking on the three slices.
+- **The sub-task bar (pre-registered).** The transfer hybrid is **licensed** if
+  it beats the **title cosine** on unseen micro recall@50 by **at least +0.05
+  absolute**, the paired within-seed 95 % interval (macro unseen recall) excludes
+  zero in **at least 4 of 5 seeds**, and its `family_new` R@50 is **no more than
+  0.01 below** the lexical k-NN's. Otherwise the item is a **null**. No
+  auto-adopt; the reviewer decides.
+- **Comparators.** The lexical k-NN, the title cosine, and the embedding k-NN,
+  recomputed in-run so the paired bootstrap is exact.
+
+### 27.4 Sub-task 3 — Arm B: the word-cluster bridge (artifact `eurlex-label-sparse-clusters`)
+
+- **The clustering (no labels).** TF-IDF (word 1–2 grams, `min_df=2`,
+  `max_features=200,000`, `sublinear_tf=True`, lowercase, `float32`, L2) fitted
+  on the **train split's 45,000 `full_text`s**, and `MiniBatchKMeans`
+  (`batch_size=4096`, `n_init=3`, `max_iter=100`, `random_state=42`) with
+  **K = 200** (fixed). This is the word-cluster arm's pre-authorised use of the
+  unlabelled corpus: **no labels of any of the 45,000 documents are read**, and
+  the fit is done once and shared by all five seeds (it is label-free, so it
+  cannot depend on the sample). Sensitivity: K = 100 and K = 300, same config.
+- **Soft membership and label affinity.** Centroids are L2-normalised. For a
+  document `d`, `m(d,c) = max(0, cos(d, centroid_c)) / Σ_c' max(0, cos(d,
+  centroid_c'))`; for a label's **text** `l`, the same formula gives its
+  affinity `a(l,c)`. The score is `score(d,l) = Σ_c m(d,c) · a(l,c)` — a soft
+  co-clustering bridge that gives every label, seen or unseen, a score. Label
+  texts: the **primary variant (ii, title + parents)**; sensitivity variants
+  (i) and (iii) (the same texts and cache versions as sub-task 1).
+- **Cluster-level diagnostic ("the topic area" reading).** The label's **home
+  cluster** is `argmax_c a(l,c)`; the document's **top-3 clusters** are the three
+  largest `m(d,·)`. Report the **share of gold assignments whose home cluster is
+  in the document's top-3**, overall and by seen/unseen, on every slice. This is
+  a diagnostic, not a win condition; a share ≥ 0.75 is read as a usable topic
+  map, < 0.50 as "the clusters do not form topic areas".
+- **The fixed hybrid.** The same rule as sub-task 2: per document, z-score the
+  lexical retrieval over the seen columns and the cluster score over the unseen
+  columns separately; seen labels take the retrieval z-score, unseen labels the
+  cluster z-score. The standalone cluster arm (all 4,197 labels) is also
+  evaluated.
+- **The sub-task bar (pre-registered).** The cluster hybrid is **licensed** on
+  the same terms as sub-task 2: **≥ +0.05 absolute** unseen micro recall@50 over
+  the title cosine, paired interval excluding zero in **≥ 4/5 seeds**, and
+  `family_new` R@50 no more than 0.01 below the lexical k-NN. Otherwise
+  **null**. The cluster diagnostic is reported beside it.
+- **Comparators.** The lexical k-NN, the title cosine, the standalone cluster
+  arm and **the sub-task-2 transfer hybrid** (recomputed in-run with the same
+  fixed settings).
+
+### 27.5 What is not tested here
+
+- `test` (never read); any LLM; any GPU run; any new model download;
+  embeddinggemma (TC-20 stays the open lever).
+- Tuning of k, K, the hybrid rule, the z-score rule, the label-text templates,
+  the pack's parameters or the support-bucket cut-offs.
+- The other 44,760 train documents' **labels** (forbidden by design); dev text
+  as a fitting corpus; a cluster fit on dev; the 74 test-only labels.
+- The deployment's **subjectivity**: EURLEX labels are objective and
+  catalogued, so inter-annotator disagreement is absent here. Five seeds are a
+  small sample of corpora, not a sample of annotators.
+
+**Cost.** CPU only. Sub-task 1: 5 seeds × (240-document TF-IDF + two k-NNs +
+5-fold pack + three label-text matmuls), roughly 20–30 min total, plus the
+one-off 51,000-document cache read and the 12-s TF-IDF/near-duplicate slice.
+Sub-task 2: the same retrieval recomputation plus a 4,197-label TF-IDF and the
+neighbour means, roughly 15–25 min. Sub-task 3: the 45,000-document TF-IDF
+(12 s) and three MiniBatchKMeans fits (~2 min each at K = 200, measured
+126 s) plus the scoring, roughly 30–45 min. No 6 h cap is relevant.

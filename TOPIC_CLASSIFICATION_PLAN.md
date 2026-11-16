@@ -397,6 +397,25 @@ otherwise null. LLM-free (the English definitions are recorded but unused),
 ~20 min CPU. **Status: executed 2026-11-14 — null** (R@50 +0.0009, nDCG@10
 +0.00945, both under the 0.01 bars; the quota leg gains 34 → 37/96). §23.
 
+**TC-21 — the label-sparse regime** (pre-registered 2026-11-16, detailed in
+`docs/topic_classification.md` §27). The deployment-regime measurement: **240
+labelled train documents over the full 4,197-label space** (120/2,000 ≈
+240/4,197 ≈ 0.057 docs/label), sampled with seeds 42–46, evaluated on the full
+dev split and the track's three slices. Three sub-tasks, each its own commit
+and artifact: (1) the harness + the lexical/embedding k-NN, the TC-14 pack
+trained on out-of-fold candidates from the 240, and three label-text scorers
+(title / +parents / +definition) → `results/eurlex-label-sparse/metrics.json`;
+(2) **Arm A**, the label-text TF-IDF k-NN transfer from unseen labels to seen
+neighbours → `results/eurlex-label-sparse-transfer/metrics.json`; (3) **Arm B**,
+the word-cluster bridge on the unlabelled corpus (TF-IDF + k-means, K = 200) →
+`results/eurlex-label-sparse-clusters/metrics.json`. The labelled-data cap is
+total: the other 44,760 train documents' labels are never read; the cluster arm
+may read train **text** for the label-free clustering only. Test is never read;
+no LLM, no GPU, no new download. The pre-registered bar for Arms A/B is **+0.05
+absolute unseen micro recall@50 over the title cosine**, interval excluding zero
+in ≥ 4/5 seeds, with `family_new` R@50 no more than 0.01 below the lexical
+k-NN. **Status: pre-registered 2026-11-16; sub-tasks execute as three commits.**
+
 **TC-20 — the embeddinggemma-300m embedding** (pre-registered 2026-11-14,
 detailed in `docs/topic_classification.md` §26). Replace the document embedding
 with `google/embeddinggemma-300m` (768-d, 2,048-token card) and test it
