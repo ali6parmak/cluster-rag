@@ -844,13 +844,12 @@ LABEL_MAP_STATUSES = ("seen in this seed", "unseen in this seed", "selected labe
 
 
 def _label_map_spec(seed: int) -> dict[str, Any]:
-    """The Vega-Lite spec: hoverable label points with the selected one on top."""
-    axis = None
-    points_layer = {
+    """The Vega-Lite spec: hoverable label points, one zoomable mark layer."""
+    points_layer: dict[str, Any] = {
         "mark": {"type": "circle", "stroke": "#1e1e2e", "strokeWidth": 0.4},
         "encoding": {
-            "x": {"field": "x", "type": "quantitative", "axis": axis},
-            "y": {"field": "y", "type": "quantitative", "axis": axis},
+            "x": {"field": "x", "type": "quantitative", "axis": None},
+            "y": {"field": "y", "type": "quantitative", "axis": None},
             "color": {
                 "field": "status",
                 "type": "nominal",
@@ -876,26 +875,13 @@ def _label_map_spec(seed: int) -> dict[str, Any]:
                 {"field": "status", "type": "nominal", "title": f"seed {seed}"},
             ],
         },
-    }
-    selected_layer = {
-        "transform": [{"filter": "datum.status == 'selected label'"}],
-        "mark": {
-            "type": "text",
-            "dy": -14,
-            "fontSize": 12,
-            "fontWeight": 600,
-            "color": "#f9e2af",
-        },
-        "encoding": {
-            "x": {"field": "x", "type": "quantitative", "axis": axis},
-            "y": {"field": "y", "type": "quantitative", "axis": axis},
-            "text": {"field": "label", "type": "nominal"},
-        },
-    }
-    return {
-        "layer": [points_layer, selected_layer],
+        # Streamlit's default scatter chart is pan/zoomable; a custom Vega-Lite
+        # spec only is when this interaction is declared. It must live on one
+        # mark layer: a layered spec duplicates the generated signals.
+        "params": [{"name": "zoom_pan", "select": "interval", "bind": "scales"}],
         "config": {"view": {"stroke": None}},
     }
+    return points_layer
 
 
 def label_map_page(
@@ -985,7 +971,8 @@ def label_map_page(
         f"{len(seen):,} seen, {len(unseen_labels):,} unseen in seed {seed}. "
         "The axes are arbitrary; only the neighbourhoods are meaningful (and "
         "the UMAP view approximates the exact cosines in the table below). "
-        "Hover a point for its label, id, bucket and train support."
+        "Hover a point for its label, id, bucket and train support; drag to pan "
+        "and scroll to zoom."
     )
     st.caption(f"Selected: **{ev.label_title(dataset, label)}** (`{label}`) — the yellow point.")
     parentless = sum(1 for label_id in dataset.labels if not dataset.catalog[label_id].parents)
