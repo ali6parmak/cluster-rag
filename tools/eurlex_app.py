@@ -296,12 +296,65 @@ def _provenance(report: ev.GuardReport) -> None:
 
 # --- page 1: one document ---------------------------------------------------
 
+SECTION_LABELS = {
+    "title": "title",
+    "header": "header",
+    "recitals": "recitals",
+    "main_body": "main body",
+}
+
+
+def _inline_sections(sections: Sequence[ev.DocumentSection]) -> str:
+    """The four full-text parts as coloured inline spans (one clipped line)."""
+    parts: list[str] = []
+    for section in sections:
+        text = " ".join(section.text.split())
+        if not text:
+            continue
+        if parts:
+            parts.append('<span class="ex-part-sep"> · </span>')
+        parts.append(f'<span class="ex-part ex-part-{_esc(section.kind)}">{_esc(text)}</span>')
+    return "".join(parts) or '<span class="ev-muted">—</span>'
+
+
+def _section_legend() -> str:
+    """The colour key of the full-text parts."""
+    return (
+        '<div class="ex-legend">'
+        + "".join(
+            f'<span class="ex-legend-chip ex-part-{_esc(kind)}">{_esc(label)}</span>'
+            for kind, label in SECTION_LABELS.items()
+        )
+        + "</div>"
+    )
+
+
+def _document_text_panel(sections: Sequence[ev.DocumentSection]) -> str:
+    """The full document text, one coloured block per field."""
+    blocks: list[str] = []
+    for section in sections:
+        text = section.text.strip()
+        label = SECTION_LABELS.get(section.kind, section.kind)
+        body = (
+            f'<div class="ex-part-body">{_esc(text)}</div>'
+            if text
+            else '<div class="ex-part-body ev-muted">—</div>'
+        )
+        blocks.append(
+            f'<div class="ex-part-block ex-part-{_esc(section.kind)}">'
+            f'<div class="ex-part-label">{_esc(label)} · {len(text):,} chars</div>'
+            f"{body}</div>"
+        )
+    return '<div class="ex-fulltext">' + "".join(blocks) + "</div>"
+
 
 def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> str:
     """One neighbour list as a table (shared labels are green).
 
     The title and the document text use the error viewer's ``ev-text`` rule:
-    one clipped line, and the full text expands **in place** on hover.
+    one clipped line, and the full text expands **in place** on hover. The text
+    is the train document's ``full_text`` (title, header, recitals, body),
+    colour-coded by part.
     """
     body = []
     for row in rows:
@@ -326,7 +379,7 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
             f'<span class="ev-text ex-text-title">{_esc(row.title.strip())}</span>'
             f'<span class="ev-id"> · {_esc(row.doc_id)}</span>'
         )
-        text_cell = f'<span class="ev-text">{_esc(" ".join(row.text.split()))}</span>'
+        text_cell = f'<span class="ev-text">{_inline_sections(row.sections)}</span>'
         body.append(
             [
                 f'<span class="ev-rank">{row.rank}</span>',
@@ -547,16 +600,6 @@ def one_document_page(
         f"{len(doc.main_body)} body paragraphs · {len(doc.text):,} characters</div>",
         unsafe_allow_html=True,
     )
-    with st.expander("header", expanded=False):
-        st.code(_truncate(doc.header, 1500), language="text")
-    st.markdown('<div class="ex-section-label">Recitals</div>', unsafe_allow_html=True)
-    if doc.recitals.strip():
-        st.markdown(
-            f'<div class="ex-recitals">{_esc(doc.recitals)}</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.caption("This document has no recitals.")
 
     n_unseen = sum(1 for tag in view.gold if tag.unseen)
     pack_hits = view.methods[0].hits
@@ -570,6 +613,15 @@ def one_document_page(
         + "".join(_label_pill(tag.title, tag.label, tag.bucket) for tag in view.gold)
         + "</div>",
         unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ex-section-label">Document text</div>', unsafe_allow_html=True)
+    st.markdown(_section_legend(), unsafe_allow_html=True)
+    st.markdown(_document_text_panel(view.doc.sections), unsafe_allow_html=True)
+    st.caption(
+        "`full_text` = title + header + recitals + main body — the exact text "
+        "the cache embedded and the retrievers score. The colours are only a "
+        "reading aid."
     )
 
     st.subheader("The closest train documents")

@@ -135,13 +135,27 @@ a { color: var(--ctp-blue); }
   display: inline-block; margin: 0.4rem 0 0.1rem; color: var(--ctp-mauve);
   font-size: 0.74rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
 }
-.ex-recitals {
-  white-space: pre-wrap; color: var(--ctp-text); font-size: 0.95rem;
-  line-height: 1.55; background: rgba(24, 24, 37, 0.8);
-  border: 1px solid var(--ctp-surface0); border-left: 4px solid var(--ctp-mauve);
-  border-radius: 0 0.6rem 0.6rem 0; padding: 1rem 1.2rem; margin: 0.35rem 0 1rem;
-  max-height: none; overflow: visible; box-shadow: 0 2px 0 rgba(17, 17, 27, 0.5);
+.ex-legend { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.15rem 0 0.5rem; }
+.ex-legend-chip {
+  padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.04em; background: rgba(49, 50, 68, 0.55);
 }
+.ex-fulltext { margin: 0.3rem 0 1rem; }
+.ex-part-block {
+  border: 1px solid var(--ctp-surface0); border-left: 4px solid currentColor;
+  border-radius: 0 0.55rem 0.55rem 0; background: rgba(24, 24, 37, 0.7);
+  padding: 0.55rem 0.9rem; margin: 0.45rem 0;
+}
+.ex-part-label {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; opacity: 0.9; margin-bottom: 0.15rem;
+}
+.ex-part-body { white-space: pre-wrap; line-height: 1.55; font-size: 0.93rem; color: inherit; }
+.ex-part-title { color: var(--ctp-yellow); }
+.ex-part-header { color: var(--ctp-blue); }
+.ex-part-recitals { color: var(--ctp-peach); }
+.ex-part-main_body { color: var(--ctp-green); }
+.ex-part-sep { color: var(--ctp-overlay0); }
 
 /* the error viewer's in-place expand rule (tools/error_app.css): one clipped
    line, the full text on hover, no popup */

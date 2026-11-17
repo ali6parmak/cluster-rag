@@ -188,6 +188,19 @@ def resolve_sources(
 
 
 @dataclass(frozen=True)
+class DocumentSection:
+    """One coloured part of a document's ``full_text``.
+
+    Attributes:
+        kind: ``title`` / ``header`` / ``recitals`` / ``main_body``.
+        text: The section's own text (``main_body`` is newline-joined).
+    """
+
+    kind: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Document:
     """One EURLEX-4K document, as the track's retrievers see it.
 
@@ -208,6 +221,20 @@ class Document:
     recitals: str
     main_body: tuple[str, ...]
     labels: tuple[str, ...]
+
+    @property
+    def sections(self) -> tuple[DocumentSection, ...]:
+        """The four ``full_text`` parts, in the text's own order.
+
+        The parts are for display only: the retrievers see the concatenated
+        :attr:`text`, exactly as the cache keyed it.
+        """
+        return (
+            DocumentSection("title", self.title),
+            DocumentSection("header", self.header),
+            DocumentSection("recitals", self.recitals),
+            DocumentSection("main_body", "\n".join(self.main_body)),
+        )
 
     @property
     def text(self) -> str:
@@ -1085,6 +1112,7 @@ class NeighbourRow:
     doc_id: str
     title: str
     text: str
+    sections: tuple[DocumentSection, ...]
     score: float
     labels: tuple[str, ...]
     shared: tuple[str, ...]
@@ -1109,6 +1137,7 @@ def _neighbour_rows(
                 doc_id=doc.celex_id,
                 title=doc.title.strip(),
                 text=doc.text,
+                sections=doc.sections,
                 score=float(scores[int(column)]),
                 labels=doc.labels,
                 shared=tuple(label for label in doc.labels if label in gold),

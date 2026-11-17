@@ -185,6 +185,14 @@ def test_embedding_neighbours_on_a_tiny_fake_cache(ev: Any, tmp_path: Path) -> N
     assert neighbours[1].rank == 2
     assert "alpha beta body text" in neighbours[0].text
     assert "alpha epsilon body text" in neighbours[1].text
+    assert [section.kind for section in neighbours[0].sections] == [
+        "title",
+        "header",
+        "recitals",
+        "main_body",
+    ]
+    assert neighbours[0].sections[0].text == "alpha beta"
+    assert "alpha beta body text" in neighbours[0].sections[3].text
 
 
 def test_a_missing_cached_vector_says_so_and_never_downloads(ev: Any, tmp_path: Path) -> None:
