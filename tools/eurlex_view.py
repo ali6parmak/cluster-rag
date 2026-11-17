@@ -32,7 +32,7 @@ import hashlib
 import json
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1939,6 +1939,93 @@ def pack_misses(dataset: Dataset, ranking: Ranking, *, depth: int = 50) -> MissT
 
 
 # --- the label map ----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LabelNeighbourRow:
+    """One label's nearest label in the label-text embedding space.
+
+    Attributes:
+        rank: 1-based rank among the other labels.
+        label: The neighbour's label id.
+        title: The neighbour's title.
+        cosine: The label-text cosine to the selected label.
+        bucket: The neighbour's full-train support bucket.
+        support: The neighbour's full-train support.
+        n_dev_gold: How many dev documents carry the neighbour.
+        seen: Whether the neighbour is in the seed's 240-document corpus
+            (``None`` when the caller did not pass the seed's seen set).
+    """
+
+    rank: int
+    label: str
+    title: str
+    cosine: float
+    bucket: str
+    support: int
+    n_dev_gold: int
+    seen: bool | None
+
+
+def label_neighbours(
+    dataset: Dataset,
+    label_vectors: np.ndarray,
+    label: str,
+    *,
+    k: int = TOP_K,
+    seen: Collection[str] | None = None,
+) -> tuple[LabelNeighbourRow, ...]:
+    """The nearest labels to one label in the cached label-text space.
+
+    The cosine is the same dot product the TC-21 label-text arms use; the
+    projection on the map is only an approximation of these neighbours.
+
+    Args:
+        dataset: The loaded dataset (for titles, buckets, dev support).
+        label_vectors: The ``(n_labels, d)`` unit-norm label vectors.
+        label: The selected label id.
+        k: The number of neighbours.
+        seen: The seed's seen label ids (for the ``seen`` flag).
+
+    Raises:
+        KeyError: If the label is not in the label space.
+        ValueError: If the vectors do not have one row per label.
+    """
+    if label not in dataset.label_index:
+        raise KeyError(f"label {label!r} is not in the label space")
+    vectors = np.asarray(label_vectors, dtype=np.float32)
+    if vectors.shape[0] != len(dataset.labels):
+        raise ValueError(
+            f"the label vectors have {vectors.shape[0]} rows, the label space {len(dataset.labels)}"
+        )
+    column = dataset.label_index[label]
+    scores = vectors @ vectors[column]
+    order = np.argsort(-scores, kind="stable")
+    dev_counts: Counter[str] = Counter()
+    for gold in dataset.gold:
+        for gold_column in gold:
+            dev_counts[dataset.labels[int(gold_column)]] += 1
+    seen_set = None if seen is None else set(seen)
+    rows: list[LabelNeighbourRow] = []
+    for candidate in order:
+        if int(candidate) == column:
+            continue
+        neighbour = dataset.labels[int(candidate)]
+        rows.append(
+            LabelNeighbourRow(
+                rank=len(rows) + 1,
+                label=neighbour,
+                title=label_title(dataset, neighbour),
+                cosine=float(scores[int(candidate)]),
+                bucket=dataset.bucket.get(neighbour, "unseen"),
+                support=int(dataset.support.get(neighbour, 0)),
+                n_dev_gold=dev_counts.get(neighbour, 0),
+                seen=None if seen_set is None else neighbour in seen_set,
+            )
+        )
+        if len(rows) == k:
+            break
+    return tuple(rows)
 
 
 @dataclass(frozen=True)

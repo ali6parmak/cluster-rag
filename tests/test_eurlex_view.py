@@ -516,3 +516,22 @@ def test_the_curve_keeps_the_four_retrieval_families(ev: Any) -> None:
         ("lexical k-NN", 240),
         ("pack", 45000),
     ]
+
+
+def test_label_neighbours_are_the_exact_cosines(ev: Any) -> None:
+    """A's nearest labels by label-text cosine are B, C, D; self is excluded."""
+    dataset = _dataset(ev)
+    vectors = np.asarray(
+        [[1.0, 0.0, 0.0], [0.8, 0.6, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    rows = ev.label_neighbours(dataset, vectors, "A", k=3, seen={"C"})
+    assert [row.label for row in rows] == ["B", "C", "D"]
+    assert [row.rank for row in rows] == [1, 2, 3]
+    assert rows[0].cosine == pytest.approx(0.8)
+    assert rows[0].title == "beta"
+    assert rows[0].n_dev_gold == 1
+    assert rows[0].seen is False
+    assert rows[1].seen is True
+    with pytest.raises(KeyError, match="not in the label space"):
+        ev.label_neighbours(dataset, vectors, "Z")
