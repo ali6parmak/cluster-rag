@@ -1130,12 +1130,21 @@ def main() -> None:
         st.markdown(
             """
             <style>
-            [data-testid="stSidebar"] { display: none !important; }
-            .block-container { max-width: 1550px; padding-top: 1.1rem; }
+            [data-testid="stSidebar"],
+            [data-testid="stSidebarCollapsedControl"] { display: none !important; }
+            /* full viewport: the old 1550px cap shrank the wide layout */
+            .block-container {
+              max-width: 100% !important; width: 100% !important;
+              padding: 0.9rem 2.5rem 3rem !important;
+            }
             [data-testid="stMarkdownContainer"] p,
-            [data-testid="stMarkdownContainer"] li { font-size: 1.05rem; }
-            .ev-table { font-size: 0.94rem; }
-            [data-testid="stCaptionContainer"] p { font-size: 0.92rem; }
+            [data-testid="stMarkdownContainer"] li { font-size: 1.1rem; }
+            .ev-table, .ev-table.compact { font-size: 1rem !important; }
+            .ev-pill, .ev-badge, .ev-chip { font-size: 0.88rem !important; }
+            .ex-doc-title { font-size: 1.55rem !important; }
+            .ex-part-body { font-size: 1.06rem !important; }
+            .ex-part-label { font-size: 0.78rem !important; }
+            [data-testid="stCaptionContainer"] p { font-size: 1rem; }
             </style>
             """,
             unsafe_allow_html=True,

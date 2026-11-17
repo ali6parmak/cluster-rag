@@ -170,9 +170,3 @@ a { color: var(--ctp-blue); }
 }
 .ex-text-title { max-width: 18rem; }
 .ex-text-title:hover { max-width: 34rem; }
-
-/* presenter: larger text, no sidebar (the app toggles the style block) */
-.ex-presenter .block-container { max-width: 1550px; padding-top: 1.1rem; }
-.ex-presenter p, .ex-presenter li { font-size: 1.04rem; }
-.ex-presenter .ev-table { font-size: 0.92rem; }
-.ex-presenter caption, .ex-presenter .stCaption { font-size: 0.9rem; }
