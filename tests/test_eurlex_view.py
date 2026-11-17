@@ -183,6 +183,8 @@ def test_embedding_neighbours_on_a_tiny_fake_cache(ev: Any, tmp_path: Path) -> N
     assert neighbours[0].shared == ("A",)
     assert neighbours[1].shared == ("A",)
     assert neighbours[1].rank == 2
+    assert "alpha beta body text" in neighbours[0].text
+    assert "alpha epsilon body text" in neighbours[1].text
 
 
 def test_a_missing_cached_vector_says_so_and_never_downloads(ev: Any, tmp_path: Path) -> None:

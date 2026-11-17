@@ -1084,6 +1084,7 @@ class NeighbourRow:
     rank: int
     doc_id: str
     title: str
+    text: str
     score: float
     labels: tuple[str, ...]
     shared: tuple[str, ...]
@@ -1107,6 +1108,7 @@ def _neighbour_rows(
                 rank=rank,
                 doc_id=doc.celex_id,
                 title=doc.title.strip(),
+                text=doc.text,
                 score=float(scores[int(column)]),
                 labels=doc.labels,
                 shared=tuple(label for label in doc.labels if label in gold),

@@ -298,7 +298,11 @@ def _provenance(report: ev.GuardReport) -> None:
 
 
 def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> str:
-    """One neighbour list as a table (shared labels are green)."""
+    """One neighbour list as a table (shared labels are green).
+
+    The title and the document text are visually clipped; their full value is
+    in the ``title`` attribute, so hovering the cell shows all of it.
+    """
     body = []
     for row in rows:
         labels = (
@@ -321,17 +325,27 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
         body.append(
             [
                 f'<span class="ev-rank">{row.rank}</span>',
-                f'<span class="ev-label">{_esc(_snippet(row.title, 70))}</span>'
+                f'<span class="ev-label ex-clip ex-clip-title" title="{_esc(row.title)}">'
+                f"{_esc(_snippet(row.title, 70))}</span>"
                 f'<span class="ev-id"> · {_esc(row.doc_id)}</span>',
+                f'<span class="ex-neighbour-text" title="{_esc(row.text)}">'
+                f"{_esc(_snippet(row.text, 220))}</span>",
                 f'<span class="ev-chip ev-chip-score">{row.score:.3f}</span>',
                 f'<span class="ev-pills">{labels}</span>',
                 f'<span class="ev-pills">{shared}</span>',
             ]
         )
     return _table(
-        ("#", "train document", "cosine", "its gold labels", "shared with the document"),
+        (
+            "#",
+            "train document",
+            "document text (hover for all)",
+            "cosine",
+            "its gold labels",
+            "shared with the document",
+        ),
         body,
-        aligns=("right", "left", "right", "left", "left"),
+        aligns=("right", "left", "left", "right", "left", "left"),
         compact=True,
     )
 
@@ -533,11 +547,14 @@ def one_document_page(
     )
     with st.expander("header", expanded=False):
         st.code(_truncate(doc.header, 1500), language="text")
-    st.markdown("**Recitals** (truncated)")
-    st.markdown(
-        f'<div class="ex-recitals">{_esc(_truncate(doc.recitals, 1600))}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="ex-section-label">Recitals</div>', unsafe_allow_html=True)
+    if doc.recitals.strip():
+        st.markdown(
+            f'<div class="ex-recitals">{_esc(doc.recitals)}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("This document has no recitals.")
 
     n_unseen = sum(1 for tag in view.gold if tag.unseen)
     pack_hits = view.methods[0].hits
@@ -555,17 +572,15 @@ def one_document_page(
 
     st.subheader("The closest train documents")
     st.caption(
-        "Left: TF-IDF (word 1–2 grams) cosine over the chosen index. "
-        "Right: the cached MiniLM whole-document cosine. Both are the same "
-        "`full_text` the track's runs used."
+        "TF-IDF (word 1–2 grams) cosine over the chosen index, then the cached "
+        "MiniLM whole-document cosine. Both read the same `full_text` the "
+        "track's runs used. Hover a clipped document title or text cell to see "
+        "the full value."
     )
-    neighbour_columns = st.columns(2)
-    with neighbour_columns[0]:
-        st.markdown("**lexical TF-IDF neighbours**")
-        st.markdown(_neighbour_table(view.lexical, dataset), unsafe_allow_html=True)
-    with neighbour_columns[1]:
-        st.markdown("**MiniLM embedding neighbours**")
-        st.markdown(_neighbour_table(view.embedding, dataset), unsafe_allow_html=True)
+    st.markdown("**lexical TF-IDF neighbours**")
+    st.markdown(_neighbour_table(view.lexical, dataset), unsafe_allow_html=True)
+    st.markdown("**MiniLM embedding neighbours**")
+    st.markdown(_neighbour_table(view.embedding, dataset), unsafe_allow_html=True)
 
     overlap = st.columns(3)
     overlap[0].metric("shared labels", view.overlap.n_shared)
