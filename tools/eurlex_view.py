@@ -38,8 +38,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import normalize
 
 from cluster_rag.embed.cache import cache_key_path
 from cluster_rag.retrieve.knn import knn_vote_scores
@@ -2244,6 +2245,114 @@ def label_evidence_map(
         note=note,
         support=evidence.support,
         has_evidence=evidence.has_evidence,
+    )
+
+
+# --- the document map -------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DocumentMap:
+    """A 2-D projection of the dev documents' ``full_text``.
+
+    Attributes:
+        coordinates: ``(n_dev, 2)`` coordinates.
+        representation: ``tfidf`` or ``minilm``.
+        method: ``UMAP`` or ``PCA``.
+        note: One line saying exactly what was projected.
+    """
+
+    coordinates: np.ndarray
+    representation: str
+    method: str
+    note: str
+
+
+def document_map(
+    dataset: Dataset,
+    sources: Sources,
+    *,
+    representation: str = "tfidf",
+    vectors: np.ndarray | None = None,
+    n_components: int = 128,
+    random_state: int = DEFAULT_SEED,
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+) -> DocumentMap:
+    """Project the 6,000 dev documents by their ``full_text``.
+
+    Two representations:
+
+    * ``tfidf`` — the track's TF-IDF config fitted on the **train** documents,
+      transformed for dev, reduced with ``TruncatedSVD`` and projected;
+    * ``minilm`` — the cached MiniLM ``full_text`` vectors, projected.
+
+    No label enters either projection. The map is a view, not a model.
+
+    Raises:
+        ValueError: On an unknown representation or a vector shape mismatch.
+    """
+    if representation not in ("tfidf", "minilm"):
+        raise ValueError(f"unknown document-map representation {representation!r}")
+    if representation == "minilm":
+        matrix = (
+            load_document_vectors(sources, dataset.dev)
+            if vectors is None
+            else np.asarray(vectors, dtype=np.float32)
+        )
+        if matrix.shape[0] != len(dataset.dev):
+            raise ValueError(
+                f"the document vectors have {matrix.shape[0]} rows, "
+                f"the dev split {len(dataset.dev)}"
+            )
+        projection = label_map(
+            matrix,
+            random_state=random_state,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+        )
+        note = (
+            "UMAP of the cached MiniLM full-text vectors (cosine metric)."
+            if projection.method == "UMAP"
+            else "umap-learn is not installed; PCA of the cached MiniLM "
+            "full-text vectors is shown instead."
+        )
+        return DocumentMap(
+            coordinates=projection.coordinates,
+            representation=representation,
+            method=projection.method,
+            note=note,
+        )
+    vectorizer = TfidfVectorizer(**TFIDF_CONFIG)
+    train_matrix = vectorizer.fit_transform([doc.text for doc in dataset.train])
+    dev_matrix = vectorizer.transform([doc.text for doc in dataset.dev])
+    components = max(1, min(n_components, min(train_matrix.shape) - 1))
+    svd = TruncatedSVD(n_components=components, random_state=random_state)
+    svd.fit(train_matrix)
+    dev_reduced = normalize(svd.transform(dev_matrix), norm="l2", axis=1, copy=False)
+    del train_matrix, dev_matrix
+    projection = label_map(
+        dev_reduced,
+        random_state=random_state,
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+    )
+    explained = float(svd.explained_variance_ratio_.sum())
+    note = (
+        f"TF-IDF word 1–2 grams fitted on the {len(dataset.train):,} train "
+        f"documents, transformed for dev, TruncatedSVD {components} "
+        f"({explained:.1%} variance) and UMAP (cosine)."
+    )
+    if projection.method != "UMAP":
+        note = (
+            "umap-learn is not installed; PCA of the TF-IDF → TruncatedSVD "
+            f"{components} dev vectors is shown instead."
+        )
+    return DocumentMap(
+        coordinates=projection.coordinates,
+        representation=representation,
+        method=projection.method,
+        note=note,
     )
 
 

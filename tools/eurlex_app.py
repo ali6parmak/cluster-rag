@@ -33,6 +33,7 @@ import html as html_lib
 import math
 import os
 import sys
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,7 @@ CSS_PATH = TOOLS / "eurlex_app.css"
 sys.path.insert(0, str(TOOLS))
 import eurlex_view as ev  # noqa: E402
 
-PAGES = ("One document", "Methods", "Label map", "Errors")
+PAGES = ("One document", "Document map", "Methods", "Label map", "Errors")
 
 REGIME_CHOICES = ("45,000 train documents", "240-document seed")
 
@@ -176,6 +177,23 @@ def compute_label_map(
     """Project the label vectors (UMAP when available, PCA fallback)."""
     vectors = load_label_cache(results, cache, data_dir, catalog, ranking_path, model_id, variant)
     return ev.label_map(vectors)
+
+
+@st.cache_data(show_spinner="building the document map…")
+def compute_document_map(
+    results: str,
+    cache: str,
+    data_dir: str,
+    catalog: str,
+    ranking_path: str,
+    model_id: str,
+    representation: str,
+) -> ev.DocumentMap:
+    """Project the dev documents (TF-IDF -> SVD or cached MiniLM)."""
+    sources, dataset, _, _ = load_artifacts(
+        results, cache, data_dir, catalog, ranking_path, model_id
+    )
+    return ev.document_map(dataset, sources, representation=representation)
 
 
 @st.cache_data(show_spinner="centroiding the label documents and projecting the evidence map…")
@@ -695,6 +713,194 @@ def one_document_page(
         "with the track's rule. No score is invented."
     )
     _why_panel(dataset, view, index)
+    _provenance(report)
+
+
+# --- page 2: the document map -----------------------------------------------
+
+
+DOCUMENT_MAP_REPRESENTATIONS = ("lexical (TF-IDF)", "MiniLM")
+DOCUMENT_TYPE_PALETTE = (
+    "#cba6f7",
+    "#89b4fa",
+    "#a6e3a1",
+    "#fab387",
+    "#f9e2af",
+    "#f38ba8",
+    "#94e2d5",
+    "#b4befe",
+    "#eba0ac",
+    "#74c7ec",
+)
+
+
+def _document_map_spec(
+    color_title: str, domain: Sequence[str], palette: Sequence[str]
+) -> dict[str, Any]:
+    """The Vega-Lite spec for the document map (hover + pan/zoom)."""
+    return {
+        "mark": {"type": "circle", "stroke": "#1e1e2e", "strokeWidth": 0.3},
+        "encoding": {
+            "x": {"field": "x", "type": "quantitative", "axis": None},
+            "y": {"field": "y", "type": "quantitative", "axis": None},
+            "color": {
+                "field": "group",
+                "type": "nominal",
+                "scale": {"domain": list(domain), "range": list(palette)},
+                "legend": {"title": color_title},
+            },
+            "size": {"value": 32},
+            "opacity": {"value": 0.55},
+            "tooltip": [
+                {"field": "celex", "type": "nominal", "title": "CELEX"},
+                {"field": "document", "type": "nominal", "title": "title"},
+                {"field": "type", "type": "nominal", "title": "document type"},
+                {"field": "group", "type": "nominal", "title": color_title},
+                {"field": "n_gold", "type": "quantitative", "title": "gold labels"},
+                {"field": "n_unseen", "type": "quantitative", "title": "unseen gold labels"},
+            ],
+        },
+        "params": [{"name": "zoom_pan", "select": "interval", "bind": "scales"}],
+        "config": {"view": {"stroke": None}},
+    }
+
+
+def document_map_page(
+    dataset: ev.Dataset,
+    report: ev.GuardReport,
+    *,
+    source_args: tuple[str, str, str, str, str, str],
+) -> None:
+    """The dev-document map: lexical TF-IDF or cached MiniLM, colour overlays."""
+    st.markdown('<span class="ex-kicker">document map</span>', unsafe_allow_html=True)
+    st.subheader("The 6,000 dev documents, placed by their full text")
+    st.markdown(
+        "Each point is one **dev document**. The two representations are "
+        "**lexical** (the track's TF-IDF fitted on the train documents, then "
+        "TruncatedSVD and UMAP) and **MiniLM** (the cached full-text vectors, "
+        "then UMAP). Neither projection uses a label; the colour is a separate "
+        "overlay chosen below. Lexical neighbours share words and register; "
+        "MiniLM neighbours are close in the frozen embedding space."
+    )
+    dev_counts: Counter[str] = Counter()
+    for gold in dataset.gold:
+        for column in gold:
+            dev_counts[dataset.labels[int(column)]] += 1
+    default_gold = dev_counts.most_common(1)[0][0] if dev_counts else dataset.labels[0]
+    controls = st.columns([2, 2])
+    with controls[0]:
+        representation = st.radio(
+            "representation",
+            DOCUMENT_MAP_REPRESENTATIONS,
+            horizontal=True,
+            key="d_repr",
+        )
+    with controls[1]:
+        color_by = st.selectbox(
+            "colour by",
+            ["document type", "family_new", "gold label"],
+            key="d_color",
+        )
+        selected_label = None
+        if color_by == "gold label":
+            options = [
+                f"{ev.label_title(dataset, label_id)} · {label_id}" for label_id in dataset.labels
+            ]
+            choice = st.selectbox(
+                "gold label",
+                options,
+                index=dataset.label_index[default_gold],
+                key="d_label",
+            )
+            selected_label = dataset.labels[options.index(choice)]
+    map_representation = "tfidf" if representation.startswith("lexical") else "minilm"
+    try:
+        document_map = compute_document_map(*source_args, map_representation)
+    except (ev.MissingVectorError, FileNotFoundError, ValueError, KeyError) as exc:
+        st.error(f"the viewer could not build the document map: {exc}")
+        st.stop()
+
+    family_new = ev.family_new_mask(dataset)
+    if color_by == "document type":
+        groups = [doc.document_type or "unknown" for doc in dataset.dev]
+        domain = sorted(set(groups))
+        palette = [
+            DOCUMENT_TYPE_PALETTE[index % len(DOCUMENT_TYPE_PALETTE)]
+            for index in range(len(domain))
+        ]
+        color_title = "document type"
+    elif color_by == "family_new":
+        groups = ["family_new" if is_new else "family_seen" for is_new in family_new]
+        domain = ["family_new", "family_seen"]
+        palette = ["#f38ba8", "#89b4fa"]
+        color_title = "dev document family"
+    else:
+        assert selected_label is not None
+        column = dataset.label_index[selected_label]
+        groups = [
+            "carries the label" if column in gold else "does not carry it" for gold in dataset.gold
+        ]
+        domain = ["carries the label", "does not carry it"]
+        palette = ["#f9e2af", "#45475a"]
+        color_title = f"gold: {ev.label_title(dataset, selected_label)}"
+    points = []
+    for row, doc in enumerate(dataset.dev):
+        gold = dataset.gold[row]
+        points.append(
+            {
+                "x": float(document_map.coordinates[row, 0]),
+                "y": float(document_map.coordinates[row, 1]),
+                "celex": doc.celex_id,
+                "document": doc.title.strip(),
+                "type": doc.document_type,
+                "group": groups[row],
+                "n_gold": len(gold),
+                "n_unseen": sum(
+                    1
+                    for gold_column in gold
+                    if dataset.bucket.get(dataset.labels[int(gold_column)]) == "unseen"
+                ),
+            }
+        )
+    st.vega_lite_chart(
+        points,
+        spec=_document_map_spec(color_title, domain, palette),
+        height=600,
+        width="stretch",
+        alt=(
+            "A 2-D map of 6,000 EURLEX dev documents placed by their full-text "
+            f"representation ({representation}), coloured by {color_title}."
+        ),
+    )
+    if map_representation == "tfidf":
+        reading = (
+            "Lexical view: nearby documents share words, templates and legal "
+            "register — not necessarily topic. The TF-IDF and SVD are fitted on "
+            "the train documents only; dev is transformed."
+        )
+    else:
+        reading = (
+            "Semantic view: nearby documents are close in the frozen MiniLM "
+            "embedding of the full text."
+        )
+    st.caption(
+        f"{document_map.method}: {document_map.note} · {len(dataset.dev):,} dev "
+        f"documents · colour: {color_title}. {reading} The axes are arbitrary; "
+        "only neighbourhoods are meaningful. Hover a point for its CELEX id, "
+        "title, type and gold counts; drag to pan and scroll to zoom."
+    )
+    type_count = len({doc.document_type or "unknown" for doc in dataset.dev})
+    metrics = st.columns(4)
+    metrics[0].metric("dev documents", f"{len(dataset.dev):,}")
+    metrics[1].metric("document types", f"{type_count:,}")
+    metrics[2].metric("family_new documents", f"{int(family_new.sum()):,}")
+    if selected_label is None:
+        metrics[3].metric("gold assignments", f"{sum(len(gold) for gold in dataset.gold):,}")
+    else:
+        metrics[3].metric(
+            "carrying the colour label",
+            f"{dev_counts.get(selected_label, 0):,}",
+        )
     _provenance(report)
 
 
@@ -1402,6 +1608,12 @@ def main() -> None:
             ranking,
             report,
             seed=seed,
+            source_args=source_args,
+        )
+    elif page == "Document map":
+        document_map_page(
+            dataset,
+            report,
             source_args=source_args,
         )
     elif page == "Methods":

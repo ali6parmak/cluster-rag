@@ -563,3 +563,11 @@ def test_label_neighbours_can_be_restricted_to_eligible_labels(ev: Any) -> None:
     assert [row.label for row in rows] == ["B"]
     with pytest.raises(ValueError, match="no vector in this representation"):
         ev.label_neighbours(dataset, vectors, "C", eligible={"A", "B"})
+
+
+def test_the_document_map_rejects_an_unknown_representation(ev: Any, tmp_path: Path) -> None:
+    """The map's representation is an explicit choice, never a fallback."""
+    dataset = _dataset(ev)
+    sources = _sources(ev, tmp_path)
+    with pytest.raises(ValueError, match="unknown document-map representation"):
+        ev.document_map(dataset, sources, representation="bag-of-words")
