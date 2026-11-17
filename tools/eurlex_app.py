@@ -30,6 +30,7 @@ environment variables.
 from __future__ import annotations
 
 import html as html_lib
+import math
 import os
 import sys
 from collections.abc import Iterable, Sequence
@@ -175,6 +176,24 @@ def compute_label_map(
     """Project the label vectors (UMAP when available, PCA fallback)."""
     vectors = load_label_cache(results, cache, data_dir, catalog, ranking_path, model_id, variant)
     return ev.label_map(vectors)
+
+
+@st.cache_data(show_spinner="centroiding the label documents and projecting the evidence map…")
+def compute_evidence_map(
+    results: str,
+    cache: str,
+    data_dir: str,
+    catalog: str,
+    ranking_path: str,
+    model_id: str,
+    seed_key: int,
+) -> ev.EvidenceLabelMap:
+    """Project the label-evidence centroids (0 = the full train split)."""
+    sources, dataset, _, _ = load_artifacts(
+        results, cache, data_dir, catalog, ranking_path, model_id
+    )
+    seed = None if seed_key == 0 else int(seed_key)
+    return ev.label_evidence_map(dataset, sources, seed=seed)
 
 
 # --- HTML helpers -----------------------------------------------------------
@@ -843,7 +862,7 @@ def methods_page(rows: Sequence[ev.MetricRow], report: ev.GuardReport) -> None:
 LABEL_MAP_STATUSES = ("seen in this seed", "unseen in this seed", "selected label")
 
 
-def _label_map_spec(seed: int) -> dict[str, Any]:
+def _label_map_spec(seed: int, *, support_title: str = "train support") -> dict[str, Any]:
     """The Vega-Lite spec: hoverable label points, one zoomable mark layer."""
     points_layer: dict[str, Any] = {
         "mark": {"type": "circle", "stroke": "#1e1e2e", "strokeWidth": 0.4},
@@ -871,7 +890,7 @@ def _label_map_spec(seed: int) -> dict[str, Any]:
                 {"field": "label", "type": "nominal", "title": "label"},
                 {"field": "id", "type": "nominal", "title": "id"},
                 {"field": "bucket", "type": "nominal", "title": "bucket"},
-                {"field": "support", "type": "quantitative", "title": "train support"},
+                {"field": "support", "type": "quantitative", "title": support_title},
                 {"field": "status", "type": "nominal", "title": f"seed {seed}"},
             ],
         },
@@ -884,6 +903,9 @@ def _label_map_spec(seed: int) -> dict[str, Any]:
     return points_layer
 
 
+REPRESENTATIONS = ("label text", "train evidence", "seed evidence")
+
+
 def label_map_page(
     sources: ev.Sources,
     dataset: ev.Dataset,
@@ -892,105 +914,195 @@ def label_map_page(
     seed: int,
     source_args: tuple[str, str, str, str, str, str],
 ) -> None:
-    """The label-catalogue map, the selected label's card and its neighbours."""
+    """The label map: names or document evidence, the label card and neighbours."""
     st.markdown('<span class="ex-kicker">label map</span>', unsafe_allow_html=True)
-    st.subheader("The 4,197-label catalogue, placed by label text")
+    st.subheader("The label catalogue, placed by names or by its documents")
     st.markdown(
-        "Each point is **one EUROVOC label** — a topic tag such as *milk* or "
-        "*foreign trade* — placed by the similarity of its **label text** "
-        "(title, or title + parent names). The layout never uses a document or "
-        "a gold label. The colour is an overlay from the chosen TC-21 seed: "
-        "**seen** = the label occurs in at least one of the 240 sampled train "
-        "documents, **unseen** = it occurs in none. Use it to see where the "
-        "label-space holes are, not where documents are."
+        "Each point is **one EUROVOC label**. **label text** places all 4,197 "
+        "labels by their title (or title + parent names). **train evidence** "
+        "places the labels that have at least one train document by the mean "
+        "`full_text` embedding of those documents. **seed evidence** does the "
+        "same with only the seed's 240 documents. The colour is always the "
+        "seed's seen/unseen overlay; a label with no document in the chosen "
+        "representation is not plotted (switch to label text to see it)."
     )
-    controls = st.columns([1, 2])
+    controls = st.columns([2, 2])
     with controls[0]:
-        variant = st.radio(
-            "label text",
-            ["title + parents", "title"],
+        representation = st.radio(
+            "representation",
+            REPRESENTATIONS,
             horizontal=True,
-            key="l_variant",
+            key="l_repr",
         )
-    with controls[1]:
-        options = [f"{ev.label_title(dataset, label)} · {label}" for label in dataset.labels]
-        unseen_preview = ev.seed_sample(seed, n_sources=len(dataset.train))
-        seen_preview = {label for row in unseen_preview for label in dataset.train[int(row)].labels}
-        default_label = next(
-            (label for label in dataset.labels if label not in seen_preview),
-            dataset.labels[0],
-        )
-        choice = st.selectbox(
-            "pick a label (search by title or id) — it becomes the yellow point",
-            options,
-            index=dataset.label_index[default_label],
-            key="l_label",
-        )
-    variant_key = "title_parents" if variant == "title + parents" else "title"
-    label = dataset.labels[options.index(choice)]
-    try:
-        vectors = load_label_cache(*source_args, variant_key)
-        label_map = compute_label_map(*source_args, variant_key)
-    except (ev.MissingVectorError, FileNotFoundError, ValueError, KeyError) as exc:
-        st.error(f"the viewer could not read the label cache: {exc}")
-        st.stop()
+        if representation == "label text":
+            variant = st.radio(
+                "label text",
+                ["title + parents", "title"],
+                horizontal=True,
+                key="l_variant",
+            )
+        else:
+            variant = "title + parents"
     sample = ev.seed_sample(seed, n_sources=len(dataset.train))
     seen = {label_id for row in sample for label_id in dataset.train[int(row)].labels}
     unseen_labels = [label_id for label_id in dataset.labels if label_id not in seen]
-    points = [
-        {
-            "x": float(label_map.coordinates[index, 0]),
-            "y": float(label_map.coordinates[index, 1]),
-            "label": ev.label_title(dataset, label_id),
-            "id": label_id,
-            "bucket": dataset.bucket.get(label_id, "unseen"),
-            "support": int(dataset.support.get(label_id, 0)),
-            "status": (
-                "selected label"
-                if label_id == label
-                else ("unseen in this seed" if label_id not in seen else "seen in this seed")
+    try:
+        if representation == "label text":
+            variant_key = "title_parents" if variant == "title + parents" else "title"
+            source_vectors = load_label_cache(*source_args, variant_key)
+            projection = compute_label_map(*source_args, variant_key)
+            coordinates = projection.coordinates
+            support_values = [int(dataset.support.get(label_id, 0)) for label_id in dataset.labels]
+            has_point = [True] * len(dataset.labels)
+            eligible = None
+            method, note = projection.method, projection.note
+            support_title = "train support"
+            table_title = "Nearest labels by label-text cosine"
+            table_note = (
+                "The exact cosines behind the map's neighbourhood; `seen` is "
+                "the same seed overlay as the point colour."
+            )
+            no_evidence = 0
+        else:
+            seed_key = 0 if representation == "train evidence" else seed
+            evidence = compute_evidence_map(*source_args, seed_key)
+            source_vectors = evidence.vectors
+            coordinates = evidence.coordinates
+            support_values = [int(value) for value in evidence.support]
+            has_point = [bool(value) for value in evidence.has_evidence]
+            eligible = {
+                label_id
+                for label_id, plotted in zip(dataset.labels, has_point, strict=True)
+                if plotted
+            }
+            method, note = evidence.method, evidence.note
+            support_title = (
+                "train documents" if representation == "train evidence" else "seed documents"
+            )
+            table_title = "Nearest labels by document-evidence cosine"
+            table_note = (
+                "The exact cosines between the labels' mean document vectors; "
+                "`seen` is the same seed overlay as the point colour."
+            )
+            no_evidence = len(dataset.labels) - len(eligible)
+    except (ev.MissingVectorError, FileNotFoundError, ValueError, KeyError) as exc:
+        st.error(f"the viewer could not build this map: {exc}")
+        st.stop()
+
+    if representation == "label text":
+        default_label = next(
+            (label_id for label_id in dataset.labels if label_id not in seen),
+            dataset.labels[0],
+        )
+    elif representation == "train evidence":
+        default_label = next(
+            (
+                label_id
+                for label_id in dataset.labels
+                if label_id in (eligible or ()) and label_id not in seen
             ),
-        }
-        for index, label_id in enumerate(dataset.labels)
-    ]
+            next(label_id for label_id in dataset.labels if label_id in (eligible or ())),
+        )
+    else:
+        default_label = next(
+            (
+                label_id
+                for label_id in dataset.labels
+                if label_id in (eligible or ()) and label_id in seen
+            ),
+            next(label_id for label_id in dataset.labels if label_id in (eligible or ())),
+        )
+    options = [f"{ev.label_title(dataset, label_id)} · {label_id}" for label_id in dataset.labels]
+    default_choice = options[dataset.label_index[default_label]]
+    map_key = (
+        representation,
+        seed if representation == "seed evidence" else 0,
+    )
+    if st.session_state.get("l_map_key") != map_key:
+        st.session_state["l_map_key"] = map_key
+        st.session_state["l_label"] = default_choice
+    with controls[1]:
+        choice = st.selectbox(
+            "pick a label (search by title or id) — it becomes the yellow point",
+            options,
+            key="l_label",
+        )
+    label = dataset.labels[options.index(choice)]
+    label_has_point = has_point[dataset.label_index[label]]
+
+    points = []
+    for index, label_id in enumerate(dataset.labels):
+        x = float(coordinates[index, 0])
+        y = float(coordinates[index, 1])
+        if math.isnan(x) or math.isnan(y):
+            continue
+        points.append(
+            {
+                "x": x,
+                "y": y,
+                "label": ev.label_title(dataset, label_id),
+                "id": label_id,
+                "bucket": dataset.bucket.get(label_id, "unseen"),
+                "support": support_values[index],
+                "status": (
+                    "selected label"
+                    if label_has_point and label_id == label
+                    else ("unseen in this seed" if label_id not in seen else "seen in this seed")
+                ),
+            }
+        )
     # draw the selected point last so a close neighbour never covers it
     points.sort(key=lambda point: point["status"] == "selected label")
     st.vega_lite_chart(
         points,
-        spec=_label_map_spec(seed),
+        spec=_label_map_spec(seed, support_title=support_title),
         height=560,
         width="stretch",
         alt=(
-            "A 2-D map of the 4,197 EUROVOC labels placed by their label-text "
-            "embeddings; the selected label is highlighted in yellow and the "
-            "unseen labels in red."
+            f"A 2-D map of the EUROVOC labels placed by {representation}; the "
+            "selected label is highlighted in yellow and the unseen labels in red."
         ),
     )
-    st.caption(
-        f"{label_map.method}: {label_map.note} · {len(dataset.labels):,} labels · "
-        f"{len(seen):,} seen, {len(unseen_labels):,} unseen in seed {seed}. "
-        "The axes are arbitrary; only the neighbourhoods are meaningful (and "
-        "the UMAP view approximates the exact cosines in the table below). "
-        "Hover a point for its label, id, bucket and train support; drag to pan "
-        "and scroll to zoom."
+    extra = (
+        f" · {no_evidence:,} labels have no document in this representation" if no_evidence else ""
     )
-    st.caption(f"Selected: **{ev.label_title(dataset, label)}** (`{label}`) — the yellow point.")
-    parentless = sum(1 for label_id in dataset.labels if not dataset.catalog[label_id].parents)
+    st.caption(
+        f"{method}: {note} · {len(points):,} labels on the map · "
+        f"{len(seen):,} seen, {len(unseen_labels):,} unseen in seed {seed}{extra}. "
+        "The axes are arbitrary; only the neighbourhoods are meaningful (and "
+        "the projection approximates the exact cosines in the table below). "
+        "Hover a point for its label, id, bucket and support; drag to pan and "
+        "scroll to zoom."
+    )
+    if label_has_point:
+        st.caption(
+            f"Selected: **{ev.label_title(dataset, label)}** (`{label}`) — the yellow point."
+        )
+    else:
+        st.warning(
+            f"**{ev.label_title(dataset, label)}** (`{label}`) has no document "
+            f"in the {representation} view, so it is not on the map. Switch to "
+            "**label text** to see it; its label card is below."
+        )
     metrics = st.columns(4)
-    metrics[0].metric("labels", f"{len(dataset.labels):,}")
+    metrics[0].metric("labels on map", f"{len(points):,}")
     metrics[1].metric("seen in this seed", f"{len(seen):,}")
     metrics[2].metric("unseen in this seed", f"{len(unseen_labels):,}")
-    metrics[3].metric("parentless labels", f"{parentless:,}")
+    metrics[3].metric("no evidence", f"{no_evidence:,}")
 
     entry = dataset.catalog[label]
     tag = ev.label_tag(dataset, label)
-    neighbours = ev.label_neighbours(dataset, vectors, label, k=10, seen=seen)
     cards = st.columns(2)
     with cards[0]:
         st.markdown(f"### {_esc(tag.title)}")
         st.caption(
             f"label `{label}` · {tag.bucket} · train support {tag.support} · "
             + ("unseen in this seed" if label not in seen else "seen in this seed")
+            + (
+                f" · {support_values[dataset.label_index[label]]} documents in this representation"
+                if representation != "label text"
+                else ""
+            )
         )
         details = [
             ["parents", " · ".join(tag.parent_names) or "—"],
@@ -1001,38 +1113,58 @@ def label_map_page(
             ["definition", tag.definition or "—"],
             ["definition kind", tag.definition_kind or "—"],
             ["catalogue name", entry.name],
-            ["label text", ev.label_text(dataset, label, variant_key)],
+            ["label text", ev.label_text(dataset, label, "title_parents")],
         ]
+        if representation != "label text":
+            details.insert(
+                1,
+                [
+                    "documents in this representation",
+                    f"{support_values[dataset.label_index[label]]}",
+                ],
+            )
         st.markdown(
             _table(("field", "value"), details, aligns=("left", "left")),
             unsafe_allow_html=True,
         )
     with cards[1]:
-        st.markdown("### Nearest labels by label-text cosine")
-        st.caption(
-            "The exact cosines behind the map's neighbourhood; `seen` is the "
-            "same seed overlay as the point colour."
-        )
-        neighbour_rows = [
-            [
-                f'<span class="ev-rank">{row.rank}</span>',
-                _label_cell(row.label, row.title),
-                f'<span class="ev-chip ev-chip-score">{row.cosine:.3f}</span>',
-                _bucket_badge(row.bucket),
-                _badge("seen", "muted") if row.seen else _badge("unseen", "unseen"),
-                f'<span class="ev-rank">{row.n_dev_gold}</span>',
+        st.markdown(f"### {table_title}")
+        st.caption(table_note)
+        if label_has_point:
+            neighbours = ev.label_neighbours(
+                dataset,
+                source_vectors,
+                label,
+                k=10,
+                seen=seen,
+                eligible=eligible,
+            )
+            neighbour_rows = [
+                [
+                    f'<span class="ev-rank">{row.rank}</span>',
+                    _label_cell(row.label, row.title),
+                    f'<span class="ev-chip ev-chip-score">{row.cosine:.3f}</span>',
+                    _bucket_badge(row.bucket),
+                    _badge("seen", "muted") if row.seen else _badge("unseen", "unseen"),
+                    f'<span class="ev-rank">{row.n_dev_gold}</span>',
+                ]
+                for row in neighbours
             ]
-            for row in neighbours
-        ]
-        st.markdown(
-            _table(
-                ("#", "label", "cosine", "bucket", "in seed", "dev gold docs"),
-                neighbour_rows,
-                aligns=("right", "left", "right", "center", "center", "right"),
-                compact=True,
-            ),
-            unsafe_allow_html=True,
-        )
+            st.markdown(
+                _table(
+                    ("#", "label", "cosine", "bucket", "in seed", "dev gold docs"),
+                    neighbour_rows,
+                    aligns=("right", "left", "right", "center", "center", "right"),
+                    compact=True,
+                ),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info(
+                "No neighbour table: this label has no document in the chosen "
+                "representation. Switch to **label text** for its name-space "
+                "neighbours."
+            )
     hits = [
         row
         for row, doc in enumerate(dataset.dev)

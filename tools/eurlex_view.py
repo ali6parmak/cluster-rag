@@ -1974,11 +1974,12 @@ def label_neighbours(
     *,
     k: int = TOP_K,
     seen: Collection[str] | None = None,
+    eligible: Collection[str] | None = None,
 ) -> tuple[LabelNeighbourRow, ...]:
-    """The nearest labels to one label in the cached label-text space.
+    """The nearest labels to one label in a label-vector space.
 
-    The cosine is the same dot product the TC-21 label-text arms use; the
-    projection on the map is only an approximation of these neighbours.
+    The cosine is the same dot product the track uses; the projection on the
+    map is only an approximation of these neighbours.
 
     Args:
         dataset: The loaded dataset (for titles, buckets, dev support).
@@ -1986,10 +1987,13 @@ def label_neighbours(
         label: The selected label id.
         k: The number of neighbours.
         seen: The seed's seen label ids (for the ``seen`` flag).
+        eligible: The labels that have a vector in this representation (the
+            evidence maps skip the labels with no train document).
 
     Raises:
         KeyError: If the label is not in the label space.
-        ValueError: If the vectors do not have one row per label.
+        ValueError: If the vectors do not have one row per label, or if the
+            selected label is not eligible.
     """
     if label not in dataset.label_index:
         raise KeyError(f"label {label!r} is not in the label space")
@@ -1998,6 +2002,9 @@ def label_neighbours(
         raise ValueError(
             f"the label vectors have {vectors.shape[0]} rows, the label space {len(dataset.labels)}"
         )
+    eligible_set = None if eligible is None else set(eligible)
+    if eligible_set is not None and label not in eligible_set:
+        raise ValueError(f"label {label!r} has no vector in this representation")
     column = dataset.label_index[label]
     scores = vectors @ vectors[column]
     order = np.argsort(-scores, kind="stable")
@@ -2011,6 +2018,8 @@ def label_neighbours(
         if int(candidate) == column:
             continue
         neighbour = dataset.labels[int(candidate)]
+        if eligible_set is not None and neighbour not in eligible_set:
+            continue
         rows.append(
             LabelNeighbourRow(
                 rank=len(rows) + 1,
@@ -2080,6 +2089,161 @@ def label_map(
         coordinates=np.asarray(coordinates, dtype=np.float64),
         method="UMAP",
         note="UMAP of the cached MiniLM label vectors (cosine metric).",
+    )
+
+
+# --- the label-evidence map -------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LabelEvidence:
+    """The document-evidence centroid of every label.
+
+    Attributes:
+        vectors: The ``(n_labels, d)`` centroids; a label with no document in
+            the representation has a zero row.
+        support: The number of documents carrying each label.
+        has_evidence: Whether a label has at least one document.
+    """
+
+    vectors: np.ndarray
+    support: np.ndarray
+    has_evidence: np.ndarray
+
+
+def label_evidence_centroids(
+    dataset: Dataset,
+    sources: Sources | None = None,
+    *,
+    seed: int | None = None,
+    vectors: np.ndarray | None = None,
+) -> LabelEvidence:
+    """Average the cached document vectors carrying each label.
+
+    The labels are used only to group the train documents; no model is fitted.
+    With ``seed=None`` the full 45,000-document train split is read; with a
+    seed, only that seed's 240 rows are read (TC-21's rule).
+
+    Args:
+        dataset: The loaded dataset.
+        sources: The resolved sources (needed when ``vectors`` is not given).
+        seed: ``None`` for the full train split; a TC-21 seed for the 240.
+        vectors: Preloaded document vectors, row-aligned with the chosen rows.
+
+    Returns:
+        The unit-norm centroids, their support counts and the evidence mask.
+
+    Raises:
+        ValueError: On a vector shape mismatch or a zero-length centroid.
+    """
+    if seed is None:
+        rows = tuple(range(len(dataset.train)))
+    else:
+        rows = tuple(int(row) for row in seed_sample(seed, n_sources=len(dataset.train)))
+    if vectors is None:
+        if sources is None:
+            raise ValueError("label_evidence_centroids needs sources or vectors")
+        docs = tuple(dataset.train[row] for row in rows)
+        vectors = load_document_vectors(sources, docs)
+    matrix = np.asarray(vectors, dtype=np.float32)
+    if matrix.shape[0] != len(rows):
+        raise ValueError(
+            f"the document vectors have {matrix.shape[0]} rows, the selected corpus {len(rows)}"
+        )
+    n_labels = len(dataset.labels)
+    sums = np.zeros((n_labels, matrix.shape[1]), dtype=np.float64)
+    counts = np.zeros(n_labels, dtype=np.int64)
+    for offset, row in enumerate(rows):
+        for column in dataset.train_gold[row]:
+            sums[int(column)] += matrix[offset]
+            counts[int(column)] += 1
+    has_evidence = counts > 0
+    centroids = np.zeros((n_labels, matrix.shape[1]), dtype=np.float32)
+    if has_evidence.any():
+        centroids[has_evidence] = (sums[has_evidence] / counts[has_evidence, None]).astype(
+            np.float32
+        )
+        norms = np.linalg.norm(centroids[has_evidence], axis=1)
+        if np.any(norms == 0.0):
+            raise ValueError("a label's evidence centroid is a zero vector")
+        centroids[has_evidence] = centroids[has_evidence] / norms[:, None]
+    return LabelEvidence(
+        vectors=centroids,
+        support=counts,
+        has_evidence=has_evidence,
+    )
+
+
+@dataclass(frozen=True)
+class EvidenceLabelMap:
+    """A 2-D projection of the label-evidence centroids.
+
+    Attributes:
+        coordinates: ``(n_labels, 2)`` coordinates; NaN for a label with no
+            document in the representation.
+        vectors: The ``(n_labels, d)`` unit-norm centroids (zero rows for labels
+            with no document).
+        method: ``UMAP`` or ``PCA``.
+        note: One line saying exactly what was projected.
+        support: The number of documents carrying each label.
+        has_evidence: Whether a label has at least one document.
+    """
+
+    coordinates: np.ndarray
+    vectors: np.ndarray
+    method: str
+    note: str
+    support: np.ndarray
+    has_evidence: np.ndarray
+
+
+def label_evidence_map(
+    dataset: Dataset,
+    sources: Sources | None = None,
+    *,
+    seed: int | None = None,
+    vectors: np.ndarray | None = None,
+    random_state: int = DEFAULT_SEED,
+    n_neighbors: int = 15,
+    min_dist: float = 0.1,
+) -> EvidenceLabelMap:
+    """Project the label-evidence centroids to 2-D (UMAP, PCA fallback)."""
+    evidence = label_evidence_centroids(
+        dataset,
+        sources,
+        seed=seed,
+        vectors=vectors,
+    )
+    indices = np.flatnonzero(evidence.has_evidence)
+    if len(indices) == 0:
+        raise ValueError("no label has a document in this representation")
+    projection = label_map(
+        evidence.vectors[indices],
+        random_state=random_state,
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+    )
+    coordinates = np.full((len(dataset.labels), 2), np.nan, dtype=np.float64)
+    coordinates[indices] = projection.coordinates
+    scope = (
+        "the full 45,000-document train split"
+        if seed is None
+        else f"the seed {seed} 240-document sample"
+    )
+    if projection.method == "UMAP":
+        note = f"UMAP of the mean full-text embeddings of {scope} (cosine metric)."
+    else:
+        note = (
+            "umap-learn is not installed in this environment; PCA of the mean "
+            f"full-text embeddings of {scope} is shown instead."
+        )
+    return EvidenceLabelMap(
+        coordinates=coordinates,
+        vectors=evidence.vectors,
+        method=projection.method,
+        note=note,
+        support=evidence.support,
+        has_evidence=evidence.has_evidence,
     )
 
 

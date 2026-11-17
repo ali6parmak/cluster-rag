@@ -535,3 +535,31 @@ def test_label_neighbours_are_the_exact_cosines(ev: Any) -> None:
     assert rows[1].seen is True
     with pytest.raises(KeyError, match="not in the label space"):
         ev.label_neighbours(dataset, vectors, "Z")
+
+
+def test_label_evidence_centroids_average_the_documents(ev: Any) -> None:
+    """A's centroid is the normalized mean of train-1 and train-3; D has none."""
+    dataset = _dataset(ev)
+    vectors = np.asarray(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.8, 0.6, 0.0]],
+        dtype=np.float32,
+    )
+    evidence = ev.label_evidence_centroids(dataset, vectors=vectors)
+    assert evidence.support.tolist() == [2, 1, 1, 0]
+    assert evidence.has_evidence.tolist() == [True, True, True, False]
+    assert evidence.vectors[0].tolist() == pytest.approx([0.948683, 0.316228, 0.0])
+    assert np.linalg.norm(evidence.vectors[0]) == pytest.approx(1.0)
+    assert evidence.vectors[3].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_label_neighbours_can_be_restricted_to_eligible_labels(ev: Any) -> None:
+    """The evidence map only ranks labels that have a centroid."""
+    dataset = _dataset(ev)
+    vectors = np.asarray(
+        [[1.0, 0.0, 0.0], [0.8, 0.6, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    rows = ev.label_neighbours(dataset, vectors, "A", k=3, seen={"A"}, eligible={"A", "B"})
+    assert [row.label for row in rows] == ["B"]
+    with pytest.raises(ValueError, match="no vector in this representation"):
+        ev.label_neighbours(dataset, vectors, "C", eligible={"A", "B"})
