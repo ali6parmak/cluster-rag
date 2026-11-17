@@ -236,7 +236,6 @@ def _table(
     aligns: Sequence[str] | None = None,
     compact: bool = False,
     empty: str = "no rows",
-    wrap_class: str = "",
 ) -> str:
     """A read-only, escaped table (the cells are trusted HTML fragments)."""
     body_rows = list(rows)
@@ -256,9 +255,8 @@ def _table(
     if not body:
         body = f'<tr><td class="ev-empty" colspan="{len(headers)}">{_esc(empty)}</td></tr>'
     css = "ev-table compact" if compact else "ev-table"
-    wrap = "ev-table-wrap" + (f" {wrap_class}" if wrap_class else "")
     return (
-        f'<div class="{wrap}"><table class="{css}">'
+        f'<div class="ev-table-wrap"><table class="{css}">'
         f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
     )
 
@@ -302,8 +300,8 @@ def _provenance(report: ev.GuardReport) -> None:
 def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> str:
     """One neighbour list as a table (shared labels are green).
 
-    The title and the document text are visually clipped; hovering the cell
-    opens a CSS tooltip with the full value (no native ``title`` tooltip).
+    The title and the document text use the error viewer's ``ev-text`` rule:
+    one clipped line, and the full text expands **in place** on hover.
     """
     body = []
     for row in rows:
@@ -325,16 +323,10 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
             or '<span class="ev-muted">—</span>'
         )
         title_cell = (
-            '<span class="ex-hover">'
-            f'<span class="ex-hover-clip ex-hover-title">{_esc(_snippet(row.title, 70))}</span>'
-            f'<span class="ex-tooltip">{_esc(row.title)}</span></span>'
+            f'<span class="ev-text ex-text-title">{_esc(row.title.strip())}</span>'
             f'<span class="ev-id"> · {_esc(row.doc_id)}</span>'
         )
-        text_cell = (
-            '<span class="ex-hover">'
-            f'<span class="ex-hover-clip ex-hover-text">{_esc(_snippet(row.text, 220))}</span>'
-            f'<span class="ex-tooltip">{_esc(row.text)}</span></span>'
-        )
+        text_cell = f'<span class="ev-text">{_esc(" ".join(row.text.split()))}</span>'
         body.append(
             [
                 f'<span class="ev-rank">{row.rank}</span>',
@@ -349,7 +341,7 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
         (
             "#",
             "train document",
-            "document text (hover for all)",
+            "document text (hover to expand)",
             "cosine",
             "its gold labels",
             "shared with the document",
@@ -357,7 +349,6 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
         body,
         aligns=("right", "left", "left", "right", "left", "left"),
         compact=True,
-        wrap_class="ex-free",
     )
 
 
@@ -585,8 +576,8 @@ def one_document_page(
     st.caption(
         "TF-IDF (word 1–2 grams) cosine over the chosen index, then the cached "
         "MiniLM whole-document cosine. Both read the same `full_text` the "
-        "track's runs used. Hover a clipped document title or text cell to see "
-        "the full value."
+        "track's runs used. Hover a clipped document title or text to extend it "
+        "in place."
     )
     st.markdown("**lexical TF-IDF neighbours**")
     st.markdown(_neighbour_table(view.lexical, dataset), unsafe_allow_html=True)
