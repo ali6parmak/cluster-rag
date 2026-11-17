@@ -143,21 +143,32 @@ a { color: var(--ctp-blue); }
   max-height: none; overflow: visible; box-shadow: 0 2px 0 rgba(17, 17, 27, 0.5);
 }
 
-/* clipped table cells: the full value is in the title tooltip */
-.ex-clip {
+/* neighbour tables: let the hover tooltip escape the table box */
+.ev-table-wrap.ex-free { overflow: visible; max-height: none; }
+
+/* clipped cells + a CSS tooltip on hover (no native title attribute) */
+.ex-hover {
+  position: relative; display: inline-block; vertical-align: middle;
+  max-width: 100%;
+}
+.ex-hover-clip {
   display: inline-block; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; vertical-align: middle; cursor: help;
 }
-.ex-clip-title { max-width: 22rem; }
-.ex-neighbour-text {
-  display: inline-block; max-width: 40rem; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; vertical-align: middle; cursor: help;
-  color: var(--ctp-subtext0); font-size: 0.8rem;
-  border-bottom: 1px dotted var(--ctp-overlay0);
+.ex-hover-title { max-width: 22rem; }
+.ex-hover-text { max-width: 40rem; color: var(--ctp-subtext0); font-size: 0.8rem; }
+.ex-hover:hover .ex-hover-title,
+.ex-hover:hover .ex-hover-text { color: var(--ctp-text); }
+.ex-tooltip {
+  display: none; position: absolute; left: 0; top: calc(100% + 0.45rem);
+  z-index: 1000; width: max-content; max-width: min(56vw, 44rem);
+  max-height: 24rem; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; background: var(--ctp-crust); color: var(--ctp-text);
+  border: 1px solid var(--ctp-surface1); border-radius: 0.55rem;
+  padding: 0.8rem 1rem; box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.6);
+  font-size: 0.84rem; line-height: 1.5; font-weight: 400; text-align: left;
 }
-.ex-neighbour-text:hover, .ex-clip-title:hover {
-  color: var(--ctp-text); border-bottom-color: var(--ctp-blue);
-}
+.ex-hover:hover .ex-tooltip { display: block; }
 
 /* presenter: larger text, no sidebar (the app toggles the style block) */
 .ex-presenter .block-container { max-width: 1550px; padding-top: 1.1rem; }

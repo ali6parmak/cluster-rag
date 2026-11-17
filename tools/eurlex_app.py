@@ -236,6 +236,7 @@ def _table(
     aligns: Sequence[str] | None = None,
     compact: bool = False,
     empty: str = "no rows",
+    wrap_class: str = "",
 ) -> str:
     """A read-only, escaped table (the cells are trusted HTML fragments)."""
     body_rows = list(rows)
@@ -255,8 +256,9 @@ def _table(
     if not body:
         body = f'<tr><td class="ev-empty" colspan="{len(headers)}">{_esc(empty)}</td></tr>'
     css = "ev-table compact" if compact else "ev-table"
+    wrap = "ev-table-wrap" + (f" {wrap_class}" if wrap_class else "")
     return (
-        f'<div class="ev-table-wrap"><table class="{css}">'
+        f'<div class="{wrap}"><table class="{css}">'
         f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
     )
 
@@ -300,8 +302,8 @@ def _provenance(report: ev.GuardReport) -> None:
 def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> str:
     """One neighbour list as a table (shared labels are green).
 
-    The title and the document text are visually clipped; their full value is
-    in the ``title`` attribute, so hovering the cell shows all of it.
+    The title and the document text are visually clipped; hovering the cell
+    opens a CSS tooltip with the full value (no native ``title`` tooltip).
     """
     body = []
     for row in rows:
@@ -322,14 +324,22 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
             )
             or '<span class="ev-muted">—</span>'
         )
+        title_cell = (
+            '<span class="ex-hover">'
+            f'<span class="ex-hover-clip ex-hover-title">{_esc(_snippet(row.title, 70))}</span>'
+            f'<span class="ex-tooltip">{_esc(row.title)}</span></span>'
+            f'<span class="ev-id"> · {_esc(row.doc_id)}</span>'
+        )
+        text_cell = (
+            '<span class="ex-hover">'
+            f'<span class="ex-hover-clip ex-hover-text">{_esc(_snippet(row.text, 220))}</span>'
+            f'<span class="ex-tooltip">{_esc(row.text)}</span></span>'
+        )
         body.append(
             [
                 f'<span class="ev-rank">{row.rank}</span>',
-                f'<span class="ev-label ex-clip ex-clip-title" title="{_esc(row.title)}">'
-                f"{_esc(_snippet(row.title, 70))}</span>"
-                f'<span class="ev-id"> · {_esc(row.doc_id)}</span>',
-                f'<span class="ex-neighbour-text" title="{_esc(row.text)}">'
-                f"{_esc(_snippet(row.text, 220))}</span>",
+                title_cell,
+                text_cell,
                 f'<span class="ev-chip ev-chip-score">{row.score:.3f}</span>',
                 f'<span class="ev-pills">{labels}</span>',
                 f'<span class="ev-pills">{shared}</span>',
@@ -347,6 +357,7 @@ def _neighbour_table(rows: Sequence[ev.NeighbourRow], dataset: ev.Dataset) -> st
         body,
         aligns=("right", "left", "left", "right", "left", "left"),
         compact=True,
+        wrap_class="ex-free",
     )
 
 
